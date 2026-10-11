@@ -9,7 +9,14 @@ import type {
 	MemoryBenchmarkDataset,
 	MemorySearchResult,
 } from "../../packages/memory-engine/src/types.js"
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import {
+	access,
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -400,7 +407,18 @@ describe("benchmark scenario queue settling", () => {
 		)
 	})
 
-	it("stops an isolated durable worker before measuring and cleaning its scenario", async () => {
+	it.each([
+		"success",
+		"startup",
+		"late",
+		"close",
+		"cleanup",
+		"keep",
+		"measurement",
+	])("fully closes and removes its workspace on %s", async (failure) => {
+		let workspace: string | undefined
+		if (failure === "keep")
+			vi.stubEnv("MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA", "1")
 		const { ingestBenchmarkConversations } = await import(
 			"./mongodb-benchmark-harness.js"
 		)
@@ -418,8 +436,9 @@ describe("benchmark scenario queue settling", () => {
 		})
 		const scenarioManager = {
 			agentId: "benchmark-isolated-worker",
-			stopMemoryJobWorker: vi.fn(async () => {
-				order.push("stop")
+			close: vi.fn(async () => {
+				order.push("close")
+				if (failure === "close") throw new Error("close failure")
 			}),
 		} as unknown as MongoDBMemoryManager
 		const manager = Object.assign(
@@ -430,6 +449,8 @@ describe("benchmark scenario queue settling", () => {
 						aggregate: vi.fn(() => ({
 							toArray: vi.fn(async () => {
 								order.push("measure")
+								if (failure === "measurement")
+									throw new Error("measurement failure")
 								return []
 							}),
 						})),
@@ -439,8 +460,17 @@ describe("benchmark scenario queue settling", () => {
 				agentId: "benchmark-parent",
 				config: { mongodb: {} },
 				relevance: { persistRegression: vi.fn(async () => []) },
-				createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
-				settleBenchmarkScenarioManager: vi.fn(async () => {}),
+				createBenchmarkScenarioManager: vi.fn(
+					async (_id: string, dir: string) => {
+						workspace = dir
+						await access(dir)
+						if (failure === "startup") throw new Error("startup failure")
+						return scenarioManager
+					},
+				),
+				settleBenchmarkScenarioManager: vi.fn(async () => {
+					if (failure === "late") throw new Error("late failure")
+				}),
 				listBenchmarkEventEvidence: vi.fn(async () => ({
 					sessionIds: new Map(),
 					turnIds: new Map(),
@@ -449,6 +479,7 @@ describe("benchmark scenario queue settling", () => {
 				waitForBenchmarkSearchConvergence: vi.fn(async () => {}),
 				cleanupBenchmarkScenarioData: vi.fn(async () => {
 					order.push("cleanup")
+					if (failure === "cleanup") throw new Error("cleanup failure")
 				}),
 			},
 		) as MongoDBMemoryManager
@@ -470,7 +501,7 @@ describe("benchmark scenario queue settling", () => {
 			],
 		}
 
-		await benchmarkOps(manager).runScenarioBenchmarkDataset({
+		const run = benchmarkOps(manager).runScenarioBenchmarkDataset({
 			datasetPath: "/tmp/benchmark.jsonl",
 			dataset,
 			datasetVersion: "dataset-v1",
@@ -481,8 +512,27 @@ describe("benchmark scenario queue settling", () => {
 			runContext: testOperationRunContext("worker-cleanup"),
 		})
 
-		expect(order[0]).toBe("stop")
-		expect(order.at(-1)).toBe("cleanup")
+		try {
+			if (["startup", "late", "close", "cleanup"].includes(failure))
+				await expect(run).rejects.toThrow(`${failure} failure`)
+			else {
+				const outcome = await run
+				if (failure === "measurement")
+					expect(outcome.storage.unavailableReason).toContain(
+						"measurement failure",
+					)
+			}
+			expect(workspace).toBeDefined()
+			if (!workspace) throw new Error("missing owned workspace")
+			await expect(access(workspace)).rejects.toThrow()
+			if (failure !== "startup") expect(order[0]).toBe("close")
+			if (failure === "keep") expect(order).not.toContain("cleanup")
+			else expect(order.at(-1)).toBe("cleanup")
+			if (failure === "close" || failure === "startup")
+				expect(order).not.toContain("measure")
+		} finally {
+			vi.unstubAllEnvs()
+		}
 	})
 
 	it("repeats only the measurement loop for extra measurement passes", async () => {
@@ -522,7 +572,7 @@ describe("benchmark scenario queue settling", () => {
 		const scenarioManager = {
 			agentId: "benchmark-measurement-passes",
 			search,
-			stopMemoryJobWorker: vi.fn(async () => {}),
+			close: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),
@@ -626,7 +676,7 @@ describe("benchmark scenario queue settling", () => {
 		const scenarioManager = {
 			agentId: "benchmark-single-pass",
 			search,
-			stopMemoryJobWorker: vi.fn(async () => {}),
+			close: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),

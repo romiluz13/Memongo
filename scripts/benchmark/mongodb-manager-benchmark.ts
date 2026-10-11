@@ -5,8 +5,9 @@
  */
 
 import { createHash, randomUUID } from "node:crypto"
-import { access } from "node:fs/promises"
+import { access, mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import {
 	createBenchmarkRunContext,
 	assertBenchmarkRunConfiguration,
@@ -33,6 +34,7 @@ import {
 	ingestBenchmarkDataset,
 	ingestBenchmarkConversations,
 	importConversationDataset,
+	type BenchmarkConversationImportResult,
 	loadBenchmarkDataset,
 	resolveBenchmarkDatasetPath,
 } from "./mongodb-benchmark-harness.js"
@@ -83,7 +85,6 @@ import type {
 	RelevanceReport,
 	RelevanceSampleState,
 } from "../../packages/memory-engine/src/mongodb-relevance.js"
-import { MongoDBRelevanceRuntime } from "../../packages/memory-engine/src/mongodb-relevance.js"
 import {
 	buildBenchmarkCaseSummary,
 	loadLegacyRelevanceDataset,
@@ -115,7 +116,6 @@ import type {
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkIngestResult,
-	MemoryConversationImportResult,
 	MemorySearchResult,
 	BenchmarkRerankerConfig,
 	BenchmarkLatencyDistribution,
@@ -338,45 +338,31 @@ export class MongoDBManagerBenchmarkOps {
 
 	private readonly scenario: MongoDBManagerBenchmarkScenarioOps
 
-	private createBenchmarkScenarioManager(agentId: string): MongoDBManagerHost {
+	private async createBenchmarkScenarioManager(
+		agentId: string,
+		workspaceDir: string,
+	): Promise<MongoDBMemoryManager> {
 		const mongoConfig = this.host.config.mongodb
-		const relevance =
-			mongoConfig?.relevance?.enabled === true
-				? new MongoDBRelevanceRuntime(
-						this.host.db,
-						this.host.prefix,
-						agentId,
-						mongoConfig,
-						this.host.capabilities,
-					)
-				: null
-		return new MongoDBMemoryManager({
-			client: this.host.client,
-			db: this.host.db,
-			prefix: this.host.prefix,
+		const resolved = {
+			...this.host.config,
+			mongodb: mongoConfig
+				? {
+						...mongoConfig,
+						reranking: {
+							...(mongoConfig.reranking ?? {}),
+							...BENCHMARK_RERANK_BOOST_OVERRIDES,
+						},
+					}
+				: mongoConfig,
+		}
+		const manager = await MongoDBMemoryManager.create({
+			cfg: { agents: { list: [{ id: agentId, workspace: workspaceDir }] } },
 			agentId,
-			workspaceDir: this.host.workspaceDir,
-			extraMemoryPaths: this.host.extraMemoryPaths,
-			capabilities: this.host.capabilities,
-			nativeBitemporalVectorPrefilter:
-				this.host.nativeBitemporalVectorPrefilter,
-			// B12: scenario managers get a config copy with the post-rerank
-			// recency/access boosts zeroed (see BENCHMARK_RERANK_BOOST_OVERRIDES).
-			// The host config object itself is never mutated.
-			config: {
-				...this.host.config,
-				mongodb: mongoConfig
-					? {
-							...mongoConfig,
-							reranking: {
-								...(mongoConfig.reranking ?? {}),
-								...BENCHMARK_RERANK_BOOST_OVERRIDES,
-							},
-						}
-					: mongoConfig,
-			},
-			relevance,
-		}) as unknown as MongoDBManagerHost
+			resolved,
+			extraPaths: [],
+			client: this.host.client,
+		})
+		return manager
 	}
 
 	async relevanceBenchmark(params?: {
@@ -780,7 +766,7 @@ export class MongoDBManagerBenchmarkOps {
 			const summary = buildBenchmarkCaseSummary(run.results, run.latencyMs)
 			const expectedSources = entry.expectedSources ?? []
 			const sourcePass = expectedSources.every((source) =>
-				summary.hitSources.includes(source),
+				summary.hitSources.some((hitSource) => hitSource === source),
 			)
 			const scorePass =
 				typeof entry.minTopScore === "number"
@@ -1080,7 +1066,10 @@ export class MongoDBManagerBenchmarkOps {
 				[]
 			let scenarioStorageFailure: string | undefined
 			let scenarioManager: MongoDBManagerHost = this.host
-			let scenarioOps = this
+			let closeScenarioManager = async (): Promise<void> => {}
+			let scenarioWorkspaceDir: string | undefined
+			let ownedScenarioAgentId: string | undefined
+			let scenarioOps: MongoDBManagerBenchmarkOps = this
 			let eventEvidence: BenchmarkEventEvidenceMaps = {
 				sessionIds: new Map<string, string>(),
 				turnIds: new Map<string, string>(),
@@ -1135,7 +1124,16 @@ export class MongoDBManagerBenchmarkOps {
 				})
 				if (scenario.conversations.length > 0) {
 					const scenarioAgentId = `benchmark-${this.host.agentId}-${runToken}-${createHash("sha256").update(`${index}:${scenario.scenarioId}`).digest("hex").slice(0, 12)}`
-					scenarioManager = this.createBenchmarkScenarioManager(scenarioAgentId)
+					ownedScenarioAgentId = scenarioAgentId
+					scenarioWorkspaceDir = await mkdtemp(
+						path.join(os.tmpdir(), "memongo-benchmark-scenario-"),
+					)
+					const createdManager = await this.createBenchmarkScenarioManager(
+						scenarioAgentId,
+						scenarioWorkspaceDir,
+					)
+					scenarioManager = createdManager as unknown as MongoDBManagerHost
+					closeScenarioManager = () => createdManager.close()
 					scenarioOps = new MongoDBManagerBenchmarkOps(scenarioManager)
 					const scenarioIngest =
 						params.executionProfile !== "shipped" &&
@@ -1916,32 +1914,45 @@ export class MongoDBManagerBenchmarkOps {
 				)
 				throw scenarioErr
 			} finally {
-				if (scenarioManager !== this.host) {
-					await scenarioManager.stopMemoryJobWorker()
-					const measurement = await collectBenchmarkTenantStorage({
-						db: this.host.db,
-						agentId: scenarioManager.agentId,
-						collectionNames: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(
-							(suffix) => `${this.host.prefix}${suffix}`,
-						),
-					})
-					if (measurement.unavailableReason) {
-						scenarioStorageFailure = `${scenario.scenarioId}: ${measurement.unavailableReason}`
+				try {
+					if (scenarioManager !== this.host) {
+						await closeScenarioManager()
+						const measurement = await collectBenchmarkTenantStorage({
+							db: this.host.db,
+							agentId: scenarioManager.agentId,
+							collectionNames: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(
+								(suffix) => `${this.host.prefix}${suffix}`,
+							),
+						})
+						if (measurement.unavailableReason) {
+							scenarioStorageFailure = `${scenario.scenarioId}: ${measurement.unavailableReason}`
+							storageFailures.push(scenarioStorageFailure)
+						}
+						scenarioStorageCollections = measurement.collections
+						addStorageRows(measurement.collections)
+					} else {
+						scenarioStorageFailure = `${scenario.scenarioId}: scenario did not use an isolated benchmark agent`
 						storageFailures.push(scenarioStorageFailure)
 					}
-					scenarioStorageCollections = measurement.collections
-					addStorageRows(measurement.collections)
-				} else {
-					scenarioStorageFailure = `${scenario.scenarioId}: scenario did not use an isolated benchmark agent`
-					storageFailures.push(scenarioStorageFailure)
-				}
-				if (
-					scenarioManager !== this.host &&
-					process.env.MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA !== "1"
-				) {
-					await this.cleanupBenchmarkScenarioData(scenarioManager.agentId)
+				} finally {
+					try {
+						if (
+							ownedScenarioAgentId &&
+							process.env.MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA !== "1"
+						) {
+							await this.cleanupBenchmarkScenarioData(
+								scenarioManager !== this.host
+									? scenarioManager.agentId
+									: ownedScenarioAgentId,
+							)
+						}
+					} finally {
+						if (scenarioWorkspaceDir)
+							await rm(scenarioWorkspaceDir, { recursive: true, force: true })
+					}
 				}
 			}
+
 			// Slice B round 2: the checkpoint write happens after the finally
 			// block's worker stop / storage measurement / cleanup, and only for
 			// complete official scenarios (an incomplete one must re-run on
@@ -2169,7 +2180,7 @@ export class MongoDBManagerBenchmarkOps {
 		scopeRef?: string
 		limitConversations?: number
 		limitTurnsPerConversation?: number
-	}): Promise<MemoryConversationImportResult> {
+	}): Promise<BenchmarkConversationImportResult> {
 		const datasetPath = await resolveBenchmarkDatasetPath({
 			datasetPath: params.datasetPath,
 			baseDir: this.host.workspaceDir,

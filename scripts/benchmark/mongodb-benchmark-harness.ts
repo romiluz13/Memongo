@@ -16,6 +16,11 @@ const log = createSubsystemLogger("memory:mongodb:benchmark-harness")
 
 export { loadBenchmarkDataset, resolveBenchmarkDatasetPath }
 
+export type BenchmarkConversationImportResult = Omit<
+	MemoryConversationImportResult,
+	"datasetKind"
+> & { datasetKind?: MemoryBenchmarkDatasetKind }
+
 /**
  * B6: bound for importer write batches submitted to
  * writeConversationEventsBatch. Matches the MAX_WRITE_EVENTS_BATCH envelope
@@ -132,7 +137,7 @@ async function replayConversationDataset(params: {
 	writeTurns?: (
 		turns: ConversationReplayBatchTurn[],
 	) => Promise<ConversationReplayReceipt[]>
-}): Promise<MemoryConversationImportResult> {
+}): Promise<BenchmarkConversationImportResult> {
 	const startedAt = new Date()
 	const conversationLimit =
 		typeof params.limitConversations === "number" &&
@@ -388,7 +393,7 @@ export async function importConversationDataset(params: {
 	writeTurns?: (
 		turns: ConversationReplayBatchTurn[],
 	) => Promise<ConversationReplayReceipt[]>
-}): Promise<MemoryConversationImportResult> {
+}): Promise<BenchmarkConversationImportResult> {
 	const dataset = await loadBenchmarkDataset(params.datasetPath, {
 		baseDir: params.baseDir,
 		allowedRoots: params.allowedRoots,

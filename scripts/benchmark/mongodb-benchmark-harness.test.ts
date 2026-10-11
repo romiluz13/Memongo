@@ -135,6 +135,11 @@ describe("benchmark harness", () => {
 			const dataset = await loadBenchmarkDataset(datasetPath)
 
 			expect(dataset.datasetKind).toBe("longmemeval")
+			const imported = await importConversationDataset({
+				datasetPath,
+				writeTurn: async () => {},
+			})
+			expect(imported.datasetKind).toBe("longmemeval")
 			expect(dataset.scenarios).toHaveLength(1)
 			expect(dataset.scenarios?.[0]?.conversations[0]?.sessionId).toBe("q1::s1")
 			expect(dataset.scenarios?.[0]?.evaluations[0]).toEqual(
@@ -253,6 +258,11 @@ describe("benchmark harness", () => {
 			const dataset = await loadBenchmarkDataset(datasetPath)
 
 			expect(dataset.datasetKind).toBe("locomo")
+			const imported = await importConversationDataset({
+				datasetPath,
+				writeTurn: async () => {},
+			})
+			expect(imported.datasetKind).toBe("locomo")
 			expect(dataset.scenarios).toHaveLength(1)
 			expect(dataset.scenarios?.[0]?.conversations[0]?.turns).toHaveLength(2)
 			expect(dataset.scenarios?.[0]?.evaluations[0]).toEqual(

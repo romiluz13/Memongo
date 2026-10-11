@@ -203,7 +203,7 @@ const { eventsCollection, chunksCollection, sessionChunksCollection } =
 	await import("../../packages/memory-engine/src/mongodb-schema.js")
 
 describe("benchmark scenario manager configuration (B12)", () => {
-	it("zeroes post-rerank recency/access boosts without mutating the host config", () => {
+	it("zeroes post-rerank recency/access boosts without mutating the host config", async () => {
 		const manager = {
 			client: {},
 			db: fakeDb,
@@ -227,16 +227,44 @@ describe("benchmark scenario manager configuration (B12)", () => {
 			},
 		} as unknown as MongoDBMemoryManager
 
-		// No createBenchmarkScenarioManager override on the fake manager, so
-		// the real ops method runs and builds a real scenario manager.
+		const create = vi
+			.spyOn(MongoDBMemoryManager, "create")
+			.mockImplementation(
+				async (input) => ({ config: input.resolved }) as MongoDBMemoryManager,
+			)
 		const ops = benchmarkOps(manager)
-		const opsRecord = ops as unknown as Record<
-			string,
-			(id: string) => Record<string, unknown>
-		>
-		const scenarioManager = opsRecord.createBenchmarkScenarioManager(
-			"benchmark-scenario-agent",
-		)
+		const invoke = ops as unknown as {
+			createBenchmarkScenarioManager(
+				id: string,
+				workspace: string,
+			): Promise<MongoDBManagerHost>
+		}
+		let scenarioManager: MongoDBManagerHost
+		try {
+			scenarioManager = await invoke.createBenchmarkScenarioManager(
+				"benchmark-scenario-agent",
+				"/empty-scenario",
+			)
+			expect(create).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentId: "benchmark-scenario-agent",
+					client: manager.client,
+					extraPaths: [],
+					cfg: expect.objectContaining({
+						agents: expect.objectContaining({
+							list: expect.arrayContaining([
+								{
+									id: "benchmark-scenario-agent",
+									workspace: "/empty-scenario",
+								},
+							]),
+						}),
+					}),
+				}),
+			)
+		} finally {
+			create.mockRestore()
+		}
 		const scenarioMongo = (scenarioManager.config as Record<string, unknown>)
 			.mongodb as Record<string, Record<string, number>>
 		expect(scenarioMongo.reranking.recencyBoost).toBe(0)
@@ -504,7 +532,7 @@ describe("scenario benchmark ingestion", () => {
 		const scenarioManager = {
 			agentId: "benchmark-scenario-agent",
 			writeConversationEventsBatch,
-			stopMemoryJobWorker: vi.fn(async () => {
+			close: vi.fn(async () => {
 				throw new Error("stop after ingestion")
 			}),
 		} as unknown as MongoDBMemoryManager
@@ -578,7 +606,7 @@ describe("scenario benchmark ingestion", () => {
 		const scenarioManager = {
 			agentId: "benchmark-scenario-agent",
 			writeConversationEventsBatch: vi.fn(),
-			stopMemoryJobWorker: vi.fn(async () => {}),
+			close: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
 		const manager = {
 			agentId: "benchmark-root-agent",
@@ -643,7 +671,7 @@ describe("scenario benchmark ingestion", () => {
 		const scenarioManager = {
 			agentId: "benchmark-scenario-agent",
 			writeConversationEventsBatch: vi.fn(),
-			stopMemoryJobWorker: vi.fn(async () => {}),
+			close: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
 		const cleanupBenchmarkScenarioData = vi.fn(async () => {})
 		const manager = {
@@ -726,7 +754,7 @@ describe("scenario benchmark ingestion", () => {
 			},
 			prefix: "test_",
 			writeConversationEventsBatch: vi.fn(),
-			stopMemoryJobWorker: vi.fn(async () => {}),
+			close: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
 		const settleBenchmarkScenarioManager = vi.fn(async () => {})
 		const cleanupBenchmarkScenarioData = vi.fn(async () => {})
