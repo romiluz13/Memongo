@@ -6,6 +6,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 // Mock telemetry before importing module under test
 // ---------------------------------------------------------------------------
 
+vi.mock("node:dns/promises", () => ({
+	lookup: vi.fn(async () => [{ address: "203.0.113.10", family: 4 }]),
+}))
+
 vi.mock("./mongodb-telemetry.js", () => ({
 	emitTelemetry: vi.fn().mockResolvedValue(undefined),
 }))

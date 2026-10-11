@@ -163,7 +163,7 @@ export type MemoryMongoDBConfig = {
 	}
 	reranking?: {
 		enabled?: boolean
-		model?: "rerank-2.5" | "rerank-2.5-lite"
+		model?: "rerank-3" | "rerank-3-lite" | "rerank-2.5" | "rerank-2.5-lite"
 		topN?: number
 		minScore?: number
 		voyageApiKey?: string

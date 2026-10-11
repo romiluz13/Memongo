@@ -31,6 +31,25 @@ if (!manager) {
 const results = await manager.search("release notes")
 ```
 
+## HTTP reranking
+
+`memory.mongodb.reranking.model` defaults to `rerank-3`. Select `rerank-3-lite`,
+`rerank-2.5`, or `rerank-2.5-lite` explicitly to use that model; the engine sends
+that name without a model fallback.
+
+The rank window defaults to 20 results. Positive finite `topN` values are floored
+and capped at 1,000, including at the HTTP boundary for direct callers. A value
+between zero and one resolves to an empty window and skips reranking. Blank
+passages within the window are omitted from the request; results beyond the
+window remain overflow rather than being discarded. Provider failures retain
+the existing input-order fallback, or throw when strict mode is enabled.
+
+Configured instruction text is prepended to the query with a newline. This does
+not establish instruction-following support for rerank-3. Token limits and
+truncation remain provider-managed; the engine's document-count guard does not
+measure tokens. Model availability and retrieval quality require separate live
+qualification. This route uses HTTP, not MongoDB's native `$rerank` stage.
+
 ## Consolidation lease behavior
 
 An exact inferred-fact replay ignores only its run IDs and leaves the stored fact unchanged: no revision, reinforcement, re-embedding accounting, cache invalidation or mutation audit. This no-op reflects the writer's read snapshot; a concurrent invalidation may already have committed when it returns. Changed rationale, source order, other compared fields or explicit lifecycle intents retain the existing write path. Invalidated or expired rows are not skipped, and a stale expected revision still fails.

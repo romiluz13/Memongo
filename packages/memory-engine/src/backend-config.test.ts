@@ -1234,7 +1234,7 @@ describe("resolveMemoryBackendConfig", () => {
 	// reranking config resolution
 	// ---------------------------------------------------------------------------
 
-	it("resolves reranking defaults (enabled, rerank-2.5, topN=20, minScore=0.01)", () => {
+	it("resolves reranking defaults (enabled, rerank-3, topN=20, minScore=0.01)", () => {
 		vi.stubEnv("VOYAGE_API_KEY", "")
 		try {
 			const cfg = {
@@ -1246,7 +1246,7 @@ describe("resolveMemoryBackendConfig", () => {
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 			expect(resolved.mongodb?.reranking.enabled).toBe(true)
-			expect(resolved.mongodb?.reranking.model).toBe("rerank-2.5")
+			expect(resolved.mongodb?.reranking.model).toBe("rerank-3")
 			expect(resolved.mongodb?.reranking.topN).toBe(20)
 			expect(resolved.mongodb?.reranking.minScore).toBe(0.01)
 			expect(resolved.mongodb?.reranking.voyageApiKey).toBe("")

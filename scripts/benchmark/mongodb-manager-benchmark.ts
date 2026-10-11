@@ -5,6 +5,10 @@
  */
 
 import { createHash, randomUUID } from "node:crypto"
+import {
+	DEFAULT_HTTP_RERANK_MODEL,
+	resolveEffectiveRerankTopN,
+} from "../../packages/memory-engine/src/http-rerank-config.js"
 import { access, mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
@@ -682,11 +686,11 @@ export class MongoDBManagerBenchmarkOps {
 				model:
 					retrievalLane === "raw-session"
 						? "none"
-						: (mongoCfg.reranking?.model ?? "rerank-2.5"),
+						: (mongoCfg.reranking?.model ?? DEFAULT_HTTP_RERANK_MODEL),
 				topN:
 					retrievalLane === "raw-session"
 						? 0
-						: (mongoCfg.reranking?.topN ?? 20),
+						: resolveEffectiveRerankTopN(mongoCfg.reranking?.topN),
 			},
 			latencySamples: params.latencySamples,
 			cost: params.runContext.accounting.snapshot(),
@@ -2222,7 +2226,23 @@ export class MongoDBManagerBenchmarkOps {
 		qualityContractId?: string
 		qualityContractVersion?: string
 	}): BenchmarkRunConfiguration {
-		return this.scenario.snapshotBenchmarkRunConfiguration(params)
+		const configuration =
+			this.scenario.snapshotBenchmarkRunConfiguration(params)
+		const reranking = this.host.config.mongodb?.reranking
+		const rawSession = params.retrievalLane === "raw-session"
+		return {
+			...configuration,
+			settings: {
+				...configuration.settings,
+				rerankerEnabled: rawSession ? false : (reranking?.enabled ?? false),
+				rerankerModel: rawSession
+					? "none"
+					: (reranking?.model ?? DEFAULT_HTTP_RERANK_MODEL),
+				rerankerTopN: rawSession
+					? 0
+					: resolveEffectiveRerankTopN(reranking?.topN),
+			},
+		}
 	}
 
 	async settleBenchmarkScenarioManager(

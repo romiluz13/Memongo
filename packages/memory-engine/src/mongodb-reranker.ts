@@ -1,4 +1,5 @@
 import type { Db } from "mongodb"
+import { resolveEffectiveRerankTopN } from "./http-rerank-config.js"
 import { createSubsystemLogger } from "@memongo/lib"
 import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
 import type { AdmissionToken } from "./mongodb-write-fence.js"
@@ -13,11 +14,11 @@ const log = createSubsystemLogger("memory:mongodb:reranker")
 
 export type RerankConfig = {
 	enabled: boolean
-	model: "rerank-2.5" | "rerank-2.5-lite"
+	model: "rerank-3" | "rerank-3-lite" | "rerank-2.5" | "rerank-2.5-lite"
 	topN: number
 	minScore: number
 	voyageApiKey: string
-	/** Optional instruction prepended to query for rerank-2.5 instruction-following. */
+	/** Optional instruction text prepended to the query. */
 	instruction?: string
 	/** Post-CE recency boost weight applied after reranking (0 disables). */
 	recencyBoost?: number
@@ -104,7 +105,7 @@ export function resolveRerankTimeoutMs(
 }
 
 // ---------------------------------------------------------------------------
-// Cross-encoder re-ranking via Voyage rerank-2.5 API
+// Cross-encoder re-ranking via Voyage HTTP API
 // ---------------------------------------------------------------------------
 
 // Auto-route based on API key prefix (same pattern as official Voyage Python SDK):
@@ -145,7 +146,7 @@ function emitLeafTelemetry(
 }
 
 /**
- * Cross-encoder re-ranking of search results using Voyage rerank-2.5 API.
+ * Cross-encoder re-ranking of search results using the Voyage HTTP API.
  *
  * On ANY error (network, API, JSON parse, unexpected shape): falls back to
  * input order unchanged, logs a warning, and never crashes the search pipeline.
@@ -224,8 +225,9 @@ export async function crossEncoderRerank(params: {
 	// silently drop the exact results the cross-encoder would have ranked
 	// highest. `minScore` now applies to the CE scores after the rerank (see
 	// the partition split below).
-	const candidates = results.slice(0, config.topN)
-	const overflow = results.slice(config.topN) // beyond topN, never sent to the reranker
+	const topN = resolveEffectiveRerankTopN(config.topN)
+	const candidates = results.slice(0, topN)
+	const overflow = results.slice(topN) // beyond the bounded rank window, never sent to the reranker
 
 	// Need at least 2 candidates for reranking to have any benefit
 	if (candidates.length <= 1) {
@@ -310,7 +312,7 @@ export async function crossEncoderRerank(params: {
 				},
 				body: JSON.stringify({
 					model: config.model,
-					// rerank-2.5 supports instruction-following: prepend instruction to query
+					// Preserve configured instruction text as part of the query.
 					query: config.instruction ? `${config.instruction}\n${query}` : query,
 					documents,
 					top_k: validCandidates.length,

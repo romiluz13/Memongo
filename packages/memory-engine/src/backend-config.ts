@@ -11,6 +11,11 @@ import {
 	createSubsystemLogger,
 	resolveUserPath,
 } from "@memongo/lib"
+import {
+	DEFAULT_HTTP_RERANK_MODEL,
+	DEFAULT_HTTP_RERANK_TOP_N,
+	resolveEffectiveRerankTopN,
+} from "./http-rerank-config.js"
 import { resolveSearchBudgetLimits } from "./mongodb-search-budget.js"
 import {
 	type ConversationEvidenceMode,
@@ -145,7 +150,7 @@ export type ResolvedMongoDBConfig = {
 	}
 	reranking: {
 		enabled: boolean
-		model: "rerank-2.5" | "rerank-2.5-lite"
+		model: "rerank-3" | "rerank-3-lite" | "rerank-2.5" | "rerank-2.5-lite"
 		topN: number
 		minScore: number
 		voyageApiKey: string
@@ -641,13 +646,13 @@ export function resolveMemoryBackendConfig(params: {
 						"MEMONGO_RERANKING_ENABLED",
 						mongoCfg?.reranking?.enabled !== false,
 					),
-					model: mongoCfg?.reranking?.model ?? "rerank-2.5",
+					model: mongoCfg?.reranking?.model ?? DEFAULT_HTTP_RERANK_MODEL,
 					topN:
 						typeof mongoCfg?.reranking?.topN === "number" &&
 						Number.isFinite(mongoCfg.reranking.topN) &&
 						mongoCfg.reranking.topN > 0
-							? Math.floor(mongoCfg.reranking.topN)
-							: 20,
+							? resolveEffectiveRerankTopN(mongoCfg.reranking.topN)
+							: DEFAULT_HTTP_RERANK_TOP_N,
 					minScore:
 						typeof mongoCfg?.reranking?.minScore === "number" &&
 						Number.isFinite(mongoCfg.reranking.minScore)
