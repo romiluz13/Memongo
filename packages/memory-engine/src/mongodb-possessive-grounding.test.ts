@@ -189,7 +189,6 @@ describe("possessive fact grounding through actual promotion and persistence", (
 		["literal first person", BODY, BODY],
 		["literal third person", FACT, FACT],
 		["reverse possessive", BODY, FACT],
-		["existing embedded literal", FACT, `Earlier evidence: ${FACT}`],
 		[
 			"existing case-insensitive remainder",
 			FACT,
@@ -214,7 +213,9 @@ describe("possessive fact grounding through actual promotion and persistence", (
 		const f = fixture([
 			{ ...event, eventId: "b", body, timestamp: new Date(1) },
 		])
-		const { result } = await promote(f, fact)
+		// Full-claim promotion now verifies the current canonical event too.
+		f.table("test_events")[0].body = body
+		const { result } = await promote(f, fact, { ...event, body })
 		expect(result.structuredCreated).toBe(1)
 		expect(f.table("test_structured_mem")[0].value).toBe(fact)
 	})

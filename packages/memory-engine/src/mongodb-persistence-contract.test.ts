@@ -185,6 +185,159 @@ async function managerLoop(
 
 describe("prompt-compatible facts reach durable persistence through actual assignment", () => {
 	it.each([
+		["The user's pickup label is NARU-617-QP.", BODY.slice(0, -1)],
+		["The user's pickup label is NARU-617-QP", BODY.slice(0, -1)],
+		[
+			"My pickup label is NARU-617-QP",
+			"The user's pickup label is NARU-617-QP.",
+		],
+	])("preserves bare period and possessive equivalence: %s / %s", async (fact, body) => {
+		const r = await managerLoop({ fact, body, batchFacts: [] })
+		expect(r.completed.outputCount).toBe(1)
+		expect(r.stored[0].value).toBe(fact)
+	})
+	it.each([
+		[
+			"The user's label is [A].*+?^$()|{B}\\C",
+			"My label is [A].*+?^$()|{B}\\C.",
+		],
+		["The user's label is not NARU-617-QP", "My label is not NARU-617-QP."],
+		[
+			"The user's pickup has 3 boxes on 2026-10-08",
+			"My pickup has 3 boxes on 2026-10-08.",
+		],
+	])("preserves full bare literal through manager/worker: %s", async (fact, body) => {
+		const r = await managerLoop({ fact, body, batchFacts: [] })
+		expect(r.completed.outputCount).toBe(1)
+		expect(r.stored[0].value).toBe(fact)
+		expect(r.stored[0].sourceEventIds).toEqual(
+			r.actual.map((e) => e.eventId).sort(),
+		)
+	})
+	it.each([
+		["quoted", `Alice said, "${BODY}"`],
+		["named", `Alice: ${BODY}`],
+		[
+			"embedded literal",
+			"Earlier evidence: The user's pickup label is NARU-617-QP",
+		],
+		["extended statement", `${BODY} Extra statement.`],
+		["extended label", "My pickup label is NARU-617-QP-EXTRA."],
+		["internal punctuation", "My pickup label is NARU.617-QP."],
+		["wrong label", "My pickup label is WRONG."],
+		["double period", `${BODY}.`],
+		["question mark", "My pickup label is NARU-617-QP?"],
+		["exclamation mark", "My pickup label is NARU-617-QP!"],
+	])("does not admit bare %s evidence", async (_name, body) => {
+		const r = await managerLoop({
+			fact: "The user's pickup label is NARU-617-QP",
+			body,
+			batchFacts: [],
+		})
+		expect(r.stored).toHaveLength(0)
+		expect(r.completed.outputCount).toBe(0)
+	})
+	it.each([
+		["assistant", "assistant"],
+		["assistant", "tool"],
+		["tool", "tool"],
+	] as const)("does not admit bare evidence without a user: %s / %s", async (current, support) => {
+		const r = await managerLoop({
+			fact: "The user's pickup label is NARU-617-QP",
+			roles: [current, support],
+			batchFacts: [],
+		})
+		expect(r.stored).toHaveLength(0)
+		expect(r.completed.outputCount).toBe(0)
+	})
+	it.each([
+		["user", "assistant"],
+		["assistant", "user"],
+		["user", "user"],
+	] as const)("retains bare evidence with a canonical user: %s / %s", async (current, support) => {
+		const r = await managerLoop({
+			fact: "The user's pickup label is NARU-617-QP",
+			roles: [current, support],
+			batchFacts: [],
+		})
+		expect(r.completed.outputCount).toBe(1)
+		expect(r.stored[0].sourceEventIds).toEqual(
+			r.actual.map((e) => e.eventId).sort(),
+		)
+	})
+	it.each([
+		[
+			"agent",
+			(row: Row) => {
+				row.agentId = "other"
+			},
+		],
+		[
+			"scope",
+			(row: Row) => {
+				row.scope = "workspace"
+			},
+		],
+		[
+			"scopeRef",
+			(row: Row) => {
+				row.scopeRef = "other"
+			},
+		],
+		[
+			"expired",
+			(row: Row) => {
+				row.expiresAt = new Date(0)
+			},
+		],
+		[
+			"invalidated",
+			(row: Row) => {
+				row.invalidAt = new Date(0)
+			},
+		],
+		[
+			"future",
+			(row: Row) => {
+				row.validAt = new Date(Date.now() + 60000)
+			},
+		],
+		[
+			"quoted",
+			(row: Row) => {
+				row.body = `Alice said, "${BODY}"`
+			},
+		],
+	] as const)("does not use bare %s supporting evidence", async (_name, mutateSupport) => {
+		const r = await managerLoop({
+			fact: "The user's pickup label is NARU-617-QP",
+			mutateSupport,
+			batchFacts: [],
+		})
+		expect(r.stored).toHaveLength(0)
+		expect(r.completed.outputCount).toBe(0)
+	})
+	it.each([
+		"The user's pickup label is NARU-617-QP",
+		"The user's pickup label is NARU-617-QP.",
+	])("persists captured bare claim through fenced worker: %s", async (fact) => {
+		const r = await managerLoop({ fact, batchFacts: [] })
+		expect(r.completed.status).toBe("completed")
+		expect(r.completed.outputCount).toBe(1)
+		expect(r.stored).toHaveLength(1)
+		expect(r.stored[0]).toMatchObject({
+			value: fact,
+			sourceEventIds: r.actual.map((e) => e.eventId).sort(),
+			reinforcementCount: 2,
+			provenance: {
+				promotionTrigger: "repeated-evidence",
+				supportingEventCount: 1,
+			},
+		})
+		expect(r.f.transactions.committed).toBeGreaterThan(0)
+		expect(r.f.transactions.aborted).toBe(0)
+	})
+	it.each([
 		"From a conversation about package or item pickup: The user's pickup label is NARU-617-QP",
 		"From a conversation about a pickup label: The user's pickup label is NARU-617-QP",
 	])("persists captured contextual claim without terminal period: %s", async (fact) => {
@@ -501,34 +654,42 @@ describe("contextual personal facts require a canonical user witness", () => {
 		expect(r.completed.outputCount).toBe(1)
 		expect(r.stored[0].value).toBe(PREFIX_FACT)
 	})
-	it("rejects stale user role supplied in the event argument", async () => {
+	it.each([
+		PREFIX_FACT,
+		"The user's pickup label is NARU-617-QP",
+	])("rejects stale user role supplied in the event argument: %s", async (fact) => {
 		const f = fixture()
 		for (const row of f.table("test_events")) row.role = "assistant"
 		const prepared = await prepareDerivedMemoryPromotion({
 			db: f.db,
 			prefix: "test_",
 			event,
-			prefetchedLlmFacts: [PREFIX_FACT],
+			prefetchedLlmFacts: [fact],
 		})
 		expect(prepared.structuredCandidates).toHaveLength(0)
 	})
-	it.each([
-		"role",
-		"body",
-		"period-body",
-		"timestamp",
-		"scope",
-		"expired",
-		"invalidated",
-		"removed",
-	] as const)("fenced commit rejects changed current user witness: %s", async (change) => {
+	it.each(
+		[
+			"role",
+			"body",
+			"period-body",
+			"timestamp",
+			"scope",
+			"expired",
+			"invalidated",
+			"removed",
+		].flatMap((change) => [
+			[PREFIX_FACT.slice(0, -1), change],
+			["The user's pickup label is NARU-617-QP", change],
+		]),
+	)("fenced commit rejects changed current user witness (%s): %s", async (fact, change) => {
 		const f = fixture()
 		f.table("test_events")[1].role = "assistant"
 		const args = {
 			db: f.db,
 			prefix: "test_",
 			event,
-			prefetchedLlmFacts: [PREFIX_FACT.slice(0, -1)],
+			prefetchedLlmFacts: [fact],
 		}
 		const prepared = await prepareDerivedMemoryPromotion(args)
 		expect(prepared.structuredCandidates).toHaveLength(1)
@@ -566,14 +727,17 @@ describe("contextual personal facts require a canonical user witness", () => {
 		expect(f.table("test_meta")[0].serial).toBe(1)
 		expect(f.transactions.ended).toBe(1)
 	})
-	it("fenced commit rejects changed supporting user role", async () => {
+	it.each([
+		PREFIX_FACT,
+		"The user's pickup label is NARU-617-QP",
+	])("fenced commit rejects changed supporting user role: %s", async (fact) => {
 		const f = fixture()
 		f.table("test_events")[0].role = "assistant"
 		const args = {
 			db: f.db,
 			prefix: "test_",
 			event: { ...event, role: "assistant" as const },
-			prefetchedLlmFacts: [PREFIX_FACT],
+			prefetchedLlmFacts: [fact],
 		}
 		const prepared = await prepareDerivedMemoryPromotion(args)
 		expect(prepared.structuredCandidates).toHaveLength(1)

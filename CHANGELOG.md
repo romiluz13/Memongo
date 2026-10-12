@@ -2,6 +2,15 @@
 
 All notable changes to Memongo will be documented in this file.
 
+## 2.2.2 — 2026-10-12
+
+- Preserve repeated bare possessive user facts when extraction omits one terminal
+  sentence period, with the existing narrow first-person possessive equivalence.
+- Require canonical user evidence and recheck exact event role, body, timestamp
+  and lifecycle under the write fence before promoting those claims.
+
+See [release details and validation limits](docs/platform/releases/2.2.2.md).
+
 ## 2.2.1 — 2026-10-12
 
 - Add opt-in derived-memory diagnostics and preserve grounded contextual claims

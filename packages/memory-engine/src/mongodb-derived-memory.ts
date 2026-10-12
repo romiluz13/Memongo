@@ -427,7 +427,7 @@ function escapeRegex(input: string): string {
 }
 
 // Sentence punctuation may differ; the full claim and internal punctuation may not.
-function contextualClaimPattern(claim: string): RegExp {
+function fullClaimPattern(claim: string): RegExp {
 	const repeatedPeriod = claim.endsWith("..")
 	const literal = repeatedPeriod ? claim : claim.replace(/\.$/, "")
 	const alternate = /^My /i.test(literal)
@@ -436,6 +436,13 @@ function contextualClaimPattern(claim: string): RegExp {
 	return new RegExp(
 		`^(?:${escapeRegex(literal)}|${escapeRegex(alternate)})${repeatedPeriod ? "" : "\\.?"}$`,
 		"i",
+	)
+}
+
+function extractedFullClaim(value: string): string | undefined {
+	return (
+		/^From a conversation about [^:]+:\s+(.+)$/i.exec(value)?.[1] ??
+		(/^(?:My |The user's )\S/i.test(value) ? value : undefined)
 	)
 }
 
@@ -458,27 +465,15 @@ async function findSupportingEventIds(params: {
 	}
 
 	const value = candidate.value.trim()
-	const contextualFact =
+	const claim =
 		candidate.promotionReason === "llm-extraction"
-			? /^From a conversation about [^:]+:\s+(.+)$/i.exec(value)
-			: null
-	const evidenceValue = contextualFact?.[1] ?? value
-	let evidencePattern = contextualFact
-		? contextualClaimPattern(evidenceValue).source
+			? extractedFullClaim(value)
+			: undefined
+	const evidencePattern = claim
+		? fullClaimPattern(claim).source
 		: escapeRegex(value)
-	if (candidate.promotionReason === "llm-extraction" && !contextualFact) {
-		const possessive = /^(My |The user's )/i.exec(evidenceValue)
-		if (possessive && evidenceValue.length > possessive[0].length) {
-			const alternate =
-				possessive[0].toLowerCase() === "my " ? "The user's " : "My "
-			// Anchor the new subject alternative so quoted or named speakers
-			// cannot supply first-person evidence for the current user. Require the
-			// entire alternative statement to avoid extending a literal value.
-			evidencePattern = `${evidencePattern}|^${escapeRegex(alternate + evidenceValue.slice(possessive[0].length))}$`
-		}
-	}
 
-	if (contextualFact && !new RegExp(evidencePattern, "i").test(event.body)) {
+	if (claim && !new RegExp(evidencePattern, "i").test(event.body)) {
 		return []
 	}
 
@@ -907,14 +902,12 @@ async function prepareDerivedMemoryPromotionImpl(
 			const supportingIds = (candidate.sourceEventIds ?? []).filter(
 				(eventId) => eventId !== params.event.eventId,
 			)
-			const contextualClaim =
+			const claim =
 				candidate.context ===
 				"Extracted by the LLM fact extractor from a canonical event."
-					? /^From a conversation about [^:]+:\s+(.+)$/i.exec(
-							candidate.value.trim(),
-						)?.[1]
+					? extractedFullClaim(candidate.value.trim())
 					: undefined
-			const evidenceIds = contextualClaim
+			const evidenceIds = claim
 				? [params.event.eventId, ...supportingIds]
 				: supportingIds
 			const docs = await eventsCollection(params.db, params.prefix)
@@ -938,8 +931,8 @@ async function prepareDerivedMemoryPromotionImpl(
 				)
 				continue
 			}
-			if (contextualClaim) {
-				const fullClaim = contextualClaimPattern(contextualClaim)
+			if (claim) {
+				const fullClaim = fullClaimPattern(claim)
 				const current = docs.find((doc) => doc.eventId === params.event.eventId)
 				if (
 					current?.body !== params.event.body ||
@@ -969,7 +962,7 @@ async function prepareDerivedMemoryPromotionImpl(
 				kind: "evidence",
 				events: docs.map((doc) => ({
 					eventId: String(doc.eventId),
-					...(contextualClaim ? { role: String(doc.role ?? "") } : {}),
+					...(claim ? { role: String(doc.role ?? "") } : {}),
 					body: String(doc.body ?? ""),
 					timestamp:
 						doc.timestamp instanceof Date ? doc.timestamp : new Date(0),
