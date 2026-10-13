@@ -146,11 +146,36 @@ scenario has one matching case and prediction IDs must belong to the declared
 population. Generic scenarios can retain several distinct case IDs. Earlier
 measurement passes are not treated as duplicate final-pass results.
 
-Missing legacy declarations, optional R-only sidecars and partial primary
-coverage remain supported. A partial comparison can still emit descriptive
-`REAL`; it does not certify complete workload coverage, equal effective
-settings, causal improvement or a publishable win. Supplied complete-repeat,
-minimum-judged and known declared dataset-inequality guards remain separate.
+The only comparison verdict is an exact two-sided McNemar test on one
+declared endpoint: official judged QA correctness, or binary session R@10
+under `--r-only`. It uses a fixed diagnostic alpha of 0.05, which is not a
+release or practical-margin policy. The report records the endpoint, method,
+complete denominator, B-only and A-only successes, p-value and direction.
+Practical significance is reported as not assessed, and a non-significant
+result is `inconclusive`, never evidence of equivalence. Net R/Q movement, the
+double-baseline flip threshold and `retrievalRealAnswerNeutral` are
+descriptive only; `noiseRule.real` mirrors the test for compatibility.
+
+Inference is emitted only for eligible comparisons. Both runs need a version 2
+checkpoint and a v2 prediction sidecar whose `runId`, `datasetSha256` and
+`configurationHash` match their own checkpoint. The runs must be distinct and
+must share `datasetSha256`, `configurationHash` and `executableDigest`; these
+opaque digests cannot show that a single setting changed, so they are never a
+treatment. At most one directly observed scalar sidecar field may differ, and
+only when declared with `--treatment` (answer/judge model, judge protocol,
+prompt versions, answer temperature or max tokens); a declared field must
+actually differ and cannot hide a second difference. Every declared scenario
+must be completed with exactly one final-pass case and a paired binary outcome
+in both runs, and `--min-judged` must be met. Question-level independence is
+an assumption the caller declares with `--assume-independent-questions`; the
+report records it as declared, not verified. Known clustered populations
+(several cases per scenario) are refused even with that declaration.
+
+Ineligible comparisons, including legacy artifacts without identity, partial
+coverage and dataset inequality, still print the descriptive join and exit
+non-zero with the reasons. Malformed artifacts and invalid flags remain errors
+without a report. Paired intervals, power analysis and cluster-aware
+estimators are not implemented.
 
 Build environment labels do not attest the full loaded graph or effective
 requests. Record actual entrypoints, loaded artifacts and intended-target

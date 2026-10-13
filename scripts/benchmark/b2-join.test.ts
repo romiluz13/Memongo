@@ -36,7 +36,7 @@ function run(
 }
 
 describe("joinB2Runs (tightened noise rule)", () => {
-	it("marks a change real when net Q flips reach the 3-question threshold", () => {
+	it("reports net Q flips at the 3-question threshold descriptively, never as a verdict", () => {
 		const a = run([
 			{ id: "q1", r10: 1, verdict: "no" },
 			{ id: "q2", r10: 1, verdict: "no" },
@@ -52,14 +52,14 @@ describe("joinB2Runs (tightened noise rule)", () => {
 		const report = joinB2Runs(a, b)
 		expect(report.netQFlips).toBe(3)
 		expect(report.netR).toBe(0)
-		expect(report.noiseRule.real).toBe(true)
-		expect(report.noiseRule.reason).toContain("threshold")
+		expect(report.noiseRule.real).toBe(false)
+		expect(report.inference.eligible).toBe(false)
 		expect(report.noiseRule.threshold).toBe(3)
 		expect(report.aggregate.accuracy.delta).toBeCloseTo(0.75)
 		expect(report.judgedInBoth).toBe(4)
 	})
 
-	it("treats +1 recall question with +1 Q flip as noise (inside the envelope)", () => {
+	it("keeps +1 recall question with +1 Q flip descriptive", () => {
 		const a = run([
 			{ id: "q1", r10: 0, verdict: "no" },
 			{ id: "q2", r10: 1, verdict: "yes" },
@@ -72,10 +72,10 @@ describe("joinB2Runs (tightened noise rule)", () => {
 		expect(report.netR).toBe(1)
 		expect(report.netQFlips).toBe(1)
 		expect(report.noiseRule.real).toBe(false)
-		expect(report.noiseRule.reason).toContain("noise envelope")
+		expect(report.noiseRule.reason).toContain("no inferential verdict")
 	})
 
-	it("marks a change real when R and Q co-move with at least 2 net recall questions", () => {
+	it("reports R and Q co-movement descriptively without a verdict", () => {
 		const a = run([
 			{ id: "q1", r10: 0, verdict: "no" },
 			{ id: "q2", r10: 0, verdict: "no" },
@@ -89,11 +89,11 @@ describe("joinB2Runs (tightened noise rule)", () => {
 		const report = joinB2Runs(a, b)
 		expect(report.netR).toBe(2)
 		expect(report.netQFlips).toBe(1)
-		expect(report.noiseRule.real).toBe(true)
-		expect(report.noiseRule.reason).toContain("move together")
+		expect(report.noiseRule.real).toBe(false)
+		expect(report.noiseRule.reason).toContain("no inferential verdict")
 	})
 
-	it("marks a co-moving regression real", () => {
+	it("reports a co-moving regression descriptively without a verdict", () => {
 		const a = run([
 			{ id: "q1", r10: 1, verdict: "yes" },
 			{ id: "q2", r10: 1, verdict: "no" },
@@ -107,8 +107,8 @@ describe("joinB2Runs (tightened noise rule)", () => {
 		const report = joinB2Runs(a, b)
 		expect(report.netR).toBe(-2)
 		expect(report.netQFlips).toBe(-1)
-		expect(report.noiseRule.real).toBe(true)
-		expect(report.noiseRule.reason).toContain("move together")
+		expect(report.noiseRule.real).toBe(false)
+		expect(report.noiseRule.reason).toContain("no inferential verdict")
 	})
 
 	it("treats diverging R and Q as noise", () => {
@@ -144,7 +144,7 @@ describe("joinB2Runs (tightened noise rule)", () => {
 		expect(report.netQFlips).toBe(0)
 		expect(report.noiseRule.real).toBe(false)
 		expect(report.noiseRule.retrievalRealAnswerNeutral).toBe(true)
-		expect(report.noiseRule.reason).toContain("noise envelope")
+		expect(report.noiseRule.reason).toContain("no inferential verdict")
 	})
 
 	it("raises the threshold from measured baseline flips", () => {
@@ -160,15 +160,15 @@ describe("joinB2Runs (tightened noise rule)", () => {
 			{ id: "q3", r10: 1, verdict: "yes" },
 			{ id: "q4", r10: 1, verdict: "no" },
 		])
-		// Without a baseline: 3 flips reach the default threshold of 3.
-		expect(joinB2Runs(a, b).noiseRule.real).toBe(true)
+		// The threshold is descriptive: without a baseline it is the default 3.
+		expect(joinB2Runs(a, b).noiseRule.threshold).toBe(3)
 		// With 5 measured baseline flips, the threshold becomes 6.
 		const raised = joinB2Runs(a, b, { baselineFlips: 5 })
 		expect(raised.noiseRule.threshold).toBe(6)
 		expect(raised.noiseRule.real).toBe(false)
 	})
 
-	it("verdicts on R movement alone in r-only mode", () => {
+	it("uses session R@10 as the r-only endpoint without a heuristic verdict", () => {
 		const quiet = run([
 			{ id: "q1", r10: 0, verdict: "no" },
 			{ id: "q2", r10: 0, verdict: "no" },
@@ -191,8 +191,9 @@ describe("joinB2Runs (tightened noise rule)", () => {
 			]),
 			{ rOnly: true },
 		)
-		expect(stronger.noiseRule.real).toBe(true)
-		expect(stronger.noiseRule.reason).toContain("r-only")
+		expect(stronger.netR).toBe(3)
+		expect(stronger.noiseRule.real).toBe(false)
+		expect(stronger.inference.endpoint).toBe("session-recall-any-at-10")
 	})
 })
 
@@ -449,13 +450,13 @@ describe("main baseline sidecar gate (R2-1)", () => {
 	}
 
 	it.each([
-		["different Q datasets", "a", "b", false, 1],
-		["different R-only datasets", "a", "b", true, 1],
-		["same Q dataset", "a", "a", false, 0],
-		["same R-only dataset", "a", "a", true, 0],
-		["one missing legacy digest", "a", undefined, false, 0],
-		["both missing legacy digests", undefined, undefined, false, 0],
-	] as const)("checks %s", async (_name, digestA, digestB, rOnly, code) => {
+		["different Q datasets", "a", "b", false, true],
+		["different R-only datasets", "a", "b", true, true],
+		["same Q dataset", "a", "a", false, false],
+		["same R-only dataset", "a", "a", true, false],
+		["one missing legacy digest", "a", undefined, false, false],
+		["both missing legacy digests", undefined, undefined, false, false],
+	] as const)("checks %s", async (_name, digestA, digestB, rOnly, mismatch) => {
 		const dir = await mkdtemp(path.join(tmpdir(), "b2-join-dataset-"))
 		try {
 			const runA = await writeCheckpoint(dir, "a.json")
@@ -481,13 +482,14 @@ describe("main baseline sidecar gate (R2-1)", () => {
 				runB,
 				...(rOnly ? ["--r-only"] : []),
 			])
-			expect(result.code).toBe(code)
-			if (code === 1) {
-				expect(result.stdout).toBe("")
-				expect(result.stderr).toContain("dataset digest mismatch")
-			} else {
-				expect(JSON.parse(result.stdout).questionCount).toBe(1)
-			}
+			// Legacy artifacts carry no bound identity: the descriptive join is
+			// printed and the comparison exits non-zero without a verdict.
+			expect(result.code).toBe(1)
+			const report = JSON.parse(result.stdout)
+			expect(report.questionCount).toBe(1)
+			expect(report.inference.eligible).toBe(false)
+			if (mismatch) expect(result.stderr).toContain("dataset digest mismatch")
+			else expect(result.stderr).not.toContain("dataset digest mismatch")
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}
@@ -734,7 +736,8 @@ describe("main baseline sidecar gate (R2-1)", () => {
 			[],
 			true,
 		)
-		expect(result.code).toBe(0)
+		expect(result.code).toBe(1)
+		expect(result.stderr).toContain("incomplete pairs")
 		const report = JSON.parse(result.stdout)
 		expect(report.judgedInBoth).toBe(2)
 		expect(report.partialQ.incomplete).toBe(true)
@@ -750,8 +753,11 @@ describe("main baseline sidecar gate (R2-1)", () => {
 			[],
 			true,
 		)
-		expect(result.code).toBe(0)
-		expect(JSON.parse(result.stdout).noiseRule.real).toBe(true)
+		expect(result.code).toBe(1)
+		const report = JSON.parse(result.stdout)
+		expect(report.questionCount).toBe(3)
+		expect(report.netQFlips).toBe(3)
+		expect(report.noiseRule.real).toBe(false)
 	})
 
 	it("preserves declared generic scenarios with multiple distinct cases", async () => {
@@ -771,7 +777,8 @@ describe("main baseline sidecar gate (R2-1)", () => {
 			["--r-only"],
 			true,
 		)
-		expect(result.code).toBe(0)
+		expect(result.code).toBe(1)
+		expect(result.stderr).toContain("clustered")
 		expect(JSON.parse(result.stdout).questionCount).toBe(6)
 	})
 
@@ -826,30 +833,29 @@ describe("main baseline sidecar gate (R2-1)", () => {
 		" 3 ",
 	])("preserves complete baseline calibration with minimum %j", async (minimum) => {
 		const result = await runBaselineFixture(() => {}, ["--min-judged", minimum])
-		expect(result.code).toBe(0)
-		expect(result.stderr).toBe("")
+		expect(result.code).toBe(1)
+		expect(result.stderr).not.toContain("below --min-judged")
+		expect(result.stderr).not.toContain("--min-judged requires")
 		const report = JSON.parse(result.stdout)
 		expect(report.judgedInBoth).toBe(3)
 		expect(report.netQFlips).toBe(3)
 		expect(report.flipRate).toEqual({ judgedInBoth: 3, flips: 0, flipRate: 0 })
 		expect(report.noiseRule.threshold).toBe(3)
-		expect(report.noiseRule.real).toBe(true)
+		expect(report.noiseRule.real).toBe(false)
 	})
 
 	it("preserves omission of the optional minimum", async () => {
 		const result = await runBaselineFixture(() => {})
-		expect(result.code).toBe(0)
-		expect(result.stderr).toBe("")
-		expect(JSON.parse(result.stdout).noiseRule.real).toBe(true)
+		expect(result.code).toBe(1)
+		expect(result.stderr).not.toContain("min-judged")
+		expect(JSON.parse(result.stdout).judgedInBoth).toBe(3)
 	})
 
 	it("preserves the below-count error for a valid minimum", async () => {
 		const result = await runBaselineFixture(() => {}, ["--min-judged", "4"])
 		expect(result.code).toBe(1)
-		expect(result.stderr).toBe(
-			"error: judged-in-both 3 is below --min-judged 4",
-		)
-		expect(result.stdout).toBe("")
+		expect(result.stderr).toContain("judged-in-both 3 is below --min-judged 4")
+		expect(JSON.parse(result.stdout).inference.eligible).toBe(false)
 	})
 
 	it.each([
@@ -887,7 +893,7 @@ describe("main baseline sidecar gate (R2-1)", () => {
 			"--min-judged",
 			minimum,
 		])
-		expect(result.code).toBe(minimum === "0" ? 0 : 1)
+		expect(result.code).toBe(1)
 		if (minimum === "0") {
 			expect(JSON.parse(result.stdout).noiseRule.rOnly).toBe(true)
 		} else {
@@ -899,17 +905,17 @@ describe("main baseline sidecar gate (R2-1)", () => {
 	})
 
 	it.each([
-		["3", "not-a-count", 0],
-		["not-a-count", "3", 1],
-	])("preserves the first repeated minimum value %j", async (first, second, code) => {
+		["3", "not-a-count", true],
+		["not-a-count", "3", false],
+	])("preserves the first repeated minimum value %j", async (first, second, valid) => {
 		const result = await runBaselineFixture(() => {}, [
 			"--min-judged",
 			String(first),
 			"--min-judged",
 			String(second),
 		])
-		expect(result.code).toBe(code)
-		if (code === 0) {
+		expect(result.code).toBe(1)
+		if (valid) {
 			expect(JSON.parse(result.stdout).judgedInBoth).toBe(3)
 		} else {
 			expect(result.stderr).toContain(
@@ -1054,8 +1060,7 @@ describe("main baseline sidecar gate (R2-1)", () => {
 		const result = await runBaselineFixture((_, b) => {
 			Object.assign(b, baselineFixture(["q3", "q2", "q1"], "yes"))
 		})
-		expect(result.code).toBe(0)
-		expect(result.stderr).toBe("")
+		expect(result.code).toBe(1)
 		const report = JSON.parse(result.stdout)
 		expect(report.flipRate).toEqual({ judgedInBoth: 3, flips: 3, flipRate: 1 })
 		expect(report.netQFlips).toBe(3)

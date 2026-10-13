@@ -14,19 +14,27 @@
  * failed in one run cannot masquerade as a fix. Unpaired counts are
  * reported. Q uses judged-in-both, which is paired by construction.
  *
- * Noise rule (tightened, ADR 0011):
+ * Inference (B06): the only verdict is an exact two-sided McNemar test on
+ * ONE declared endpoint — official judged QA correctness, or binary session
+ * R@10 under --r-only — at a fixed diagnostic alpha of 0.05. It is emitted
+ * only for eligible comparisons (see b2-join-eligibility.ts): bound run
+ * identity, at most one declared scalar treatment, the complete declared
+ * population paired, no known clusters, and the question-level independence
+ * assumption declared with --assume-independent-questions (recorded as
+ * declared, never verified). Ineligible comparisons still print the
+ * descriptive join and exit non-zero. A non-significant result is
+ * "inconclusive", not equivalence; statistical evidence is not a practical
+ * or release win. noiseRule.real mirrors the test for compatibility.
+ *
+ * Descriptive heuristic (former noise rule, ADR 0011; no longer a verdict):
  *   P_R  = questions with session R@10 in both runs
  *   P_Q  = questions judged in both runs
  *   netR = Σ_P_R (r10B − r10A)     (net recall questions)
  *   netQ = Σ_P_Q (qB − qA)         (net correct answers)
  *   T    = max(3, baselineFlips + 1)   (baselineFlips from the double
  *                                       baseline; 3 until measured)
- *   REAL iff |netQ| ≥ T
- *         OR (sign(netR) == sign(netQ) ≠ 0 AND |netR| ≥ 2 AND |netQ| ≥ 1)
- *   Reported separately — retrieval-real, answer-neutral — when
- *   |netR| ≥ 3 and netQ == 0 (expected for retrieval-only fixes; R-neutral
- *   fixes can only be REAL via |netQ| ≥ T).
- * With --r-only (no Q sidecar required), REAL iff |netR| ≥ 3.
+ *   netR, netQ, T and retrievalRealAnswerNeutral (|netR| ≥ 3, netQ == 0)
+ *   are reported as diagnostics only.
  *
  * Q requires the run to have set MEMONGO_BENCHMARK_QA_PROTOCOL=official;
  * a missing prediction sidecar is refused unless --r-only is passed.
@@ -34,13 +42,25 @@
  * Usage:
  *   bun scripts/benchmark/b2-join.ts --a <checkpoint-a> --b <checkpoint-b> \
  *     [--baseline-a <ckpt> --baseline-b <ckpt>] [--r-only] [--min-judged <n>]
+ *     [--assume-independent-questions] [--treatment <field>]
  */
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+	B2_TREATMENT_FIELDS,
+	type B2ComparisonEligibility,
+	type B2TreatmentField,
+	assessB2Comparison,
+	isB2TreatmentField,
+	readB2RunIdentity,
+} from "./b2-join-eligibility.js"
+import { exactMcNemar } from "./paired-inference.js"
 
 export const B2_NET_Q_FLIP_THRESHOLD = 3
 export const B2_NET_R_THRESHOLD = 3
+/** Fixed diagnostic level for this slice; not a release or practical-margin policy. */
+export const B2_INFERENCE_ALPHA = 0.05
 
 type ExecutionTrace = {
 	caseId?: string
@@ -98,6 +118,28 @@ export type B2PerQuestionRow = {
 
 export type B2AggregateTriple = { a: number; b: number; delta: number }
 
+export type B2Inference = {
+	endpoint: "official-qa-judged-correct" | "session-recall-any-at-10"
+	analysisUnit: "question"
+	independence: "declared-not-verified" | "not-declared"
+	treatment: B2TreatmentField | null
+	eligible: boolean
+	reasons: string[]
+	method?: "exact-mcnemar-two-sided"
+	alpha?: number
+	/** Complete paired population (the denominator). */
+	n?: number
+	/** B succeeds where A fails. */
+	gains?: number
+	/** A succeeds where B fails. */
+	losses?: number
+	discordant?: number
+	pTwoSided?: number
+	differenceInProportion?: number
+	evidence?: "b-higher" | "a-higher" | "inconclusive"
+	practicalSignificance?: "not-assessed"
+}
+
 export type B2JoinReport = {
 	questionCount: number
 	judgedInBoth: number
@@ -112,6 +154,7 @@ export type B2JoinReport = {
 	}
 	netR: number
 	netQFlips: number
+	inference: B2Inference
 	noiseRule: {
 		real: boolean
 		reason: string
@@ -135,8 +178,120 @@ export type B2JoinReport = {
 export type JoinB2RunsOptions = {
 	/** Net flips measured between two repetitions of the SAME configuration. */
 	baselineFlips?: number
-	/** No Q sidecar available: verdict on R movement alone. */
+	/** No Q sidecar available: binary session R@10 is the declared endpoint. */
 	rOnly?: boolean
+	/** Artifact-level eligibility; without it no inference is emitted. */
+	eligibility?: B2ComparisonEligibility
+}
+
+function isBinary(value: number): boolean {
+	return value === 0 || value === 1
+}
+
+function buildInference(
+	questionIds: string[],
+	runA: Map<string, RunQuestionMetrics>,
+	runB: Map<string, RunQuestionMetrics>,
+	options: JoinB2RunsOptions,
+): B2Inference {
+	const eligibility = options.eligibility
+	const endpoint = options.rOnly
+		? "session-recall-any-at-10"
+		: "official-qa-judged-correct"
+	const reasons = eligibility
+		? [...eligibility.reasons]
+		: [
+				"artifact identity was not assessed; typed metrics alone cannot establish a comparable pair",
+			]
+	if (
+		eligibility &&
+		eligibility.independence !== "declared-not-verified" &&
+		!reasons.some((reason) => reason.includes("independence"))
+	)
+		reasons.push("question-level independence was not declared")
+	let gains = 0
+	let losses = 0
+	let incomplete = 0
+	let nonBinary = 0
+	for (const id of questionIds) {
+		const a = runA.get(id)
+		const b = runB.get(id)
+		let successA: boolean
+		let successB: boolean
+		if (options.rOnly) {
+			const ra = a?.recallAnyAt10
+			const rb = b?.recallAnyAt10
+			if (ra == null || rb == null) {
+				incomplete += 1
+				continue
+			}
+			if (!isBinary(ra) || !isBinary(rb)) {
+				nonBinary += 1
+				continue
+			}
+			successA = ra === 1
+			successB = rb === 1
+		} else {
+			const va = a?.verdict
+			const vb = b?.verdict
+			if ((va !== "yes" && va !== "no") || (vb !== "yes" && vb !== "no")) {
+				incomplete += 1
+				continue
+			}
+			successA = va === "yes"
+			successB = vb === "yes"
+		}
+		if (successB && !successA) gains += 1
+		if (successA && !successB) losses += 1
+	}
+	if (questionIds.length === 0) reasons.push("no questions to compare")
+	if (incomplete > 0)
+		reasons.push(
+			`incomplete pairs: ${incomplete} of ${questionIds.length} questions lack a paired ${endpoint} outcome`,
+		)
+	if (nonBinary > 0)
+		reasons.push(
+			`${nonBinary} question(s) have non-binary recall; the exact test needs 0/1 outcomes`,
+		)
+	const base = {
+		endpoint,
+		analysisUnit: "question",
+		independence: eligibility?.independence ?? "not-declared",
+		treatment: eligibility?.treatment ?? null,
+	} as const
+	if (eligibility?.eligible !== true || reasons.length > 0)
+		return { ...base, eligible: false, reasons }
+	const test = exactMcNemar(gains, losses)
+	const n = questionIds.length
+	return {
+		...base,
+		eligible: true,
+		reasons: [],
+		method: "exact-mcnemar-two-sided",
+		alpha: B2_INFERENCE_ALPHA,
+		n,
+		gains,
+		losses,
+		discordant: test.discordant,
+		pTwoSided: test.pTwoSided,
+		differenceInProportion: (gains - losses) / n,
+		evidence:
+			test.pTwoSided > B2_INFERENCE_ALPHA
+				? "inconclusive"
+				: gains > losses
+					? "b-higher"
+					: "a-higher",
+		practicalSignificance: "not-assessed",
+	}
+}
+
+function describeInference(inference: B2Inference): string {
+	if (!inference.eligible)
+		return `no inferential verdict: ${inference.reasons.join("; ")}`
+	const test = `exact two-sided McNemar on ${inference.endpoint}: ${inference.gains} B-only vs ${inference.losses} A-only successes over ${inference.n} complete pairs, p=${inference.pTwoSided}`
+	return inference.evidence === "inconclusive"
+		? `${test}; inconclusive at alpha ${inference.alpha} (not evidence of equivalence)`
+		: `${test}; statistical evidence at alpha ${inference.alpha} that ${inference.evidence === "b-higher" ? "B" : "A"} is higher; practical significance not assessed`
 }
 
 function mean(values: number[]): number {
@@ -409,28 +564,9 @@ export function joinB2Runs(
 	)
 	const retrievalRealAnswerNeutral =
 		Math.abs(netR) >= B2_NET_R_THRESHOLD && netQFlips === 0
-	let real: boolean
-	let reason: string
-	if (options.rOnly) {
-		real = Math.abs(netR) >= B2_NET_R_THRESHOLD
-		reason = real
-			? `r-only: net R@10 ${netR >= 0 ? "+" : ""}${netR} questions reaches the ±${B2_NET_R_THRESHOLD}-question threshold`
-			: `r-only: net R@10 ${netR >= 0 ? "+" : ""}${netR} questions stays under the ±${B2_NET_R_THRESHOLD}-question threshold`
-	} else if (Math.abs(netQFlips) >= threshold) {
-		real = true
-		reason = `net Q flips ${netQFlips >= 0 ? "+" : ""}${netQFlips} reach the ±${threshold}-question threshold`
-	} else if (
-		netR !== 0 &&
-		Math.sign(netR) === Math.sign(netQFlips) &&
-		Math.abs(netR) >= 2 &&
-		Math.abs(netQFlips) >= 1
-	) {
-		real = true
-		reason = `R@10 net ${netR >= 0 ? "+" : ""}${netR} questions and Q net ${netQFlips >= 0 ? "+" : ""}${netQFlips} correct answers move together (|netR| ≥ 2)`
-	} else {
-		real = false
-		reason = `net R@10 ${netR >= 0 ? "+" : ""}${netR} questions and net Q ${netQFlips >= 0 ? "+" : ""}${netQFlips} flips stay inside the noise envelope (threshold ±${threshold})`
-	}
+	const inference = buildInference(questionIds, runA, runB, options)
+	const real = inference.eligible && inference.evidence !== "inconclusive"
+	const reason = describeInference(inference)
 	return {
 		questionCount: questionIds.length,
 		judgedInBoth,
@@ -449,6 +585,7 @@ export function joinB2Runs(
 		},
 		netR,
 		netQFlips,
+		inference,
 		noiseRule: {
 			real,
 			reason,
@@ -517,7 +654,7 @@ export async function main(
 	const checkpointB = parseArg(argv, "--b")
 	if (!checkpointA || !checkpointB) {
 		console.error(
-			"usage: bun scripts/benchmark/b2-join.ts --a <checkpoint-a> --b <checkpoint-b> [--baseline-a <ckpt> --baseline-b <ckpt>] [--r-only] [--min-judged <n>]",
+			"usage: bun scripts/benchmark/b2-join.ts --a <checkpoint-a> --b <checkpoint-b> [--baseline-a <ckpt> --baseline-b <ckpt>] [--r-only] [--min-judged <n>] [--assume-independent-questions] [--treatment <field>]",
 		)
 		process.exitCode = 1
 		return
@@ -538,6 +675,19 @@ export async function main(
 		process.exitCode = 1
 		return
 	}
+	const treatmentValue = parseArg(argv, "--treatment")
+	if (
+		argv.includes("--treatment") &&
+		(!treatmentValue || !isB2TreatmentField(treatmentValue))
+	) {
+		console.error(
+			`error: --treatment must be one of ${B2_TREATMENT_FIELDS.join(", ")}; opaque digests such as configurationHash or executableDigest cannot be a treatment`,
+		)
+		process.exitCode = 1
+		return
+	}
+	const treatment: B2TreatmentField | null =
+		treatmentValue && isB2TreatmentField(treatmentValue) ? treatmentValue : null
 	const requireSidecar = !rOnly
 	// Sequential (not Promise.all) so a missing-sidecar failure names the
 	// first artifact deterministically instead of racing on rejection order.
@@ -560,8 +710,24 @@ export async function main(
 		}
 	}
 	const [datasetShaA, datasetShaB] = datasetDigests
-	if (datasetShaA && datasetShaB && datasetShaA !== datasetShaB) {
-		throw new Error(
+	const eligibility = assessB2Comparison({
+		a: await readB2RunIdentity(path.resolve(checkpointA)),
+		b: await readB2RunIdentity(path.resolve(checkpointB)),
+		runA,
+		runB,
+		treatment,
+		independenceDeclared: argv.includes("--assume-independent-questions"),
+		rOnly,
+		...(minJudged != null ? { minJudged } : {}),
+	})
+	if (
+		datasetShaA &&
+		datasetShaB &&
+		datasetShaA !== datasetShaB &&
+		!eligibility.reasons.some((reason) => reason.startsWith("datasetSha256"))
+	) {
+		eligibility.eligible = false
+		eligibility.reasons.push(
 			"dataset digest mismatch: A and B must use the same dataset",
 		)
 	}
@@ -609,14 +775,12 @@ export async function main(
 			)
 		}
 	}
-	const report = joinB2Runs(runA, runB, { baselineFlips, rOnly })
+	const report = joinB2Runs(runA, runB, { baselineFlips, rOnly, eligibility })
 	if (!rOnly) {
 		if (report.judgedInBoth === 0) {
 			console.error(
 				"error: no questions judged in both runs — the Q side is empty; check that both runs set MEMONGO_BENCHMARK_QA_PROTOCOL=official (or pass --r-only)",
 			)
-			process.exitCode = 1
-			return
 		}
 		if (report.partialQ.incomplete) {
 			console.warn(
@@ -629,13 +793,6 @@ export async function main(
 			)
 		}
 	}
-	if (minJudged != null && report.judgedInBoth < minJudged) {
-		console.error(
-			`error: judged-in-both ${report.judgedInBoth} is below --min-judged ${minJudged}`,
-		)
-		process.exitCode = 1
-		return
-	}
 	if (baselineFlips != null) {
 		report.flipRate = {
 			judgedInBoth: baselineJudged,
@@ -644,6 +801,10 @@ export async function main(
 		}
 	}
 	console.log(JSON.stringify(report, null, 2))
+	if (!report.inference.eligible) {
+		console.error(`error: ${report.noiseRule.reason}`)
+		process.exitCode = 1
+	}
 }
 
 const invokedPath = process.argv[1]
