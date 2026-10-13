@@ -78,8 +78,16 @@ export async function computeExecutableDigest(
 		let bytes: Buffer | null
 		try {
 			bytes = await readFile(path.join(repoRoot, file))
-		} catch {
-			// A tracked file deleted from the working tree is itself a change.
+		} catch (error) {
+			// A tracked file deleted from the working tree is itself a change;
+			// any other read failure leaves executable bytes unknown.
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				return {
+					status: "unavailable",
+					reason: `tracked file ${file} is unreadable`,
+					runtime,
+				}
+			}
 			bytes = null
 		}
 		hash.update(`\0${file}\0`)

@@ -30,7 +30,7 @@ export type BenchmarkCheckpoint = {
 	runId: string
 	datasetSha256: string
 	configurationHash: string
-	/** computeExecutableDigest at write time; resume requires the same bytes. */
+	/** computeExecutableDigest captured once at run admission; resume requires the same value. */
 	executableDigest: string
 	totalScenarios: number
 	scenarioIds: string[]

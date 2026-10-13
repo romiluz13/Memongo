@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -71,6 +71,32 @@ describe("computeExecutableDigest", () => {
 			bun: null,
 		})
 		expect(otherRuntime.digest).not.toBe(before.digest)
+	})
+
+	it("treats a deleted tracked file as a change, not as unavailable", async () => {
+		const before = await computeExecutableDigest(repo)
+		await rm(path.join(repo, "scripts/benchmark/run.ts"))
+		const deleted = await computeExecutableDigest(repo)
+		expect(deleted.status).toBe("available")
+		expect(deleted.digest).not.toBe(before.digest)
+		expect((await computeExecutableDigest(repo)).digest).toBe(deleted.digest)
+	})
+
+	it("reports unavailable when a tracked file cannot be read", async () => {
+		const file = path.join(repo, "scripts/benchmark/run.ts")
+		try {
+			await chmod(file, 0o000)
+			const first = await computeExecutableDigest(repo)
+			await chmod(file, 0o600)
+			await writeFile(file, "export const a = 99\n")
+			await chmod(file, 0o000)
+			const second = await computeExecutableDigest(repo)
+			expect(first).toMatchObject({ status: "unavailable" })
+			expect(second).toMatchObject({ status: "unavailable" })
+			expect(first.digest).toBeUndefined()
+		} finally {
+			await chmod(file, 0o600)
+		}
 	})
 
 	it("reports unavailable outside a git work tree", async () => {

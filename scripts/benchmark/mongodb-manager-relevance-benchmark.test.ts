@@ -7,6 +7,8 @@ import {
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { loadBenchmarkDataset } from "./mongodb-benchmark-harness.js"
+import { computeExecutableDigest } from "./benchmark-executable-identity.js"
+import { writeBenchmarkCheckpointAtomic } from "./mongodb-benchmark-checkpoint.js"
 import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-contracts.js"
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
@@ -39,6 +41,13 @@ function benchmarkOps(
 	}
 	return ops
 }
+
+vi.mock("./benchmark-executable-identity.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("./benchmark-executable-identity.js")
+	>()),
+	computeExecutableDigest: vi.fn(),
+}))
 
 vi.mock("../../packages/memory-engine/src/mongodb-events.js", async () =>
 	(
@@ -932,5 +941,170 @@ describe("resolveExplainSources", () => {
 			reference: false,
 			structured: false,
 		})
+	})
+})
+
+describe("relevanceBenchmark resume admission binds the executable digest", () => {
+	const runtime = { node: "v0.0.0", bun: null }
+	const available = (digest: string) => ({
+		status: "available" as const,
+		digest,
+		headCommit: "f".repeat(40),
+		trackedFiles: 1,
+		runtime,
+	})
+
+	async function setup() {
+		const workspaceDir = await mkdtemp(
+			path.join(os.tmpdir(), "memongo-resume-admission-"),
+		)
+		const datasetDir = path.join(workspaceDir, "benchmarks")
+		const datasetPath = path.join(datasetDir, "dataset.json")
+		const checkpointPath = path.join(workspaceDir, "checkpoint.json")
+		await mkdir(datasetDir, { recursive: true })
+		await writeFile(datasetPath, JSON.stringify({ name: "placeholder" }))
+		vi.mocked(loadBenchmarkDataset).mockResolvedValue({
+			name: "LongMemEval sample",
+			datasetKind: "longmemeval",
+			conversations: [],
+			evaluations: [],
+			scenarios: [
+				{
+					scenarioId: "scenario-1",
+					conversations: [],
+					evaluations: [
+						{
+							caseId: "case-1",
+							query: "When is the launch?",
+							expectedSessionIds: ["session-1"],
+						},
+					],
+				},
+			],
+		})
+		const runScenarioBenchmarkDataset = vi.fn().mockResolvedValue({
+			result: {
+				datasetVersion: "dataset-v1",
+				datasetName: "LongMemEval sample",
+				datasetKind: "longmemeval",
+				scenarios: 1,
+				cases: 1,
+				scoredCases: 1,
+				skippedCases: 0,
+				hitRate: 1,
+				emptyRate: 0,
+				avgTopScore: 0.9,
+				p95LatencyMs: 10,
+				rAt5: 1,
+				rAt10: 1,
+				ndcgAt10: 1,
+				questionTypeBreakdown: [],
+				regressions: [],
+			},
+			latencySamples: [10],
+		})
+		const manager = {
+			workspaceDir,
+			db: {
+				command: vi.fn().mockResolvedValue({ size: 0, totalIndexSize: 0 }),
+			},
+			prefix: "memongo_bench_",
+			config: {
+				mongodb: {
+					relevance: {
+						benchmark: {
+							enabled: true,
+							datasetPath: path.join(datasetDir, "default.json"),
+						},
+					},
+					numDimensions: 1024,
+					quantization: "none",
+					reranking: { enabled: false, model: "rerank-2.5", topN: 20 },
+				},
+			},
+			relevance: { loadBenchmarkDataset: vi.fn() },
+			snapshotBenchmarkRunConfiguration: testBenchmarkRunConfiguration,
+			runScenarioBenchmarkDataset,
+			runLegacyRelevanceBenchmark: vi.fn(),
+		} as unknown as MongoDBMemoryManager
+		const run = (resume: boolean) =>
+			benchmarkOps(manager).relevanceBenchmark({
+				datasetPath: "benchmarks/dataset.json",
+				checkpointPath,
+				resume,
+			})
+
+		// A fresh admission forwards the captured digest; its run identity seeds
+		// the checkpoint the resume cases read back.
+		vi.mocked(computeExecutableDigest).mockResolvedValue(
+			available("d".repeat(64)),
+		)
+		await run(false)
+		const fresh = runScenarioBenchmarkDataset.mock.calls[0][0]
+		expect(fresh.executableDigest).toBe("d".repeat(64))
+		expect(fresh.resumeCheckpoint).toBeUndefined()
+		await writeBenchmarkCheckpointAtomic(checkpointPath, {
+			version: 2,
+			runId: "run-to-resume",
+			datasetSha256: fresh.datasetSha256,
+			configurationHash: fresh.runContext.configurationHash,
+			executableDigest: "d".repeat(64),
+			totalScenarios: 1,
+			scenarioIds: ["scenario-1"],
+			completedScenarios: [],
+			accounting: fresh.runContext.accounting.snapshot(),
+			updatedAt: "2026-10-13T00:00:00.000Z",
+		})
+		runScenarioBenchmarkDataset.mockClear()
+		return { workspaceDir, run, runScenarioBenchmarkDataset }
+	}
+
+	it("refuses scenario admission when executable source changed", async () => {
+		const t = await setup()
+		try {
+			vi.mocked(computeExecutableDigest).mockResolvedValue(
+				available("e".repeat(64)),
+			)
+			await expect(t.run(true)).rejects.toThrow(
+				"executable digest does not match",
+			)
+			expect(t.runScenarioBenchmarkDataset).not.toHaveBeenCalled()
+		} finally {
+			await rm(t.workspaceDir, { recursive: true, force: true })
+		}
+	})
+
+	it("refuses scenario admission when the executable identity is unavailable", async () => {
+		const t = await setup()
+		try {
+			vi.mocked(computeExecutableDigest).mockResolvedValue({
+				status: "unavailable",
+				reason: "tracked file scripts/x.ts is unreadable",
+				runtime,
+			})
+			await expect(t.run(true)).rejects.toThrow(
+				"executable identity is unavailable",
+			)
+			expect(t.runScenarioBenchmarkDataset).not.toHaveBeenCalled()
+		} finally {
+			await rm(t.workspaceDir, { recursive: true, force: true })
+		}
+	})
+
+	it("resumes with a matching digest and forwards it to scenario execution", async () => {
+		const t = await setup()
+		try {
+			vi.mocked(computeExecutableDigest).mockResolvedValue(
+				available("d".repeat(64)),
+			)
+			await t.run(true)
+			expect(t.runScenarioBenchmarkDataset).toHaveBeenCalledTimes(1)
+			const params = t.runScenarioBenchmarkDataset.mock.calls[0][0]
+			expect(params.executableDigest).toBe("d".repeat(64))
+			expect(params.resumeCheckpoint).toMatchObject({ runId: "run-to-resume" })
+			expect(params.runContext.runId).toBe("run-to-resume")
+		} finally {
+			await rm(t.workspaceDir, { recursive: true, force: true })
+		}
 	})
 })
