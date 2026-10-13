@@ -244,16 +244,12 @@ export const CAPABILITY_GATES: readonly CapabilityGate[] = [
 	{
 		id: "autoembed-quantization",
 		description:
-			"quantization (scalar/binary) on autoEmbed vector index definitions (~75% memory reduction for scalar)",
-		// The server rejects quantization on autoEmbed definitions ("Omit
-		// quantization to use the default (float)"); there is no version that
-		// announces support, so adoption is by probe: ensureSearchIndexes
-		// passes the configured quantization through and records a rejection.
+			"explicit scalar/binary quantization on autoEmbed vector index definitions",
+		// The configured value is sent unchanged. Target rejection propagates;
+		// omission is server-default, not a full-precision guarantee.
 		blockedOn:
-			"Atlas accepting quantization on autoEmbed vector index definitions",
-		todo: "fix-plan-2026-08-03 P3.4 — re-probe when Atlas documents autoEmbed quantization support",
-		// Optimistic until the probe records a rejection; the recorded probe
-		// result (see isCapabilityEnabled) is the real gate.
+			"Target deployment accepting the requested autoEmbed quantization",
+		todo: "fix-plan-2026-08-03 P3.4 — verify requested/effective definitions and native retrieval on the target",
 		shouldEnable: () => true,
 	},
 	{

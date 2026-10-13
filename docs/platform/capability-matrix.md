@@ -73,6 +73,24 @@ Search results are always produced by live retrieval. The legacy
 `query_cache` collection remains only for TTL cleanup, write-side invalidation,
 and tenant erasure while old rows age out.
 
+## AutoEmbed quantization
+
+`vectorQuantization: "none"` omits the AutoEmbed field's `quantization`
+option and preserves the server default. It does not request or guarantee
+full-precision vectors. The existing configuration default is unchanged.
+
+Explicit `"scalar"` or `"binary"` values are sent unchanged. A quantization
+rejection during index creation or update now fails index setup instead of
+silently retrying with the option omitted. Check the target deployment's
+support before selecting an explicit value.
+
+An accepted index definition alone does not prove retrieval readiness. Target
+qualification must check READY/queryable state and each host's active
+`statusDetail[].mainIndex.definition`, then exercise native text retrieval.
+`latestDefinition` describes the submitted definition and is insufficient
+as active-definition evidence. See MongoDB's [Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/)
+and [List Search Indexes](https://www.mongodb.com/docs/manual/reference/operator/aggregation/listsearchindexes/).
+
 ## Proof path
 
 - MongoDB runtime parity: `bun run mongodb:parity` with managed Atlas cloud, Atlas Local Preview, or both configured.

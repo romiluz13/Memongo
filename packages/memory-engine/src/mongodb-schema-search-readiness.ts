@@ -351,7 +351,17 @@ export async function ensureNamedSearchIndex(params: {
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
-		if (isSearchIndexManagementUnavailable(msg)) {
+		const explicitAutoEmbedQuantization =
+			params.type === "vectorSearch" &&
+			Array.isArray(params.definition.fields) &&
+			params.definition.fields.some(
+				(field: Document) =>
+					field.type === "autoEmbed" && field.quantization !== undefined,
+			)
+		if (
+			isSearchIndexManagementUnavailable(msg) ||
+			(explicitAutoEmbedQuantization && msg.includes("quantization"))
+		) {
 			throw err
 		}
 		log.warn(
