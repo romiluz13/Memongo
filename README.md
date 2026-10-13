@@ -39,12 +39,21 @@ Prerequisites:
 
 - Node.js and Bun versions specified by `engines.node` and `packageManager` in [package.json](package.json)
 - Docker (for the local MongoDB path — uses MongoDB Atlas Local Preview with mongot for Atlas Search)
+- A MongoDB replica set or sharded cluster. Memongo writes use transactions,
+  which a [standalone `mongod` does not support](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/);
+  writes then fail with `ADD_FAILED`. Atlas clusters and the Docker stack below
+  (a single-node replica set) qualify. To use your own standalone server,
+  [convert it to a replica set](https://www.mongodb.com/docs/manual/tutorial/convert-standalone-to-replica-set/).
 
 ```bash
 git clone https://github.com/romiluz13/memongo.git
 cd memongo
 bun install
+bun run build
 ```
+
+The API imports the workspace packages from their built `dist/` output, so
+build once after installing and again after pulling changes.
 
 Start MongoDB:
 

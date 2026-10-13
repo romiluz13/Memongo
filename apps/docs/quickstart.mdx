@@ -6,17 +6,25 @@ icon: "play"
 
 ## Prerequisites
 
-- Node.js 20+
-- Bun 1.2+
+- Node.js and Bun versions from `engines.node` and `packageManager` in the root
+  `package.json` (currently Node.js 20.19 or later and Bun 1.4.2)
 - Docker, for local MongoDB
+- A MongoDB replica set or sharded cluster. Memongo writes use transactions,
+  which a [standalone `mongod` does not support](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/).
+  Atlas clusters and the Docker stack below (a single-node replica set) qualify.
 
-## 1. Clone and install
+## 1. Clone, install, and build
 
 ```bash
 git clone https://github.com/romiluz13/memongo.git
 cd memongo
 bun install
+bun run build
 ```
+
+The API imports the workspace packages from their built `dist/` output. Without
+this step, `bun run dev` fails with `ERR_MODULE_NOT_FOUND` for
+`@memongo/lib/dist/index.js`. Rebuild after pulling changes.
 
 ## 2. Start MongoDB
 
@@ -64,6 +72,12 @@ curl -s http://127.0.0.1:3847/v1/status \
 ```
 
 Look for a healthy API response and a memory status payload.
+
+`/health` can report ok even when MongoDB rejects writes. If `/v1/add` returns
+`ADD_FAILED` and the API log shows `Transaction numbers are only allowed on a
+replica set member or mongos`, the server is a standalone `mongod`.
+[Convert it to a replica set](https://www.mongodb.com/docs/manual/tutorial/convert-standalone-to-replica-set/)
+or use the Docker stack above.
 
 ## 5. Add and search memory
 
