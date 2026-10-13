@@ -478,3 +478,99 @@ describe("b2-join CLI comparison eligibility", () => {
 		expectIneligible(await cli(c, fixture("run-b", verdicts), flags), "binary")
 	})
 })
+
+describe("b2-join CLI coverage and identity values (1111.3)", () => {
+	function generic(f: Fixture, caseIds: Array<string | undefined>) {
+		f.checkpoint.completedScenarios.forEach((scenario, i) => {
+			const caseId = caseIds[i]
+			scenario.executionsByPass = [[caseId === undefined ? {} : { caseId }]]
+		})
+		const rows = Object.values(f.sidecar.rows)
+		f.sidecar.rows = Object.fromEntries(
+			rows.flatMap((row, i) => {
+				const caseId = caseIds[i]
+				return caseId ? [[caseId, { ...row, questionId: caseId }]] : []
+			}),
+		)
+	}
+
+	it("keeps generic scenarios whose selected case ID differs from the scenario ID", async () => {
+		const [a, b] = pair(6, 0, 8)
+		const ids = Array.from({ length: 8 }, (_, i) => `conv-${i}::qa`)
+		generic(a, ids)
+		generic(b, ids)
+		const result = await cli(a, b)
+		expect(result.code).toBe(0)
+		expect(result.report.inference).toMatchObject({ eligible: true, n: 8 })
+	})
+
+	it.each([
+		["missing", undefined, undefined],
+		["blank", " ", "   "],
+	])("refuses declared scenarios whose final-pass case ID is %s", async (_name, first, second) => {
+		const [a, b] = pair(6, 0, 8)
+		for (const f of [a, b])
+			generic(f, [
+				...Array.from({ length: 6 }, (_, i) => `q${i}`),
+				first,
+				second,
+			])
+		const result = await cli(a, b)
+		expectIneligible(result, "case ID")
+		expect(result.stderr).not.toContain('"   "')
+	})
+
+	it.each([
+		"runId",
+		"datasetSha256",
+		"configurationHash",
+		"executableDigest",
+	])("refuses a blank checkpoint %s", async (field) => {
+		const [a, b] = pair()
+		b.checkpoint[field] = "   "
+		if (field !== "executableDigest") b.sidecar.identity[field] = "   "
+		expectIneligible(await cli(a, b), field)
+	})
+
+	it.each(
+		Object.keys(IDENTITY).filter(
+			(key) => key !== "datasetSha256" && key !== "configurationHash",
+		),
+	)("refuses a blank sidecar %s in both runs", async (field) => {
+		const [a, b] = pair()
+		a.sidecar.identity[field] = "   "
+		b.sidecar.identity[field] = "   "
+		expectIneligible(await cli(a, b), field)
+	})
+
+	it.each([
+		["uppercase", "D".repeat(64)],
+		["short", "d".repeat(63)],
+		["non-hex", "z".repeat(64)],
+		["padded", ` ${"d".repeat(64)}`],
+	])("refuses a %s datasetSha256 shared by both runs", async (_name, value) => {
+		const [a, b] = pair()
+		for (const f of [a, b]) {
+			f.checkpoint.datasetSha256 = value
+			f.sidecar.identity.datasetSha256 = value
+		}
+		const result = await cli(a, b)
+		expectIneligible(result, "datasetSha256")
+		expect(result.stderr).not.toContain(value.trim())
+	})
+
+	it("blocks root's all-blank identity fixture", async () => {
+		const [a, b] = pair(6, 0, 8)
+		for (const f of [a, b]) {
+			for (const key of Object.keys(f.sidecar.identity))
+				if (key !== "runId") f.sidecar.identity[key] = "   "
+			for (const key of [
+				"datasetSha256",
+				"configurationHash",
+				"executableDigest",
+			])
+				f.checkpoint[key] = "   "
+		}
+		expectIneligible(await cli(a, b), "identity")
+	})
+})

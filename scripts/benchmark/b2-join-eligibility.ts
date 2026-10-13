@@ -42,12 +42,18 @@ type CheckpointIdentity = Record<
 
 export type B2RunIdentity = {
 	checkpoint: CheckpointIdentity | null
+	/** Names (never values) of missing or malformed checkpoint identity fields. */
+	checkpointInvalid: string[]
 	sidecar: Record<string, string> | null
+	sidecarInvalid: string[]
 	sidecarPresent: boolean
 	declared: string[] | null
 	completed: string[]
 	clusteredScenarios: number
 	emptyScenarios: number
+	/** Final-pass entries without a meaningful case ID. */
+	invalidCaseEntries: number
+	selectedCaseIds: string[]
 }
 
 export type B2ComparisonEligibility = {
@@ -59,6 +65,27 @@ export type B2ComparisonEligibility = {
 
 function nonEmpty(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0
+}
+
+// Identity text must carry meaning: blank or whitespace-padded values never
+// count as bound provenance.
+function meaningful(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value.trim() === value
+}
+
+const SHA256_HEX = /^[0-9a-f]{64}$/
+const SHA256_FIELDS: ReadonlySet<string> = new Set(SHARED_DIGESTS)
+
+function invalidFields(
+	source: Record<string, unknown> | undefined,
+	fields: readonly string[],
+): string[] {
+	return fields.filter((field) => {
+		const value = source?.[field]
+		return SHA256_FIELDS.has(field)
+			? typeof value !== "string" || !SHA256_HEX.test(value)
+			: !meaningful(value)
+	})
 }
 
 export async function readB2RunIdentity(
@@ -74,21 +101,26 @@ export async function readB2RunIdentity(
 		if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
 	}
 	const fields = ["runId", ...SHARED_DIGESTS] as const
+	const checkpointInvalid = [
+		...(checkpoint?.version === 2 ? [] : ["version"]),
+		...invalidFields(checkpoint, fields),
+	]
 	const boundCheckpoint =
-		checkpoint?.version === 2 &&
-		fields.every((field) => nonEmpty(checkpoint[field]))
+		checkpointInvalid.length === 0
 			? (Object.fromEntries(
 					fields.map((field) => [field, checkpoint[field]]),
 				) as CheckpointIdentity)
 			: null
 	const identity = sidecarFile?.identity as Record<string, unknown> | undefined
 	const sidecarFields = [...BOUND_FIELDS, ...B2_TREATMENT_FIELDS]
+	const sidecarInvalid = [
+		...(sidecarFile?.version === "v2" ? [] : ["version"]),
+		...invalidFields(identity, sidecarFields),
+	]
 	const sidecar =
-		sidecarFile?.version === "v2" &&
-		identity &&
-		sidecarFields.every((field) => nonEmpty(identity[field]))
+		sidecarInvalid.length === 0
 			? (Object.fromEntries(
-					sidecarFields.map((field) => [field, identity[field]]),
+					sidecarFields.map((field) => [field, identity?.[field]]),
 				) as Record<string, string>)
 			: null
 	const scenarios: Array<{
@@ -97,9 +129,18 @@ export async function readB2RunIdentity(
 	}> = Array.isArray(checkpoint?.completedScenarios)
 		? checkpoint.completedScenarios
 		: []
+	const finalEntries = scenarios.flatMap((scenario) => {
+		const last = scenario.executionsByPass?.at(-1)
+		return Array.isArray(last) ? last : []
+	}) as Array<{ caseId?: unknown } | null>
+	const selectedCaseIds = finalEntries
+		.map((entry) => entry?.caseId)
+		.filter(meaningful)
 	return {
 		checkpoint: boundCheckpoint,
+		checkpointInvalid,
 		sidecar,
+		sidecarInvalid,
 		sidecarPresent: sidecarFile !== undefined,
 		declared:
 			Array.isArray(checkpoint?.scenarioIds) &&
@@ -115,6 +156,8 @@ export async function readB2RunIdentity(
 		emptyScenarios: scenarios.filter(
 			(scenario) => (scenario.executionsByPass?.at(-1)?.length ?? 0) === 0,
 		).length,
+		invalidCaseEntries: finalEntries.length - selectedCaseIds.length,
+		selectedCaseIds,
 	}
 }
 
@@ -153,11 +196,15 @@ export function assessB2Comparison(params: {
 	for (const [label, run] of runs) {
 		if (!run.checkpoint)
 			reasons.push(
-				`run ${label}: checkpoint identity is missing or invalid (version 2 runId, datasetSha256, configurationHash, executableDigest)`,
+				`run ${label}: checkpoint identity is missing or invalid (${run.checkpointInvalid.join(", ")}); version 2 requires runId and lowercase sha256 datasetSha256, configurationHash, executableDigest`,
 			)
 		if (!run.sidecar && (!rOnly || run.sidecarPresent || treatment))
 			reasons.push(
-				`run ${label}: prediction sidecar v2 identity is missing or invalid`,
+				`run ${label}: prediction sidecar v2 identity is missing or invalid (${run.sidecarInvalid.join(", ")})`,
+			)
+		if (run.invalidCaseEntries > 0)
+			reasons.push(
+				`run ${label}: ${run.invalidCaseEntries} final-pass entr${run.invalidCaseEntries === 1 ? "y lacks" : "ies lack"} a valid case ID, so the declared population is not paired`,
 			)
 		if (run.checkpoint && run.sidecar) {
 			for (const field of BOUND_FIELDS) {
@@ -200,6 +247,11 @@ export function assessB2Comparison(params: {
 			!a.declared.every((id) => b.declared?.includes(id)))
 	)
 		reasons.push("declared populations differ between runs")
+	if (
+		a.selectedCaseIds.length !== b.selectedCaseIds.length ||
+		!a.selectedCaseIds.every((id) => b.selectedCaseIds.includes(id))
+	)
+		reasons.push("selected case IDs differ between runs")
 	if (a.sidecar && b.sidecar) {
 		const differing = B2_TREATMENT_FIELDS.filter(
 			(field) => a.sidecar?.[field] !== b.sidecar?.[field],

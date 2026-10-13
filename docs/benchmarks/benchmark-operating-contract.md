@@ -158,15 +158,19 @@ descriptive only; `noiseRule.real` mirrors the test for compatibility.
 
 Inference is emitted only for eligible comparisons. Both runs need a version 2
 checkpoint and a v2 prediction sidecar whose `runId`, `datasetSha256` and
-`configurationHash` match their own checkpoint. The runs must be distinct and
+`configurationHash` match their own checkpoint. `datasetSha256`,
+`configurationHash` and `executableDigest` must be lowercase 64-character
+sha256 hex; every other identity field must be non-blank text without
+surrounding whitespace. Rejections name the field, never its value. The runs must be distinct and
 must share `datasetSha256`, `configurationHash` and `executableDigest`; these
 opaque digests cannot show that a single setting changed, so they are never a
 treatment. At most one directly observed scalar sidecar field may differ, and
 only when declared with `--treatment` (answer/judge model, judge protocol,
 prompt versions, answer temperature or max tokens); a declared field must
 actually differ and cannot hide a second difference. Every declared scenario
-must be completed with exactly one final-pass case and a paired binary outcome
-in both runs, and `--min-judged` must be met. Question-level independence is
+must be completed with exactly one final-pass entry carrying a valid case ID
+(which may differ from the scenario ID), both runs must select the same case
+IDs, each with a paired binary outcome, and `--min-judged` must be met. Question-level independence is
 an assumption the caller declares with `--assume-independent-questions`; the
 report records it as declared, not verified. Known clustered populations
 (several cases per scenario) are refused even with that declaration.
