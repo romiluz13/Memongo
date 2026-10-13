@@ -57,7 +57,12 @@ bun run benchmark --resume
 
 Each completed scenario is written atomically to
 `benchmarks/results/checkpoints/`. `--resume` accepts that checkpoint only when
-the dataset digest, complete scenario manifest, and configuration hash match.
+the dataset digest, complete scenario manifest, configuration hash, and
+executable digest match. The executable digest covers HEAD plus the working-tree
+bytes of tracked files under `packages/`, `apps/`, `scripts/`, `bun.lock`, and
+`package.json`, plus the Node and Bun versions; results, checkpoints, and
+untracked files are excluded. Resume requires a git work tree. Checkpoints
+written before this binding are refused; keep them for historical analysis only.
 Use `--checkpoint <path>` to choose another file or `--no-checkpoint` for a
 throwaway run. Transient MongoDB read failures are retried at bounded
 idempotent boundaries; incomplete ingest and unsettled workers fail publication
