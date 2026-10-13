@@ -2,6 +2,15 @@
 
 All notable changes to Memongo will be documented in this file.
 
+## 2.2.3 — 2026-10-13
+
+- Preserve explicitly requested autoEmbed scalar and binary quantization when
+  MongoDB rejects a create or update, instead of silently retrying with omission.
+- Describe omitted autoEmbed quantization as the server default rather than an
+  explicit full-precision request.
+
+See [release details and validation limits](docs/platform/releases/2.2.3.md).
+
 ## 2.2.2 — 2026-10-12
 
 - Preserve repeated bare possessive user facts when extraction omits one terminal

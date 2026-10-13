@@ -268,9 +268,8 @@ export function autoEmbedVectorField(
 		path,
 		model: INDEX_AUTOEMBED_MODEL,
 		...(indexingMethod ? { indexingMethod } : {}),
-		// P3.4 probe-adopt: the configured quantization ships in the definition;
-		// a server rejection is caught in ensureSearchIndexes, recorded in the
-		// capability registry, and retried with the server default.
+		// "none" omits the option and preserves the server default.
+		// Explicit scalar/binary requests are never retried with omission.
 		...(quantization !== "none" ? { quantization } : {}),
 	}
 }
@@ -418,13 +417,12 @@ export function withVectorStoredSource(
  * returned {text: true, vector: false}. No semantic retrieval at all, on
  * precisely the versions the gate was written to light up.
  *
- * The per-field options are not ours to choose either. The same cluster
- * rejects `quantization` ("Omit quantization to use the default (float)"),
- * `similarity` ("...the default (dotProduct)"), `numDimensions` ("The
- * embedding model determines dimensions automatically") and field-level
- * `indexingMethod` ("Omit indexingMethod to use default HNSW") on an autoEmbed
- * field: the embedding model determines all of them. So there is nothing here
- * to pin, and no irreversible choice to get wrong.
+ * That historical 8.3.4 probe also rejected explicit quantization. It does
+ * not establish the default or supported options on a current deployment.
+ * Explicit scalar/binary requests now retain their meaning or fail; omission
+ * leaves the server default in effect. The same historical cluster rejected
+ * `similarity`, `numDimensions`, and field-level `indexingMethod`; later
+ * indexing-method support is described below.
  *
  * Two exceptions have since opened up, both tracked in the capability
  * registry (mongodb-capability-registry.ts) so they self-enable as servers
@@ -439,8 +437,8 @@ export function withVectorStoredSource(
  *   the search projections read — the boolean `true` form remains rejected
  *   on every version.
  *
- * `quantization` is probe-adopted (P3.4): the configured value ships in the
- * definition and a server rejection degrades to the default at ensure time.
+ * Explicit quantization ships unchanged; rejection must not substitute the
+ * server default. "none" omits the field without asserting float precision.
  */
 export function buildAutoEmbedVectorDefinition(
 	path: string,
@@ -455,27 +453,6 @@ export function buildAutoEmbedVectorDefinition(
 				path: filterPath,
 			})),
 		],
-	}
-}
-
-/**
- * Strip quantization from autoEmbed fields — the retry shape after a server
- * rejection during probe-adopt (P3.4).
- */
-export function withoutFieldQuantization(definition: Document): Document {
-	const fields = definition.fields
-	if (!Array.isArray(fields)) {
-		return definition
-	}
-	return {
-		...definition,
-		fields: fields.map((field: Document) =>
-			field?.type === "autoEmbed" && "quantization" in field
-				? Object.fromEntries(
-						Object.entries(field).filter(([key]) => key !== "quantization"),
-					)
-				: field,
-		),
 	}
 }
 

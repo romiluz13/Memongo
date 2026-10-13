@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/memory",
-	"version": "2.2.2",
+	"version": "2.2.3",
 	"description": "Memongo memory: published re-export surface for the memory engine and bridge",
 	"type": "module",
 	"engines": {
@@ -39,8 +39,8 @@
 		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
-		"@memongo/memory-engine": "^2.2.2",
-		"@memongo/memory-bridge": "^2.2.2"
+		"@memongo/memory-engine": "^2.2.3",
+		"@memongo/memory-bridge": "^2.2.3"
 	},
 	"devDependencies": {
 		"typescript": "^5.8.0"

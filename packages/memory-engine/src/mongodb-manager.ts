@@ -686,10 +686,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					mongoCfg.numDimensions,
 					capabilityDeployment,
 				)
-				// P3.2: the quantization-on-autoEmbed rejection is a probe outcome
-				// recorded during index creation — fold it into the capabilities so
-				// the search paths see the adopted gate state (detectCapabilities ran
-				// before the probe was recorded).
+				// Apply recorded capability overrides to the detected state.
 				capabilities = {
 					...capabilities,
 					capabilityGates: applyCapabilityProbeResult(

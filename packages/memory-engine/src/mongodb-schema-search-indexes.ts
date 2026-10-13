@@ -18,7 +18,7 @@
 // required; existing deployments keep `lucene.standard` definitions until
 // they opt in, and the default flips only after the retrieval eval gate
 // (benchmark harness, before/after on the sample corpus) passes.
-import type { Collection, Db, Document } from "mongodb"
+import type { Db, Document } from "mongodb"
 import type {
 	MemoryMongoDBDeploymentProfile,
 	MemoryMongoDBEmbeddingMode,
@@ -27,7 +27,6 @@ import { createSubsystemLogger } from "@memongo/lib"
 
 const log = createSubsystemLogger("memory:mongodb:schema")
 
-import { recordCapabilityProbe } from "./mongodb-capability-registry.js"
 import { isEvidenceMirrorEnabled } from "./mongodb-evidence-mirror.js"
 import { assertIndexBudget } from "./mongodb-schema-budget.js"
 import {
@@ -57,7 +56,6 @@ import {
 	isRawSessionSearchIndexProfile,
 	autoEmbedVectorField,
 	withVectorStoredSource,
-	withoutFieldQuantization,
 } from "./mongodb-schema-search-definitions.js"
 import {
 	detectServerVersionArray,
@@ -128,36 +126,7 @@ export async function ensureSearchIndexes(
 	// capability registry; undefined (buildInfo unavailable) keeps them off.
 	const serverVersionArray = await detectServerVersionArray(db)
 
-	// Probe-adopt quantization (P3.4): the configured value ships in every
-	// autoEmbed vector definition. If the server rejects it, record the
-	// capability off in the registry and retry that index with the server
-	// default — index creation never fails over a tuning knob.
-	let activeQuantization = quantization
-	const ensureVectorIndex = async (params: {
-		collection: Collection
-		name: string
-		definition: Document
-		label: string
-	}): Promise<boolean> => {
-		try {
-			return await ensureNamedSearchIndex({ ...params, type: "vectorSearch" })
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			if (activeQuantization !== "none" && msg.includes("quantization")) {
-				activeQuantization = "none"
-				recordCapabilityProbe("autoembed-quantization", false, deployment)
-				log.warn(
-					`server rejected quantization on autoEmbed index definitions; capability recorded off, using the server default: ${msg}`,
-				)
-				return await ensureNamedSearchIndex({
-					...params,
-					type: "vectorSearch",
-					definition: withoutFieldQuantization(params.definition),
-				})
-			}
-			throw err
-		}
-	}
+	// Explicit quantization must never degrade to the server default.
 
 	// 14 search indexes total: chunks, kb_chunks, structured_mem, procedures,
 	// events, and session_chunks each get text + vector indexes, plus entities
@@ -198,7 +167,7 @@ export async function ensureSearchIndexes(
 			const sessionVectorDef: Document = withVectorStoredSource(
 				{
 					fields: [
-						autoEmbedVectorField("text", activeQuantization),
+						autoEmbedVectorField("text", quantization),
 						{ type: "filter", path: "agentId" },
 						{ type: "filter", path: "scope" },
 						{ type: "filter", path: "scopeRef" },
@@ -216,7 +185,8 @@ export async function ensureSearchIndexes(
 				serverVersionArray,
 				deployment,
 			)
-			const vectorCreated = await ensureVectorIndex({
+			const vectorCreated = await ensureNamedSearchIndex({
+				type: "vectorSearch",
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
 				definition: sessionVectorDef,
@@ -225,6 +195,7 @@ export async function ensureSearchIndexes(
 			return { text: false, vector: vectorCreated }
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
+			if (quantization !== "none" && msg.includes("quantization")) throw err
 			if (msg.includes("already exists") || msg.includes("duplicate")) {
 				return { text: false, vector: true }
 			}
@@ -307,17 +278,14 @@ export async function ensureSearchIndexes(
 			"timestamp",
 		]
 		const vectorDef: Document = withVectorStoredSource(
-			buildAutoEmbedVectorDefinition(
-				"text",
-				chunksFilterPaths,
-				activeQuantization,
-			),
+			buildAutoEmbedVectorDefinition("text", chunksFilterPaths, quantization),
 			"chunks",
 			serverVersionArray,
 			deployment,
 		)
 
-		vectorCreated = await ensureVectorIndex({
+		vectorCreated = await ensureNamedSearchIndex({
+			type: "vectorSearch",
 			collection: chunks,
 			name: `${prefix}chunks_vector`,
 			definition: vectorDef,
@@ -325,6 +293,7 @@ export async function ensureSearchIndexes(
 		})
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
+		if (quantization !== "none" && msg.includes("quantization")) throw err
 		if (msg.includes("already exists") || msg.includes("duplicate")) {
 			vectorCreated = true
 		} else if (isSearchIndexManagementUnavailable(msg)) {
@@ -394,7 +363,7 @@ export async function ensureSearchIndexes(
 			const kbVectorDef: Document = withVectorStoredSource(
 				{
 					fields: [
-						autoEmbedVectorField("text", activeQuantization),
+						autoEmbedVectorField("text", quantization),
 						...kbFilterFields,
 					],
 				},
@@ -403,7 +372,8 @@ export async function ensureSearchIndexes(
 				deployment,
 			)
 
-			vectorCreated = await ensureVectorIndex({
+			vectorCreated = await ensureNamedSearchIndex({
+				type: "vectorSearch",
 				collection: kbChunks,
 				name: `${prefix}kb_chunks_vector`,
 				definition: kbVectorDef,
@@ -411,6 +381,7 @@ export async function ensureSearchIndexes(
 			})
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
+			if (quantization !== "none" && msg.includes("quantization")) throw err
 			if (msg.includes("already exists") || msg.includes("duplicate")) {
 				vectorCreated = true
 			} else if (isSearchIndexManagementUnavailable(msg)) {
@@ -483,7 +454,7 @@ export async function ensureSearchIndexes(
 		const structVectorDef: Document = withVectorStoredSource(
 			{
 				fields: [
-					autoEmbedVectorField("value", activeQuantization),
+					autoEmbedVectorField("value", quantization),
 					...structFilterFields,
 				],
 			},
@@ -492,7 +463,8 @@ export async function ensureSearchIndexes(
 			deployment,
 		)
 
-		vectorCreated = await ensureVectorIndex({
+		vectorCreated = await ensureNamedSearchIndex({
+			type: "vectorSearch",
 			collection: structured,
 			name: `${prefix}structured_mem_vector`,
 			definition: structVectorDef,
@@ -500,6 +472,7 @@ export async function ensureSearchIndexes(
 		})
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
+		if (quantization !== "none" && msg.includes("quantization")) throw err
 		if (msg.includes("already exists") || msg.includes("duplicate")) {
 			vectorCreated = true
 		} else if (isSearchIndexManagementUnavailable(msg)) {
@@ -550,7 +523,7 @@ export async function ensureSearchIndexes(
 		const procedureVectorDef: Document = withVectorStoredSource(
 			{
 				fields: [
-					autoEmbedVectorField("searchText", activeQuantization),
+					autoEmbedVectorField("searchText", quantization),
 					{ type: "filter", path: "intentTags" },
 					{ type: "filter", path: "agentId" },
 					{ type: "filter", path: "scope" },
@@ -565,7 +538,8 @@ export async function ensureSearchIndexes(
 			deployment,
 		)
 
-		vectorCreated = await ensureVectorIndex({
+		vectorCreated = await ensureNamedSearchIndex({
+			type: "vectorSearch",
 			collection: procedures,
 			name: `${prefix}procedures_vector`,
 			definition: procedureVectorDef,
@@ -573,6 +547,7 @@ export async function ensureSearchIndexes(
 		})
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
+		if (quantization !== "none" && msg.includes("quantization")) throw err
 		if (msg.includes("already exists") || msg.includes("duplicate")) {
 			vectorCreated = true
 		} else if (isSearchIndexManagementUnavailable(msg)) {
@@ -634,11 +609,12 @@ export async function ensureSearchIndexes(
 		]
 		const eventsVectorDef: Document = {
 			fields: [
-				autoEmbedVectorField("body", activeQuantization),
+				autoEmbedVectorField("body", quantization),
 				...eventsFilterFields,
 			],
 		}
-		vectorCreated = await ensureVectorIndex({
+		vectorCreated = await ensureNamedSearchIndex({
+			type: "vectorSearch",
 			collection: events,
 			name: `${prefix}events_vector`,
 			definition: eventsVectorDef,
@@ -646,6 +622,7 @@ export async function ensureSearchIndexes(
 		})
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
+		if (quantization !== "none" && msg.includes("quantization")) throw err
 		if (msg.includes("already exists") || msg.includes("duplicate")) {
 			vectorCreated = true
 		} else if (isSearchIndexManagementUnavailable(msg)) {
@@ -709,7 +686,7 @@ export async function ensureSearchIndexes(
 			const sessionVectorDef: Document = withVectorStoredSource(
 				{
 					fields: [
-						autoEmbedVectorField("text", activeQuantization),
+						autoEmbedVectorField("text", quantization),
 						...sessionFilterFields,
 					],
 				},
@@ -717,7 +694,8 @@ export async function ensureSearchIndexes(
 				serverVersionArray,
 				deployment,
 			)
-			vectorCreated = await ensureVectorIndex({
+			vectorCreated = await ensureNamedSearchIndex({
+				type: "vectorSearch",
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
 				definition: sessionVectorDef,
@@ -725,6 +703,7 @@ export async function ensureSearchIndexes(
 			})
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
+			if (quantization !== "none" && msg.includes("quantization")) throw err
 			if (msg.includes("already exists") || msg.includes("duplicate")) {
 				vectorCreated = true
 			} else if (isSearchIndexManagementUnavailable(msg)) {
@@ -785,11 +764,12 @@ export async function ensureSearchIndexes(
 			]
 			const evidenceVectorDef: Document = {
 				fields: [
-					autoEmbedVectorField("text", activeQuantization),
+					autoEmbedVectorField("text", quantization),
 					...evidenceFilterFields,
 				],
 			}
-			vectorCreated = await ensureVectorIndex({
+			vectorCreated = await ensureNamedSearchIndex({
+				type: "vectorSearch",
 				collection: memoryEvidence,
 				name: `${prefix}memory_evidence_vector`,
 				definition: evidenceVectorDef,
@@ -797,6 +777,7 @@ export async function ensureSearchIndexes(
 			})
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
+			if (quantization !== "none" && msg.includes("quantization")) throw err
 			if (msg.includes("already exists") || msg.includes("duplicate")) {
 				vectorCreated = true
 			} else if (isSearchIndexManagementUnavailable(msg)) {

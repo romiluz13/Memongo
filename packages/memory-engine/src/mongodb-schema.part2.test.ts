@@ -653,14 +653,14 @@ describe("ensureSearchIndexes", () => {
 				.fields as Document[]
 			const autoEmbedField = fields.find((f) => f.type === "autoEmbed")
 			expect(autoEmbedField?.quantization).toBe("scalar")
-			// Accepting fake: the probe-adopt capability stays on.
+			// Accepted settings do not disable the capability.
 			expect(isCapabilityEnabled("autoembed-quantization", {})).toBe(true)
 		} finally {
 			resetCapabilityProbes()
 		}
 	})
 
-	it("defaults to no quantization on autoEmbed vector fields (P3.4)", async () => {
+	it("omits quantization to preserve the server default on autoEmbed fields", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
 		const chunks = db.collection("test_chunks") as unknown as {
@@ -675,44 +675,46 @@ describe("ensureSearchIndexes", () => {
 		expect(autoEmbedField && "quantization" in autoEmbedField).toBe(false)
 	})
 
-	it("records the capability off and retries without quantization when the server rejects it (P3.4)", async () => {
+	it("propagates an explicit quantization rejection without retrying or disabling the capability", async () => {
 		resetCapabilityProbes()
 		try {
 			const db = mockDb()
 			const chunks = db.collection("test_chunks") as unknown as {
 				createSearchIndex: ReturnType<typeof vi.fn>
 			}
-			// Rejecting fake mirrors the live 8.3.4 server message on any
-			// autoEmbed definition that carries quantization.
+			const rejection = new Error(
+				"Omit quantization to use the default (float)",
+			)
 			chunks.createSearchIndex.mockImplementation(async (spec: Document) => {
 				const fields = (spec.definition?.fields ?? []) as Document[]
-				const autoEmbed = fields.find((f) => f.type === "autoEmbed")
-				if (autoEmbed && "quantization" in autoEmbed) {
-					throw new Error("Omit quantization to use the default (float)")
+				if (
+					fields.some(
+						(field) => field.type === "autoEmbed" && "quantization" in field,
+					)
+				) {
+					throw rejection
 				}
 				return spec.name
 			})
 
-			const result = await ensureSearchIndexes(
-				db,
-				"test_",
-				"atlas-local-preview",
-				"automated",
-				"scalar",
-			)
-			// Index creation still succeeds — the retry ships the server default.
-			expect(result.vector).toBe(true)
-			expect(isCapabilityEnabled("autoembed-quantization", {})).toBe(false)
+			await expect(
+				ensureSearchIndexes(
+					db,
+					"test_",
+					"atlas-local-preview",
+					"automated",
+					"scalar",
+				),
+			).rejects.toBe(rejection)
+			expect(isCapabilityEnabled("autoembed-quantization", {})).toBe(true)
 
 			const vectorSpecs = chunks.createSearchIndex.mock.calls
-				.map((c: unknown[]) => c[0] as Document)
+				.map((call: unknown[]) => call[0] as Document)
 				.filter((spec) => spec.type === "vectorSearch")
-			const retried = vectorSpecs.at(-1)
-			expect(retried).toBeDefined()
-			const fields = retried?.definition.fields as Document[]
-			const autoEmbedField = fields.find((f) => f.type === "autoEmbed")
-			expect(autoEmbedField).toBeDefined()
-			expect(autoEmbedField && "quantization" in autoEmbedField).toBe(false)
+			expect(vectorSpecs).toHaveLength(1)
+			expect(vectorSpecs[0].definition.fields).toContainEqual(
+				expect.objectContaining({ type: "autoEmbed", quantization: "scalar" }),
+			)
 		} finally {
 			resetCapabilityProbes()
 		}
