@@ -252,7 +252,7 @@ export class OfficialQaCaptureError extends Error {
 
 export type OfficialQaCaptureWriter = (
 	sequence: number,
-	kind: "request" | "outcome",
+	kind: "request" | "outcome" | "case",
 	record: Record<string, unknown>,
 ) => Promise<void>
 
