@@ -157,22 +157,33 @@ double-baseline flip threshold and `retrievalRealAnswerNeutral` are
 descriptive only; `noiseRule.real` mirrors the test for compatibility.
 
 Inference is emitted only for eligible comparisons. Both runs need a version 2
-checkpoint and a v2 prediction sidecar whose `runId`, `datasetSha256` and
-`configurationHash` match their own checkpoint. `datasetSha256`,
-`configurationHash` and `executableDigest` must be lowercase 64-character
-sha256 hex; every other identity field must be non-blank text without
-surrounding whitespace. Rejections name the field, never its value. The runs must be distinct and
-must share `datasetSha256`, `configurationHash` and `executableDigest`; these
-opaque digests cannot show that a single setting changed, so they are never a
-treatment. At most one directly observed scalar sidecar field may differ, and
-only when declared with `--treatment` (answer/judge model, judge protocol,
-prompt versions, answer temperature or max tokens); a declared field must
-actually differ and cannot hide a second difference. Every declared scenario
-must be completed with exactly one final-pass entry carrying a valid case ID
-(which may differ from the scenario ID), both runs must select the same case
-IDs, each with a paired binary outcome, and `--min-judged` must be met. Question-level independence is
-an assumption the caller declares with `--assume-independent-questions`; the
-report records it as declared, not verified. Known clustered populations
+checkpoint whose `datasetSha256`, `configurationHash` and `executableDigest`
+are lowercase 64-character sha256 hex and whose `runId` is non-blank text
+without surrounding whitespace. The default QA endpoint also needs a v2
+prediction sidecar in each run, with every identity field valid (digests as
+sha256 hex, other fields non-blank and unpadded) and `runId`, `datasetSha256`
+and `configurationHash` equal to its own checkpoint. Under `--r-only` without
+`--treatment`, both sidecars may be omitted; a sidecar that is supplied must
+still be valid and bound to its checkpoint, and scalar sidecar fields are
+compared whenever both runs supply one. `--treatment` always requires valid
+sidecars in both runs. Rejections name the field, never its value.
+
+The runs must be distinct and must share `datasetSha256`,
+`configurationHash` and `executableDigest`; these opaque digests cannot show
+that a single setting changed, so they are never a treatment. At most one
+directly observed scalar sidecar field may differ, and only when declared with
+`--treatment` (answer/judge model, judge protocol, prompt versions, answer
+temperature or max tokens); a declared field must actually differ and cannot
+hide a second difference.
+
+Every declared scenario must be completed with exactly one final-pass entry
+carrying a valid case ID (which may differ from the scenario ID), and both runs
+must select the same case IDs. Each selected case needs a paired outcome in
+both runs: a judged `yes`/`no` verdict for QA, or a session R@10 of exactly 0
+or 1 under `--r-only` (fractional or missing recall is refused, never
+rounded). `--min-judged`, when given, must be met. Question-level independence
+is an assumption the caller declares with `--assume-independent-questions`;
+the report records it as declared, not verified. Known clustered populations
 (several cases per scenario) are refused even with that declaration.
 
 Ineligible comparisons, including legacy artifacts without identity, partial
