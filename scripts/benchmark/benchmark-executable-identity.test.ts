@@ -111,6 +111,82 @@ describe("computeExecutableDigest", () => {
 		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: true })
 	})
 
+	it("ignores inherited Git repository and index overrides", async () => {
+		const clean = await computeExecutableDigest(repo)
+		if (clean.status !== "available") throw new Error("expected available")
+		const foreign = await mkdtemp(path.join(os.tmpdir(), "memongo-foreign-"))
+		const saved = { ...process.env }
+		try {
+			execFileSync("git", ["init", "-q"], { cwd: foreign })
+			execFileSync(
+				"git",
+				[
+					"-c",
+					"user.email=f@example.invalid",
+					"-c",
+					"user.name=f",
+					"commit",
+					"-q",
+					"--allow-empty",
+					"-m",
+					"foreign",
+				],
+				{ cwd: foreign },
+			)
+			const alternateIndex = path.join(foreign, "alternate-index")
+			execFileSync("git", ["read-tree", "--empty"], {
+				cwd: repo,
+				env: { ...process.env, GIT_INDEX_FILE: alternateIndex },
+			})
+			process.env.GIT_DIR = path.join(foreign, ".git")
+			process.env.GIT_WORK_TREE = repo
+			expect(await computeExecutableDigest(repo)).toMatchObject({
+				status: "available",
+				digest: clean.digest,
+				headCommit: clean.headCommit,
+			})
+			delete process.env.GIT_DIR
+			delete process.env.GIT_WORK_TREE
+			process.env.GIT_INDEX_FILE = alternateIndex
+			expect(await computeExecutableDigest(repo)).toMatchObject({
+				digest: clean.digest,
+				trackedFiles: clean.trackedFiles,
+				dirty: false,
+			})
+		} finally {
+			for (const key of Object.keys(process.env))
+				if (!(key in saved)) delete process.env[key]
+			Object.assign(process.env, saved)
+			await rm(foreign, { recursive: true, force: true })
+		}
+	})
+
+	it("observes a linked worktree as its own checkout", async () => {
+		const linked = path.join(
+			await mkdtemp(path.join(os.tmpdir(), "memongo-linked-")),
+			"wt",
+		)
+		try {
+			git("worktree", "add", "-q", "--detach", linked)
+			const main = await computeExecutableDigest(repo)
+			const identity = await computeExecutableDigest(linked)
+			expect(identity).toMatchObject({
+				status: "available",
+				headCommit: main.status === "available" ? main.headCommit : "",
+				digest: main.digest,
+				dirty: false,
+			})
+		} finally {
+			await rm(path.dirname(linked), { recursive: true, force: true })
+		}
+	})
+
+	it("refuses a directory that is not the top of its work tree", async () => {
+		expect(
+			await computeExecutableDigest(path.join(repo, "scripts")),
+		).toMatchObject({ status: "unavailable" })
+	})
+
 	it("reports unavailable outside a git work tree", async () => {
 		const plain = await mkdtemp(path.join(os.tmpdir(), "memongo-plain-"))
 		try {

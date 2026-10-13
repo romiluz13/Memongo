@@ -271,8 +271,16 @@ function readBuildIdentity(
 		process.env.npm_package_version?.trim() ||
 		""
 
+	// A malformed claim may carry anything, including credential URLs: record
+	// only that it was invalid.
+	const claimValid = /^[0-9a-f]{7,40}$/i.test(claimedCommitSha)
 	const claims = {
-		...(claimedCommitSha ? { claimedCommitSha } : {}),
+		...(claimedCommitSha && claimValid
+			? { claimedCommitSha: claimedCommitSha.toLowerCase() }
+			: {}),
+		...(claimedCommitSha && !claimValid
+			? { claimedCommitInvalid: true as const }
+			: {}),
 		...(buildId ? { buildId } : {}),
 		...(buildLabel ? { buildLabel } : {}),
 	}
@@ -293,13 +301,6 @@ function readBuildIdentity(
 		...(observed ? { runtime: observed.runtime } : {}),
 		...claims,
 	}
-}
-
-function claimNamesCommit(claimed: string, commitSha: string): boolean {
-	return (
-		/^[0-9a-f]{7,40}$/i.test(claimed) &&
-		commitSha.startsWith(claimed.toLowerCase())
-	)
 }
 
 function buildBenchmarkWarnings(params: BenchmarkReportInput): string[] {
@@ -683,10 +684,12 @@ function buildEvidenceCompletenessGate(
 			missing.push("uncommitted executable source")
 		if (
 			build.claimedCommitSha &&
-			!claimNamesCommit(build.claimedCommitSha, build.commitSha)
+			!build.commitSha.startsWith(build.claimedCommitSha)
 		)
 			missing.push("claimed build commit does not match observed HEAD")
 	}
+	if (build.claimedCommitInvalid)
+		missing.push("claimed build commit is not a commit SHA")
 	if (!params.runIdentity?.runId || !params.runIdentity.configurationHash) {
 		missing.push("immutable run identity")
 	}
@@ -740,7 +743,7 @@ function buildEvidenceCompletenessGate(
 				gate: "evidence-completeness",
 				status: "passed",
 				evidence:
-					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; build identity covers tracked source at HEAD, not generated workspace dist modules",
+					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; source identity covers tracked source at HEAD and is not a build or executable attestation (generated workspace dist modules are not covered)",
 			}
 		: {
 				gate: "evidence-completeness",

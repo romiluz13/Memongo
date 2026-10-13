@@ -1400,6 +1400,8 @@ export type MemoryBenchmarkBuildIdentity = {
 	commitSha?: string
 	/** Environment-supplied labels are metadata, never proof of identity. */
 	claimedCommitSha?: string
+	/** An environment commit claim was present but not a commit SHA; its value is withheld. */
+	claimedCommitInvalid?: true
 	buildId?: string
 	buildLabel?: string
 	executableDigest?: string

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { readFile, realpath } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
@@ -46,8 +46,17 @@ export function currentRuntimeVersions(): BenchmarkRuntimeVersions {
 	return { node: process.version, bun: process.versions.bun ?? null }
 }
 
+// Inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_CONFIG_* and similar
+// variables redirect git away from repoRoot even with -C, so none reach it.
+function isolatedGitEnv(): NodeJS.ProcessEnv {
+	return Object.fromEntries(
+		Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+	)
+}
+
 async function git(repoRoot: string, args: string[]): Promise<string> {
 	const { stdout } = await execFileAsync("git", ["-C", repoRoot, ...args], {
+		env: isolatedGitEnv(),
 		maxBuffer: 64 * 1024 * 1024,
 	})
 	return stdout
@@ -61,6 +70,16 @@ export async function computeExecutableDigest(
 	let files: string[]
 	let dirty: boolean
 	try {
+		const topLevel = (
+			await git(repoRoot, ["rev-parse", "--show-toplevel"])
+		).trim()
+		if ((await realpath(topLevel)) !== (await realpath(repoRoot))) {
+			return {
+				status: "unavailable",
+				reason: "repository root is not the top of its git work tree",
+				runtime,
+			}
+		}
 		headCommit = (await git(repoRoot, ["rev-parse", "HEAD"])).trim()
 		files = (
 			await git(repoRoot, ["ls-files", "-z", "--", ...EXECUTABLE_PATHSPECS])

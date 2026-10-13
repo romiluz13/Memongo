@@ -1090,9 +1090,10 @@ describe("mongodb benchmark runner", () => {
 			expect(report.build).toEqual(
 				expect.objectContaining({
 					source: "unknown",
-					claimedCommitSha: "abc123",
+					claimedCommitInvalid: true,
 				}),
 			)
+			expect(report.build.claimedCommitSha).toBeUndefined()
 			expect(report.build.commitSha).toBeUndefined()
 			expect(report.releaseGates).toEqual(
 				expect.arrayContaining([
@@ -1359,6 +1360,22 @@ describe("benchmark report build identity is observed, not claimed", () => {
 			commitSha: head,
 			claimedCommitSha: "b".repeat(40),
 		})
+	})
+
+	it("fails a malformed claimed commit without serializing its raw value", () => {
+		const secret = "https://user:synthetic-secret-token@example.invalid/repo"
+		const built = withEnv(secret, () => report(observed()))
+		expect(completeness(built)).toContain(
+			"claimed build commit is not a commit SHA",
+		)
+		expect(built.build).toMatchObject({ claimedCommitInvalid: true })
+		expect(built.build.claimedCommitSha).toBeUndefined()
+		expect(JSON.stringify(built)).not.toContain("synthetic-secret-token")
+		const unobserved = withEnv(secret, () => report())
+		expect(completeness(unobserved)).toContain(
+			"claimed build commit is not a commit SHA",
+		)
+		expect(JSON.stringify(unobserved)).not.toContain("synthetic-secret-token")
 	})
 
 	it("fails dirty or unavailable source without inventing a commit", () => {
