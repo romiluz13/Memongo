@@ -26,10 +26,12 @@ export type BenchmarkCheckpointScenario = {
 }
 
 export type BenchmarkCheckpoint = {
-	version: 1
+	version: 2
 	runId: string
 	datasetSha256: string
 	configurationHash: string
+	/** computeExecutableDigest at write time; resume requires the same bytes. */
+	executableDigest: string
 	totalScenarios: number
 	scenarioIds: string[]
 	completedScenarios: BenchmarkCheckpointScenario[]
@@ -44,13 +46,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function assertCheckpointShape(
 	value: unknown,
 ): asserts value is BenchmarkCheckpoint {
-	if (!isRecord(value) || value.version !== 1) {
+	if (isRecord(value) && value.version === 1) {
+		throw new Error(
+			"benchmark checkpoint version 1 is not bound to executable source; analyze it as historical only and start a new run",
+		)
+	}
+	if (!isRecord(value) || value.version !== 2) {
 		throw new Error("benchmark checkpoint has an unsupported format")
 	}
 	for (const field of [
 		"runId",
 		"datasetSha256",
 		"configurationHash",
+		"executableDigest",
 		"updatedAt",
 	] as const) {
 		if (typeof value[field] !== "string" || value[field].length === 0) {
@@ -74,9 +82,16 @@ export async function readBenchmarkCheckpoint(
 	expected: {
 		datasetSha256: string
 		configurationHash: string
+		/** null when the current executable identity cannot be computed. */
+		executableDigest: string | null
 		scenarioIds: string[]
 	},
 ): Promise<BenchmarkCheckpoint> {
+	if (expected.executableDigest === null) {
+		throw new Error(
+			"benchmark resume refused: the current executable identity is unavailable (run from a git work tree)",
+		)
+	}
 	const parsed: unknown = JSON.parse(await readFile(checkpointPath, "utf8"))
 	assertCheckpointShape(parsed)
 	if (parsed.datasetSha256 !== expected.datasetSha256) {
@@ -84,6 +99,11 @@ export async function readBenchmarkCheckpoint(
 	}
 	if (parsed.configurationHash !== expected.configurationHash) {
 		throw new Error("benchmark checkpoint configuration hash does not match")
+	}
+	if (parsed.executableDigest !== expected.executableDigest) {
+		throw new Error(
+			"benchmark checkpoint executable digest does not match: source, lockfile or runtime changed since it was written",
+		)
 	}
 	if (
 		parsed.totalScenarios !== expected.scenarioIds.length ||

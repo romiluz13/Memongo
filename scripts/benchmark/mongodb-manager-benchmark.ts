@@ -33,6 +33,10 @@ import {
 	type BenchmarkCheckpoint,
 	type BenchmarkCheckpointScenario,
 } from "./mongodb-benchmark-checkpoint.js"
+import {
+	BENCHMARK_REPO_ROOT,
+	computeExecutableDigest,
+} from "./benchmark-executable-identity.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import {
 	ingestBenchmarkDataset,
@@ -567,11 +571,15 @@ export class MongoDBManagerBenchmarkOps {
 		if (params?.resume && !checkpointPath) {
 			throw new Error("benchmark resume requires checkpointPath")
 		}
+		const executable = checkpointPath
+			? await computeExecutableDigest(BENCHMARK_REPO_ROOT)
+			: undefined
 		const resumeCheckpoint =
 			params?.resume && checkpointPath
 				? await readBenchmarkCheckpoint(checkpointPath, {
 						datasetSha256,
 						configurationHash: runContext.configurationHash,
+						executableDigest: executable?.digest ?? null,
 						scenarioIds: (dataset.scenarios ?? []).map(
 							(scenario) => scenario.scenarioId,
 						),
@@ -596,6 +604,7 @@ export class MongoDBManagerBenchmarkOps {
 			publicationRun: Boolean(qualityThresholds),
 			checkpointPath,
 			resumeCheckpoint,
+			executableDigest: executable?.digest ?? "unavailable",
 			datasetSha256,
 			runContext,
 		})
@@ -831,6 +840,8 @@ export class MongoDBManagerBenchmarkOps {
 		publicationRun?: boolean
 		checkpointPath?: string
 		resumeCheckpoint?: BenchmarkCheckpoint
+		/** Written into every checkpoint; "unavailable" never resumes. */
+		executableDigest?: string
 		datasetSha256?: string
 		runContext: BenchmarkRunContext
 	}): Promise<{
@@ -1019,10 +1030,11 @@ export class MongoDBManagerBenchmarkOps {
 			}
 			if (!checkpointExists) {
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
-					version: 1,
+					version: 2,
 					runId: params.runContext.runId,
 					datasetSha256: seedDatasetSha256,
 					configurationHash: params.runContext.configurationHash,
+					executableDigest: params.executableDigest ?? "unavailable",
 					totalScenarios: scenarios.length,
 					scenarioIds: scenarios.map((entry) => entry.scenarioId),
 					completedScenarios: [],
@@ -1997,10 +2009,11 @@ export class MongoDBManagerBenchmarkOps {
 					(left, right) => left.index - right.index,
 				)
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
-					version: 1,
+					version: 2,
 					runId: params.runContext.runId,
 					datasetSha256,
 					configurationHash: params.runContext.configurationHash,
+					executableDigest: params.executableDigest ?? "unavailable",
 					totalScenarios: scenarios.length,
 					scenarioIds: scenarios.map((entry) => entry.scenarioId),
 					completedScenarios: completedCheckpointScenarios,

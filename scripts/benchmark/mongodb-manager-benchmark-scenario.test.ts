@@ -539,10 +539,11 @@ describe("runScenarioBenchmarkDataset", () => {
 			}),
 		} as unknown as MongoDBMemoryManager
 		const resumeCheckpoint: BenchmarkCheckpoint = {
-			version: 1,
+			version: 2,
 			runId: runContext.runId,
 			datasetSha256: "a".repeat(64),
 			configurationHash: runContext.configurationHash,
+			executableDigest: "d".repeat(64),
 			totalScenarios: 2,
 			scenarioIds: ["scenario-1", "scenario-2"],
 			completedScenarios: [
@@ -761,10 +762,11 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 		completedScenarios: BenchmarkCheckpoint["completedScenarios"],
 	): BenchmarkCheckpoint {
 		return {
-			version: 1,
+			version: 2,
 			runId: runContext.runId,
 			datasetSha256: "a".repeat(64),
 			configurationHash: runContext.configurationHash,
+			executableDigest: "d".repeat(64),
 			totalScenarios: 2,
 			scenarioIds: ["scenario-1", "scenario-2"],
 			completedScenarios,
@@ -1408,6 +1410,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 					minScore: 0.1,
 					executionProfile: "shipped" as const,
 					checkpointPath,
+					executableDigest: "d".repeat(64),
 					runContext,
 				}
 
@@ -1423,6 +1426,10 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 					await readFile(checkpointPath, "utf8"),
 				) as BenchmarkCheckpoint
 				expect(seeded.completedScenarios).toEqual([])
+				expect(seeded).toMatchObject({
+					version: 2,
+					executableDigest: "d".repeat(64),
+				})
 				// The sidecar kept the answered row, so the crash never re-pays
 				// the answer generation.
 				const sidecarAfterCrash = JSON.parse(
@@ -1437,6 +1444,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				const restored = await readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
 					configurationHash: runContext.configurationHash,
+					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				})
 				const resumed = await benchmarkOps(manager).runScenarioBenchmarkDataset(
@@ -1464,6 +1472,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				const restoredAgain = await readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
 					configurationHash: runContext.configurationHash,
+					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				})
 				const repeated = await benchmarkOps(
