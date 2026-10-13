@@ -951,6 +951,7 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 		digest,
 		headCommit: "f".repeat(40),
 		trackedFiles: 1,
+		dirty: false,
 		runtime,
 	})
 
@@ -1058,6 +1059,24 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 		runScenarioBenchmarkDataset.mockClear()
 		return { workspaceDir, run, runScenarioBenchmarkDataset }
 	}
+
+	it("reports the identity observed at admission, not an env claim", async () => {
+		const t = await setup()
+		try {
+			vi.mocked(computeExecutableDigest).mockResolvedValue(
+				available("d".repeat(64)),
+			)
+			const result = await t.run(false)
+			expect(result.benchmarkReport?.build).toMatchObject({
+				source: "git-worktree",
+				commitSha: "f".repeat(40),
+				executableDigest: "d".repeat(64),
+				sourceDirty: false,
+			})
+		} finally {
+			await rm(t.workspaceDir, { recursive: true, force: true })
+		}
+	})
 
 	it("refuses scenario admission when executable source changed", async () => {
 		const t = await setup()

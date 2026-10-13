@@ -1394,10 +1394,18 @@ export type QueryGovernanceReport = {
 }
 
 export type MemoryBenchmarkBuildIdentity = {
-	source: "env" | "unknown"
+	/** "env" appears only in reports written before the tree was observed. */
+	source: "git-worktree" | "env" | "unknown"
+	/** Observed HEAD for "git-worktree"; legacy "env" reports hold an unverified claim. */
 	commitSha?: string
+	/** Environment-supplied labels are metadata, never proof of identity. */
+	claimedCommitSha?: string
 	buildId?: string
 	buildLabel?: string
+	executableDigest?: string
+	sourceDirty?: boolean
+	runtime?: { node: string; bun: string | null }
+	unavailableReason?: string
 }
 
 export type MemoryBenchmarkReleaseGate = {

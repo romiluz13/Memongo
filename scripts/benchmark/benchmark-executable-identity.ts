@@ -31,6 +31,8 @@ export type BenchmarkExecutableIdentity =
 			digest: string
 			headCommit: string
 			trackedFiles: number
+			/** Tracked executable files differ from HEAD or untracked ones exist. */
+			dirty: boolean
 			runtime: BenchmarkRuntimeVersions
 	  }
 	| {
@@ -57,6 +59,7 @@ export async function computeExecutableDigest(
 ): Promise<BenchmarkExecutableIdentity> {
 	let headCommit: string
 	let files: string[]
+	let dirty: boolean
 	try {
 		headCommit = (await git(repoRoot, ["rev-parse", "HEAD"])).trim()
 		files = (
@@ -65,6 +68,17 @@ export async function computeExecutableDigest(
 			.split("\0")
 			.filter((file) => file.length > 0)
 			.toSorted()
+		dirty =
+			(
+				await git(repoRoot, [
+					"status",
+					"--porcelain=v1",
+					"-z",
+					"--untracked-files=all",
+					"--",
+					...EXECUTABLE_PATHSPECS,
+				])
+			).length > 0
 	} catch {
 		return {
 			status: "unavailable",
@@ -102,6 +116,7 @@ export async function computeExecutableDigest(
 		digest: hash.digest("hex"),
 		headCommit,
 		trackedFiles: files.length,
+		dirty,
 		runtime,
 	}
 }

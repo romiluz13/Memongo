@@ -35,6 +35,7 @@ import {
 } from "./mongodb-benchmark-checkpoint.js"
 import {
 	BENCHMARK_REPO_ROOT,
+	type BenchmarkExecutableIdentity,
 	computeExecutableDigest,
 } from "./benchmark-executable-identity.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
@@ -277,6 +278,7 @@ export function attachBenchmarkOperationsReport(
 		status: "passed" | "failed"
 		evidence: string
 	},
+	observedBuild?: BenchmarkExecutableIdentity,
 ): RelevanceBenchmarkResult {
 	const queryGovernance = buildQueryGovernanceReport(result)
 	// C-039: project the QA envelope into the official LongMemEval metrics so
@@ -292,6 +294,7 @@ export function attachBenchmarkOperationsReport(
 		queryGovernance,
 		benchmarkReport: buildBenchmarkRunReport({
 			...result,
+			...(observedBuild ? { observedBuild } : {}),
 			...(officialMetrics !== result.officialMetrics
 				? { officialMetrics }
 				: {}),
@@ -482,6 +485,8 @@ export class MongoDBManagerBenchmarkOps {
 			runId: randomUUID(),
 			configuration: runConfiguration,
 		})
+		// Observed once at admission: resume binding and report identity share it.
+		const executable = await computeExecutableDigest(BENCHMARK_REPO_ROOT)
 		let dataset: MemoryBenchmarkDataset
 		try {
 			dataset = await loadBenchmarkDataset(resolvedDatasetPath, {
@@ -520,6 +525,7 @@ export class MongoDBManagerBenchmarkOps {
 				qualityThresholds,
 				undefined,
 				params?.conversationRecallRegression,
+				executable,
 			)
 		}
 		if (
@@ -563,6 +569,7 @@ export class MongoDBManagerBenchmarkOps {
 				qualityThresholds,
 				undefined,
 				params?.conversationRecallRegression,
+				executable,
 			)
 		}
 		const checkpointPath = params?.checkpointPath
@@ -571,9 +578,6 @@ export class MongoDBManagerBenchmarkOps {
 		if (params?.resume && !checkpointPath) {
 			throw new Error("benchmark resume requires checkpointPath")
 		}
-		const executable = checkpointPath
-			? await computeExecutableDigest(BENCHMARK_REPO_ROOT)
-			: undefined
 		const resumeCheckpoint =
 			params?.resume && checkpointPath
 				? await readBenchmarkCheckpoint(checkpointPath, {
@@ -623,6 +627,7 @@ export class MongoDBManagerBenchmarkOps {
 			qualityThresholds,
 			scenario.e2eQa,
 			params?.conversationRecallRegression,
+			executable,
 		)
 	}
 

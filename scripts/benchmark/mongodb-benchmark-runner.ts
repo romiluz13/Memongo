@@ -9,6 +9,7 @@ import {
 	resolveDatasetSha256,
 	resolveRetrievalUnit,
 } from "./benchmark-parity-envelope.js"
+import type { BenchmarkExecutableIdentity } from "./benchmark-executable-identity.js"
 import type { BenchmarkReadinessSkip } from "./mongodb-manager-benchmark-scenario.js"
 import type { MemorySearchResult } from "../../packages/memory-engine/src/types.js"
 import type {
@@ -211,6 +212,8 @@ export type BenchmarkSummary = {
 }
 
 type BenchmarkReportInput = {
+	/** Executable source identity observed once at run admission. */
+	observedBuild?: BenchmarkExecutableIdentity
 	datasetVersion: string
 	datasetName?: string
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
@@ -250,8 +253,10 @@ type BenchmarkReportInput = {
 	}
 }
 
-function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
-	const commitSha =
+function readBuildIdentity(
+	observed: BenchmarkExecutableIdentity | undefined,
+): MemoryBenchmarkRunReport["build"] {
+	const claimedCommitSha =
 		process.env.MEMONGO_BUILD_COMMIT?.trim() ||
 		process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
 		process.env.GITHUB_SHA?.trim() ||
@@ -266,12 +271,35 @@ function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
 		process.env.npm_package_version?.trim() ||
 		""
 
-	return {
-		source: commitSha || buildId || buildLabel ? "env" : "unknown",
-		...(commitSha ? { commitSha } : {}),
+	const claims = {
+		...(claimedCommitSha ? { claimedCommitSha } : {}),
 		...(buildId ? { buildId } : {}),
 		...(buildLabel ? { buildLabel } : {}),
 	}
+	if (observed?.status === "available") {
+		return {
+			source: "git-worktree",
+			commitSha: observed.headCommit,
+			executableDigest: observed.digest,
+			sourceDirty: observed.dirty,
+			runtime: observed.runtime,
+			...claims,
+		}
+	}
+	return {
+		source: "unknown",
+		unavailableReason:
+			observed?.reason ?? "executable source was not observed for this run",
+		...(observed ? { runtime: observed.runtime } : {}),
+		...claims,
+	}
+}
+
+function claimNamesCommit(claimed: string, commitSha: string): boolean {
+	return (
+		/^[0-9a-f]{7,40}$/i.test(claimed) &&
+		commitSha.startsWith(claimed.toLowerCase())
+	)
 }
 
 function buildBenchmarkWarnings(params: BenchmarkReportInput): string[] {
@@ -648,8 +676,16 @@ function buildEvidenceCompletenessGate(
 	build: MemoryBenchmarkRunReport["build"],
 ): MemoryBenchmarkRunReport["releaseGates"][number] {
 	const missing: string[] = []
-	if (build.source !== "env" || !build.commitSha) {
+	if (build.source !== "git-worktree" || !build.commitSha) {
 		missing.push("build commit identity")
+	} else {
+		if (build.sourceDirty !== false)
+			missing.push("uncommitted executable source")
+		if (
+			build.claimedCommitSha &&
+			!claimNamesCommit(build.claimedCommitSha, build.commitSha)
+		)
+			missing.push("claimed build commit does not match observed HEAD")
 	}
 	if (!params.runIdentity?.runId || !params.runIdentity.configurationHash) {
 		missing.push("immutable run identity")
@@ -704,7 +740,7 @@ function buildEvidenceCompletenessGate(
 				gate: "evidence-completeness",
 				status: "passed",
 				evidence:
-					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete",
+					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; build identity covers tracked source at HEAD, not generated workspace dist modules",
 			}
 		: {
 				gate: "evidence-completeness",
@@ -716,7 +752,7 @@ function buildEvidenceCompletenessGate(
 export function buildBenchmarkRunReport(
 	params: BenchmarkReportInput,
 ): MemoryBenchmarkRunReport {
-	const build = readBuildIdentity()
+	const build = readBuildIdentity(params.observedBuild)
 	const executionFailed = (params.execution?.failedCases ?? 0) > 0
 	const internalStatus =
 		params.cases > 0 && !executionFailed ? "passed" : "failed"

@@ -68,6 +68,14 @@ throwaway run. Transient MongoDB read failures are retried at bounded
 idempotent boundaries; incomplete ingest and unsettled workers fail publication
 runs rather than producing partial metrics.
 
+The report's build identity is observed the same way, once at run admission:
+it records HEAD, the executable digest, and whether tracked executable source
+is dirty. `MEMONGO_BUILD_COMMIT` and CI commit variables are kept only as
+`claimedCommitSha` metadata. The evidence-completeness gate fails when the tree
+was not observed, is dirty, or the claim names a different commit. Generated
+workspace `dist/` modules (`@memongo/lib`, `@memongo/memory-bridge`) are not
+covered by this identity.
+
 ### Why LongMemEval first, and not LoCoMo
 
 LongMemEval is MIT-licensed, peer-reviewed (ICLR 2025), and downloadable in CI

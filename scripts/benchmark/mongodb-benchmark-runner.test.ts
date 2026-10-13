@@ -1089,10 +1089,11 @@ describe("mongodb benchmark runner", () => {
 
 			expect(report.build).toEqual(
 				expect.objectContaining({
-					source: "env",
-					commitSha: "abc123",
+					source: "unknown",
+					claimedCommitSha: "abc123",
 				}),
 			)
+			expect(report.build.commitSha).toBeUndefined()
 			expect(report.releaseGates).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
@@ -1280,5 +1281,103 @@ describe("mongodb benchmark runner", () => {
 				}),
 			]),
 		)
+	})
+})
+
+describe("benchmark report build identity is observed, not claimed", () => {
+	const head = "a".repeat(40)
+	const runtime = { node: "v24.0.0", bun: "1.3.0" }
+	const observed = (overrides: Record<string, unknown> = {}) => ({
+		status: "available" as const,
+		digest: "d".repeat(64),
+		headCommit: head,
+		trackedFiles: 10,
+		dirty: false,
+		runtime,
+		...overrides,
+	})
+	const report = (
+		observedBuild?: Parameters<
+			typeof buildBenchmarkRunReport
+		>[0]["observedBuild"],
+	) =>
+		buildBenchmarkRunReport({
+			datasetVersion: "v1",
+			cases: 1,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 1,
+			p95LatencyMs: 1,
+			...(observedBuild ? { observedBuild } : {}),
+		})
+	const completeness = (built: ReturnType<typeof report>) =>
+		built.releaseGates.find((gate) => gate.gate === "evidence-completeness")
+			?.evidence ?? ""
+	const withEnv = <T>(commit: string | undefined, fn: () => T): T => {
+		const previous = process.env.MEMONGO_BUILD_COMMIT
+		if (commit === undefined) delete process.env.MEMONGO_BUILD_COMMIT
+		else process.env.MEMONGO_BUILD_COMMIT = commit
+		try {
+			return fn()
+		} finally {
+			if (previous === undefined) delete process.env.MEMONGO_BUILD_COMMIT
+			else process.env.MEMONGO_BUILD_COMMIT = previous
+		}
+	}
+
+	it("does not accept a fabricated env commit without an observed tree", () => {
+		const built = withEnv("f".repeat(40), () => report())
+		expect(completeness(built)).toContain("build commit identity")
+		expect(built.build).toMatchObject({
+			source: "unknown",
+			claimedCommitSha: "f".repeat(40),
+		})
+		expect(built.build.commitSha).toBeUndefined()
+	})
+
+	it("passes build identity only for a clean observed tree and records HEAD", () => {
+		const built = withEnv(undefined, () => report(observed()))
+		expect(completeness(built)).not.toContain("build commit identity")
+		expect(built.build).toMatchObject({
+			source: "git-worktree",
+			commitSha: head,
+			executableDigest: "d".repeat(64),
+			sourceDirty: false,
+			runtime,
+		})
+	})
+
+	it("accepts a claimed commit only when it names the observed HEAD", () => {
+		expect(
+			completeness(withEnv(head.slice(0, 7), () => report(observed()))),
+		).not.toContain("build commit")
+		const mismatched = withEnv("b".repeat(40), () => report(observed()))
+		expect(completeness(mismatched)).toContain(
+			"claimed build commit does not match observed HEAD",
+		)
+		expect(mismatched.build).toMatchObject({
+			commitSha: head,
+			claimedCommitSha: "b".repeat(40),
+		})
+	})
+
+	it("fails dirty or unavailable source without inventing a commit", () => {
+		expect(
+			completeness(withEnv(undefined, () => report(observed({ dirty: true })))),
+		).toContain("uncommitted executable source")
+		const unavailable = withEnv(head, () =>
+			report({
+				status: "unavailable",
+				reason: "not a readable git work tree",
+				runtime,
+			}),
+		)
+		expect(completeness(unavailable)).toContain("build commit identity")
+		expect(unavailable.build).toMatchObject({
+			source: "unknown",
+			unavailableReason: "not a readable git work tree",
+			claimedCommitSha: head,
+		})
+		expect(unavailable.build.commitSha).toBeUndefined()
 	})
 })

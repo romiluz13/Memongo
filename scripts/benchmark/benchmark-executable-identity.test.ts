@@ -99,6 +99,18 @@ describe("computeExecutableDigest", () => {
 		}
 	})
 
+	it("reports whether executable source differs from HEAD", async () => {
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: false })
+		await put("docs/readme.md", "edited docs\n")
+		await put("benchmarks/results/run.json", "{}\n")
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: false })
+		await put("scripts/benchmark/new-module.ts", "export const c = 3\n")
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: true })
+		await rm(path.join(repo, "scripts/benchmark/new-module.ts"))
+		await put("packages/engine/src/index.ts", "export const b = 3\n")
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: true })
+	})
+
 	it("reports unavailable outside a git work tree", async () => {
 		const plain = await mkdtemp(path.join(os.tmpdir(), "memongo-plain-"))
 		try {
