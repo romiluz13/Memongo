@@ -367,6 +367,7 @@ export type OfficialQaContext = {
 	sidecarPath: string
 	sidecar: OfficialPredictionSidecar
 	stats: OfficialQaStats
+	capture?: Awaited<ReturnType<typeof createOfficialProviderCapture>>
 	unavailable: Array<{
 		questionId: string
 		reason: OfficialQaUnavailableReason
@@ -393,82 +394,129 @@ async function createOfficialProviderCapture(
 		configurationHash: redact(identity.configurationHash),
 	})
 	let sequence = 0
-	return (
+	let caseSequence = 0
+	const originals = new WeakMap<EnrichmentProvider, EnrichmentProvider>()
+	const wrap = (
 		provider: EnrichmentProvider,
 		phase: "preflight" | "answer" | "judge",
-	): EnrichmentProvider => ({
-		name: provider.name,
-		async chatCompletion(params) {
-			const attempt = ++sequence
-			await write(attempt, "request", {
-				level: "provider-parameters",
-				phase,
-				recordedAt: new Date().toISOString(),
-				model: redact(params.model),
-				messages: params.messages.map((message) => ({
-					role: redact(message.role),
-					content: redact(message.content),
-				})),
-				maxTokens: params.maxTokens,
-				temperature: params.temperature,
-				...(params.responseFormat
-					? { responseFormat: { type: params.responseFormat.type } }
-					: {}),
-			})
-			let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
-			try {
-				response = await provider.chatCompletion(params)
-			} catch (error) {
-				await write(attempt, "outcome", {
-					level: "provider-failure-classification",
+		questionId?: string,
+	): EnrichmentProvider => {
+		const original = originals.get(provider) ?? provider
+		const wrapped: EnrichmentProvider = {
+			name: original.name,
+			async chatCompletion(params) {
+				const attempt = ++sequence
+				const question =
+					questionId === undefined ? {} : { questionId: redact(questionId) }
+				await write(attempt, "request", {
+					...question,
+					level: "provider-parameters",
 					phase,
 					recordedAt: new Date().toISOString(),
-					status: "failed",
-					failure:
-						error instanceof EnrichmentHttpError
-							? "http"
-							: error instanceof DOMException && error.name === "AbortError"
-								? "timeout"
-								: error instanceof TypeError
-									? "network"
-									: "provider",
-					...(error instanceof EnrichmentHttpError
-						? { httpStatus: error.statusCode }
+					model: redact(params.model),
+					messages: params.messages.map((message) => ({
+						role: redact(message.role),
+						content: redact(message.content),
+					})),
+					maxTokens: params.maxTokens,
+					temperature: params.temperature,
+					...(params.responseFormat
+						? { responseFormat: { type: params.responseFormat.type } }
 						: {}),
 				})
-				throw error
-			}
-			await write(attempt, "outcome", {
-				level: "provider-adapted-completion",
-				phase,
+				let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
+				try {
+					response = await original.chatCompletion(params)
+				} catch (error) {
+					await write(attempt, "outcome", {
+						...question,
+						level: "provider-failure-classification",
+						phase,
+						recordedAt: new Date().toISOString(),
+						status: "failed",
+						failure:
+							error instanceof EnrichmentHttpError
+								? "http"
+								: error instanceof DOMException && error.name === "AbortError"
+									? "timeout"
+									: error instanceof TypeError
+										? "network"
+										: "provider",
+						...(error instanceof EnrichmentHttpError
+							? { httpStatus: error.statusCode }
+							: {}),
+					})
+					throw error
+				}
+				await write(attempt, "outcome", {
+					...question,
+					level: "provider-adapted-completion",
+					phase,
+					recordedAt: new Date().toISOString(),
+					status: "succeeded",
+					content: redact(response.content),
+					...(response.responseMeta
+						? {
+								responseMeta: {
+									shape: redact(response.responseMeta.shape),
+									finishReason:
+										response.responseMeta.finishReason === undefined
+											? undefined
+											: redact(response.responseMeta.finishReason),
+									refusal: response.responseMeta.refusal,
+								},
+							}
+						: {}),
+					...(response.usage
+						? {
+								usage: {
+									inputTokens: response.usage.inputTokens,
+									outputTokens: response.usage.outputTokens,
+									reasoningTokens: response.usage.reasoningTokens,
+								},
+							}
+						: {}),
+				})
+				return response
+			},
+		}
+		originals.set(wrapped, original)
+		return wrapped
+	}
+	return {
+		wrap,
+		async recordCase(
+			questionId: string,
+			scenarioId: string,
+			stage:
+				| "material"
+				| "retrieval"
+				| "eligibility"
+				| "answer"
+				| "answer-validation"
+				| "judge"
+				| "judge-validation"
+				| "result"
+				| "resume",
+			status:
+				| "failed"
+				| "unavailable"
+				| "started"
+				| "unreliable"
+				| "correct"
+				| "incorrect"
+				| "reused",
+		) {
+			await write(++caseSequence, "case", {
+				level: "question-stage",
+				questionId: redact(questionId),
+				scenarioId: redact(scenarioId),
+				stage,
+				status,
 				recordedAt: new Date().toISOString(),
-				status: "succeeded",
-				content: redact(response.content),
-				...(response.responseMeta
-					? {
-							responseMeta: {
-								shape: redact(response.responseMeta.shape),
-								finishReason:
-									response.responseMeta.finishReason === undefined
-										? undefined
-										: redact(response.responseMeta.finishReason),
-								refusal: response.responseMeta.refusal,
-							},
-						}
-					: {}),
-				...(response.usage
-					? {
-							usage: {
-								inputTokens: response.usage.inputTokens,
-								outputTokens: response.usage.outputTokens,
-								reasoningTokens: response.usage.reasoningTokens,
-							},
-						}
-					: {}),
 			})
-			return response
 		},
-	})
+	}
 }
 
 /**
@@ -594,18 +642,19 @@ export async function prepareOfficialQa(params: {
 			? await createOfficialProviderCapture(sidecarPath, identity, params.env)
 			: undefined
 	await preflightOfficialAnswerProvider(
-		capture ? capture(providers.answer, "preflight") : providers.answer,
+		capture ? capture.wrap(providers.answer, "preflight") : providers.answer,
 		answerModel,
 		protocol,
 	)
 	return {
 		protocol,
 		answerProvider: capture
-			? capture(providers.answer, "answer")
+			? capture.wrap(providers.answer, "answer")
 			: providers.answer,
 		judgeProvider: capture
-			? capture(providers.judge, "judge")
+			? capture.wrap(providers.judge, "judge")
 			: providers.judge,
+		...(capture ? { capture } : {}),
 		answerModel,
 		judgeModel,
 		sidecarPath,
@@ -857,24 +906,36 @@ export async function scoreOfficialScenario(params: {
 		reason: OfficialQaUnavailableReason
 	}> = []
 	for (const caseId of params.declaredCaseIds) {
+		const recordStage = (
+			stage: Parameters<
+				NonNullable<OfficialQaContext["capture"]>["recordCase"]
+			>[2],
+			status: Parameters<
+				NonNullable<OfficialQaContext["capture"]>["recordCase"]
+			>[3],
+		) => context.capture?.recordCase(caseId, params.scenarioId, stage, status)
 		const material = params.materialByCaseId.get(caseId)
 		if (!material) {
+			await recordStage("material", "failed")
 			throw new Error(
 				`scenario ${params.scenarioId} declares case ${caseId} with no captured QA material; the declared case set and the captured material disagree`,
 			)
 		}
 		const existing = context.sidecar.rows[caseId]
 		if (existing?.stage === "judged") {
+			await recordStage("resume", "reused")
 			judgedCaseIds.push(caseId)
 			continue
 		}
 		if (existing?.stage === "unreliable") {
+			await recordStage("resume", "reused")
 			// B8-3: unreliable rows are terminal; a resume never re-pays for
 			// them (temperature 0 reproduces the failure).
 			unreliableCaseIds.push(caseId)
 			continue
 		}
 		if (material.upstreamFailure) {
+			await recordStage("retrieval", "failed")
 			throw new Error(
 				`official QA scoring for scenario ${params.scenarioId} stopped before the checkpoint: upstream retrieval failed for question ${caseId}; re-run the scenario before scoring`,
 			)
@@ -882,11 +943,13 @@ export async function scoreOfficialScenario(params: {
 		const abstention =
 			material.abstention || isOfficialAbstentionQuestion(caseId)
 		if (!abstention && material.goldAnswer.trim() === "") {
+			await recordStage("eligibility", "unavailable")
 			unavailable.push({ questionId: caseId, reason: "missing-gold" })
 			context.unavailable.push({ questionId: caseId, reason: "missing-gold" })
 			continue
 		}
 		if (!SUPPORTED_QUESTION_TYPES.has(material.questionType ?? "")) {
+			await recordStage("eligibility", "unavailable")
 			unavailable.push({
 				questionId: caseId,
 				reason: "unsupported-question-type",
@@ -901,13 +964,21 @@ export async function scoreOfficialScenario(params: {
 		if (existing?.stage === "answered") {
 			hypothesis = existing.hypothesis
 		} else {
-			const generated = await generateOfficialAnswer(
-				params,
-				context,
-				caseId,
-				material,
-			)
+			await recordStage("answer", "started")
+			let generated: string | null
+			try {
+				generated = await generateOfficialAnswer(
+					params,
+					context,
+					caseId,
+					material,
+				)
+			} catch (error) {
+				await recordStage("answer", "failed")
+				throw error
+			}
 			if (generated === null) {
+				await recordStage("answer-validation", "unreliable")
 				// B8-3: the unreliable row is already recorded and persisted;
 				// keep scoring the rest of the scenario.
 				unreliableCaseIds.push(caseId)
@@ -915,19 +986,28 @@ export async function scoreOfficialScenario(params: {
 			}
 			hypothesis = generated
 		}
-		const verdict = await judgeOfficialHypothesis(
-			params,
-			context,
-			caseId,
-			material,
-			hypothesis,
-			abstention,
-		)
+		await recordStage("judge", "started")
+		let verdict: string | null
+		try {
+			verdict = await judgeOfficialHypothesis(
+				params,
+				context,
+				caseId,
+				material,
+				hypothesis,
+				abstention,
+			)
+		} catch (error) {
+			await recordStage("judge", "failed")
+			throw error
+		}
 		if (verdict === null) {
+			await recordStage("judge-validation", "unreliable")
 			// J1: the judge-unreliable row is already recorded and persisted.
 			unreliableCaseIds.push(caseId)
 			continue
 		}
+		await recordStage("result", verdict === "yes" ? "correct" : "incorrect")
 		judgedCaseIds.push(caseId)
 	}
 	return {
@@ -989,7 +1069,10 @@ async function generateOfficialAnswer(
 		// outage must never become a sticky unreliable row.
 		completion = await withRetry(
 			() =>
-				context.answerProvider.chatCompletion({
+				(
+					context.capture?.wrap(context.answerProvider, "answer", caseId) ??
+					context.answerProvider
+				).chatCompletion({
 					model: context.answerModel,
 					messages: buildOfficialDatedAnswerMessages(material),
 					// B8: answer-call hygiene. A reasoning-class answer model burns a
@@ -1095,7 +1178,10 @@ async function judgeOfficialHypothesis(
 			// answer call — a judge 503 is as transport-class as an answer 503.
 			completion = await withRetry(
 				() =>
-					context.judgeProvider.chatCompletion({
+					(
+						context.capture?.wrap(context.judgeProvider, "judge", caseId) ??
+						context.judgeProvider
+					).chatCompletion({
 						model: context.judgeModel,
 						messages: [{ role: "user", content: prompt }],
 						// The official protocol pins a 10-token budget with temperature 0

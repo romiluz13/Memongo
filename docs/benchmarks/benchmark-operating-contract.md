@@ -98,6 +98,43 @@ bound excludes ingestion, additional cases, resume and provider-internal
 retries, and does not enforce a monetary or whole-run budget. Capture and
 injected-request tests are diagnostic evidence, not benchmark-quality results.
 
+### Per-question stage evidence
+
+The same opt-in capture adds `questionId` to answer/judge request and outcome
+records, including every retry. Preflight records have no question ID. Match
+request and outcome by their provider `sequence`; the request's `messages`
+contain the exact answerer context after configured-key redaction. Gold answers
+are supplied only to the judge, never added to the answerer's messages.
+
+Separately numbered `<sequence>.case.json` files join `questionId` and
+`scenarioId` to a stage and status. The case sequence is independent of the
+provider sequence; join by question ID within this capture directory, not by
+matching the two sequence numbers. Cases can stop at `material`, `retrieval`,
+or `eligibility` without an answer call. Answer/judge stages distinguish a
+failed operation from an unreliable parsed completion; `result` records a
+valid judged `correct` or `incorrect` verdict. Reused rows get a `resume`
+record, not an invented new provider request. Case records contain no question
+text, passages, gold answer or raw error message. A stage identifies where
+execution stopped, not the underlying cause: correlate it with provider
+outcomes and the prediction sidecar. A request without an outcome or a started
+stage without a terminal record remains incomplete.
+
+Case files use the same exclusive private writer and fail-closed behavior as
+provider capture. Context can contain personal data not recognized as a
+configured API key; this is sensitive opt-in evidence, not anonymized output.
+Do not commit it or attach it to public issues/PRs. Disabling capture retains
+the prior prompts, prediction sidecar, call accounting and scoring behavior.
+This facility covers `official` and `custom-judge`, not legacy `custom-v1`.
+
+Use this evidence to select an experiment before changing answer prompts or
+retrieval. The current durable answer path already passes full retrieved text
+when available, preserving dates and speaker roles, and asks for per-passage
+notes. Capture alone neither establishes a preference failure's cause nor
+measures an improvement. Any later prompt/context/query experiment needs its
+own switch and run identity; compare exact question sets and report the judge
+protocol, sample size and uncertainty. A custom judge is not the pinned
+LongMemEval judge, and a subset is not full-set qualification.
+
 ## Checkpoint-sidecar comparison
 
 The `b2-join.ts` reader refuses duplicate or inconsistent supplied scenario

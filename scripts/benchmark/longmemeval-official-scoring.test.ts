@@ -227,6 +227,41 @@ describe("explicit private provider capture", () => {
 		})
 	}
 
+	it("records the question and retrieval failure before any answer call, without upstream secrets", async () => {
+		const dir = await tempDir("capture-retrieval-stage")
+		try {
+			const answer = answerProvider()
+			const context = await prepare(dir, answer, judgeProvider())
+			await expect(
+				score(
+					context,
+					material("q-1", {
+						upstreamFailure: "private upstream body synthetic-answer",
+					}),
+				),
+			).rejects.toThrow("upstream retrieval failed")
+			const directory = `${context.sidecarPath}.capture`
+			const records = await Promise.all(
+				(await readdir(directory)).map(async (name) =>
+					JSON.parse(await readFile(path.join(directory, name), "utf8")),
+				),
+			)
+			expect(records.filter((record) => record.kind === "case")).toEqual([
+				expect.objectContaining({
+					questionId: "q-1",
+					scenarioId: "scenario-1",
+					stage: "retrieval",
+					status: "failed",
+				}),
+			])
+			expect(JSON.stringify(records)).not.toContain("private upstream body")
+			expect(JSON.stringify(records)).not.toContain("synthetic-answer")
+			expect(answer.calls).toHaveLength(1) // Only preparation preflight.
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
 	it.each([
 		"omitted",
 		"",
@@ -318,7 +353,9 @@ describe("explicit private provider capture", () => {
 				}),
 			)
 			const capture = `${context.sidecarPath}.capture`
-			expect(await readdir(capture)).toHaveLength(10)
+			expect(
+				(await readdir(capture)).filter((name) => !name.endsWith(".case.json")),
+			).toHaveLength(10)
 			const entries = await Promise.all(
 				(await readdir(capture))
 					.sort()
@@ -360,6 +397,11 @@ describe("explicit private provider capture", () => {
 					(entry) => entry.sequence === 5 && entry.kind === "outcome",
 				),
 			).not.toHaveProperty("usage")
+			for (const entry of entries.filter((value) => value.kind !== "case")) {
+				if (entry.phase === "preflight")
+					expect(entry).not.toHaveProperty("questionId")
+				else expect(entry.questionId).toBe("q-1")
+			}
 			const raw = JSON.stringify(entries)
 			for (const secret of [
 				"synthetic-answer",
