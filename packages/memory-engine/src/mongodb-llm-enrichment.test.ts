@@ -2125,6 +2125,49 @@ describe("provider failure diagnostics never carry provider or runtime payloads"
 			expect(fetchFn).toHaveBeenCalledOnce()
 			expectNoPayload(error)
 		})
+
+		it("keeps only the status of an EnrichmentHttpError thrown by an injected transport", async () => {
+			const thrown = Object.assign(
+				new EnrichmentHttpError(`HTTP 503 ${KEY}`, 503),
+				{ cause: new Error(HOST) },
+			)
+			const fetchFn = vi.fn(async () => {
+				throw thrown
+			}) as unknown as typeof fetch
+			const error = await withRetry(() => call(make(fetchFn)), 2, 0).catch(
+				(e: unknown) => e,
+			)
+			expect(error).not.toBe(thrown)
+			expect(error).toBeInstanceOf(EnrichmentHttpError)
+			expect((error as EnrichmentHttpError).statusCode).toBe(503)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed: HTTP 503 (transport error withheld)",
+			)
+			expect(fetchFn).toHaveBeenCalledTimes(3)
+			expectNoPayload(error)
+		})
+
+		it("does not pass through an EnrichmentResponseError thrown by an injected transport", async () => {
+			const thrown = new EnrichmentResponseError(
+				`bad ${KEY}`,
+				"refusal",
+				TOKEN,
+				true,
+				{ inputTokens: 1, outputTokens: 1 },
+			)
+			const fetchFn = vi.fn(async () => {
+				throw thrown
+			}) as unknown as typeof fetch
+			const error = await withRetry(() => call(make(fetchFn)), 2, 0).catch(
+				(e: unknown) => e,
+			)
+			expect(error).not.toBe(thrown)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed before a response",
+			)
+			expect(fetchFn).toHaveBeenCalledOnce()
+			expectNoPayload(error)
+		})
 	})
 
 	it("reports an Anthropic non-JSON success body as a non-retryable malformed body", async () => {

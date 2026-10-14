@@ -500,9 +500,11 @@ export function createHttpProvider(
 
 				if (!response.ok) {
 					discardBody(response)
-					throw new EnrichmentHttpError(
-						`LLM enrichment request failed: HTTP ${response.status} (response body withheld)`,
-						response.status,
+					throw ownFailure(
+						new EnrichmentHttpError(
+							`LLM enrichment request failed: HTTP ${response.status} (response body withheld)`,
+							response.status,
+						),
 					)
 				}
 
@@ -638,9 +640,11 @@ export function createAnthropicProvider(
 
 				if (!response.ok) {
 					discardBody(response)
-					throw new EnrichmentHttpError(
-						`LLM enrichment request failed: HTTP ${response.status} (response body withheld)`,
-						response.status,
+					throw ownFailure(
+						new EnrichmentHttpError(
+							`LLM enrichment request failed: HTTP ${response.status} (response body withheld)`,
+							response.status,
+						),
 					)
 				}
 
@@ -655,9 +659,11 @@ export function createAnthropicProvider(
 					// The parser quotes the body; a body that is not JSON is a
 					// provider failure, never retried and never a silent degrade.
 					if (err instanceof SyntaxError)
-						throw new EnrichmentResponseError(
-							"LLM enrichment response body was not valid JSON",
-							"malformed-body",
+						throw ownFailure(
+							new EnrichmentResponseError(
+								"LLM enrichment response body was not valid JSON",
+								"malformed-body",
+							),
 						)
 					throw err
 				}
@@ -712,14 +718,17 @@ export function createAnthropicProvider(
 
 // Provider bodies may echo the request, and runtime, DNS and guard errors can
 // quote a header value, the host or the body, so only this module's own
-// fixed-text errors pass through; anything else keeps its class (and with it
-// the retry decision) under fixed text.
+// fixed-text errors pass through; anything else keeps at most its runtime class
+// (and with it the retry decision) under fixed text.
 function providerFailure(err: unknown, timeoutMs: number): Error {
-	if (
-		err instanceof EnrichmentHttpError ||
-		err instanceof EnrichmentResponseError
-	)
-		return err
+	if (err instanceof Error && ownFailures.has(err)) return err
+	// An injected transport may signal a status through the exported class;
+	// only the status (and so the retry decision) survives.
+	if (err instanceof EnrichmentHttpError && Number.isInteger(err.statusCode))
+		return new EnrichmentHttpError(
+			`LLM enrichment request failed: HTTP ${err.statusCode} (transport error withheld)`,
+			err.statusCode,
+		)
 	// Timeouts are a retryable 408.
 	if (isAbortError(err))
 		return new EnrichmentHttpError(
@@ -732,6 +741,15 @@ function providerFailure(err: unknown, timeoutMs: number): Error {
 			503,
 		)
 	return withoutRemotePayload(err, "LLM enrichment request")
+}
+
+// Identity, not class: an injected fetch can throw the exported error classes
+// with any message, cause or fields.
+const ownFailures = new WeakSet<Error>()
+
+function ownFailure<T extends Error>(error: T): T {
+	ownFailures.add(error)
+	return error
 }
 
 // The body is never read. Cancelling is best effort and not awaited, so neither

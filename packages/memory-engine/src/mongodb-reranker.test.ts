@@ -1344,4 +1344,40 @@ describe("rerank failure diagnostics never carry provider or runtime payloads", 
 		expect(lines.some((line) => line.includes("rerank failed"))).toBe(true)
 		expect(lines.join("\n")).not.toContain(KEY)
 	})
+
+	it("never logs a non-numeric index from the response when not strict", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "0")
+		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "0")
+		const lines: string[] = []
+		const spies = (["warn", "error", "log", "info"] as const).map((level) =>
+			vi.spyOn(console, level).mockImplementation((...args) => {
+				lines.push(
+					args
+						.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+						.join(" "),
+				)
+			}),
+		)
+		try {
+			const out = await rerank(
+				requestThen(
+					() =>
+						new Response(
+							JSON.stringify({
+								data: [
+									{ index: KEY, relevance_score: 1 },
+									{ index: 1, relevance_score: 0.9 },
+								],
+							}),
+						),
+				),
+			)
+			expect(out.reranked).toBe(true)
+			expect(out.results[0]?.path).toBe("path/1")
+		} finally {
+			for (const spy of spies) spy.mockRestore()
+		}
+		expect(lines.some((line) => line.includes("index"))).toBe(true)
+		expect(lines.join("\n")).not.toContain(KEY)
+	})
 })

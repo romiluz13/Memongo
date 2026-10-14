@@ -390,18 +390,21 @@ export async function crossEncoderRerank(params: {
 					r.index < 0 ||
 					r.index >= validCandidates.length
 				) {
+					// Only a number is echoed; anything else is provider text.
+					const numeric = typeof r.index === "number"
 					if (isStrictRerankMode()) {
-						// Only a number is echoed; anything else is provider text.
 						throw new RerankApiError(
-							typeof r.index === "number"
+							numeric
 								? `rerank API returned out-of-bounds index: ${r.index}`
 								: "rerank API returned a non-numeric index",
 						)
 					}
-					log.warn("rerank API returned out-of-bounds index", {
-						index: r.index,
-						max: validCandidates.length - 1,
-					})
+					if (numeric)
+						log.warn("rerank API returned out-of-bounds index", {
+							index: r.index,
+							max: validCandidates.length - 1,
+						})
+					else log.warn("rerank API returned a non-numeric index")
 					return false
 				}
 				return true

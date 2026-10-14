@@ -266,11 +266,19 @@ Provider failures are reported without provider or runtime payload, because a
 provider error body can echo the key or request URL and runtime, DNS or SSRF
 guard errors can quote a header value, the host or the response body. The
 answer, judge and enrichment providers report `HTTP <status> (response body
-withheld)` and never read the body; a rejected request becomes `transport
-failed (TypeError)` with status 503, and a DNS, guard or other failure before a
-response keeps only its class under fixed text. The Voyage reranker follows the
-same rule in its fallback log and strict-mode error. Status codes, error
-classes and therefore retry, fallback and capture classification are
+withheld)` and never read the body. A runtime `TypeError`, such as a header
+value the runtime rejects, becomes `transport failed (TypeError)` with status
+503 and stays retryable. A DNS failure stays a plain `Error` and a guard
+refusal stays an `SsrFBlockedError`, both under fixed text and, as before,
+never retried. Two classes change: an Anthropic success body that is not JSON
+now fails as a non-retryable `EnrichmentResponseError` with shape
+`malformed-body` instead of a raw `SyntaxError`, and any other unrecognized
+failure, including an `EnrichmentResponseError` thrown by an injected `fetch`,
+becomes a plain non-retryable `Error`. An `EnrichmentHttpError` thrown by an
+injected `fetch` keeps only its status, and so its retry decision. The Voyage reranker follows
+the same rule in its fallback log and strict-mode error and never echoes a
+non-numeric result index. HTTP status codes, the timeout 408 and the retry,
+fallback and capture classification of the default `fetch` are otherwise
 unchanged. This covers configured credentials in these failure diagnostics; it
 does not cover MongoDB driver errors, successful provider content or dataset
 text.
