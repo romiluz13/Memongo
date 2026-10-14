@@ -35,6 +35,7 @@ import {
 	memongoBridgeGetManager,
 	memongoBridgeShutdown,
 } from "@memongo/memory-bridge"
+import { parseBenchmarkFingerprintKey } from "./benchmark/benchmark-credential-fingerprint.js"
 import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark/benchmark-quality-contracts.js"
 import { OFFICIAL_LONGMEMEVAL_QA_JUDGE_MODEL } from "./benchmark/longmemeval-official-qa.js"
 import {
@@ -481,6 +482,14 @@ export async function main(
 			"MEMONGO_MONGODB_URI is not set.\n" +
 				"  The benchmark runs against a real cluster; there is no offline mode.",
 		)
+	}
+	// Every run binds its credentials under the operator's fingerprint key, so
+	// refuse here, before the live recall gate or manager acquisition touches
+	// the database or a provider.
+	try {
+		parseBenchmarkFingerprintKey(process.env)
+	} catch (error) {
+		fail((error as Error).message)
 	}
 
 	// B7: --no-rerank must take effect before the manager is acquired (the

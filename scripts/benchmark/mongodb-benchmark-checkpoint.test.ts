@@ -162,7 +162,7 @@ describe("benchmark scenario checkpoint", () => {
 			(cp: BenchmarkCheckpoint) => {
 				Reflect.deleteProperty(
 					cp.configuration.settings,
-					"env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.sha256",
+					"env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.hmac",
 				)
 				cp.configurationHash = hashOperationRunConfiguration(cp.configuration)
 			},

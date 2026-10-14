@@ -11,7 +11,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-judge-v1"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v1"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -78,9 +78,10 @@ export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
 ] as const
 
 /**
- * Credentials and endpoints, recorded only as `env.<KEY>.sha256` (never the
- * raw value) so a different answerer, enrichment provider or judge cannot
- * share an identity. Unsalted digests are not a secrecy guarantee.
+ * Credentials and endpoints, recorded only as `env.<KEY>.hmac`: a keyed
+ * fingerprint of the effective value under the operator's fingerprint key, so
+ * a different answerer, enrichment provider or judge cannot share an identity
+ * and a guessed value cannot be confirmed without the key.
  */
 export const BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS = [
 	"MEMONGO_ENRICHMENT_API_KEY",
@@ -135,7 +136,8 @@ const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	rerankerRecencyBoost: scalar,
 	rerankerAccessBoost: scalar,
 	rerankerInstructionSha256: nullable(sha256),
-	rerankerApiKeySha256: nullable(sha256),
+	rerankerApiKeyHmac: nullable(sha256),
+	credentialFingerprintKeyId: sha256,
 	queryRewritingEnabled: scalar,
 	queryRewritingMethod: scalar,
 	queryRewritingMaxTokens: scalar,
@@ -179,7 +181,7 @@ const SETTING_CONTRACTS: ReadonlyMap<string, Contract> = new Map([
 			[`env.${key}`, nullable(ENV_CONTRACTS[key] ?? trimmedText)] as const,
 	),
 	...BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS.map(
-		(key) => [`env.${key}.sha256`, nullable(sha256)] as const,
+		(key) => [`env.${key}.hmac`, nullable(sha256)] as const,
 	),
 ])
 
@@ -207,7 +209,7 @@ export function hasCompleteConfigurationCoverage(
 	)
 		return false
 	const dedicated =
-		settings["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.sha256"] !== null
+		settings["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.hmac"] !== null
 	if ((settings.answerProviderSource === "dedicated") !== dedicated)
 		return false
 	return (
@@ -216,8 +218,8 @@ export function hasCompleteConfigurationCoverage(
 		) ||
 		[
 			"env.MEMONGO_BENCHMARK_JUDGE_MODEL",
-			"env.MEMONGO_BENCHMARK_JUDGE_API_KEY.sha256",
-			"env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.sha256",
+			"env.MEMONGO_BENCHMARK_JUDGE_API_KEY.hmac",
+			"env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.hmac",
 		].every((key) => settings[key] !== null)
 	)
 }

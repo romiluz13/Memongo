@@ -43,9 +43,13 @@ export const SYNTHETIC_BENCHMARK_HOST = {
 	},
 }
 
+/** Synthetic credential fingerprint key; never a real secret. */
+export const SYNTHETIC_FINGERPRINT_KEY = "5e".repeat(32)
+
 /**
  * The real producer's configuration under exactly `env` (other MEMONGO_*
- * variables cleared for the call), with its hash. Restores process.env.
+ * variables cleared for the call, the synthetic fingerprint key supplied
+ * unless `env` sets its own), with its hash. Restores process.env.
  */
 export function producedRunConfiguration(env: Record<string, string> = {}): {
 	configuration: OperationRunConfiguration
@@ -55,7 +59,11 @@ export function producedRunConfiguration(env: Record<string, string> = {}): {
 	try {
 		for (const key of Object.keys(process.env))
 			if (key.startsWith("MEMONGO_")) delete process.env[key]
-		Object.assign(process.env, env)
+		Object.assign(
+			process.env,
+			{ MEMONGO_BENCHMARK_FINGERPRINT_KEY: SYNTHETIC_FINGERPRINT_KEY },
+			env,
+		)
 		const configuration = new MongoDBManagerBenchmarkScenarioOps(
 			SYNTHETIC_BENCHMARK_HOST as never,
 		).snapshotBenchmarkRunConfiguration({

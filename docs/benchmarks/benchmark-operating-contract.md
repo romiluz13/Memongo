@@ -215,21 +215,47 @@ Each checkpoint must also persist its run configuration, the exact
 `settings.configurationCoverage` marker. The manifest is accepted only with
 that exact top-level shape, a hash equal to the checkpoint's and complete
 coverage as defined in `benchmark-run-configuration-schema.ts`, which the
-producer also builds from: exactly the covered settings keys; fingerprints as
-sha256 hex or null; env values as trimmed text or null; known values for the
+producer also builds from: exactly the covered settings keys; credential
+fingerprints as 64-character hex or null, plus a non-null key id; env values as trimmed text or null; known values for the
 QA protocol, judge auth style, judge token parameter and answer source; a
 dedicated answer source only with a fingerprinted dedicated key; and a durable
 QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage now
-includes the judge model, auth style, token parameter and QA protocol, plus
-sha256 fingerprints of the judge base URL and API key (never raw values;
-unsalted digests are not a secrecy guarantee). Checkpoints without a valid
-manifest, including every earlier run, stay descriptive and are refused for
-resume: equal hashes alone once missed a changed judge endpoint, so this is a
-deliberate compatibility change, not retroactive certification.
+run cannot verify. Coverage (`b02-keyed-v1`) includes the judge model, auth
+style, token parameter and QA protocol, plus keyed fingerprints of every
+supported credential. Checkpoints without a valid manifest, including every
+earlier run and every `b02-judge-v1` run with plain sha256 fingerprints, stay
+descriptive and are refused for resume: equal hashes alone once missed a
+changed judge endpoint, so this is a deliberate compatibility change, not
+retroactive certification.
+
+Credentials never enter a manifest raw or as a plain digest, which anyone could
+confirm by guessing. The enrichment, answer and judge API keys and base URLs
+(`env.<KEY>.hmac`) and the Voyage reranker key (`rerankerApiKeyHmac`) are
+recorded as HMAC-SHA-256 under the operator's
+`MEMONGO_BENCHMARK_FINGERPRINT_KEY`, over a fixed scheme label, the setting
+name and the effective value, separated by NUL bytes. The effective value is
+the env value trimmed as the provider resolvers trim it, and the Voyage key as
+configured; URLs are not canonicalized, so two spellings of one endpoint can
+refuse a resume but never merge. An absent credential is `null`.
+`credentialFingerprintKeyId`, an HMAC of a fixed label under the same key,
+names the key domain inside the hash; it is an equality tag, not provenance.
+
+The key is exactly 64 hex characters (32 bytes), supplied by the operator and
+never generated, stored, recorded or logged by the benchmark. Every
+`scripts/run-benchmark.ts` run requires it and refuses a missing or malformed
+key right after the MongoDB URI check, before the live recall gate, manager
+acquisition or any provider call. The producer refuses too, which protects
+direct callers of the benchmark ops only from that point on: a caller that
+acquires its own manager has already connected by then. Rotating the key is a
+deliberate operator act: the key id and every fingerprint change, so resume
+refuses ("configuration hash does not match"), b2-join refuses inference
+("credential fingerprint key differs between runs") and earlier runs remain
+historical. A key changed mid-run fails the run as a configuration change. The
+fingerprints hide guessable values only while the key stays secret, and runs
+under one key still reveal which ones share a credential.
 
 The runs must be distinct and must share `datasetSha256` and
 `executableDigest`; an opaque digest cannot show that a single setting

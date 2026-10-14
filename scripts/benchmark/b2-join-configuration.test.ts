@@ -8,7 +8,10 @@ import {
 } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import { main } from "./b2-join.js"
 import { BENCHMARK_CONFIGURATION_SETTING_KEYS } from "./benchmark-run-configuration-schema.js"
-import { SYNTHETIC_BENCHMARK_HOST } from "./benchmark-run-configuration.fixture.js"
+import {
+	SYNTHETIC_BENCHMARK_HOST,
+	SYNTHETIC_FINGERPRINT_KEY,
+} from "./benchmark-run-configuration.fixture.js"
 import { writeBenchmarkCheckpointAtomic } from "./mongodb-benchmark-checkpoint.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 import { prepareOfficialQa } from "./longmemeval-official-scoring.js"
@@ -93,7 +96,11 @@ async function produceRun(
 ): Promise<string> {
 	for (const key of Object.keys(process.env))
 		if (key.startsWith("MEMONGO_")) delete process.env[key]
-	Object.assign(process.env, env)
+	Object.assign(
+		process.env,
+		{ MEMONGO_BENCHMARK_FINGERPRINT_KEY: SYNTHETIC_FINGERPRINT_KEY },
+		env,
+	)
 	const ops = new MongoDBManagerBenchmarkScenarioOps(HOST as never)
 	const runContext = createOperationRunContext({
 		runId: `run-${label}`,
@@ -469,19 +476,19 @@ describe("b2-join configuration identity from the real producer", () => {
 		[
 			"malformed judge URL digest",
 			(s: Record<string, unknown>) => {
-				s["env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.sha256"] = "not-a-digest"
+				s["env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.hmac"] = "not-a-digest"
 			},
 		],
 		[
 			"durable protocol without judge endpoint",
 			(s: Record<string, unknown>) => {
-				s["env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.sha256"] = null
+				s["env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.hmac"] = null
 			},
 		],
 		[
 			"durable protocol without judge key",
 			(s: Record<string, unknown>) => {
-				s["env.MEMONGO_BENCHMARK_JUDGE_API_KEY.sha256"] = null
+				s["env.MEMONGO_BENCHMARK_JUDGE_API_KEY.hmac"] = null
 			},
 		],
 		[
@@ -499,7 +506,7 @@ describe("b2-join configuration identity from the real producer", () => {
 		[
 			"dedicated source without a dedicated key",
 			(s: Record<string, unknown>) => {
-				s["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.sha256"] = null
+				s["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.hmac"] = null
 			},
 		],
 		[
@@ -515,6 +522,43 @@ describe("b2-join configuration identity from the real producer", () => {
 			rehash(cp, sc)
 		})
 		expectRefused(result, "run A: configuration manifest")
+	})
+
+	// Synthetic second key: every fingerprint and the key id change with it.
+	const OTHER_KEY = { MEMONGO_BENCHMARK_FINGERPRINT_KEY: "0d".repeat(32) }
+
+	it.each([
+		["no treatment", {}, []],
+		["--r-only", {}, ["--r-only"]],
+		[
+			"an answerModel treatment",
+			{ MEMONGO_BENCHMARK_ANSWER_MODEL: "answer-b" },
+			["--treatment", "answerModel"],
+		],
+		[
+			"a judgeModel treatment",
+			{ MEMONGO_BENCHMARK_JUDGE_MODEL: "judge-k" },
+			["--treatment", "judgeModel"],
+		],
+		[
+			"a judgeProtocol treatment",
+			{ MEMONGO_BENCHMARK_QA_PROTOCOL: "official" },
+			["--treatment", "judgeProtocol"],
+		],
+	])("refuses runs fingerprinted under different keys with %s", async (_name, change, flags) => {
+		const result = await compare(
+			DEDICATED,
+			{ ...DEDICATED, ...OTHER_KEY, ...change },
+			flags,
+		)
+		expectRefused(result, "credential fingerprint key differs between runs")
+		expect(result.reasons).toContain(
+			"undeclared configuration difference: settings.credentialFingerprintKeyId",
+		)
+		expect(result.output).not.toContain(
+			OTHER_KEY.MEMONGO_BENCHMARK_FINGERPRINT_KEY,
+		)
+		expect(result.output).not.toContain(SYNTHETIC_FINGERPRINT_KEY)
 	})
 
 	it("refuses a rehashed marker-only manifest under --r-only", async () => {

@@ -6,7 +6,10 @@ import type { MemorySearchResult } from "../../packages/memory-engine/src/types.
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
-import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
+import {
+	producedRunConfiguration,
+	SYNTHETIC_FINGERPRINT_KEY,
+} from "./benchmark-run-configuration.fixture.js"
 import { readBenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
 import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import {
@@ -316,6 +319,7 @@ vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
 describe("benchmark run configuration identity", () => {
 	it("records query model and conversation evidence mode", () => {
 		vi.stubEnv("MEMONGO_SEARCH_MAX_TIME_MS", "4321")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", SYNTHETIC_FINGERPRINT_KEY)
 		const host = {
 			config: {
 				mongodb: {

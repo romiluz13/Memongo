@@ -15,6 +15,11 @@ import type {
 } from "./benchmark-parity-envelope.js"
 import { benchmarkAnswerProviderSource } from "./benchmark-answer-provider.js"
 import {
+	benchmarkCredentialFingerprint,
+	benchmarkCredentialKeyId,
+	parseBenchmarkFingerprintKey,
+} from "./benchmark-credential-fingerprint.js"
+import {
 	isTerminalSearchIndexStatus,
 	readSearchIndexStatus,
 } from "./mongodb-benchmark-readiness.js"
@@ -171,6 +176,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		qualityContractVersion?: string
 	}): BenchmarkRunConfiguration {
 		const mongoCfg = this.host.config.mongodb!
+		// Refuses before any identity exists: a run without the key would have
+		// no way to bind (or later compare) its credentials.
+		const fingerprintKey = parseBenchmarkFingerprintKey(process.env)
 		const deploymentIdentitySha256 = createHash("sha256")
 			.update(mongodbDeploymentIdentity(mongoCfg.uri, mongoCfg.database))
 			.digest("hex")
@@ -203,11 +211,14 @@ export class MongoDBManagerBenchmarkScenarioOps {
 						.update(mongoCfg.reranking.instruction)
 						.digest("hex")
 				: null,
-			rerankerApiKeySha256: mongoCfg.reranking?.voyageApiKey
-				? createHash("sha256")
-						.update(mongoCfg.reranking.voyageApiKey)
-						.digest("hex")
+			rerankerApiKeyHmac: mongoCfg.reranking?.voyageApiKey
+				? benchmarkCredentialFingerprint(
+						fingerprintKey,
+						"reranking.voyageApiKey",
+						mongoCfg.reranking.voyageApiKey,
+					)
 				: null,
+			credentialFingerprintKeyId: benchmarkCredentialKeyId(fingerprintKey),
 			queryRewritingEnabled: mongoCfg.queryRewriting.enabled,
 			queryRewritingMethod: mongoCfg.queryRewriting.method,
 			queryRewritingMaxTokens: mongoCfg.queryRewriting.maxTokens,
@@ -244,11 +255,12 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		for (const key of BENCHMARK_CONFIGURATION_ENV_KEYS) {
 			settings[`env.${key}`] = process.env[key]?.trim() || null
 		}
-		// Credentials and endpoints are fingerprinted, never recorded raw.
+		// Credentials and endpoints are fingerprinted, never recorded raw. The
+		// trimmed value is exactly what the provider resolvers use.
 		for (const key of BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS) {
 			const value = process.env[key]?.trim() ?? ""
-			settings[`env.${key}.sha256`] = value
-				? createHash("sha256").update(value).digest("hex")
+			settings[`env.${key}.hmac`] = value
+				? benchmarkCredentialFingerprint(fingerprintKey, key, value)
 				: null
 		}
 		// F-B1-2: record which provider config the answerer resolved from, so

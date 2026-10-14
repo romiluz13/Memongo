@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -62,7 +63,11 @@ const URLS = {
 	mongo: `mongodb://${encodeURIComponent(C.mongoUser)}:${encodeURIComponent(C.mongoPass)}@synthetic.invalid:27017/db?authSource=admin&tlsCertificateKeyFilePassword=${encodeURIComponent(C.mongoToken)}`,
 }
 
+// Synthetic fingerprint key; hex, so the detector also checks its case forms.
+const FINGERPRINT_KEY = "c0ffee5e".repeat(8)
+
 const ENV: Record<string, string> = {
+	MEMONGO_BENCHMARK_FINGERPRINT_KEY: FINGERPRINT_KEY,
 	MEMONGO_ENRICHMENT_API_KEY: C.enrichmentKey,
 	MEMONGO_ENRICHMENT_BASE_URL: URLS.enrichment,
 	MEMONGO_ENRICHMENT_MODEL: "enrich-model",
@@ -92,7 +97,12 @@ const HOST = {
 	},
 }
 
-/** Every encoding of every component and full URL that would expose it. */
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
+
+/**
+ * Every encoding of every component and full URL that would expose it,
+ * including its unkeyed SHA-256, which anyone can confirm by guessing.
+ */
 function exposures(text: string): string[] {
 	const found: string[] = []
 	const values: Array<[string, string]> = [
@@ -101,6 +111,7 @@ function exposures(text: string): string[] {
 			`${name}Url`,
 			value,
 		]),
+		["fingerprintKey", FINGERPRINT_KEY],
 	]
 	for (const [name, value] of values) {
 		const forms = new Set([
@@ -109,6 +120,7 @@ function exposures(text: string): string[] {
 			encodeURIComponent(value),
 			encodeURIComponent(value).toLowerCase(),
 			encodeURIComponent(encodeURIComponent(value)),
+			sha256(value),
 		])
 		for (const form of forms)
 			if (
@@ -160,12 +172,14 @@ describe("credential canary detector", () => {
 		expect(exposures(`password ${C.enrichmentPass}`)).toContain(
 			"enrichmentPass",
 		)
+		expect(exposures(`{"fp":"${sha256(C.judgeKey)}"}`)).toEqual(["judgeKey"])
+		expect(exposures(FINGERPRINT_KEY.toUpperCase())).toEqual(["fingerprintKey"])
 	})
 
 	it("does not flag digests, model names or the safe origin", () => {
 		expect(
 			exposures(
-				'{"env.MEMONGO_BENCHMARK_ANSWER_API_KEY.sha256":"4f2a","model":"answer-model","origin":"http://127.0.0.1:9/v1"}',
+				'{"env.MEMONGO_BENCHMARK_ANSWER_API_KEY.hmac":"4f2a","model":"answer-model","origin":"http://127.0.0.1:9/v1"}',
 			),
 		).toEqual([])
 	})
@@ -286,10 +300,10 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 		// The fingerprints exist, so the manifest really was built from them.
 		expect(
 			runContext.configuration.settings[
-				"env.MEMONGO_BENCHMARK_ANSWER_BASE_URL.sha256"
+				"env.MEMONGO_BENCHMARK_ANSWER_BASE_URL.hmac"
 			],
 		).toMatch(/^[0-9a-f]{64}$/)
-		expect(runContext.configuration.settings.rerankerApiKeySha256).toMatch(
+		expect(runContext.configuration.settings.rerankerApiKeyHmac).toMatch(
 			/^[0-9a-f]{64}$/,
 		)
 		const text = [

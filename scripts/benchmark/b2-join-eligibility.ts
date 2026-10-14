@@ -360,6 +360,10 @@ export function assessB2Comparison(params: {
 			a.configuration,
 			b.configuration,
 		)
+		if (differences.includes("settings.credentialFingerprintKeyId"))
+			reasons.push(
+				"credential fingerprint key differs between runs; their credential fingerprints cannot be compared",
+			)
 		for (const key of differences) {
 			if (!ownership?.keys.includes(key))
 				reasons.push(`undeclared configuration difference: ${key}`)
