@@ -38,7 +38,8 @@ copies covered separately. The report lists each package under
 bytes were present at admission, not that they were built from the tracked
 source, and it does not cover third-party installed packages, the runtime
 binary or changes after admission. Identity is refused, not degraded, when a
-package does not resolve, resolves outside the repository, uses an export
+package does not resolve, resolves differently under the running Bun resolver
+(for example through tsconfig `paths`), resolves outside the repository, uses an export
 condition other than `types`/`default`, has an entry outside `dist`, or has a
 missing or unreadable `dist` containing links, special files or
 `node_modules`. Checkpoints written before this change carry a digest without

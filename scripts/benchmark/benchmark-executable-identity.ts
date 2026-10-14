@@ -229,6 +229,25 @@ async function resolveWorkspacePackage(
 			`workspace package ${specifier} does not resolve`,
 		)
 	}
+	// The modeled resolver ignores tsconfig paths and other Bun-only lookup; when
+	// running under Bun, its own answer must agree or the bytes are unknown.
+	const bun = (
+		globalThis as {
+			Bun?: { resolveSync(specifier: string, from: string): string }
+		}
+	).Bun
+	if (bun) {
+		let runtimeEntry: string | null = null
+		try {
+			runtimeEntry = await realpath(
+				bun.resolveSync(specifier, path.dirname(importer)),
+			)
+		} catch {}
+		if (runtimeEntry !== entry)
+			throw new BuildTopologyError(
+				`workspace package ${specifier} resolves differently under the running runtime`,
+			)
+	}
 	for (let dir = path.dirname(entry); ; dir = path.dirname(dir)) {
 		const relative = path.relative(repoReal, dir)
 		if (relative.startsWith("..") || path.isAbsolute(relative))

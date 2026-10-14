@@ -10,9 +10,10 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises"
+import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	BENCHMARK_BUILD_ROOTS,
 	computeExecutableDigest,
@@ -410,6 +411,33 @@ describe("computeExecutableDigest", () => {
 		expect(identity.digest).toBeUndefined()
 		if (identity.status === "unavailable")
 			expect(identity.reason).not.toContain(repo)
+	})
+
+	it("cross-checks the running Bun resolver and refuses a mismatch", async () => {
+		const modeled = await available()
+		vi.stubGlobal("Bun", {
+			resolveSync: (specifier: string, from: string) =>
+				createRequire(path.join(from, "importer.js")).resolve(specifier),
+		})
+		try {
+			expect((await available()).digest).toBe(modeled.digest)
+			// e.g. tsconfig paths mapping a workspace package to its source
+			await put("packages/lib/src/index.js", "export const id = 0\n")
+			vi.stubGlobal("Bun", {
+				resolveSync: (specifier: string, from: string) =>
+					specifier === "@memongo/lib"
+						? path.join(repo, "packages/lib/src/index.js")
+						: createRequire(path.join(from, "importer.js")).resolve(specifier),
+			})
+			const identity = await computeExecutableDigest(repo)
+			expect(identity).toMatchObject({ status: "unavailable" })
+			expect(identity.digest).toBeUndefined()
+			expect(identity.status === "unavailable" && identity.reason).toContain(
+				"@memongo/lib",
+			)
+		} finally {
+			vi.unstubAllGlobals()
+		}
 	})
 
 	it("refuses identity when a build file cannot be read", async () => {
