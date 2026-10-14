@@ -98,12 +98,12 @@ export function resolveBenchmarkQaProtocol(
 	)
 }
 
-const JUDGE_AUTH_STYLES: ReadonlySet<string> = new Set([
+export const JUDGE_AUTH_STYLES: ReadonlySet<string> = new Set([
 	"authorization-bearer",
 	"api-key",
 	"x-api-key",
 ])
-const JUDGE_TOKEN_PARAMS: ReadonlySet<string> = new Set([
+export const JUDGE_TOKEN_PARAMS: ReadonlySet<string> = new Set([
 	"max_tokens",
 	"max_completion_tokens",
 ])

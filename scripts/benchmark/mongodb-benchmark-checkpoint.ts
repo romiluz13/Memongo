@@ -9,7 +9,10 @@ import type {
 	BenchmarkCostAccounting,
 	BenchmarkTenantStorageMeasurement,
 } from "../../packages/memory-engine/src/types.js"
+import { hasCompleteConfigurationCoverage } from "./benchmark-run-configuration-schema.js"
 import type { BenchmarkCaseExecution } from "./mongodb-benchmark-runner.js"
+
+export { BENCHMARK_CONFIGURATION_COVERAGE } from "./benchmark-run-configuration-schema.js"
 
 export type BenchmarkCheckpointIngest = {
 	conversationsIngested: number
@@ -49,14 +52,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-/**
- * Hash-bound marker for the settings coverage that includes judge identity.
- * Because it lives inside the hashed settings, a manifest copied from an
- * older run cannot verify against that run's hash; bump it whenever the
- * producer gains an identity input.
- */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-judge-v1"
-
 const CONFIGURATION_FIELDS = [
 	"executionProfile",
 	"maxResults",
@@ -70,9 +65,9 @@ function finiteNumber(value: unknown): value is number {
 }
 
 /**
- * The persisted manifest when it has the supported coverage, only scalar
- * finite values and the exact top-level shape, and hashes to
- * configurationHash; otherwise null. -0 is accepted as 0, which is how it
+ * The persisted manifest when it has the exact top-level shape, complete
+ * supported settings coverage (benchmark-run-configuration-schema) and hashes
+ * to configurationHash; otherwise null. -0 is accepted as 0, which is how it
  * hashes. Never reports values.
  */
 export function parseBoundRunConfiguration(
@@ -89,14 +84,7 @@ export function parseBoundRunConfiguration(
 		!finiteNumber(value.maxResults) ||
 		!finiteNumber(value.minScore) ||
 		!isRecord(value.settings) ||
-		value.settings.configurationCoverage !== BENCHMARK_CONFIGURATION_COVERAGE ||
-		!Object.values(value.settings).every(
-			(entry) =>
-				entry === null ||
-				typeof entry === "string" ||
-				typeof entry === "boolean" ||
-				finiteNumber(entry),
-		)
+		!hasCompleteConfigurationCoverage(value.settings)
 	)
 		return null
 	const configuration = value as OperationRunConfiguration

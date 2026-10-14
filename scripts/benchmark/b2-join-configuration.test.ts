@@ -2,8 +2,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
+import {
+	createOperationRunContext,
+	hashOperationRunConfiguration,
+} from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import { main } from "./b2-join.js"
+import { BENCHMARK_CONFIGURATION_SETTING_KEYS } from "./benchmark-run-configuration-schema.js"
+import { SYNTHETIC_BENCHMARK_HOST } from "./benchmark-run-configuration.fixture.js"
 import { writeBenchmarkCheckpointAtomic } from "./mongodb-benchmark-checkpoint.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 import { prepareOfficialQa } from "./longmemeval-official-scoring.js"
@@ -11,43 +16,7 @@ import { writeOfficialPredictionSidecarAtomic } from "./longmemeval-prediction-s
 
 // Real producer -> real checkpoint/sidecar writers -> real b2-join CLI. Only
 // the MongoDB host and the providers are synthetic; no network is reached.
-const HOST = {
-	capabilities: {
-		vectorSearch: true,
-		textSearch: true,
-		scoreFusion: true,
-		rankFusion: true,
-	},
-	config: {
-		mongodb: {
-			uri: "mongodb://synthetic.invalid:27017",
-			database: "db",
-			collectionPrefix: "p_",
-			deploymentProfile: "synthetic",
-			numCandidates: 100,
-			fusionMethod: "rrf",
-			embeddingMode: "auto",
-			queryEmbeddingModel: "embed",
-			conversationEvidenceMode: "off",
-			numDimensions: 1024,
-			quantization: "int8",
-			reranking: { enabled: false },
-			queryRewriting: { enabled: false, method: "none", maxTokens: 0 },
-			sources: {
-				conversation: { enabled: true },
-				reference: { enabled: false },
-				structured: { enabled: false },
-			},
-			kb: { enabled: false },
-			graph: {
-				enabled: false,
-				maxGraphDepth: 1,
-				entityExtraction: { method: "none", timeoutMs: 1 },
-			},
-			episodes: { enabled: false, minEventsForEpisode: 1 },
-		},
-	},
-}
+const HOST = SYNTHETIC_BENCHMARK_HOST
 
 const SECRETS = {
 	answerKey: "sk-synthetic-answer-secret",
@@ -78,7 +47,16 @@ const FALLBACK = {
 
 // Parsed checkpoint JSON as the edit callbacks mutate it.
 type StoredCheckpoint = {
+	configurationHash: string
 	configuration: Record<string, unknown> & { settings: Record<string, unknown> }
+}
+type StoredSidecar = { identity: Record<string, string> }
+
+// Re-binds an edited manifest so only coverage, not the hash, can refuse it.
+function rehash(checkpoint: StoredCheckpoint, sidecar: StoredSidecar) {
+	const hash = hashOperationRunConfiguration(checkpoint.configuration as never)
+	checkpoint.configurationHash = hash
+	sidecar.identity.configurationHash = hash
 }
 
 const DATASET = "d".repeat(64)
@@ -192,7 +170,11 @@ async function compare(
 	envB: Record<string, string>,
 	flags: string[] = [],
 	// A returned string replaces the file text; otherwise the edited JSON.
-	edit?: (checkpoint: StoredCheckpoint, label: "a" | "b") => unknown,
+	edit?: (
+		checkpoint: StoredCheckpoint,
+		label: "a" | "b",
+		sidecar: StoredSidecar,
+	) => unknown,
 ) {
 	const dir = await mkdtemp(path.join(tmpdir(), "b2-config-"))
 	dirs.push(dir)
@@ -204,11 +186,14 @@ async function compare(
 			[b, "b"],
 		] as const) {
 			const parsed = JSON.parse(await readFile(file, "utf8"))
-			const text = edit(parsed, label)
+			const sidecarPath = `${file}.predictions.json`
+			const sidecar = JSON.parse(await readFile(sidecarPath, "utf8"))
+			const text = edit(parsed, label, sidecar)
 			await writeFile(
 				file,
 				typeof text === "string" ? text : JSON.stringify(parsed),
 			)
+			await writeFile(sidecarPath, JSON.stringify(sidecar))
 		}
 	}
 	const artifacts = [
@@ -446,5 +431,106 @@ describe("b2-join configuration identity from the real producer", () => {
 			expect(result.artifacts).not.toContain(secret)
 			expect(result.output).not.toContain(secret)
 		}
+	})
+
+	it("produces exactly the covered settings keys", async () => {
+		let produced: string[] = []
+		await compare(DEDICATED, DEDICATED, [], (cp) => {
+			produced = Object.keys(cp.configuration.settings)
+		})
+		expect(produced.toSorted()).toEqual(
+			[...BENCHMARK_CONFIGURATION_SETTING_KEYS].toSorted(),
+		)
+	})
+
+	it("refuses a rehashed manifest missing any covered setting", async () => {
+		const accepted: string[] = []
+		for (const key of BENCHMARK_CONFIGURATION_SETTING_KEYS) {
+			const result = await compare(
+				DEDICATED,
+				DEDICATED,
+				[],
+				(cp, label, sc) => {
+					if (label !== "a") return
+					Reflect.deleteProperty(cp.configuration.settings, key)
+					rehash(cp, sc)
+				},
+			)
+			if (
+				result.code !== 1 ||
+				!result.reasons.includes("run A: configuration manifest")
+			)
+				accepted.push(key)
+		}
+		expect(accepted).toEqual([])
+	})
+
+	it.each([
+		[
+			"malformed judge URL digest",
+			(s: Record<string, unknown>) => {
+				s["env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.sha256"] = "not-a-digest"
+			},
+		],
+		[
+			"durable protocol without judge endpoint",
+			(s: Record<string, unknown>) => {
+				s["env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.sha256"] = null
+			},
+		],
+		[
+			"durable protocol without judge key",
+			(s: Record<string, unknown>) => {
+				s["env.MEMONGO_BENCHMARK_JUDGE_API_KEY.sha256"] = null
+			},
+		],
+		[
+			"unknown judge auth style",
+			(s: Record<string, unknown>) => {
+				s["env.MEMONGO_BENCHMARK_JUDGE_AUTH_STYLE"] = "cookie"
+			},
+		],
+		[
+			"padded env text",
+			(s: Record<string, unknown>) => {
+				s["env.MEMONGO_BENCHMARK_JUDGE_MODEL"] = " judge-j"
+			},
+		],
+		[
+			"dedicated source without a dedicated key",
+			(s: Record<string, unknown>) => {
+				s["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.sha256"] = null
+			},
+		],
+		[
+			"unknown extra setting",
+			(s: Record<string, unknown>) => {
+				s.unrecorded = "x"
+			},
+		],
+	])("refuses a rehashed manifest with %s", async (_name, mutate) => {
+		const result = await compare(DEDICATED, DEDICATED, [], (cp, label, sc) => {
+			if (label !== "a") return
+			mutate(cp.configuration.settings)
+			rehash(cp, sc)
+		})
+		expectRefused(result, "run A: configuration manifest")
+	})
+
+	it("refuses a rehashed marker-only manifest under --r-only", async () => {
+		const result = await compare(
+			DEDICATED,
+			DEDICATED,
+			["--r-only"],
+			(cp, _l, sc) => {
+				cp.configuration.settings = {
+					configurationCoverage:
+						cp.configuration.settings.configurationCoverage,
+				}
+				rehash(cp, sc)
+			},
+		)
+		expectRefused(result, "run A: configuration manifest")
+		expect(result.reasons).toContain("run B: configuration manifest")
 	})
 })

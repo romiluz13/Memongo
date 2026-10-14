@@ -6,10 +6,8 @@ import type { MemorySearchResult } from "../../packages/memory-engine/src/types.
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
-import {
-	BENCHMARK_CONFIGURATION_COVERAGE,
-	readBenchmarkCheckpoint,
-} from "./mongodb-benchmark-checkpoint.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
+import { readBenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
 import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import {
 	prepareOfficialQa,
@@ -756,7 +754,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				retrievalLane: "native",
 				maxResults: 10,
 				minScore: 0.1,
-				settings: { configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE },
+				settings: producedRunConfiguration().configuration.settings,
 			},
 		})
 	}

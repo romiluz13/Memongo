@@ -8,10 +8,8 @@ import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongod
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { loadBenchmarkDataset } from "./mongodb-benchmark-harness.js"
 import { computeExecutableDigest } from "./benchmark-executable-identity.js"
-import {
-	BENCHMARK_CONFIGURATION_COVERAGE,
-	writeBenchmarkCheckpointAtomic,
-} from "./mongodb-benchmark-checkpoint.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
+import { writeBenchmarkCheckpointAtomic } from "./mongodb-benchmark-checkpoint.js"
 import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-contracts.js"
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
@@ -1031,7 +1029,7 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 				params: Parameters<typeof testBenchmarkRunConfiguration>[0],
 			) => ({
 				...testBenchmarkRunConfiguration(params),
-				settings: { configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE },
+				settings: producedRunConfiguration().configuration.settings,
 			}),
 			runScenarioBenchmarkDataset,
 			runLegacyRelevanceBenchmark: vi.fn(),

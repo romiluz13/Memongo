@@ -18,7 +18,11 @@ import {
 	isTerminalSearchIndexStatus,
 	readSearchIndexStatus,
 } from "./mongodb-benchmark-readiness.js"
-import { BENCHMARK_CONFIGURATION_COVERAGE } from "./mongodb-benchmark-checkpoint.js"
+import {
+	BENCHMARK_CONFIGURATION_COVERAGE,
+	BENCHMARK_CONFIGURATION_ENV_KEYS,
+	BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS,
+} from "./benchmark-run-configuration-schema.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import { mongodbDeploymentIdentity } from "../../packages/memory-engine/src/mongodb-capability-registry.js"
 import { renderEventChunkText } from "../../packages/memory-engine/src/mongodb-events.js"
@@ -237,103 +241,11 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				300_000,
 			),
 		}
-		const environmentKeys = [
-			// B1: the answerer and the extraction LLM are separately
-			// configurable, so both must be part of the scenario identity.
-			"MEMONGO_BENCHMARK_ANSWER_ALLOW_PRIVATE_NETWORK",
-			"MEMONGO_BENCHMARK_ANSWER_AUTH_STYLE",
-			"MEMONGO_BENCHMARK_ANSWER_MODEL",
-			"MEMONGO_BENCHMARK_ANSWER_PROVIDER",
-			"MEMONGO_BENCHMARK_ANSWER_TOKEN_PARAM",
-			"MEMONGO_BENCHMARK_STRICT",
-			"MEMONGO_BENCHMARK_DERIVED_WORK_MODE",
-			"MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS",
-			"MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS",
-			"MEMONGO_BENCHMARK_FAST_INGEST",
-			"MEMONGO_BENCHMARK_FAST_INGEST_BATCH_SIZE",
-			// The official judge resolver reads these directly; omitting them let
-			// two runs graded by different judges share one identity.
-			"MEMONGO_BENCHMARK_JUDGE_AUTH_STYLE",
-			"MEMONGO_BENCHMARK_JUDGE_MODEL",
-			"MEMONGO_BENCHMARK_JUDGE_TOKEN_PARAM",
-			"MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA",
-			"MEMONGO_BENCHMARK_MEASUREMENT_PASSES",
-			"MEMONGO_BENCHMARK_QA_PROTOCOL",
-			"MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS",
-			"MEMONGO_BENCHMARK_RETRY_ATTEMPTS",
-			"MEMONGO_BENCHMARK_RETRY_BASE_DELAY_MS",
-			"MEMONGO_BENCHMARK_RETRY_MAX_DELAY_MS",
-			"MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE",
-			"MEMONGO_BENCHMARK_TURN_PRECISION_MODE",
-			"MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS",
-			"MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS",
-			"MEMONGO_ENRICHMENT_CONCURRENCY",
-			"MEMONGO_ENRICHMENT_ALLOW_PRIVATE_NETWORK",
-			"MEMONGO_ENRICHMENT_AUTH_STYLE",
-			"MEMONGO_ENRICHMENT_MODEL",
-			"MEMONGO_ENRICHMENT_PROVIDER",
-			"MEMONGO_ENRICHMENT_TOKEN_PARAM",
-			"MEMONGO_EVIDENCE_SETTLE_MS",
-			"MEMONGO_EVIDENCE_MIRROR_MODE",
-			// B1: extraction-off changes what gets written, so it must not
-			// hash identically to an extraction-on run.
-			"MEMONGO_EXTRACTION_LLM",
-			"MEMONGO_LLM_ENRICHMENT_MAX_RETRIES",
-			"MEMONGO_LLM_ENRICHMENT_MAX_TOKENS",
-			"MEMONGO_LLM_ENRICHMENT_MODE",
-			"MEMONGO_LLM_ENRICHMENT_STRICT",
-			"MEMONGO_LLM_ENRICHMENT_TIMEOUT_MS",
-			"MEMONGO_PREFERENCE_EVIDENCE_MODE",
-			"MEMONGO_QUERY_DECOMPOSITION_MODE",
-			// #66: reranking costs ~715ms of p95 and changes ranking, so a
-			// rerank-off run must not hash identically to a rerank-on one.
-			"MEMONGO_RERANKING_ENABLED",
-			"MEMONGO_RERANK_MIN_SCORE",
-			"MEMONGO_RERANK_STRICT",
-			"MEMONGO_SCORING_ABLATION",
-			"MEMONGO_SEARCH_MAX_TIME_MS",
-			"MEMONGO_SESSION_EVIDENCE_MODE",
-			"MEMONGO_STRICT_SEARCH_INDEX_READY",
-			"MEMONGO_TEMPORAL_COVERAGE_MODE",
-			"MEMONGO_USERFACT_EVIDENCE_MODE",
-			"MEMONGO_VECTOR_INDEXING_METHOD",
-			"MEMONGO_VECTOR_STORED_SOURCE",
-		] as const
-		for (const key of environmentKeys) {
+		for (const key of BENCHMARK_CONFIGURATION_ENV_KEYS) {
 			settings[`env.${key}`] = process.env[key]?.trim() || null
 		}
-		const enrichmentApiKey =
-			process.env.MEMONGO_ENRICHMENT_API_KEY?.trim() ?? ""
-		settings["env.MEMONGO_ENRICHMENT_API_KEY.sha256"] = enrichmentApiKey
-			? createHash("sha256").update(enrichmentApiKey).digest("hex")
-			: null
-		// B1: a dedicated benchmark answerer gets the same hashed treatment
-		// (never the raw secret) so checkpoint reuse reflects which answerer
-		// produced a run.
-		const benchmarkAnswerApiKey =
-			process.env.MEMONGO_BENCHMARK_ANSWER_API_KEY?.trim() ?? ""
-		settings["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.sha256"] =
-			benchmarkAnswerApiKey
-				? createHash("sha256").update(benchmarkAnswerApiKey).digest("hex")
-				: null
-		const enrichmentBaseUrl =
-			process.env.MEMONGO_ENRICHMENT_BASE_URL?.trim() ?? ""
-		settings["env.MEMONGO_ENRICHMENT_BASE_URL.sha256"] = enrichmentBaseUrl
-			? createHash("sha256").update(enrichmentBaseUrl).digest("hex")
-			: null
-		// F-B1-3: the answer endpoint is part of the answerer identity. Hashed
-		// like the enrichment base URL (never raw), so a checkpoint from a
-		// different answer endpoint cannot be resumed silently.
-		const benchmarkAnswerBaseUrl =
-			process.env.MEMONGO_BENCHMARK_ANSWER_BASE_URL?.trim() ?? ""
-		settings["env.MEMONGO_BENCHMARK_ANSWER_BASE_URL.sha256"] =
-			benchmarkAnswerBaseUrl
-				? createHash("sha256").update(benchmarkAnswerBaseUrl).digest("hex")
-				: null
-		for (const key of [
-			"MEMONGO_BENCHMARK_JUDGE_API_KEY",
-			"MEMONGO_BENCHMARK_JUDGE_BASE_URL",
-		] as const) {
+		// Credentials and endpoints are fingerprinted, never recorded raw.
+		for (const key of BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS) {
 			const value = process.env[key]?.trim() ?? ""
 			settings[`env.${key}.sha256`] = value
 				? createHash("sha256").update(value).digest("hex")

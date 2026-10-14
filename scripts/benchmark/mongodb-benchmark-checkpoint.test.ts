@@ -3,24 +3,15 @@ import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { hashOperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
 import {
-	BENCHMARK_CONFIGURATION_COVERAGE,
 	readBenchmarkCheckpoint,
 	writeBenchmarkCheckpointAtomic,
 	type BenchmarkCheckpoint,
 } from "./mongodb-benchmark-checkpoint.js"
 
-const CONFIGURATION = {
-	executionProfile: "shipped" as const,
-	retrievalLane: "native" as const,
-	maxResults: 10,
-	minScore: 0.01,
-	settings: {
-		configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE,
-		numCandidates: 100,
-	},
-}
-const CONFIGURATION_HASH = hashOperationRunConfiguration(CONFIGURATION)
+const { configuration: CONFIGURATION, configurationHash: CONFIGURATION_HASH } =
+	producedRunConfiguration()
 
 function checkpoint(): BenchmarkCheckpoint {
 	return {
@@ -167,6 +158,16 @@ describe("benchmark scenario checkpoint", () => {
 				Reflect.set(cp.configuration.settings, "numCandidates", 999),
 		],
 		[
+			"incomplete rehashed",
+			(cp: BenchmarkCheckpoint) => {
+				Reflect.deleteProperty(
+					cp.configuration.settings,
+					"env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.sha256",
+				)
+				cp.configurationHash = hashOperationRunConfiguration(cp.configuration)
+			},
+		],
+		[
 			"older-coverage",
 			(cp: BenchmarkCheckpoint) =>
 				Reflect.deleteProperty(
@@ -184,7 +185,7 @@ describe("benchmark scenario checkpoint", () => {
 			await expect(
 				readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
-					configurationHash: CONFIGURATION_HASH,
+					configurationHash: stored.configurationHash,
 					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),

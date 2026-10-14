@@ -171,9 +171,17 @@ sidecars in both runs. Rejections name the field, never its value.
 Each checkpoint must also persist its run configuration, the exact
 `OperationRunConfiguration` hashed into `configurationHash`, with the supported
 `settings.configurationCoverage` marker. The manifest is accepted only with
-that exact top-level shape, scalar finite values and a hash equal to the
-checkpoint's; `-0` counts as `0`, as it hashes. The marker sits inside the
-hash, so a manifest copied from an older run cannot verify. Coverage now
+that exact top-level shape, a hash equal to the checkpoint's and complete
+coverage as defined in `benchmark-run-configuration-schema.ts`, which the
+producer also builds from: exactly the covered settings keys; fingerprints as
+sha256 hex or null; env values as trimmed text or null; known values for the
+QA protocol, judge auth style, judge token parameter and answer source; a
+dedicated answer source only with a fingerprinted dedicated key; and a durable
+QA protocol only with a judge model, key and endpoint. A self-consistent hash
+over an incomplete or malformed manifest is refused, and schema validity says
+nothing about whether the values are authentic. `-0` counts as `0`, as it
+hashes. The marker sits inside the hash, so a manifest copied from an older
+run cannot verify. Coverage now
 includes the judge model, auth style, token parameter and QA protocol, plus
 sha256 fingerprints of the judge base URL and API key (never raw values;
 unsalted digests are not a secrecy guarantee). Checkpoints without a valid

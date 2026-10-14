@@ -2,9 +2,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { hashOperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import { type RunQuestionMetrics, joinB2Runs, main } from "./b2-join.js"
-import { BENCHMARK_CONFIGURATION_COVERAGE } from "./mongodb-benchmark-checkpoint.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
 
 type Verdict = "yes" | "no"
 type Outcome = [a: Verdict, b: Verdict]
@@ -138,24 +137,20 @@ describe("joinB2Runs paired inference", () => {
 	})
 })
 
-// Minimal hash-bound manifest whose effective labels match IDENTITY.
-const CONFIGURATION = {
-	executionProfile: "shipped" as const,
-	retrievalLane: "native" as const,
-	maxResults: 10,
-	minScore: 0.01,
-	settings: {
-		configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE,
-		answerProviderSource: "dedicated",
-		"env.MEMONGO_BENCHMARK_ANSWER_MODEL": "answer-1",
-		"env.MEMONGO_BENCHMARK_JUDGE_MODEL": "judge-1",
-		"env.MEMONGO_BENCHMARK_QA_PROTOCOL": "official",
-	},
-}
+// Real producer manifest whose effective labels match IDENTITY.
+const PRODUCED = producedRunConfiguration({
+	MEMONGO_BENCHMARK_QA_PROTOCOL: "official",
+	MEMONGO_BENCHMARK_ANSWER_API_KEY: "sk-synthetic-answer",
+	MEMONGO_BENCHMARK_ANSWER_BASE_URL: "https://answer.invalid/v1",
+	MEMONGO_BENCHMARK_ANSWER_MODEL: "answer-1",
+	MEMONGO_BENCHMARK_JUDGE_API_KEY: "sk-synthetic-judge",
+	MEMONGO_BENCHMARK_JUDGE_BASE_URL: "https://judge.invalid/v1",
+	MEMONGO_BENCHMARK_JUDGE_MODEL: "judge-1",
+})
 
 const IDENTITY = {
 	datasetSha256: "d".repeat(64),
-	configurationHash: hashOperationRunConfiguration(CONFIGURATION),
+	configurationHash: PRODUCED.configurationHash,
 	answerModel: "answer-1",
 	judgeModel: "judge-1",
 	judgeProtocol: "official-anscheck",
@@ -190,7 +185,7 @@ function fixture(
 			runId,
 			datasetSha256: IDENTITY.datasetSha256,
 			configurationHash: IDENTITY.configurationHash,
-			configuration: structuredClone(CONFIGURATION),
+			configuration: structuredClone(PRODUCED.configuration),
 			executableDigest: "e".repeat(64),
 			totalScenarios: ids.length,
 			scenarioIds: ids,
