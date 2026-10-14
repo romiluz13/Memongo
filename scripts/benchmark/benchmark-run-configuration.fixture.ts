@@ -16,6 +16,11 @@ export const SYNTHETIC_BENCHMARK_HOST = {
 		mongodb: {
 			uri: "mongodb://synthetic.invalid:27017",
 			database: "db",
+			// The resolver's defaults; optional client inputs stay unset.
+			serverSelectionTimeoutMs: 10_000,
+			connectTimeoutMs: 10_000,
+			maxPoolSize: 10,
+			minPoolSize: 2,
 			collectionPrefix: "p_",
 			deploymentProfile: "synthetic",
 			numCandidates: 100,

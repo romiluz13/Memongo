@@ -66,6 +66,9 @@ const DATASET = "d".repeat(64)
 const EXECUTABLE = "e".repeat(64)
 const N = 20
 
+// Per-run resolved MongoDB config overrides on the synthetic host.
+let mongodbOverrides: Partial<Record<"a" | "b", Record<string, unknown>>> = {}
+
 const saved = { ...process.env }
 const dirs: string[] = []
 beforeEach(() => {
@@ -73,6 +76,7 @@ beforeEach(() => {
 		if (key.startsWith("MEMONGO_")) delete process.env[key]
 })
 afterEach(async () => {
+	mongodbOverrides = {}
 	process.env = { ...saved }
 	for (const dir of dirs.splice(0))
 		await rm(dir, { recursive: true, force: true })
@@ -101,7 +105,9 @@ async function produceRun(
 		{ MEMONGO_BENCHMARK_FINGERPRINT_KEY: SYNTHETIC_FINGERPRINT_KEY },
 		env,
 	)
-	const ops = new MongoDBManagerBenchmarkScenarioOps(HOST as never)
+	const host = structuredClone(HOST)
+	Object.assign(host.config.mongodb, mongodbOverrides[label] ?? {})
+	const ops = new MongoDBManagerBenchmarkScenarioOps(host as never)
 	const runContext = createOperationRunContext({
 		runId: `run-${label}`,
 		configuration: ops.snapshotBenchmarkRunConfiguration({
@@ -264,6 +270,32 @@ function expectRefused(
 describe("b2-join configuration identity from the real producer", () => {
 	it("tests an identical dedicated configuration", async () => {
 		expectEligible(await compare(DEDICATED, DEDICATED))
+	})
+
+	it("refuses runs whose configured MongoDB URIs differ without exposing either", async () => {
+		const uri = (password: string) =>
+			`mongodb+srv://cnryJoinUser:${password}@cluster.join.invalid/db?authSource=admin`
+		mongodbOverrides = {
+			a: { uri: uri("cnryJoinPassA") },
+			b: { uri: uri("cnryJoinPassB") },
+		}
+		const result = await compare(DEDICATED, DEDICATED)
+		expectRefused(
+			result,
+			"undeclared configuration difference: settings.mongodbUriHmac",
+		)
+		for (const secret of ["cnryJoinUser", "cnryJoinPassA", "cnryJoinPassB"]) {
+			expect(result.artifacts).not.toContain(secret)
+			expect(result.output).not.toContain(secret)
+		}
+	})
+
+	it("refuses runs whose configured MongoDB client options differ", async () => {
+		mongodbOverrides = { b: { maxPoolSize: 50 } }
+		expectRefused(
+			await compare(DEDICATED, DEDICATED),
+			"undeclared configuration difference: settings.configuredMongoClient.maxPoolSize",
+		)
 	})
 
 	it.each([

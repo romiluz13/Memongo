@@ -223,11 +223,12 @@ QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage (`b02-keyed-v1`) includes the judge model, auth
-style, token parameter and QA protocol, plus keyed fingerprints of every
-supported credential. Checkpoints without a valid manifest, including every
-earlier run and every `b02-judge-v1` run with plain sha256 fingerprints, stay
-descriptive and are refused for resume: equal hashes alone once missed a
+run cannot verify. Coverage (`b02-keyed-v2`) includes the judge model, auth
+style, token parameter and QA protocol, keyed fingerprints of every supported
+credential, and the configured MongoDB connection inputs described below.
+Checkpoints without a valid manifest, including every earlier run, every
+`b02-keyed-v1` run without connection inputs and every `b02-judge-v1` run with
+plain sha256 fingerprints, stay descriptive and are refused for resume: equal hashes alone once missed a
 changed judge endpoint, so this is a deliberate compatibility change, not
 retroactive certification.
 
@@ -261,6 +262,25 @@ refuses ("configuration hash does not match"), b2-join refuses inference
 historical. A key changed mid-run fails the run as a configuration change. The
 fingerprints hide guessable values only while the key stays secret, and runs
 under one key still reveal which ones share a credential.
+
+The configured MongoDB connection inputs are bound the same way.
+`mongodbUriHmac` is the keyed fingerprint (setting name `mongodb.uri`) of the
+exact URI the client is built from, never parsed, trimmed or normalized, and
+always present; the URI, user, password and query values are never recorded.
+Any byte change refuses resume and comparison, including a password rotation,
+an option reorder or a case change that the driver would treat alike; a
+password change can change connection success and the failures a run records,
+and a second parser would risk merging URIs the driver reads differently. The
+eleven client inputs the engine passes to `MongoClient` are recorded as typed
+`configuredMongoClient.<name>` values (null only for optional ones left unset):
+`serverSelectionTimeoutMs`, `connectTimeoutMs`, `maxPoolSize`, `minPoolSize`,
+`maxConnecting`, `maxIdleTimeMs`, `networkFamily`, `socketTimeoutMs`,
+`heartbeatFrequencyMs`, `serverMonitoringMode` and `waitQueueTimeoutMs`. This
+binds configured inputs only. A run may borrow a shared client whose pool was
+created with the first acquirer's options, and `mongodb+srv` hosts and TXT
+options, server roles and server, index, model or data state are resolved at
+runtime; none of these is proven by the manifest. `deploymentIdentitySha256`
+is unchanged.
 
 Provider failures are reported without provider or runtime payload, because a
 provider error body can echo the key or request URL and runtime, DNS or SSRF

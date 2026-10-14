@@ -11,7 +11,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v1"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v2"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -92,6 +92,25 @@ export const BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS = [
 	"MEMONGO_BENCHMARK_JUDGE_BASE_URL",
 ] as const
 
+/**
+ * The configured MongoDB client inputs (buildMongoClientOptions), recorded as
+ * `configuredMongoClient.<name>`. They bind what this run configured, not the
+ * options of a shared client it may have borrowed.
+ */
+export const BENCHMARK_MONGO_CLIENT_SETTING_NAMES = [
+	"serverSelectionTimeoutMs",
+	"connectTimeoutMs",
+	"maxPoolSize",
+	"minPoolSize",
+	"maxConnecting",
+	"maxIdleTimeMs",
+	"networkFamily",
+	"socketTimeoutMs",
+	"heartbeatFrequencyMs",
+	"serverMonitoringMode",
+	"waitQueueTimeoutMs",
+] as const
+
 type Contract = (value: unknown) => boolean
 
 const SHA256_HEX = /^[0-9a-f]{64}$/
@@ -110,6 +129,10 @@ const oneOf =
 	(allowed: Iterable<string>): Contract =>
 	(value) =>
 		typeof value === "string" && new Set(allowed).has(value)
+const positiveInteger: Contract = (value) =>
+	Number.isSafeInteger(value) && (value as number) > 0
+const nonNegativeInteger: Contract = (value) =>
+	Number.isSafeInteger(value) && (value as number) >= 0
 // Recorded as `value.trim() || null`, so text is never blank or padded.
 const trimmedText: Contract = (value) =>
 	typeof value === "string" && value.length > 0 && value.trim() === value
@@ -120,6 +143,8 @@ const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	qualityContractId: scalar,
 	qualityContractVersion: scalar,
 	deploymentIdentitySha256: sha256,
+	// Keyed fingerprint of the exact configured URI; never absent.
+	mongodbUriHmac: sha256,
 	collectionPrefix: scalar,
 	deploymentProfile: scalar,
 	numCandidates: scalar,
@@ -174,8 +199,30 @@ const ENV_CONTRACTS: Partial<Record<string, Contract>> = {
 	MEMONGO_BENCHMARK_JUDGE_TOKEN_PARAM: oneOf(JUDGE_TOKEN_PARAMS),
 }
 
+// Mirrors the resolver's types: required inputs always resolve to a value.
+const MONGO_CLIENT_CONTRACTS: Record<
+	(typeof BENCHMARK_MONGO_CLIENT_SETTING_NAMES)[number],
+	Contract
+> = {
+	serverSelectionTimeoutMs: positiveInteger,
+	connectTimeoutMs: positiveInteger,
+	maxPoolSize: positiveInteger,
+	minPoolSize: nonNegativeInteger,
+	maxConnecting: nullable(positiveInteger),
+	maxIdleTimeMs: nullable(positiveInteger),
+	networkFamily: nullable((value) => value === 4 || value === 6),
+	socketTimeoutMs: nullable(positiveInteger),
+	heartbeatFrequencyMs: nullable(positiveInteger),
+	serverMonitoringMode: nullable(oneOf(["auto", "stream", "poll"])),
+	waitQueueTimeoutMs: nullable(positiveInteger),
+}
+
 const SETTING_CONTRACTS: ReadonlyMap<string, Contract> = new Map([
 	...Object.entries(RESOLVED_CONTRACTS),
+	...BENCHMARK_MONGO_CLIENT_SETTING_NAMES.map(
+		(name) =>
+			[`configuredMongoClient.${name}`, MONGO_CLIENT_CONTRACTS[name]] as const,
+	),
 	...BENCHMARK_CONFIGURATION_ENV_KEYS.map(
 		(key) =>
 			[`env.${key}`, nullable(ENV_CONTRACTS[key] ?? trimmedText)] as const,

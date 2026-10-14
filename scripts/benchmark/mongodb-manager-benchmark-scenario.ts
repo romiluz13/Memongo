@@ -27,6 +27,7 @@ import {
 	BENCHMARK_CONFIGURATION_COVERAGE,
 	BENCHMARK_CONFIGURATION_ENV_KEYS,
 	BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS,
+	BENCHMARK_MONGO_CLIENT_SETTING_NAMES,
 } from "./benchmark-run-configuration-schema.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import { mongodbDeploymentIdentity } from "../../packages/memory-engine/src/mongodb-capability-registry.js"
@@ -187,6 +188,13 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			qualityContractId: params.qualityContractId ?? null,
 			qualityContractVersion: params.qualityContractVersion ?? null,
 			deploymentIdentitySha256,
+			// The exact URI the client is built from: any byte change (password,
+			// option order, path) refuses resume and comparison by design.
+			mongodbUriHmac: benchmarkCredentialFingerprint(
+				fingerprintKey,
+				"mongodb.uri",
+				mongoCfg.uri,
+			),
 			collectionPrefix: mongoCfg.collectionPrefix,
 			deploymentProfile: mongoCfg.deploymentProfile,
 			numCandidates: mongoCfg.numCandidates,
@@ -251,6 +259,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
 				300_000,
 			),
+		}
+		for (const name of BENCHMARK_MONGO_CLIENT_SETTING_NAMES) {
+			settings[`configuredMongoClient.${name}`] = mongoCfg[name] ?? null
 		}
 		for (const key of BENCHMARK_CONFIGURATION_ENV_KEYS) {
 			settings[`env.${key}`] = process.env[key]?.trim() || null
