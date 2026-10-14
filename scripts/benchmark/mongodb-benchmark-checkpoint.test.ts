@@ -2,18 +2,33 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { hashOperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import {
+	BENCHMARK_CONFIGURATION_COVERAGE,
 	readBenchmarkCheckpoint,
 	writeBenchmarkCheckpointAtomic,
 	type BenchmarkCheckpoint,
 } from "./mongodb-benchmark-checkpoint.js"
+
+const CONFIGURATION = {
+	executionProfile: "shipped" as const,
+	retrievalLane: "native" as const,
+	maxResults: 10,
+	minScore: 0.01,
+	settings: {
+		configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE,
+		numCandidates: 100,
+	},
+}
+const CONFIGURATION_HASH = hashOperationRunConfiguration(CONFIGURATION)
 
 function checkpoint(): BenchmarkCheckpoint {
 	return {
 		version: 2,
 		runId: "run-1",
 		datasetSha256: "a".repeat(64),
-		configurationHash: "b".repeat(64),
+		configurationHash: CONFIGURATION_HASH,
+		configuration: structuredClone(CONFIGURATION),
 		executableDigest: "d".repeat(64),
 		totalScenarios: 2,
 		scenarioIds: ["scenario-1", "scenario-2"],
@@ -55,7 +70,7 @@ describe("benchmark scenario checkpoint", () => {
 			await expect(
 				readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
-					configurationHash: "b".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
 					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),
@@ -94,7 +109,7 @@ describe("benchmark scenario checkpoint", () => {
 			await expect(
 				readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
-					configurationHash: "b".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
 					executableDigest: "e".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),
@@ -112,7 +127,7 @@ describe("benchmark scenario checkpoint", () => {
 			await expect(
 				readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
-					configurationHash: "b".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
 					executableDigest: null,
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),
@@ -131,11 +146,49 @@ describe("benchmark scenario checkpoint", () => {
 			await expect(
 				readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
-					configurationHash: "b".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
 					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),
 			).rejects.toThrow("not bound to executable source")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		[
+			"missing",
+			(cp: BenchmarkCheckpoint) => Reflect.deleteProperty(cp, "configuration"),
+		],
+		[
+			"tampered",
+			(cp: BenchmarkCheckpoint) =>
+				Reflect.set(cp.configuration.settings, "numCandidates", 999),
+		],
+		[
+			"older-coverage",
+			(cp: BenchmarkCheckpoint) =>
+				Reflect.deleteProperty(
+					cp.configuration.settings,
+					"configurationCoverage",
+				),
+		],
+	])("refuses to resume a %s configuration manifest", async (_name, edit) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-checkpoint-"))
+		const checkpointPath = path.join(dir, "release.json")
+		try {
+			const stored = checkpoint()
+			edit(stored)
+			await writeFile(checkpointPath, JSON.stringify(stored))
+			await expect(
+				readBenchmarkCheckpoint(checkpointPath, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: "d".repeat(64),
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow("configuration manifest is missing")
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}

@@ -6,7 +6,10 @@ import type { MemorySearchResult } from "../../packages/memory-engine/src/types.
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
-import { readBenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
+import {
+	BENCHMARK_CONFIGURATION_COVERAGE,
+	readBenchmarkCheckpoint,
+} from "./mongodb-benchmark-checkpoint.js"
 import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import {
 	prepareOfficialQa,
@@ -543,6 +546,7 @@ describe("runScenarioBenchmarkDataset", () => {
 			runId: runContext.runId,
 			datasetSha256: "a".repeat(64),
 			configurationHash: runContext.configurationHash,
+			configuration: runContext.configuration,
 			executableDigest: "d".repeat(64),
 			totalScenarios: 2,
 			scenarioIds: ["scenario-1", "scenario-2"],
@@ -752,7 +756,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				retrievalLane: "native",
 				maxResults: 10,
 				minScore: 0.1,
-				settings: {},
+				settings: { configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE },
 			},
 		})
 	}
@@ -766,6 +770,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 			runId: runContext.runId,
 			datasetSha256: "a".repeat(64),
 			configurationHash: runContext.configurationHash,
+			configuration: runContext.configuration,
 			executableDigest: "d".repeat(64),
 			totalScenarios: 2,
 			scenarioIds: ["scenario-1", "scenario-2"],

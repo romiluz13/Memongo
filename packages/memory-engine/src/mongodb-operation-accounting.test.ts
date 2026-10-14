@@ -384,4 +384,20 @@ describe("operation run accounting", () => {
 		expect(enrichment).not.toHaveProperty("inputTokens")
 		expect(enrichment).not.toHaveProperty("outputTokens")
 	})
+
+	it.each([
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+	])("refuses a non-finite setting that would hash like null (%s)", (value) => {
+		const configuration = {
+			executionProfile: "shipped" as const,
+			retrievalLane: "native" as const,
+			maxResults: 10,
+			minScore: 0.01,
+			settings: { knob: value },
+		}
+		expect(() =>
+			createOperationRunContext({ runId: "run", configuration }),
+		).toThrow(RangeError)
+	})
 })

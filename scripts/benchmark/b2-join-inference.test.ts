@@ -2,7 +2,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { hashOperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import { type RunQuestionMetrics, joinB2Runs, main } from "./b2-join.js"
+import { BENCHMARK_CONFIGURATION_COVERAGE } from "./mongodb-benchmark-checkpoint.js"
 
 type Verdict = "yes" | "no"
 type Outcome = [a: Verdict, b: Verdict]
@@ -136,12 +138,27 @@ describe("joinB2Runs paired inference", () => {
 	})
 })
 
+// Minimal hash-bound manifest whose effective labels match IDENTITY.
+const CONFIGURATION = {
+	executionProfile: "shipped" as const,
+	retrievalLane: "native" as const,
+	maxResults: 10,
+	minScore: 0.01,
+	settings: {
+		configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE,
+		answerProviderSource: "dedicated",
+		"env.MEMONGO_BENCHMARK_ANSWER_MODEL": "answer-1",
+		"env.MEMONGO_BENCHMARK_JUDGE_MODEL": "judge-1",
+		"env.MEMONGO_BENCHMARK_QA_PROTOCOL": "official",
+	},
+}
+
 const IDENTITY = {
 	datasetSha256: "d".repeat(64),
-	configurationHash: "c".repeat(64),
+	configurationHash: hashOperationRunConfiguration(CONFIGURATION),
 	answerModel: "answer-1",
 	judgeModel: "judge-1",
-	judgeProtocol: "official",
+	judgeProtocol: "official-anscheck",
 	promptVersion: "prompt-1",
 	answerPromptVersion: "dated-v1",
 	answerTemperature: "0",
@@ -173,6 +190,7 @@ function fixture(
 			runId,
 			datasetSha256: IDENTITY.datasetSha256,
 			configurationHash: IDENTITY.configurationHash,
+			configuration: structuredClone(CONFIGURATION),
 			executableDigest: "e".repeat(64),
 			totalScenarios: ids.length,
 			scenarioIds: ids,
@@ -332,7 +350,9 @@ describe("b2-join CLI comparison eligibility", () => {
 		expectIneligible(await cli(a, b), field)
 	})
 
-	it("accepts exactly one declared scalar treatment difference", async () => {
+	// Superseded 1114.2: a sidecar label the manifest does not carry is a
+	// contradiction, not a treatment (real treatments: b2-join-configuration).
+	it("refuses a sidecar-only treatment label the configuration does not carry", async () => {
 		const [a, b] = pair()
 		b.sidecar.identity.answerModel = "answer-2"
 		const result = await cli(a, b, [
@@ -340,12 +360,13 @@ describe("b2-join CLI comparison eligibility", () => {
 			"--treatment",
 			"answerModel",
 		])
-		expect(result.code).toBe(0)
-		expect(result.report.inference).toMatchObject({
-			eligible: true,
-			treatment: "answerModel",
-			evidence: "b-higher",
-		})
+		expectIneligible(
+			result,
+			"run B: sidecar answerModel disagrees with the effective configuration",
+		)
+		expect(result.report.inference.reasons.join(" ")).toContain(
+			"declared treatment answerModel has no configuration change",
+		)
 	})
 
 	it("refuses a declared treatment that hides a second difference or does not differ", async () => {

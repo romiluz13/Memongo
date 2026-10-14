@@ -8,7 +8,10 @@ import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongod
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { loadBenchmarkDataset } from "./mongodb-benchmark-harness.js"
 import { computeExecutableDigest } from "./benchmark-executable-identity.js"
-import { writeBenchmarkCheckpointAtomic } from "./mongodb-benchmark-checkpoint.js"
+import {
+	BENCHMARK_CONFIGURATION_COVERAGE,
+	writeBenchmarkCheckpointAtomic,
+} from "./mongodb-benchmark-checkpoint.js"
 import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-contracts.js"
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
@@ -1024,7 +1027,12 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 				},
 			},
 			relevance: { loadBenchmarkDataset: vi.fn() },
-			snapshotBenchmarkRunConfiguration: testBenchmarkRunConfiguration,
+			snapshotBenchmarkRunConfiguration: (
+				params: Parameters<typeof testBenchmarkRunConfiguration>[0],
+			) => ({
+				...testBenchmarkRunConfiguration(params),
+				settings: { configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE },
+			}),
 			runScenarioBenchmarkDataset,
 			runLegacyRelevanceBenchmark: vi.fn(),
 		} as unknown as MongoDBMemoryManager
@@ -1049,6 +1057,7 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 			runId: "run-to-resume",
 			datasetSha256: fresh.datasetSha256,
 			configurationHash: fresh.runContext.configurationHash,
+			configuration: fresh.runContext.configuration,
 			executableDigest: "d".repeat(64),
 			totalScenarios: 1,
 			scenarioIds: ["scenario-1"],

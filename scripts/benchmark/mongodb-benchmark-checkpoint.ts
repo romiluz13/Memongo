@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
+import {
+	type OperationRunConfiguration,
+	hashOperationRunConfiguration,
+} from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import type {
 	BenchmarkCostAccounting,
 	BenchmarkTenantStorageMeasurement,
@@ -30,6 +34,8 @@ export type BenchmarkCheckpoint = {
 	runId: string
 	datasetSha256: string
 	configurationHash: string
+	/** The exact run configuration hashed into configurationHash. */
+	configuration: OperationRunConfiguration
 	/** computeExecutableDigest captured once at run admission; resume requires the same value. */
 	executableDigest: string
 	totalScenarios: number
@@ -41,6 +47,62 @@ export type BenchmarkCheckpoint = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Hash-bound marker for the settings coverage that includes judge identity.
+ * Because it lives inside the hashed settings, a manifest copied from an
+ * older run cannot verify against that run's hash; bump it whenever the
+ * producer gains an identity input.
+ */
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-judge-v1"
+
+const CONFIGURATION_FIELDS = [
+	"executionProfile",
+	"maxResults",
+	"minScore",
+	"retrievalLane",
+	"settings",
+]
+
+function finiteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value)
+}
+
+/**
+ * The persisted manifest when it has the supported coverage, only scalar
+ * finite values and the exact top-level shape, and hashes to
+ * configurationHash; otherwise null. -0 is accepted as 0, which is how it
+ * hashes. Never reports values.
+ */
+export function parseBoundRunConfiguration(
+	value: unknown,
+	configurationHash: unknown,
+): OperationRunConfiguration | null {
+	if (
+		!isRecord(value) ||
+		Object.keys(value).sort().join() !== CONFIGURATION_FIELDS.join() ||
+		(value.executionProfile !== "shipped" &&
+			value.executionProfile !== "diagnostic") ||
+		(value.retrievalLane !== "native" &&
+			value.retrievalLane !== "raw-session") ||
+		!finiteNumber(value.maxResults) ||
+		!finiteNumber(value.minScore) ||
+		!isRecord(value.settings) ||
+		value.settings.configurationCoverage !== BENCHMARK_CONFIGURATION_COVERAGE ||
+		!Object.values(value.settings).every(
+			(entry) =>
+				entry === null ||
+				typeof entry === "string" ||
+				typeof entry === "boolean" ||
+				finiteNumber(entry),
+		)
+	)
+		return null
+	const configuration = value as OperationRunConfiguration
+	return hashOperationRunConfiguration(configuration) === configurationHash
+		? configuration
+		: null
 }
 
 function assertCheckpointShape(
@@ -99,6 +161,13 @@ export async function readBenchmarkCheckpoint(
 	}
 	if (parsed.configurationHash !== expected.configurationHash) {
 		throw new Error("benchmark checkpoint configuration hash does not match")
+	}
+	if (
+		!parseBoundRunConfiguration(parsed.configuration, parsed.configurationHash)
+	) {
+		throw new Error(
+			"benchmark checkpoint configuration manifest is missing, unsupported or does not match its hash; analyze it as historical only and start a new run",
+		)
 	}
 	if (parsed.executableDigest !== expected.executableDigest) {
 		throw new Error(

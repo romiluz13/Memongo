@@ -168,13 +168,33 @@ still be valid and bound to its checkpoint, and scalar sidecar fields are
 compared whenever both runs supply one. `--treatment` always requires valid
 sidecars in both runs. Rejections name the field, never its value.
 
-The runs must be distinct and must share `datasetSha256`,
-`configurationHash` and `executableDigest`; these opaque digests cannot show
-that a single setting changed, so they are never a treatment. At most one
-directly observed scalar sidecar field may differ, and only when declared with
-`--treatment` (answer/judge model, judge protocol, prompt versions, answer
-temperature or max tokens); a declared field must actually differ and cannot
-hide a second difference.
+Each checkpoint must also persist its run configuration, the exact
+`OperationRunConfiguration` hashed into `configurationHash`, with the supported
+`settings.configurationCoverage` marker. The manifest is accepted only with
+that exact top-level shape, scalar finite values and a hash equal to the
+checkpoint's; `-0` counts as `0`, as it hashes. The marker sits inside the
+hash, so a manifest copied from an older run cannot verify. Coverage now
+includes the judge model, auth style, token parameter and QA protocol, plus
+sha256 fingerprints of the judge base URL and API key (never raw values;
+unsalted digests are not a secrecy guarantee). Checkpoints without a valid
+manifest, including every earlier run, stay descriptive and are refused for
+resume: equal hashes alone once missed a changed judge endpoint, so this is a
+deliberate compatibility change, not retroactive certification.
+
+The runs must be distinct and must share `datasetSha256` and
+`executableDigest`; an opaque digest cannot show that a single setting
+changed, so it is never a treatment and source treatments are deferred.
+Configuration is compared field by field: every differing manifest field is
+refused unless the declared `--treatment` owns it. `answerModel` owns
+`MEMONGO_BENCHMARK_ANSWER_MODEL` and requires a dedicated answerer in both
+runs, because the enrichment-fallback model also drives ingestion;
+`judgeModel` owns `MEMONGO_BENCHMARK_JUDGE_MODEL`; `judgeProtocol` owns
+`MEMONGO_BENCHMARK_QA_PROTOCOL` between `official` and `custom-judge`. The
+owned field must actually change. Prompt versions, answer temperature and max
+tokens are source constants and cannot be a treatment. Each sidecar's answer
+model, judge model and judge protocol must equal the values its manifest makes
+effective; a contradicting label is refused. Diagnostics name fields, never
+their values.
 
 Every declared scenario must be completed with exactly one final-pass entry
 carrying a valid case ID (which may differ from the scenario ID), and both runs

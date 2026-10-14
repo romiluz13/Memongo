@@ -5,12 +5,15 @@
  * population with one case per scenario, and the caller declares the
  * question-level independence assumption (recorded, never verified).
  *
- * configurationHash and executableDigest are opaque digests: a difference
- * cannot show that only one setting changed, so they must match and are
- * never accepted as a treatment.
+ * executableDigest is an opaque digest: a difference cannot show that only
+ * one setting changed, so it must match and is never a treatment. Configuration
+ * is compared fieldwise through the hash-bound manifest each checkpoint
+ * persists; a treatment may change only the manifest keys it owns.
  */
 import { readFile } from "node:fs/promises"
+import type { OperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import type { RunQuestionMetrics } from "./b2-join.js"
+import { parseBoundRunConfiguration } from "./mongodb-benchmark-checkpoint.js"
 
 export const B2_TREATMENT_FIELDS = [
 	"answerModel",
@@ -26,6 +29,97 @@ export type B2TreatmentField = (typeof B2_TREATMENT_FIELDS)[number]
 
 export function isB2TreatmentField(value: string): value is B2TreatmentField {
 	return (B2_TREATMENT_FIELDS as readonly string[]).includes(value)
+}
+
+type Settings = OperationRunConfiguration["settings"]
+
+const DURABLE_PROTOCOL_LABELS: Record<string, string> = {
+	official: "official-anscheck",
+	"custom-judge": "custom-judge-anscheck",
+}
+
+function durableProtocolLabel(value: unknown): string | null {
+	return typeof value === "string" &&
+		Object.hasOwn(DURABLE_PROTOCOL_LABELS, value)
+		? DURABLE_PROTOCOL_LABELS[value]
+		: null
+}
+
+/**
+ * Manifest keys each treatment may change, and the precondition under which
+ * that change is the only effective difference. The answerer falls back to
+ * the enrichment provider, whose model also drives ingestion, so only a
+ * dedicated answerer isolates an answer-model change. Treatments without an
+ * entry are source constants: source treatments are deferred.
+ */
+const TREATMENT_OWNERSHIP: Partial<
+	Record<
+		B2TreatmentField,
+		{ keys: string[]; precondition: (settings: Settings) => string | null }
+	>
+> = {
+	answerModel: {
+		keys: ["settings.env.MEMONGO_BENCHMARK_ANSWER_MODEL"],
+		precondition: (settings) =>
+			settings.answerProviderSource === "dedicated"
+				? null
+				: "requires a dedicated answer provider in both runs; the enrichment-fallback model also drives ingestion",
+	},
+	judgeModel: {
+		keys: ["settings.env.MEMONGO_BENCHMARK_JUDGE_MODEL"],
+		precondition: () => null,
+	},
+	judgeProtocol: {
+		keys: ["settings.env.MEMONGO_BENCHMARK_QA_PROTOCOL"],
+		precondition: (settings) =>
+			durableProtocolLabel(settings["env.MEMONGO_BENCHMARK_QA_PROTOCOL"])
+				? null
+				: "requires the official or custom-judge protocol in both runs",
+	},
+}
+
+// What the answer and judge resolvers actually use, derived from the manifest
+// the same way benchmark-answer-provider and the judge resolver read env.
+function effectiveLabels(settings: Settings): Record<string, string | null> {
+	const text = (key: string) => {
+		const value = settings[key]
+		return typeof value === "string" ? value : ""
+	}
+	return {
+		answerModel:
+			settings.answerProviderSource === "dedicated"
+				? text("env.MEMONGO_BENCHMARK_ANSWER_MODEL")
+				: text("env.MEMONGO_ENRICHMENT_MODEL"),
+		judgeModel: text("env.MEMONGO_BENCHMARK_JUDGE_MODEL"),
+		judgeProtocol: durableProtocolLabel(
+			settings["env.MEMONGO_BENCHMARK_QA_PROTOCOL"],
+		),
+	}
+}
+
+// Fieldwise difference; JSON text equality matches how the hash serializes
+// (-0 equals 0, an absent key differs from null).
+function configurationDifferences(
+	a: OperationRunConfiguration,
+	b: OperationRunConfiguration,
+): string[] {
+	const flat = (configuration: OperationRunConfiguration) =>
+		new Map<string, unknown>([
+			["executionProfile", configuration.executionProfile],
+			["retrievalLane", configuration.retrievalLane],
+			["maxResults", configuration.maxResults],
+			["minScore", configuration.minScore],
+			...Object.entries(configuration.settings).map(
+				([key, value]) => [`settings.${key}`, value] as [string, unknown],
+			),
+		])
+	const left = flat(a)
+	const right = flat(b)
+	return [...new Set([...left.keys(), ...right.keys()])]
+		.filter(
+			(key) => JSON.stringify(left.get(key)) !== JSON.stringify(right.get(key)),
+		)
+		.sort()
 }
 
 const BOUND_FIELDS = ["runId", "datasetSha256", "configurationHash"] as const
@@ -44,6 +138,8 @@ export type B2RunIdentity = {
 	checkpoint: CheckpointIdentity | null
 	/** Names (never values) of missing or malformed checkpoint identity fields. */
 	checkpointInvalid: string[]
+	/** Hash-bound manifest of supported coverage, or null (legacy/altered). */
+	configuration: OperationRunConfiguration | null
 	sidecar: Record<string, string> | null
 	sidecarInvalid: string[]
 	sidecarPresent: boolean
@@ -139,6 +235,10 @@ export async function readB2RunIdentity(
 	return {
 		checkpoint: boundCheckpoint,
 		checkpointInvalid,
+		configuration: parseBoundRunConfiguration(
+			checkpoint?.configuration,
+			checkpoint?.configurationHash,
+		),
 		sidecar,
 		sidecarInvalid,
 		sidecarPresent: sidecarFile !== undefined,
@@ -214,6 +314,20 @@ export function assessB2Comparison(params: {
 					)
 			}
 		}
+		if (run.checkpoint && !run.configuration)
+			reasons.push(
+				`run ${label}: configuration manifest is missing, unsupported or does not match configurationHash; legacy or altered artifacts stay descriptive only`,
+			)
+		if (run.sidecar && run.configuration) {
+			for (const [field, effective] of Object.entries(
+				effectiveLabels(run.configuration.settings),
+			)) {
+				if (run.sidecar[field] !== effective)
+					reasons.push(
+						`run ${label}: sidecar ${field} disagrees with the effective configuration`,
+					)
+			}
+		}
 		if (!run.declared)
 			reasons.push(`run ${label}: declared population (scenarioIds) is missing`)
 		else if (
@@ -233,11 +347,41 @@ export function assessB2Comparison(params: {
 	if (a.checkpoint && b.checkpoint) {
 		if (a.checkpoint.runId === b.checkpoint.runId)
 			reasons.push("A and B are the same run (runId)")
-		for (const field of SHARED_DIGESTS) {
+		for (const field of ["datasetSha256", "executableDigest"] as const) {
 			if (a.checkpoint[field] !== b.checkpoint[field])
 				reasons.push(
 					`${field} differs between runs; an opaque digest cannot be a declared treatment`,
 				)
+		}
+	}
+	if (a.configuration && b.configuration) {
+		const ownership = treatment ? TREATMENT_OWNERSHIP[treatment] : undefined
+		const differences = configurationDifferences(
+			a.configuration,
+			b.configuration,
+		)
+		for (const key of differences) {
+			if (!ownership?.keys.includes(key))
+				reasons.push(`undeclared configuration difference: ${key}`)
+		}
+		if (treatment && !ownership)
+			reasons.push(
+				`declared treatment ${treatment} is a source constant; source treatments are deferred`,
+			)
+		if (treatment && ownership) {
+			if (!differences.some((key) => ownership.keys.includes(key)))
+				reasons.push(
+					`declared treatment ${treatment} has no configuration change`,
+				)
+			const unmet = new Set(
+				[a.configuration, b.configuration]
+					.map((configuration) =>
+						ownership.precondition(configuration.settings),
+					)
+					.filter((message): message is string => message !== null),
+			)
+			for (const message of unmet)
+				reasons.push(`declared treatment ${treatment} ${message}`)
 		}
 	}
 	if (

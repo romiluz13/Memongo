@@ -18,6 +18,7 @@ import {
 	isTerminalSearchIndexStatus,
 	readSearchIndexStatus,
 } from "./mongodb-benchmark-readiness.js"
+import { BENCHMARK_CONFIGURATION_COVERAGE } from "./mongodb-benchmark-checkpoint.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import { mongodbDeploymentIdentity } from "../../packages/memory-engine/src/mongodb-capability-registry.js"
 import { renderEventChunkText } from "../../packages/memory-engine/src/mongodb-events.js"
@@ -170,6 +171,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			.update(mongodbDeploymentIdentity(mongoCfg.uri, mongoCfg.database))
 			.digest("hex")
 		const settings: BenchmarkRunConfiguration["settings"] = {
+			configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE,
 			qualityContractId: params.qualityContractId ?? null,
 			qualityContractVersion: params.qualityContractVersion ?? null,
 			deploymentIdentitySha256,
@@ -249,8 +251,14 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			"MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS",
 			"MEMONGO_BENCHMARK_FAST_INGEST",
 			"MEMONGO_BENCHMARK_FAST_INGEST_BATCH_SIZE",
+			// The official judge resolver reads these directly; omitting them let
+			// two runs graded by different judges share one identity.
+			"MEMONGO_BENCHMARK_JUDGE_AUTH_STYLE",
+			"MEMONGO_BENCHMARK_JUDGE_MODEL",
+			"MEMONGO_BENCHMARK_JUDGE_TOKEN_PARAM",
 			"MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA",
 			"MEMONGO_BENCHMARK_MEASUREMENT_PASSES",
+			"MEMONGO_BENCHMARK_QA_PROTOCOL",
 			"MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS",
 			"MEMONGO_BENCHMARK_RETRY_ATTEMPTS",
 			"MEMONGO_BENCHMARK_RETRY_BASE_DELAY_MS",
@@ -322,6 +330,15 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			benchmarkAnswerBaseUrl
 				? createHash("sha256").update(benchmarkAnswerBaseUrl).digest("hex")
 				: null
+		for (const key of [
+			"MEMONGO_BENCHMARK_JUDGE_API_KEY",
+			"MEMONGO_BENCHMARK_JUDGE_BASE_URL",
+		] as const) {
+			const value = process.env[key]?.trim() ?? ""
+			settings[`env.${key}.sha256`] = value
+				? createHash("sha256").update(value).digest("hex")
+				: null
+		}
 		// F-B1-2: record which provider config the answerer resolved from, so
 		// an enrichment-fallback run is never mistaken for a dedicated one.
 		settings.answerProviderSource = benchmarkAnswerProviderSource(process.env)
