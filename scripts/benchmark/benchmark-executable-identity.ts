@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { lstat, readFile, readdir, realpath } from "node:fs/promises"
-import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
@@ -26,26 +25,14 @@ const EXECUTABLE_PATHSPECS = [
 
 export type BenchmarkRuntimeVersions = { node: string; bun: string | null }
 
-/**
- * Workspace packages the benchmark imports by name. They load from ignored
- * dist output (exports -> ./dist), which git never sees, so their build trees
- * and dependency closure are bound separately. A test keeps this list equal
- * to the specifiers the benchmark entry points import.
- */
-export const BENCHMARK_BUILD_ROOTS = [
-	"@memongo/memory-bridge",
-	"@memongo/lib",
-] as const
-
-// Files whose imports resolve the roots; resolution walks node_modules up from
-// the importer, so each importing directory is resolved separately.
-const BENCHMARK_BUILD_IMPORTERS = [
-	"scripts/run-benchmark.ts",
-	"scripts/benchmark/mongodb-manager-benchmark.ts",
-]
+// The benchmark process entry point. Its relative source graph is walked to
+// find every file that imports a workspace package by name: those packages
+// load from ignored dist output (exports -> ./dist), which git never sees, and
+// each import resolves from its own file's directory.
+const BENCHMARK_ENTRY = "scripts/run-benchmark.ts"
 
 export type BenchmarkWorkspaceBuild = {
-	/** Bytes present at admission; whether tracked source produced them is not checked. */
+	/** Bytes observed on disk at admission; whether tracked source produced them is not checked. */
 	relation: "not-verified"
 	packages: Array<{
 		name: string
@@ -191,9 +178,9 @@ export async function computeExecutableDigest(
 /** Unsupported or ambiguous build topology; messages carry no absolute paths. */
 class BuildTopologyError extends Error {}
 
-// Only these export conditions are modeled: resolving through createRequire
-// (require/node/default) then matches the runtime's ESM resolution
-// (import/bun/default) exactly. Anything else may resolve differently.
+// Only these export conditions are modeled; the runtime's ESM resolution
+// (import/bun/default) selects default for them, while any other condition
+// could select a different target.
 const MODELED_CONDITIONS = new Set(["types", "default"])
 
 function exportTargets(value: unknown, specifier: string): string[] {
@@ -216,21 +203,86 @@ type ResolvedPackage = {
 	manifestBytes: Buffer
 }
 
+function exportedTarget(
+	manifest: ResolvedPackage["manifest"],
+	subpath: string,
+	specifier: string,
+): unknown {
+	const exports = manifest.exports
+	if (exports === undefined)
+		return subpath === "." ? (manifest.main ?? "index.js") : undefined
+	const map =
+		typeof exports === "string" ||
+		!Object.keys(exports as object).some((key) => key.startsWith("."))
+			? { ".": exports }
+			: (exports as Record<string, unknown>)
+	exportTargets(map, specifier)
+	let target = map[subpath]
+	while (target !== null && typeof target === "object")
+		target = (target as Record<string, unknown>).default
+	return target
+}
+
+// Resolution is modeled from fresh filesystem reads: a runtime's resolver
+// caches lookups for the life of the process, so its answer alone could
+// describe a node_modules layout that is no longer on disk.
 async function resolveWorkspacePackage(
 	repoReal: string,
 	importer: string,
 	specifier: string,
 ): Promise<ResolvedPackage> {
-	let entry: string
-	try {
-		entry = await realpath(createRequire(importer).resolve(specifier))
-	} catch {
+	const name = packageName(specifier)
+	let linked: string | null = null
+	for (let dir = path.dirname(importer); !linked; dir = path.dirname(dir)) {
+		const candidate = path.join(dir, "node_modules", name)
+		if (await lstat(candidate).catch(() => null)) linked = candidate
+		else if (dir === path.dirname(dir))
+			throw new BuildTopologyError(
+				`workspace package ${specifier} does not resolve`,
+			)
+	}
+	const dir = await realpath(linked).catch(() => null)
+	const relative = dir ? path.relative(repoReal, dir) : ".."
+	if (!dir || relative.startsWith("..") || path.isAbsolute(relative))
+		throw new BuildTopologyError(
+			`workspace package ${specifier} resolves outside the repository`,
+		)
+	const manifestBytes = await readFile(path.join(dir, "package.json"))
+	const manifest = JSON.parse(manifestBytes.toString("utf8"))
+	if (manifest?.name !== name)
+		throw new BuildTopologyError(
+			`workspace package ${specifier} resolves to a differently named package`,
+		)
+	const target = exportedTarget(
+		manifest,
+		specifier === name ? "." : `.${specifier.slice(name.length)}`,
+		specifier,
+	)
+	const dist = path.join(dir, "dist")
+	const entry =
+		typeof target === "string"
+			? await realpath(path.resolve(dir, target)).catch(() => null)
+			: null
+	if (!entry)
 		throw new BuildTopologyError(
 			`workspace package ${specifier} does not resolve`,
 		)
-	}
-	// The modeled resolver ignores tsconfig paths and other Bun-only lookup; when
-	// running under Bun, its own answer must agree or the bytes are unknown.
+	const declared =
+		manifest.exports === undefined
+			? [manifest.main ?? "index.js"]
+			: exportTargets(manifest.exports, specifier)
+	if (
+		!entry.startsWith(`${dist}${path.sep}`) ||
+		!declared.every((declaredTarget) =>
+			path
+				.resolve(dir, String(declaredTarget))
+				.startsWith(`${dist}${path.sep}`),
+		)
+	)
+		throw new BuildTopologyError(`${specifier} has an entry outside dist`)
+	// The modeled resolver ignores tsconfig paths and other Bun-only lookup, and
+	// Bun may answer from its cache; under Bun the two must agree or the loaded
+	// bytes are unknown.
 	const bun = (
 		globalThis as {
 			Bun?: { resolveSync(specifier: string, from: string): string }
@@ -248,34 +300,7 @@ async function resolveWorkspacePackage(
 				`workspace package ${specifier} resolves differently under the running runtime`,
 			)
 	}
-	for (let dir = path.dirname(entry); ; dir = path.dirname(dir)) {
-		const relative = path.relative(repoReal, dir)
-		if (relative.startsWith("..") || path.isAbsolute(relative))
-			throw new BuildTopologyError(
-				`workspace package ${specifier} resolves outside the repository`,
-			)
-		let manifestBytes: Buffer
-		try {
-			manifestBytes = await readFile(path.join(dir, "package.json"))
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
-			throw error
-		}
-		const manifest = JSON.parse(manifestBytes.toString("utf8"))
-		if (manifest?.name !== specifier) continue
-		const targets = manifest.exports
-			? exportTargets(manifest.exports, specifier)
-			: [manifest.main ?? "index.js"]
-		const dist = path.join(dir, "dist")
-		if (
-			!targets.every((target) =>
-				path.resolve(dir, String(target)).startsWith(`${dist}${path.sep}`),
-			) ||
-			!entry.startsWith(`${dist}${path.sep}`)
-		)
-			throw new BuildTopologyError(`${specifier} has an entry outside dist`)
-		return { dir, entry, manifest, manifestBytes }
-	}
+	return { dir, entry, manifest, manifestBytes }
 }
 
 // Every regular file under dist; links, special files and nested node_modules
@@ -284,6 +309,7 @@ async function hashBuildTree(
 	dist: string,
 	label: string,
 	hash: ReturnType<typeof createHash>,
+	imports: WorkspaceImport[],
 ): Promise<number> {
 	const stat = await lstat(dist).catch(() => null)
 	if (!stat?.isDirectory())
@@ -302,11 +328,14 @@ async function hashBuildTree(
 					throw new BuildTopologyError(`${label} dist contains node_modules`)
 				await walk(full)
 			} else if (entry.isFile()) {
+				const bytes = await readFile(full)
 				hash.update(
-					`\0${relative}\0${createHash("sha256")
-						.update(await readFile(full))
-						.digest("hex")}`,
+					`\0${relative}\0${createHash("sha256").update(bytes).digest("hex")}`,
 				)
+				if (/\.[cm]?js$/.test(entry.name))
+					for (const specifier of importSpecifiers(bytes.toString("utf8")))
+						if (specifier.startsWith("@memongo/"))
+							imports.push({ importer: full, specifier })
 				files += 1
 			} else {
 				throw new BuildTopologyError(
@@ -319,57 +348,139 @@ async function hashBuildTree(
 	return files
 }
 
+type WorkspaceImport = { importer: string; specifier: string }
+
+function packageName(specifier: string): string {
+	return specifier.split("/").slice(0, 2).join("/")
+}
+
+// Static, re-export, side-effect, and literal dynamic imports or requires.
+// Type-only imports are included; resolving them only adds coverage.
+const IMPORT_SPECIFIER =
+	/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']/g
+
+function importSpecifiers(text: string): string[] {
+	return [...text.matchAll(IMPORT_SPECIFIER)].map((match) => match[1] ?? "")
+}
+
+function repoRelative(repoReal: string, file: string): string {
+	return path.relative(repoReal, file).split(path.sep).join("/")
+}
+
+async function isFile(file: string): Promise<boolean> {
+	return (await lstat(file).catch(() => null))?.isFile() ?? false
+}
+
+// TypeScript ESM style: "./x.js" names x.ts on disk.
+async function resolveRelativeSource(
+	from: string,
+	specifier: string,
+): Promise<string | null> {
+	const base = path.resolve(path.dirname(from), specifier)
+	for (const candidate of [
+		base,
+		base.replace(/\.js$/, ".ts"),
+		base.replace(/\.mjs$/, ".mts"),
+		`${base}.ts`,
+		path.join(base, "index.ts"),
+	])
+		if (await isFile(candidate)) return candidate
+	return null
+}
+
+/**
+ * Every workspace package import in the benchmark's source graph, from the
+ * entry point through relative static and literal dynamic imports. An import
+ * the walk cannot follow refuses identity rather than leave a gap.
+ */
+export async function benchmarkWorkspaceImports(
+	repoRoot: string,
+): Promise<WorkspaceImport[]> {
+	const repoReal = await realpath(repoRoot)
+	return (await walkSourceGraph(repoReal)).map((entry) => ({
+		importer: repoRelative(repoReal, entry.importer),
+		specifier: entry.specifier,
+	}))
+}
+
+async function walkSourceGraph(repoReal: string): Promise<WorkspaceImport[]> {
+	const entry = path.join(repoReal, BENCHMARK_ENTRY)
+	if (!(await isFile(entry)))
+		throw new BuildTopologyError(
+			`benchmark entry ${BENCHMARK_ENTRY} is missing`,
+		)
+	const seen = new Set<string>()
+	const queue = [entry]
+	const imports: WorkspaceImport[] = []
+	for (let file = queue.pop(); file; file = queue.pop()) {
+		if (seen.has(file)) continue
+		seen.add(file)
+		const label = repoRelative(repoReal, file)
+		const text = await readFile(file, "utf8")
+		if (/\bimport\s*\(\s*[^"'\s]/.test(text))
+			throw new BuildTopologyError(
+				`${label} has a dynamic import the source graph cannot follow`,
+			)
+		for (const specifier of importSpecifiers(text)) {
+			if (specifier.startsWith("@memongo/")) {
+				imports.push({ importer: file, specifier })
+				continue
+			}
+			if (!specifier.startsWith(".")) continue
+			const target = await resolveRelativeSource(file, specifier)
+			const relative = target ? repoRelative(repoReal, target) : ".."
+			if (
+				!target ||
+				relative.startsWith("..") ||
+				relative
+					.split("/")
+					.some((part) => part === "node_modules" || part === "dist")
+			)
+				throw new BuildTopologyError(
+					`${label} imports ${specifier}, which is not tracked-style source in the repository`,
+				)
+			queue.push(target)
+		}
+	}
+	return imports
+}
+
 async function observeWorkspaceBuild(
 	repoRoot: string,
 ): Promise<BenchmarkWorkspaceBuild> {
 	const repoReal = await realpath(repoRoot)
-	const pending: Array<{ importer: string; specifier: string }> =
-		BENCHMARK_BUILD_IMPORTERS.flatMap((importer) =>
-			BENCHMARK_BUILD_ROOTS.map((specifier) => ({
-				importer: path.join(repoReal, importer),
-				specifier,
-			})),
-		)
+	const pending = await walkSourceGraph(repoReal)
+	const resolvedFrom = new Set<string>()
 	const packages = new Map<
 		string,
 		BenchmarkWorkspaceBuild["packages"][number]
 	>()
-	while (pending.length > 0) {
-		const next = pending.shift()
-		if (!next) break
+	for (let next = pending.pop(); next; next = pending.pop()) {
+		// Resolution depends only on the importing directory.
+		const key = `${path.dirname(next.importer)}\0${next.specifier}`
+		if (resolvedFrom.has(key)) continue
+		resolvedFrom.add(key)
 		const resolved = await resolveWorkspacePackage(
 			repoReal,
 			next.importer,
 			next.specifier,
 		)
-		const relativeDir = path
-			.relative(repoReal, resolved.dir)
-			.split(path.sep)
-			.join("/")
+		const relativeDir = repoRelative(repoReal, resolved.dir)
 		if (packages.has(relativeDir)) continue
 		const hash = createHash("sha256").update(resolved.manifestBytes)
+		const name = packageName(next.specifier)
 		const files = await hashBuildTree(
 			path.join(resolved.dir, "dist"),
-			next.specifier,
+			name,
 			hash,
+			pending,
 		)
 		packages.set(relativeDir, {
-			name: next.specifier,
+			name,
 			path: relativeDir,
 			files,
 			digest: hash.digest("hex"),
 		})
-		for (const field of [
-			"dependencies",
-			"peerDependencies",
-			"optionalDependencies",
-		]) {
-			const deps = resolved.manifest[field]
-			if (deps === null || typeof deps !== "object") continue
-			for (const dependency of Object.keys(deps))
-				if (dependency.startsWith("@memongo/"))
-					pending.push({ importer: resolved.entry, specifier: dependency })
-		}
 	}
 	return {
 		relation: "not-verified",

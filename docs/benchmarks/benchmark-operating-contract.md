@@ -30,21 +30,33 @@ canary. The API loads workspace packages through their built `dist` entrypoints,
 so a stale build can hide or invent benchmark behavior.
 
 The benchmark's `executableDigest` binds tracked executable source at HEAD and
-the ignored build bytes it actually loads: the complete `dist` tree and
-`package.json` of every `@memongo/*` package reachable from the benchmark's
-imports, resolved from each importer the way the runtime does, with nested
-copies covered separately. The report lists each package under
-`build.workspaceBuild` with `relation: "not-verified"`: identity proves which
-bytes were present at admission, not that they were built from the tracked
-source, and it does not cover third-party installed packages, the runtime
-binary or changes after admission. Identity is refused, not degraded, when a
-package does not resolve, resolves differently under the running Bun resolver
-(for example through tsconfig `paths`), resolves outside the repository, uses an export
-condition other than `types`/`default`, has an entry outside `dist`, or has a
-missing or unreadable `dist` containing links, special files or
-`node_modules`. Checkpoints written before this change carry a digest without
-build bytes; it can never match, so they are historical only and refused for
-resume.
+the workspace build bytes observed on disk at admission: the complete `dist`
+tree and `package.json` of every `@memongo/*` package imported by name in the
+benchmark's source graph (walked from `scripts/run-benchmark.ts` through
+relative static and literal dynamic imports) or by those packages' `dist`
+files. Each import is resolved from its own file's directory with fresh
+filesystem reads, so nested copies are covered separately. The report lists
+each package under `build.workspaceBuild` with `relation: "not-verified"`. The
+digest records which bytes were on disk when the run was admitted, after the
+benchmark's modules had already loaded. It does not prove that those bytes
+are the ones loaded or cached in memory, that they were built from the
+tracked source, or that they stayed unchanged afterward. It also does not
+cover third-party installed packages or the runtime binary. Identity is
+refused, not degraded, when any of these hold:
+
+- the source graph has a dynamic import it cannot follow, or a relative import
+  that does not resolve to repository source;
+- a package does not resolve, or resolves outside the repository;
+- under Bun, the running resolver answers differently, for example through
+  tsconfig `paths` or a lookup cached before the layout changed;
+- a package uses an export condition other than `types`/`default`, or has an
+  entry outside `dist`;
+- `dist` is missing or unreadable, or contains links, special files or
+  `node_modules`.
+
+Checkpoints written before this change carry a digest without build bytes. It
+cannot match a current digest, so they are historical only and refused for
+resume. A rebuild that produces byte-identical output keeps the digest.
 
 For benchmark-specific work, include the focused engine/API tests that cover the
 touched lane. At minimum:

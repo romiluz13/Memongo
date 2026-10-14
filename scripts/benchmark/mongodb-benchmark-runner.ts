@@ -744,7 +744,7 @@ function buildEvidenceCompletenessGate(
 				gate: "evidence-completeness",
 				status: "passed",
 				evidence:
-					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; executable identity covers tracked source at HEAD plus the bytes of the loaded workspace dist closure; it does not attest that those bytes were built from that source",
+					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; executable identity covers tracked source at HEAD plus workspace build bytes observed on disk at admission; it does not attest that those bytes were built from that source or are the ones loaded in memory",
 			}
 		: {
 				gate: "evidence-completeness",

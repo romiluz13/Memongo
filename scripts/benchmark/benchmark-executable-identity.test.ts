@@ -4,8 +4,6 @@ import {
 	cp,
 	mkdir,
 	mkdtemp,
-	readFile,
-	readdir,
 	rm,
 	symlink,
 	writeFile,
@@ -15,7 +13,7 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
-	BENCHMARK_BUILD_ROOTS,
+	benchmarkWorkspaceImports,
 	computeExecutableDigest,
 } from "./benchmark-executable-identity.js"
 import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
@@ -45,6 +43,14 @@ beforeEach(async () => {
 	await put("scripts/benchmark/run.ts", "export const a = 1\n")
 	await put("packages/engine/src/index.ts", "export const b = 2\n")
 	await put("docs/readme.md", "docs\n")
+	await put(
+		"scripts/run-benchmark.ts",
+		'import "@memongo/memory-bridge"\nimport { m } from "../packages/memory-engine/src/manager.js"\nexport const x = m\n',
+	)
+	await put(
+		"packages/memory-engine/src/manager.ts",
+		'import { id } from "@memongo/lib"\nexport const m = id\n',
+	)
 	await workspace()
 	git("add", ".")
 	git("commit", "-q", "-m", "fixture")
@@ -78,7 +84,10 @@ async function workspace(): Promise<void> {
 	await put(".gitignore", "dist\nnode_modules\n")
 	for (const [dir, name, deps] of PACKAGES) {
 		await put(`packages/${dir}/package.json`, manifest(name, deps))
-		await put(`packages/${dir}/dist/index.js`, `export const id = "${dir}"\n`)
+		await put(
+			`packages/${dir}/dist/index.js`,
+			`${deps.map((dep) => `import "${dep}"\n`).join("")}export const id = "${dir}"\n`,
+		)
 		await put(`packages/${dir}/dist/index.d.ts`, "export {}\n")
 		await put(
 			`packages/${dir}/dist/internal/ranking.js`,
@@ -99,8 +108,13 @@ async function available(root = repo) {
 	return identity
 }
 
+// Temp directories a test creates outside the fixture repository.
+const owned: string[] = []
+
 afterEach(async () => {
 	await rm(repo, { recursive: true, force: true })
+	for (const dir of owned.splice(0))
+		await rm(dir, { recursive: true, force: true })
 })
 
 describe("computeExecutableDigest", () => {
@@ -341,6 +355,70 @@ describe("computeExecutableDigest", () => {
 		expect((await available()).digest).not.toBe(before.digest)
 	})
 
+	it("covers the package copy a source importer resolves outside the entry directories", async () => {
+		const nested = "packages/memory-engine/src/node_modules/@memongo/lib"
+		await put(`${nested}/package.json`, manifest("@memongo/lib", []))
+		await put(`${nested}/dist/index.js`, "export const id = 7\n")
+		const before = await available()
+		expect(before.build.packages.map((entry) => entry.path)).toContain(nested)
+		await put(`${nested}/dist/index.js`, "export const id = 8\n")
+		const after = await available()
+		expect(after.digest).not.toBe(before.digest)
+		expect(after.dirty).toBe(before.dirty)
+	})
+
+	it("resolves package subpath imports to the package's build", async () => {
+		await put(
+			"packages/lib/package.json",
+			manifest("@memongo/lib", [], {
+				".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+				"./types/memory": { default: "./dist/types.memory.js" },
+			}),
+		)
+		await put("packages/lib/dist/types.memory.js", "export const t = 1\n")
+		await put(
+			"packages/memory-engine/src/manager.ts",
+			'import { t } from "@memongo/lib/types/memory"\nexport const m = t\n',
+		)
+		const before = await available()
+		expect(before.build.packages).toContainEqual(
+			expect.objectContaining({ name: "@memongo/lib", path: "packages/lib" }),
+		)
+		await put("packages/lib/dist/types.memory.js", "export const t = 2\n")
+		expect((await available()).digest).not.toBe(before.digest)
+	})
+
+	it("follows workspace imports the build output makes, declared or not", async () => {
+		await put(
+			"packages/memory-engine/dist/internal/ranking.js",
+			'import "@memongo/web"\nexport const r = 1\n',
+		)
+		const before = await available()
+		expect(before.build.packages.map((entry) => entry.path)).toContain(
+			"packages/web",
+		)
+		await put("packages/web/dist/internal/ranking.js", "export const r = 9\n")
+		expect((await available()).digest).not.toBe(before.digest)
+	})
+
+	it.each([
+		[
+			"a dynamic import the source graph cannot follow",
+			"const name = './x.js'\nexport const load = () => import(name)\n",
+		],
+		[
+			"a relative source import that does not resolve",
+			'import "./missing.js"\nexport const m = 1\n',
+		],
+	])("refuses identity for %s", async (_name, source) => {
+		await put("packages/memory-engine/src/manager.ts", source)
+		const identity = await computeExecutableDigest(repo)
+		expect(identity).toMatchObject({ status: "unavailable" })
+		expect(identity.status === "unavailable" && identity.reason).not.toContain(
+			repo,
+		)
+	})
+
 	it.each([
 		[
 			"a missing dist tree",
@@ -357,6 +435,7 @@ describe("computeExecutableDigest", () => {
 				const outside = await mkdtemp(
 					path.join(os.tmpdir(), "memongo-outside-"),
 				)
+				owned.push(outside)
 				await writeFile(
 					path.join(outside, "package.json"),
 					manifest("@memongo/lib", []),
@@ -494,25 +573,17 @@ describe("computeExecutableDigest", () => {
 	})
 })
 
-describe("benchmark build roots", () => {
-	it("cover every workspace package the benchmark entry points import", async () => {
+describe("benchmark source graph", () => {
+	it("reaches workspace imports made from engine source, not only entry points", async () => {
 		const root = path.resolve(import.meta.dirname, "../..")
-		const files = [
-			"scripts/run-benchmark.ts",
-			...(await readdir(path.join(root, "scripts/benchmark")))
-				.filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-				.map((name) => `scripts/benchmark/${name}`),
-		]
-		const imported = new Set<string>()
-		for (const file of files) {
-			const text = await readFile(path.join(root, file), "utf8")
-			for (const match of text.matchAll(/from\s+"(@memongo\/[a-z-]+)/g))
-				imported.add(match[1])
-			for (const match of text.matchAll(/import\(\s*["'`](@memongo\/[a-z-]+)/g))
-				imported.add(match[1])
-		}
-		const roots = new Set<string>(BENCHMARK_BUILD_ROOTS)
-		expect([...imported].filter((name) => !roots.has(name))).toEqual([])
-		expect(imported.size).toBeGreaterThan(0)
+		const imports = await benchmarkWorkspaceImports(root)
+		expect(imports).toContainEqual({
+			importer: "scripts/run-benchmark.ts",
+			specifier: "@memongo/memory-bridge",
+		})
+		expect(imports).toContainEqual({
+			importer: "packages/memory-engine/src/mongodb-manager.ts",
+			specifier: "@memongo/lib",
+		})
 	})
 })

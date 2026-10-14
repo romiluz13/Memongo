@@ -1407,7 +1407,7 @@ export type MemoryBenchmarkBuildIdentity = {
 	executableDigest?: string
 	sourceDirty?: boolean
 	runtime?: { node: string; bun: string | null }
-	/** Ignored workspace dist bytes folded into executableDigest; not tied to source. */
+	/** Workspace build bytes observed at admission and folded into executableDigest; not tied to source. */
 	workspaceBuild?: {
 		relation: "not-verified"
 		packages: Array<{
