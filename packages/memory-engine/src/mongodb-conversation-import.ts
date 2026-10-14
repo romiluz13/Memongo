@@ -7,7 +7,9 @@ import {
 	type ConversationDatasetConversation,
 	type ConversationDatasetTurn,
 	type ConversationImportDataset,
+	type ConversationImportRejection,
 } from "./mongodb-conversation-dataset.js"
+import { parseExplicitTimestamp } from "./conversation-timestamp.js"
 
 const log = createSubsystemLogger("memory:mongodb:conversation-import")
 
@@ -48,12 +50,12 @@ export type ConversationReplayReceipt =
 	| { ok: true }
 	| { ok: false; code?: string; message?: string }
 
+// The loader has already rejected invalid explicit values; an absent one
+// stays undefined so the writer uses write time.
 function parseTimestamp(value?: string): Date | undefined {
-	if (!value) {
-		return undefined
-	}
-	const parsed = new Date(value)
-	return Number.isNaN(parsed.getTime()) ? undefined : parsed
+	return value === undefined
+		? undefined
+		: (parseExplicitTimestamp(value) ?? undefined)
 }
 
 function buildReplayMetadata(params: {
@@ -114,6 +116,7 @@ async function replayConversationDataset(params: {
 	datasetKind?: ConversationImportDataset["datasetKind"]
 	conversations: ConversationDatasetConversation[]
 	failedLines?: number
+	rejections?: ConversationImportRejection[]
 	scope?: MemoryScope
 	scopeRef?: string
 	limitConversations?: number
@@ -126,6 +129,7 @@ async function replayConversationDataset(params: {
 	) => Promise<ConversationReplayReceipt[]>
 }): Promise<MemoryConversationImportResult> {
 	const startedAt = new Date()
+	const rejections = params.rejections ?? []
 	const conversationLimit =
 		typeof params.limitConversations === "number" &&
 		params.limitConversations > 0
@@ -294,6 +298,12 @@ async function replayConversationDataset(params: {
 		skippedConversations,
 		failedLines: params.failedLines ?? 0,
 		failedTurns,
+		rejectedTurns: rejections.filter((entry) => entry.turnIndex !== null)
+			.length,
+		rejectedConversations: rejections.filter(
+			(entry) => entry.turnIndex === null,
+		).length,
+		rejections,
 		startedAt,
 		completedAt: new Date(),
 	}
@@ -323,6 +333,7 @@ export async function importConversationDataset(params: {
 		datasetKind: dataset.datasetKind,
 		conversations: dataset.conversations,
 		failedLines: dataset.failedLines,
+		rejections: dataset.rejections,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		limitConversations: params.limitConversations,

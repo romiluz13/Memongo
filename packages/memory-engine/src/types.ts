@@ -1178,8 +1178,28 @@ export type MemoryConversationImportResult = {
 	skippedConversations: number
 	failedLines: number
 	failedTurns: number
+	/** Turns rejected by the loader as malformed; not written. */
+	rejectedTurns?: number
+	/** Conversations rejected by the loader as malformed or left with no valid turn. */
+	rejectedConversations?: number
+	/** Value-free coordinates and reasons for every loader rejection. */
+	rejections?: MemoryConversationImportRejection[]
 	startedAt: Date
 	completedAt: Date
+}
+
+export type MemoryConversationImportRejection = {
+	line: number | null
+	conversationIndex: number
+	turnIndex: number | null
+	reason:
+		| "conversation-not-object"
+		| "turns-not-array"
+		| "no-valid-turns"
+		| "turn-not-object"
+		| "invalid-role"
+		| "empty-body"
+		| "invalid-timestamp"
 }
 
 export type MemoryBenchmarkQuestionTypeMetrics = {

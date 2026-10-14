@@ -1,6 +1,7 @@
 import { readFile, realpath } from "node:fs/promises"
 import path, { basename } from "node:path"
 import type { MemoryScope } from "@memongo/lib"
+import { parseExplicitTimestamp } from "./conversation-timestamp.js"
 
 export type ConversationDatasetTurn = {
 	role: "user" | "assistant" | "system" | "tool"
@@ -16,11 +17,35 @@ export type ConversationDatasetConversation = {
 	turns: ConversationDatasetTurn[]
 }
 
+export type ConversationImportRejectionReason =
+	| "conversation-not-object"
+	| "turns-not-array"
+	| "no-valid-turns"
+	| "turn-not-object"
+	| "invalid-role"
+	| "empty-body"
+	| "invalid-timestamp"
+
+/**
+ * A value-free pointer to a rejected input record. line is the 1-based
+ * physical line for JSONL and null for a JSON document; conversationIndex is
+ * the 0-based position among conversation records in the input; turnIndex is
+ * the 0-based position in that record's turns array, or null for a
+ * conversation-level rejection.
+ */
+export type ConversationImportRejection = {
+	line: number | null
+	conversationIndex: number
+	turnIndex: number | null
+	reason: ConversationImportRejectionReason
+}
+
 export type ConversationImportDataset = {
 	name: string
 	datasetKind: "generic"
 	conversations: ConversationDatasetConversation[]
 	failedLines?: number
+	rejections: ConversationImportRejection[]
 }
 
 const VALID_ROLES = new Set(["user", "assistant", "system", "tool"])
@@ -68,16 +93,36 @@ export async function resolveConversationDatasetPath(params: {
 	return resolved
 }
 
-function normalizeTurn(value: unknown): ConversationDatasetTurn | null {
-	if (!value || typeof value !== "object") return null
+type Located = { line: number | null; conversationIndex: number }
+
+function normalizeTurn(
+	value: unknown,
+	turnIndex: number,
+	at: Located,
+	rejections: ConversationImportRejection[],
+): ConversationDatasetTurn | null {
+	const reject = (reason: ConversationImportRejectionReason) => {
+		rejections.push({ ...at, turnIndex, reason })
+		return null
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return reject("turn-not-object")
 	const record = value as Record<string, unknown>
 	const role = typeof record.role === "string" ? record.role : ""
 	const body = typeof record.body === "string" ? record.body.trim() : ""
-	if (!VALID_ROLES.has(role) || !body) return null
+	if (!VALID_ROLES.has(role)) return reject("invalid-role")
+	if (!body) return reject("empty-body")
+	// Only an absent timestamp means "use write time"; any explicit value must
+	// be a valid instant, never silently replaced by the current time.
+	if (
+		record.timestamp !== undefined &&
+		parseExplicitTimestamp(record.timestamp) === null
+	)
+		return reject("invalid-timestamp")
 	return {
 		role: role as ConversationDatasetTurn["role"],
 		body,
-		...(typeof record.timestamp === "string" && record.timestamp.trim()
+		...(typeof record.timestamp === "string"
 			? { timestamp: record.timestamp }
 			: {}),
 		...(record.metadata && typeof record.metadata === "object"
@@ -88,14 +133,21 @@ function normalizeTurn(value: unknown): ConversationDatasetTurn | null {
 
 function normalizeConversation(
 	value: unknown,
+	at: Located,
+	rejections: ConversationImportRejection[],
 ): ConversationDatasetConversation | null {
-	if (!value || typeof value !== "object") return null
+	const reject = (reason: ConversationImportRejectionReason) => {
+		rejections.push({ ...at, turnIndex: null, reason })
+		return null
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return reject("conversation-not-object")
 	const record = value as Record<string, unknown>
-	if (!Array.isArray(record.turns)) return null
+	if (!Array.isArray(record.turns)) return reject("turns-not-array")
 	const turns = record.turns
-		.map(normalizeTurn)
+		.map((turn, turnIndex) => normalizeTurn(turn, turnIndex, at, rejections))
 		.filter((turn): turn is ConversationDatasetTurn => turn !== null)
-	if (turns.length === 0) return null
+	if (turns.length === 0) return reject("no-valid-turns")
 	const scope =
 		record.scope === "session" ||
 		record.scope === "user" ||
@@ -120,6 +172,7 @@ function normalizeConversation(
 
 function conversationsFromJson(
 	value: unknown,
+	rejections: ConversationImportRejection[],
 ): ConversationDatasetConversation[] {
 	const candidates = Array.isArray(value)
 		? value
@@ -129,7 +182,13 @@ function conversationsFromJson(
 			? ((value as Record<string, unknown>).conversations as unknown[])
 			: [value]
 	return candidates
-		.map(normalizeConversation)
+		.map((candidate, conversationIndex) =>
+			normalizeConversation(
+				candidate,
+				{ line: null, conversationIndex },
+				rejections,
+			),
+		)
 		.filter(
 			(conversation): conversation is ConversationDatasetConversation =>
 				conversation !== null,
@@ -148,7 +207,8 @@ export async function loadConversationDataset(
 	const raw = await readFile(resolvedPath, "utf-8")
 	if (!raw.trim()) throw new Error("conversation dataset is empty")
 	try {
-		const conversations = conversationsFromJson(JSON.parse(raw))
+		const rejections: ConversationImportRejection[] = []
+		const conversations = conversationsFromJson(JSON.parse(raw), rejections)
 		if (conversations.length === 0) {
 			throw new Error("conversation dataset contains no valid conversations")
 		}
@@ -156,22 +216,31 @@ export async function loadConversationDataset(
 			name: basename(resolvedPath),
 			datasetKind: "generic",
 			conversations,
+			rejections,
 		}
 	} catch (error) {
 		if (!(error instanceof SyntaxError)) throw error
 	}
 	const conversations: ConversationDatasetConversation[] = []
+	const rejections: ConversationImportRejection[] = []
 	let failedLines = 0
-	for (const rawLine of raw.split("\n")) {
+	let conversationIndex = 0
+	for (const [lineIndex, rawLine] of raw.split("\n").entries()) {
 		const line = rawLine.trim()
 		if (!line || line.startsWith("#")) continue
+		let parsed: unknown
 		try {
-			const conversation = normalizeConversation(JSON.parse(line))
-			if (conversation) conversations.push(conversation)
-			else failedLines++
+			parsed = JSON.parse(line)
 		} catch {
 			failedLines++
+			continue
 		}
+		const conversation = normalizeConversation(
+			parsed,
+			{ line: lineIndex + 1, conversationIndex: conversationIndex++ },
+			rejections,
+		)
+		if (conversation) conversations.push(conversation)
 	}
 	if (conversations.length === 0) {
 		throw new Error("conversation dataset contains no valid conversations")
@@ -181,5 +250,6 @@ export async function loadConversationDataset(
 		datasetKind: "generic",
 		conversations,
 		failedLines,
+		rejections,
 	}
 }
