@@ -262,6 +262,19 @@ historical. A key changed mid-run fails the run as a configuration change. The
 fingerprints hide guessable values only while the key stays secret, and runs
 under one key still reveal which ones share a credential.
 
+Provider failures are reported without provider or runtime payload, because a
+provider error body can echo the key or request URL and runtime, DNS or SSRF
+guard errors can quote a header value, the host or the response body. The
+answer, judge and enrichment providers report `HTTP <status> (response body
+withheld)` and never read the body; a rejected request becomes `transport
+failed (TypeError)` with status 503, and a DNS, guard or other failure before a
+response keeps only its class under fixed text. The Voyage reranker follows the
+same rule in its fallback log and strict-mode error. Status codes, error
+classes and therefore retry, fallback and capture classification are
+unchanged. This covers configured credentials in these failure diagnostics; it
+does not cover MongoDB driver errors, successful provider content or dataset
+text.
+
 The runs must be distinct and must share `datasetSha256` and
 `executableDigest`; an opaque digest cannot show that a single setting
 changed, so it is never a treatment and source treatments are deferred.

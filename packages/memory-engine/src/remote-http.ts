@@ -38,6 +38,46 @@ export function buildRemoteBaseUrlPolicy(
 // Error text reaches logs and benchmark output. Any part of a configured URL
 // (userinfo, path, query, even the host) can carry a secret, so messages
 // describe the failure and never echo the URL.
+const GUARD_REFUSALS = {
+	invalidUrl: "SSRF guard rejected invalid URL",
+	nonHttp: "SSRF guard rejected a non-HTTP URL",
+	credentials: "SSRF guard rejected a URL with embedded credentials",
+	offEndpoint: "SSRF guard blocked a request outside the configured endpoint",
+	redirect: "SSRF guard refused redirect from the configured endpoint",
+} as const
+const GUARD_REFUSAL_TEXTS: ReadonlySet<string> = new Set(
+	Object.values(GUARD_REFUSALS),
+)
+
+/**
+ * A fixed-text stand-in for a failure raised while sending a remote request or
+ * reading its response. DNS and guard errors from @memongo/lib can name the
+ * host, a runtime TypeError can quote a rejected header value, and a JSON
+ * SyntaxError can quote the body, so only the class survives (retry and
+ * fallback decisions depend on it). The guard's own refusals keep their text.
+ */
+export function withoutRemotePayload(error: unknown, operation: string): Error {
+	if (error instanceof SsrFBlockedError)
+		return new SsrFBlockedError(
+			GUARD_REFUSAL_TEXTS.has(error.message)
+				? error.message
+				: "SSRF guard blocked a private or disallowed host",
+		)
+	if (error instanceof TypeError)
+		return new TypeError(`${operation} could not be sent`)
+	if (error instanceof SyntaxError)
+		return new SyntaxError(`${operation} response was not valid JSON`)
+	if (
+		error instanceof DOMException &&
+		(error.name === "TimeoutError" || error.name === "AbortError")
+	)
+		return new DOMException(
+			`${operation} was aborted`,
+			error.name === "TimeoutError" ? "TimeoutError" : "AbortError",
+		)
+	return new Error(`${operation} failed before a response`)
+}
+
 export async function withRemoteHttpResponse<T>(params: {
 	url: string
 	init?: RequestInit
@@ -54,25 +94,21 @@ export async function withRemoteHttpResponse<T>(params: {
 	try {
 		parsedUrl = new URL(params.url)
 	} catch {
-		throw new SsrFBlockedError("SSRF guard rejected invalid URL")
+		throw new SsrFBlockedError(GUARD_REFUSALS.invalidUrl)
 	}
 	if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-		throw new SsrFBlockedError("SSRF guard rejected a non-HTTP URL")
+		throw new SsrFBlockedError(GUARD_REFUSALS.nonHttp)
 	}
 	// Node's Request throws on embedded credentials and echoes the whole URL
 	// in its TypeError; refuse first so no runtime ever reflects them.
 	if (parsedUrl.username || parsedUrl.password) {
-		throw new SsrFBlockedError(
-			"SSRF guard rejected a URL with embedded credentials",
-		)
+		throw new SsrFBlockedError(GUARD_REFUSALS.credentials)
 	}
 	const policy = params.ssrfPolicy ?? defaultSsrfPolicy
 	// Hostname pinning: when the caller configured an allow predicate (e.g. from
 	// the operator's baseUrl), the request must target that exact host.
 	if (policy.isAllowed && !policy.isAllowed(params.url)) {
-		throw new SsrFBlockedError(
-			"SSRF guard blocked a request outside the configured endpoint",
-		)
+		throw new SsrFBlockedError(GUARD_REFUSALS.offEndpoint)
 	}
 	// Fail closed by default: block private/loopback/metadata targets unless the
 	// operator explicitly opted into a private network. This runs even when a
@@ -90,9 +126,7 @@ export async function withRemoteHttpResponse<T>(params: {
 		redirect: "manual",
 	})
 	if (response.status >= 300 && response.status < 400) {
-		throw new SsrFBlockedError(
-			"SSRF guard refused redirect from the configured endpoint",
-		)
+		throw new SsrFBlockedError(GUARD_REFUSALS.redirect)
 	}
 	return await params.onResponse(response)
 }

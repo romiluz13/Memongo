@@ -369,6 +369,42 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 		expect(exposures(output.join("\n"))).toEqual([])
 	})
 
+	it("keeps a provider error body that echoes credentials out of the preflight failure", async () => {
+		process.env.MEMONGO_BENCHMARK_ANSWER_BASE_URL = `http://127.0.0.1:9/${encodeURIComponent(C.answerPath)}/v1?api_key=${encodeURIComponent(C.answerToken)}`
+		vi.stubGlobal(
+			"fetch",
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				fetchCalls += 1
+				new Request(input, init)
+				return new Response(
+					JSON.stringify({
+						error: {
+							message: `Incorrect API key provided: ${C.answerKey} for ${String(input)}`,
+						},
+					}),
+					{ status: 401 },
+				)
+			},
+		)
+		const dir = await mkdtemp(path.join(tmpdir(), "credential-canary-"))
+		dirs.push(dir)
+		const error = await prepareOfficialQa({
+			env: process.env,
+			checkpointPath: path.join(dir, "preflight.json"),
+			runId: "run-preflight",
+			configurationHash: "c".repeat(64),
+			datasetSha256: "d".repeat(64),
+		}).then(
+			() => null,
+			(failure: Error) => failure,
+		)
+		expect(error?.message).toContain("preflight failed")
+		expect(error?.message).toContain("HTTP 401 (response body withheld)")
+		expect(fetchCalls).toBe(1)
+		const text = `${error?.message}\n${error?.stack}\n${JSON.stringify(error)}\n${await filesUnder(dir)}`
+		expect(exposures(text)).toEqual([])
+	})
+
 	it.each([
 		["embedded credentials, refused before any request", URLS.answer, 0],
 		[
