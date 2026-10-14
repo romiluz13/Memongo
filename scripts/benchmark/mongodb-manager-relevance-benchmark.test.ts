@@ -954,6 +954,7 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 		trackedFiles: 1,
 		dirty: false,
 		runtime,
+		build: { relation: "not-verified" as const, packages: [] },
 	})
 
 	async function setup() {

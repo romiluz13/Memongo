@@ -29,6 +29,22 @@ Run `bun run build` after source edits and before starting a local API-backed
 canary. The API loads workspace packages through their built `dist` entrypoints,
 so a stale build can hide or invent benchmark behavior.
 
+The benchmark's `executableDigest` binds tracked executable source at HEAD and
+the ignored build bytes it actually loads: the complete `dist` tree and
+`package.json` of every `@memongo/*` package reachable from the benchmark's
+imports, resolved from each importer the way the runtime does, with nested
+copies covered separately. The report lists each package under
+`build.workspaceBuild` with `relation: "not-verified"`: identity proves which
+bytes were present at admission, not that they were built from the tracked
+source, and it does not cover third-party installed packages, the runtime
+binary or changes after admission. Identity is refused, not degraded, when a
+package does not resolve, resolves outside the repository, uses an export
+condition other than `types`/`default`, has an entry outside `dist`, or has a
+missing or unreadable `dist` containing links, special files or
+`node_modules`. Checkpoints written before this change carry a digest without
+build bytes; it can never match, so they are historical only and refused for
+resume.
+
 For benchmark-specific work, include the focused engine/API tests that cover the
 touched lane. At minimum:
 

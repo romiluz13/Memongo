@@ -1288,6 +1288,17 @@ describe("mongodb benchmark runner", () => {
 describe("benchmark report build identity is observed, not claimed", () => {
 	const head = "a".repeat(40)
 	const runtime = { node: "v24.0.0", bun: "1.3.0" }
+	const build = {
+		relation: "not-verified" as const,
+		packages: [
+			{
+				name: "@memongo/lib",
+				path: "packages/lib",
+				files: 3,
+				digest: "b".repeat(64),
+			},
+		],
+	}
 	const observed = (overrides: Record<string, unknown> = {}) => ({
 		status: "available" as const,
 		digest: "d".repeat(64),
@@ -1295,6 +1306,7 @@ describe("benchmark report build identity is observed, not claimed", () => {
 		trackedFiles: 10,
 		dirty: false,
 		runtime,
+		build,
 		...overrides,
 	})
 	const report = (
@@ -1345,6 +1357,7 @@ describe("benchmark report build identity is observed, not claimed", () => {
 			executableDigest: "d".repeat(64),
 			sourceDirty: false,
 			runtime,
+			workspaceBuild: build,
 		})
 	})
 

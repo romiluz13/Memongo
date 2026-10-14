@@ -291,6 +291,7 @@ function readBuildIdentity(
 			executableDigest: observed.digest,
 			sourceDirty: observed.dirty,
 			runtime: observed.runtime,
+			workspaceBuild: observed.build,
 			...claims,
 		}
 	}
@@ -743,7 +744,7 @@ function buildEvidenceCompletenessGate(
 				gate: "evidence-completeness",
 				status: "passed",
 				evidence:
-					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; source identity covers tracked source at HEAD and is not a build or executable attestation (generated workspace dist modules are not covered)",
+					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; executable identity covers tracked source at HEAD plus the bytes of the loaded workspace dist closure; it does not attest that those bytes were built from that source",
 			}
 		: {
 				gate: "evidence-completeness",
