@@ -19,6 +19,7 @@ import {
 	resolveDatasetSha256,
 	resolveBenchmarkRetrievalLane,
 	resolveBenchmarkExecutionProfile,
+	percentile50And95,
 } from "./benchmark-parity-envelope.js"
 import type {
 	BenchmarkExecutionProfile,
@@ -812,6 +813,11 @@ export class MongoDBManagerBenchmarkOps {
 				scoredCases: cases.length,
 				skippedCases: 0,
 				...metrics,
+				// Every legacy case is scored, so the scored-case sample is all cases.
+				scoredLatency: percentile50And95(
+					evaluations.map((entry) => entry.latencyMs),
+					"scored-cases",
+				),
 				rAt5: 0,
 				rAt10: 0,
 				ndcgAt10: 0,

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -529,5 +529,53 @@ describe("B08 measurement evidence through the real scenario loop", () => {
 		const replay = await resumed.run(await h.checkpoint())
 		expect(replay.result.ingest?.failedTurns).toBe(3)
 		expect(completeness(replay.result)?.status).toBe("failed")
+	})
+})
+
+describe("B08 legacy query benchmark latency label", () => {
+	it("names the scored-case denominator for the legacy p95", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-legacy-"))
+		dirs.push(dir)
+		const datasetPath = path.join(dir, "legacy.jsonl")
+		await writeFile(
+			datasetPath,
+			Array.from({ length: 7 }, (_, i) =>
+				JSON.stringify({ query: `synthetic query ${i}` }),
+			).join("\n"),
+		)
+		let call = 0
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {},
+				prefix: "test_",
+				agentId: "benchmark-parent",
+				relevanceExplain: async () => {
+					call += 1
+					return {
+						results: [
+							{ path: "p", score: 0.9, snippet: "s", source: "memory" },
+						],
+						latencyMs: call * 10,
+					}
+				},
+			},
+		) as MongoDBMemoryManager
+		const ops = new MongoDBManagerBenchmarkOps(
+			manager as unknown as MongoDBManagerHost,
+		)
+		const { result } = await ops.runLegacyRelevanceBenchmark({
+			datasetPath,
+			maxResults: 5,
+			minScore: 0,
+		})
+		expect(result.p95LatencyMs).toBe(70)
+		expect(result.scoredLatency).toEqual({
+			denominator: "scored-cases",
+			samples: 7,
+			p50Ms: 40,
+			p95Ms: 70,
+			p95Basis: "sample-maximum",
+		})
 	})
 })
