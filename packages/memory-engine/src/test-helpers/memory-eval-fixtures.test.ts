@@ -14,6 +14,7 @@ describe("memory-eval-fixtures", () => {
 		expect(fixture.cases.map((entry) => entry.id)).toEqual([
 			"current-release-window",
 			"no-scope-leak-red-kite",
+			"foreign-owner-red-kite",
 			"session-owner-isolation",
 			"active-slate",
 			"what-changed",

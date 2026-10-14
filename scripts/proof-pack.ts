@@ -166,13 +166,20 @@ async function main() {
 			results?: Array<{ path?: string; snippet?: string; score?: number }>
 		}
 		const topResult = search.results?.[0]
+		// Any result is not proof: the run's planted marker must come back.
+		const markerFound = (search.results ?? []).some((result) =>
+			`${result.path ?? ""}\n${result.snippet ?? ""}`.includes(marker),
+		)
 		checks.push(
-			search.results && search.results.length > 0
+			markerFound
 				? pass(
 						"search",
-						`results=${search.results.length}, top=${topResult?.path ?? "unknown"}`,
+						`results=${search.results?.length ?? 0}, top=${topResult?.path ?? "unknown"}`,
 					)
-				: fail("search", "no search results returned"),
+				: fail(
+						"search",
+						`planted marker not returned (results=${search.results?.length ?? 0})`,
+					),
 		)
 
 		const detailed = await client.searchDetailed({

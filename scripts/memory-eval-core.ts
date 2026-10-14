@@ -25,7 +25,11 @@ export type MemoryEvalCaseResult = {
 	score: number
 	failures: string[]
 	/** Same-run control role: positive authorized retrieval or negative evidence that depends on one. */
-	control?: { agentId: string; role: "positive" | "negative" }
+	control?: {
+		agentId: string
+		role: "positive" | "negative"
+		requiresPassingCaseIds?: string[]
+	}
 	metrics: {
 		latencyMs: number
 		scopeLeak: boolean
@@ -316,6 +320,12 @@ export function evaluateSearchDetailedCase(
 						role: negativeEvidence
 							? ("negative" as const)
 							: ("positive" as const),
+						...(testCase.expect.requiresPassingCaseIds?.length
+							? {
+									requiresPassingCaseIds:
+										testCase.expect.requiresPassingCaseIds,
+								}
+							: {}),
 					},
 				}
 			: {}),
@@ -722,7 +732,12 @@ export function compareEvalRuns(params: {
 		abstentionDelta:
 			candidate.abstentionSuccesses - baseline.abstentionSuccesses,
 		latencyRatio,
+		// Both runs must have executed cases and the candidate must pass all of them;
+		// two equally empty or failing runs are not evidence of readiness.
 		releaseReady:
+			baseline.totalCases > 0 &&
+			candidate.totalCases > 0 &&
+			candidate.failedCases === 0 &&
 			candidate.scopeLeakFailures === 0 &&
 			candidate.staleFailures <= baseline.staleFailures &&
 			candidate.averageScore >= baseline.averageScore &&
@@ -751,21 +766,34 @@ export function requireSameRunPositiveControls(
 			.filter((entry) => entry.control?.role === "positive" && entry.ok)
 			.map((entry) => entry.control?.agentId),
 	)
+	const passedCaseIds = new Set(
+		cases.filter((entry) => entry.ok).map((entry) => entry.id),
+	)
 	return cases.map((entry) => {
-		if (
-			entry.control?.role !== "negative" ||
-			provenAgents.has(entry.control.agentId)
-		) {
+		if (entry.control?.role !== "negative") {
+			return entry
+		}
+		const controlFailures: string[] = []
+		if (!provenAgents.has(entry.control.agentId)) {
+			controlFailures.push(
+				`no passing owner positive control in the same run for agent ${entry.control.agentId}`,
+			)
+		}
+		for (const caseId of entry.control.requiresPassingCaseIds ?? []) {
+			if (!passedCaseIds.has(caseId)) {
+				controlFailures.push(
+					`required same-run control did not pass: ${caseId}`,
+				)
+			}
+		}
+		if (controlFailures.length === 0) {
 			return entry
 		}
 		return {
 			...entry,
 			ok: false,
 			score: 0,
-			failures: [
-				...entry.failures,
-				`no passing owner positive control in the same run for agent ${entry.control.agentId}`,
-			],
+			failures: [...entry.failures, ...controlFailures],
 			metrics: { ...entry.metrics, abstentionSuccess: false },
 		}
 	})

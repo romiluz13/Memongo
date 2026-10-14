@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest"
 
 import { buildPhase6MemoryEvalFixture } from "../packages/memory-engine/src/test-helpers/memory-eval-fixtures.js"
 import {
+	compareEvalRuns,
 	evaluateSearchDetailedCase,
 	runMemoryEvalSuite,
+	summarizeEvalRun,
 } from "./memory-eval-core.js"
 
 const abstentionCase = {
@@ -22,14 +24,14 @@ const emptyMetadata = {
 }
 
 function fakeClient(
-	searchDetailed: (request: { query?: string }) => unknown,
+	searchDetailed: (request: { query?: string; agentId?: string }) => unknown,
 	contextBundle: unknown = { sections: [], metadata: {} },
 ): MemongoClient {
 	return {
 		writeEvent: async () => ({ ok: true }),
 		writeStructured: async () => ({ id: "x" }),
 		writeProcedure: async () => ({ id: "x" }),
-		searchDetailed: async (request: { query?: string }) =>
+		searchDetailed: async (request: { query?: string; agentId?: string }) =>
 			searchDetailed(request),
 		hydrateActiveSlate: async () => ({ items: [] }),
 		buildDiscoveryProjection: async () => ({ sections: [] }),
@@ -159,20 +161,27 @@ describe("memory-eval run verdict controls", () => {
 		const fixture = buildPhase6MemoryEvalFixture("owner")
 		const run = await runMemoryEvalSuite({
 			client: fakeClient((request) =>
-				/release window/i.test(request.query ?? "")
+				request.agentId === fixture.secondaryAgentId
 					? {
 							results: [
-								{
-									path: "structured:decision:release-window",
-									snippet: "Phoenix release window is Monday.",
-								},
+								{ path: "events/f", snippet: "The codeword is Red Kite." },
 							],
-							metadata: {
-								evidenceCoverage: "direct",
-								trustSummary: { topConfidence: "high" },
-							},
+							metadata: { evidenceCoverage: "direct" },
 						}
-					: { results: [], metadata: emptyMetadata },
+					: /release window/i.test(request.query ?? "")
+						? {
+								results: [
+									{
+										path: "structured:decision:release-window",
+										snippet: "Phoenix release window is Monday.",
+									},
+								],
+								metadata: {
+									evidenceCoverage: "direct",
+									trustSummary: { topConfidence: "high" },
+								},
+							}
+						: { results: [], metadata: emptyMetadata },
 			),
 			label: "owner",
 			fixture,
@@ -214,5 +223,79 @@ describe("memory-eval run verdict controls", () => {
 			(entry) => entry.id === "context-bundle-handoff",
 		)
 		expect(leakedBundle?.metrics.scopeLeak).toBe(true)
+	})
+
+	it("abstention fails when the foreign sentinel was never retrievable by its owner", async () => {
+		const fixture = buildPhase6MemoryEvalFixture("sentinel")
+		const run = await runMemoryEvalSuite({
+			client: fakeClient((request) =>
+				/release window/i.test(request.query ?? "")
+					? {
+							results: [
+								{
+									path: "structured:decision:release-window",
+									snippet: "Phoenix release window is Monday.",
+								},
+							],
+							metadata: {
+								evidenceCoverage: "direct",
+								trustSummary: { topConfidence: "high" },
+							},
+						}
+					: { results: [], metadata: emptyMetadata },
+			),
+			label: "sentinel",
+			fixture,
+		})
+		const foreignOwner = run.cases.find(
+			(entry) => entry.id === "foreign-owner-red-kite",
+		)
+		const abstention = run.cases.find(
+			(entry) => entry.id === "no-scope-leak-red-kite",
+		)
+		expect(foreignOwner?.ok).toBe(false)
+		expect(abstention?.ok).toBe(false)
+		expect(abstention?.failures.join(" ")).toMatch(/foreign-owner-red-kite/)
+	})
+})
+
+describe("memory-eval comparison gate", () => {
+	const passing = {
+		id: "p",
+		ok: true,
+		score: 1,
+		failures: [],
+		metrics: {
+			latencyMs: 10,
+			scopeLeak: false,
+			staleFailure: false,
+			abstentionSuccess: false,
+			evidenceCoverage: "direct" as const,
+			topConfidence: "high" as const,
+			exactEvidence: true,
+		},
+	}
+	const failing = { ...passing, ok: false, score: 0, failures: ["x"] }
+
+	it("empty runs never establish release readiness", () => {
+		const empty = summarizeEvalRun({ label: "empty", cases: [] })
+		expect(
+			compareEvalRuns({ baseline: empty, candidate: empty }).summary
+				.releaseReady,
+		).toBe(false)
+	})
+
+	it("equally failing runs never establish release readiness", () => {
+		const bad = summarizeEvalRun({ label: "bad", cases: [failing, failing] })
+		expect(
+			compareEvalRuns({ baseline: bad, candidate: bad }).summary.releaseReady,
+		).toBe(false)
+	})
+
+	it("a fully passing candidate against a passing baseline is release ready", () => {
+		const good = summarizeEvalRun({ label: "good", cases: [passing, passing] })
+		expect(
+			compareEvalRuns({ baseline: good, candidate: good }).summary.releaseReady,
+		).toBe(true)
 	})
 })

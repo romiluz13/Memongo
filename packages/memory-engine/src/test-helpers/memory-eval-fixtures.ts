@@ -49,6 +49,8 @@ export type SearchDetailedEvalCase = {
 		topConfidenceAtLeast?: "low" | "medium" | "high"
 		expectNoResults?: boolean
 		requireNoDirectEvidenceReason?: boolean
+		/** Cases that must pass in the same run, e.g. the foreign owner retrieving the sentinel. */
+		requiresPassingCaseIds?: string[]
 	}
 }
 
@@ -368,6 +370,24 @@ export function buildPhase6MemoryEvalFixture(
 				expect: {
 					expectNoResults: true,
 					requireNoDirectEvidenceReason: true,
+					requiresPassingCaseIds: ["foreign-owner-red-kite"],
+				},
+			},
+			{
+				id: "foreign-owner-red-kite",
+				title: "Foreign owner retrieves its own Red Kite sentinel",
+				tags: ["scope-isolation", "sentinel-owner"],
+				kind: "search-detailed",
+				request: {
+					agentId: secondaryAgentId,
+					query: "What is the Red Kite launch codeword?",
+					limit: 4,
+					searchMode: "direct",
+					needExactEvidence: true,
+					returnPlan: true,
+				},
+				expect: {
+					mustIncludeAll: ["Red Kite"],
 				},
 			},
 			{
