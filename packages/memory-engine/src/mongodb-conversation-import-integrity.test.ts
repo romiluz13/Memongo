@@ -10,6 +10,10 @@ import {
 	loadConversationDataset,
 	type ConversationReplayBatchTurn,
 } from "./mongodb-conversation-import.js"
+import {
+	normalizeConversation,
+	normalizeTurn,
+} from "./mongodb-conversation-dataset.js"
 
 const SECRET_BODY = "synthetic private body 1148"
 const BAD_STAMP = "2024-02-30T10:00:00Z"
@@ -484,5 +488,58 @@ describe("B01 all-invalid imports fail closed with per-record diagnostics", () =
 			rejectedConversations: 0,
 			rejections: [],
 		})
+	})
+})
+
+describe("typed normalizer results", () => {
+	const at = { line: 3, conversationIndex: 1 }
+
+	it("normalizeTurn returns a typed rejection with coordinates instead of null", () => {
+		expect(normalizeTurn({ role: "bot", body: "x" }, 2, at)).toEqual({
+			ok: false,
+			rejection: {
+				line: 3,
+				conversationIndex: 1,
+				turnIndex: 2,
+				reason: "invalid-role",
+			},
+		})
+		expect(normalizeTurn({ role: "user", body: " hi " }, 0, at)).toEqual({
+			ok: true,
+			value: { role: "user", body: "hi" },
+		})
+	})
+
+	it("normalizeConversation carries the accepted value plus rejected children", () => {
+		const result = normalizeConversation(
+			{
+				turns: [
+					{ role: "user", body: "kept" },
+					{ role: "user", body: "" },
+				],
+			},
+			at,
+		)
+		expect(result.value?.turns).toEqual([{ role: "user", body: "kept" }])
+		expect(result.rejections).toEqual([
+			{ line: 3, conversationIndex: 1, turnIndex: 1, reason: "empty-body" },
+		])
+	})
+
+	it("normalizeConversation rejects with a conversation-level coordinate and no value", () => {
+		const result = normalizeConversation(
+			{ turns: [{ role: "x", body: "y" }] },
+			at,
+		)
+		expect(result.value).toBeNull()
+		expect(result.rejections).toEqual([
+			{ line: 3, conversationIndex: 1, turnIndex: 0, reason: "invalid-role" },
+			{
+				line: 3,
+				conversationIndex: 1,
+				turnIndex: null,
+				reason: "no-valid-turns",
+			},
+		])
 	})
 })

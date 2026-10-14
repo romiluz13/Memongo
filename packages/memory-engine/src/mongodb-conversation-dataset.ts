@@ -95,16 +95,25 @@ export async function resolveConversationDatasetPath(params: {
 
 type Located = { line: number | null; conversationIndex: number }
 
-function normalizeTurn(
+export type TurnNormalization =
+	| { ok: true; value: ConversationDatasetTurn }
+	| { ok: false; rejection: ConversationImportRejection }
+
+/** value is null when the conversation itself is rejected; rejections also lists rejected turns of an accepted conversation. */
+export type ConversationNormalization = {
+	value: ConversationDatasetConversation | null
+	rejections: ConversationImportRejection[]
+}
+
+export function normalizeTurn(
 	value: unknown,
 	turnIndex: number,
 	at: Located,
-	rejections: ConversationImportRejection[],
-): ConversationDatasetTurn | null {
-	const reject = (reason: ConversationImportRejectionReason) => {
-		rejections.push({ ...at, turnIndex, reason })
-		return null
-	}
+): TurnNormalization {
+	const reject = (reason: ConversationImportRejectionReason) => ({
+		ok: false as const,
+		rejection: { ...at, turnIndex, reason },
+	})
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		return reject("turn-not-object")
 	const record = value as Record<string, unknown>
@@ -120,33 +129,39 @@ function normalizeTurn(
 	)
 		return reject("invalid-timestamp")
 	return {
-		role: role as ConversationDatasetTurn["role"],
-		body,
-		...(typeof record.timestamp === "string"
-			? { timestamp: record.timestamp }
-			: {}),
-		...(record.metadata && typeof record.metadata === "object"
-			? { metadata: record.metadata as Record<string, unknown> }
-			: {}),
+		ok: true,
+		value: {
+			role: role as ConversationDatasetTurn["role"],
+			body,
+			...(typeof record.timestamp === "string"
+				? { timestamp: record.timestamp }
+				: {}),
+			...(record.metadata && typeof record.metadata === "object"
+				? { metadata: record.metadata as Record<string, unknown> }
+				: {}),
+		},
 	}
 }
 
-function normalizeConversation(
+export function normalizeConversation(
 	value: unknown,
 	at: Located,
-	rejections: ConversationImportRejection[],
-): ConversationDatasetConversation | null {
+): ConversationNormalization {
+	const rejections: ConversationImportRejection[] = []
 	const reject = (reason: ConversationImportRejectionReason) => {
 		rejections.push({ ...at, turnIndex: null, reason })
-		return null
+		return { value: null, rejections }
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		return reject("conversation-not-object")
 	const record = value as Record<string, unknown>
 	if (!Array.isArray(record.turns)) return reject("turns-not-array")
-	const turns = record.turns
-		.map((turn, turnIndex) => normalizeTurn(turn, turnIndex, at, rejections))
-		.filter((turn): turn is ConversationDatasetTurn => turn !== null)
+	const turns: ConversationDatasetTurn[] = []
+	for (const [turnIndex, turn] of record.turns.entries()) {
+		const result = normalizeTurn(turn, turnIndex, at)
+		if (result.ok) turns.push(result.value)
+		else rejections.push(result.rejection)
+	}
 	if (turns.length === 0) return reject("no-valid-turns")
 	const scope =
 		record.scope === "session" ||
@@ -158,15 +173,18 @@ function normalizeConversation(
 			? record.scope
 			: undefined
 	return {
-		...(typeof record.conversationId === "string" &&
-		record.conversationId.trim()
-			? { conversationId: record.conversationId }
-			: {}),
-		...(typeof record.sessionId === "string" && record.sessionId.trim()
-			? { sessionId: record.sessionId }
-			: {}),
-		...(scope ? { scope } : {}),
-		turns,
+		value: {
+			...(typeof record.conversationId === "string" &&
+			record.conversationId.trim()
+				? { conversationId: record.conversationId }
+				: {}),
+			...(typeof record.sessionId === "string" && record.sessionId.trim()
+				? { sessionId: record.sessionId }
+				: {}),
+			...(scope ? { scope } : {}),
+			turns,
+		},
+		rejections,
 	}
 }
 
@@ -182,14 +200,13 @@ function conversationsFromJson(
 				Array.isArray((value as Record<string, unknown>).conversations)
 			? ((value as Record<string, unknown>).conversations as unknown[])
 			: [value]
-	return candidates
-		.map((candidate, conversationIndex) =>
-			normalizeConversation(candidate, { line, conversationIndex }, rejections),
-		)
-		.filter(
-			(conversation): conversation is ConversationDatasetConversation =>
-				conversation !== null,
-		)
+	const conversations: ConversationDatasetConversation[] = []
+	for (const [conversationIndex, candidate] of candidates.entries()) {
+		const result = normalizeConversation(candidate, { line, conversationIndex })
+		rejections.push(...result.rejections)
+		if (result.value) conversations.push(result.value)
+	}
+	return conversations
 }
 
 /**
@@ -270,12 +287,12 @@ export async function loadConversationDataset(
 			failedLines++
 			continue
 		}
-		const conversation = normalizeConversation(
-			parsed,
-			{ line: lineIndex + 1, conversationIndex: conversationIndex++ },
-			rejections,
-		)
-		if (conversation) conversations.push(conversation)
+		const result = normalizeConversation(parsed, {
+			line: lineIndex + 1,
+			conversationIndex: conversationIndex++,
+		})
+		rejections.push(...result.rejections)
+		if (result.value) conversations.push(result.value)
 	}
 	if (conversations.length === 0)
 		throw new ConversationImportRejectedError(rejections, failedLines)
