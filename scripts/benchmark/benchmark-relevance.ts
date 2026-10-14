@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "@memongo/lib"
 import type { Db } from "mongodb"
 import { relevanceRegressionsCollection } from "../../packages/memory-engine/src/mongodb-schema.js"
 import type {
+	BenchmarkScenarioCleanupReport,
 	MemoryBenchmarkCaseOutcome,
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkExecutionSummary,
@@ -64,6 +65,7 @@ export type RelevanceBenchmarkResult = {
 	benchmarkReport?: MemoryBenchmarkRunReport
 	missLedger?: BenchmarkMissLedgerEntry[]
 	caseDiagnostics?: BenchmarkCaseDiagnosticEntry[]
+	scenarioCleanup?: BenchmarkScenarioCleanupReport
 }
 
 export type BenchmarkRegression = {

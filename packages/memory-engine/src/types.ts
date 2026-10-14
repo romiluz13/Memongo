@@ -1438,6 +1438,7 @@ export type MemoryBenchmarkReleaseGate = {
 		| "evidence-completeness"
 		| "conversation-recall-regression"
 		| "query-governance"
+		| "scenario-cleanup"
 	status: "passed" | "failed" | "warning" | "not-run" | "advisory-only"
 	evidence: string
 	checks?: Array<{
@@ -1609,6 +1610,59 @@ export type BenchmarkTenantStorageMeasurement = {
 	unavailableReason?: string
 }
 
+/**
+ * One registered collection's delete in a benchmark scenario cleanup. Errors
+ * keep only the driver error name and code, never the message.
+ */
+export type BenchmarkCleanupCollectionResult =
+	| { suffix: string; status: "acknowledged"; deletedCount: number }
+	| { suffix: string; status: "unacknowledged" }
+	| {
+			suffix: string
+			status: "rejected"
+			errorName: string
+			errorCode?: string | number
+	  }
+
+/** The fixed collection-suffix registry a cleanup covered. */
+export type BenchmarkCleanupRegistry = {
+	version: 1
+	digest: string
+	collections: number
+}
+
+export type BenchmarkScenarioCleanupAttempt = {
+	status: "acknowledged" | "failed"
+	agentId: string
+	registry: BenchmarkCleanupRegistry
+	collections: BenchmarkCleanupCollectionResult[]
+}
+
+/**
+ * Acknowledged deletes are operation evidence for the registered collections
+ * only: they do not prove the namespace is empty or fence later writes.
+ */
+export type BenchmarkScenarioCleanupOutcome = {
+	version: 1
+	runId: string
+	scenarioId: string
+	agentId: string | null
+	status: "acknowledged" | "failed" | "retained" | "not-attempted"
+	registry: BenchmarkCleanupRegistry
+	collections: BenchmarkCleanupCollectionResult[]
+	errorName?: string
+}
+
+export type BenchmarkScenarioCleanupReport = {
+	version: 1
+	/** acknowledged only when every scenario's registered deletes were acknowledged. */
+	status: "acknowledged" | "failed" | "incomplete"
+	coverage: "registered-scenario-collections"
+	scenarios: Array<
+		BenchmarkScenarioCleanupOutcome | { scenarioId: string; status: "unknown" }
+	>
+}
+
 export type BenchmarkStorageFootprint = {
 	basis: "benchmark-agent-logical-plus-shared-physical"
 	tenant: BenchmarkTenantStorageMeasurement
@@ -1763,6 +1817,7 @@ export type MemoryBenchmarkRunReport = {
 	latency?: BenchmarkLatencyDistribution
 	cost?: BenchmarkCostAccounting
 	e2eQa?: BenchmarkE2eQaEnvelope
+	scenarioCleanup?: BenchmarkScenarioCleanupReport
 }
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import type {
 	BenchmarkQualityThresholds,
 	BenchmarkRerankerConfig,
 	BenchmarkRunIdentity,
+	BenchmarkScenarioCleanupReport,
 	BenchmarkStorageFootprint,
 	BenchmarkTenantStorageMeasurement,
 	MemoryBenchmarkDatasetKind,
@@ -250,6 +251,41 @@ type BenchmarkReportInput = {
 	conversationRecallRegression?: {
 		status: "passed" | "failed"
 		evidence: string
+	}
+	/** B08:C03: absent means cleanup is unknown, which blocks publication. */
+	scenarioCleanup?: BenchmarkScenarioCleanupReport
+}
+
+function buildScenarioCleanupGate(
+	cleanup: BenchmarkScenarioCleanupReport | undefined,
+): MemoryBenchmarkRunReport["releaseGates"][number] {
+	if (!cleanup)
+		return {
+			gate: "scenario-cleanup",
+			status: "not-run",
+			evidence:
+				"no scenario cleanup outcome was recorded; cleanup is unknown and the run is not a clean proof",
+		}
+	const byStatus = (status: string) =>
+		cleanup.scenarios
+			.filter((scenario) => scenario.status === status)
+			.map((scenario) => scenario.scenarioId)
+	if (cleanup.status === "acknowledged")
+		return {
+			gate: "scenario-cleanup",
+			status: "passed",
+			evidence: `${cleanup.scenarios.length} scenarios: every delete was acknowledged in the registered collections only; this does not prove the namespace is empty or that later writes were fenced`,
+		}
+	if (cleanup.status === "failed")
+		return {
+			gate: "scenario-cleanup",
+			status: "failed",
+			evidence: `scenario cleanup failed or was unacknowledged: ${byStatus("failed").join(", ")}`,
+		}
+	return {
+		gate: "scenario-cleanup",
+		status: "not-run",
+		evidence: `scenario cleanup is not established: retained=${byStatus("retained").length} not-attempted=${byStatus("not-attempted").length} unknown=${byStatus("unknown").length} scenarios=${cleanup.scenarios.length}`,
 	}
 }
 
@@ -802,6 +838,7 @@ export function buildBenchmarkRunReport(
 					? "queryGovernance candidates are advisory-only"
 					: "no queryGovernance candidates attached",
 		},
+		buildScenarioCleanupGate(params.scenarioCleanup),
 	]
 	const blockingGates = releaseGates
 		.filter(
@@ -859,6 +896,9 @@ export function buildBenchmarkRunReport(
 		...(params.latency ? { latency: params.latency } : {}),
 		...(params.cost ? { cost: params.cost } : {}),
 		...(params.e2eQa ? { e2eQa: params.e2eQa } : {}),
+		...(params.scenarioCleanup
+			? { scenarioCleanup: params.scenarioCleanup }
+			: {}),
 	}
 }
 

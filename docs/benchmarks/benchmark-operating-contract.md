@@ -93,6 +93,29 @@ Every standalone benchmark run through `bun run benchmark` includes a
 - `releaseGates`
 - `warnings`
 - `degradations`
+- `scenarioCleanup` when the run used isolated scenario agents
+
+### Scenario cleanup
+
+After each scenario, the runner deletes that scenario agent's rows from the
+fixed registry of benchmark collections and records the outcome per scenario:
+run id, scenario id, agent id, registry version and digest, and each
+collection's result. The same outcome is stored in the checkpoint and restored on
+resume. A failed delete keeps only the driver error name and code, never the
+message.
+
+The `scenario-cleanup` release gate passes only when every scenario's
+registered deletes were acknowledged. It fails when any delete was rejected
+or unacknowledged; a rejected `deleteMany` may still have deleted some rows.
+It stays `not-run`, and blocks publication, when rows were kept with
+`MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA=1`, cleanup was not attempted, or a
+checkpoint or report has no readable cleanup outcome. A passing gate covers the
+registered collections only: it does not prove the namespace is empty, that
+unregistered collections were cleaned, or that later writes were fenced. It
+also does not establish namespace ownership.
+
+When a scenario, close or storage-measurement error is already ending the run,
+a cleanup failure is appended to that error's message instead of replacing it.
 
 Set at least one build identifier before release or public reporting:
 
@@ -367,6 +390,7 @@ A claim may be published only when all are true:
    and benchmark command are recorded.
 5. `warnings` and `degradations` are reviewed and disclosed when material.
 6. The conversation recall regression test is run for any recall-plane change.
+7. The `scenario-cleanup` gate passed.
 
 If `datasetKind` is `legacy-query` or `officialMetrics` is absent, the result is
 an internal diagnostic, not a benchmark win.

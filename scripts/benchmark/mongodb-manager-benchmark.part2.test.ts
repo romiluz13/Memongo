@@ -24,6 +24,14 @@ import {
 	testOperationRunContext,
 } from "../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
 
+// A cleanup attempt whose registered deletes were all acknowledged.
+const ACKNOWLEDGED_CLEANUP = {
+	status: "acknowledged" as const,
+	agentId: "benchmark-test-agent",
+	registry: { version: 1 as const, digest: "0".repeat(64), collections: 0 },
+	collections: [],
+}
+
 function benchmarkOps(
 	manager: MongoDBMemoryManager,
 ): MongoDBManagerBenchmarkOps {
@@ -480,6 +488,7 @@ describe("benchmark scenario queue settling", () => {
 				cleanupBenchmarkScenarioData: vi.fn(async () => {
 					order.push("cleanup")
 					if (failure === "cleanup") throw new Error("cleanup failure")
+					return ACKNOWLEDGED_CLEANUP
 				}),
 			},
 		) as MongoDBMemoryManager
@@ -600,6 +609,7 @@ describe("benchmark scenario queue settling", () => {
 				}),
 				cleanupBenchmarkScenarioData: vi.fn(async () => {
 					order.push("cleanup")
+					return ACKNOWLEDGED_CLEANUP
 				}),
 			},
 		) as MongoDBMemoryManager
@@ -700,7 +710,7 @@ describe("benchmark scenario queue settling", () => {
 					dialogIds: new Map(),
 				})),
 				waitForBenchmarkSearchConvergence: vi.fn(async () => {}),
-				cleanupBenchmarkScenarioData: vi.fn(async () => {}),
+				cleanupBenchmarkScenarioData: vi.fn(async () => ACKNOWLEDGED_CLEANUP),
 			},
 		) as MongoDBMemoryManager
 		const dataset: MemoryBenchmarkDataset = {

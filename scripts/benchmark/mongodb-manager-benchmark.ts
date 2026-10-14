@@ -40,6 +40,13 @@ import {
 } from "./benchmark-executable-identity.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import {
+	cleanupRegistry,
+	describeScenarioCleanupFailure,
+	restoreScenarioCleanup,
+	sanitizedCleanupError,
+	summarizeScenarioCleanup,
+} from "./benchmark-scenario-cleanup.js"
+import {
 	ingestBenchmarkDataset,
 	ingestBenchmarkConversations,
 	importConversationDataset,
@@ -120,6 +127,9 @@ import {
 import type {
 	BenchmarkE2eQaEnvelope,
 	BenchmarkQualityThresholds,
+	BenchmarkScenarioCleanupAttempt,
+	BenchmarkScenarioCleanupOutcome,
+	BenchmarkScenarioCleanupReport,
 	BenchmarkTenantStorageMeasurement,
 	MemoryBenchmarkDataset,
 	MemoryBenchmarkDatasetKind,
@@ -871,6 +881,10 @@ export class MongoDBManagerBenchmarkOps {
 			{ documents: number; logicalBytes: number }
 		>()
 		const storageFailures: string[] = []
+		const cleanupByIndex = new Map<
+			number,
+			BenchmarkScenarioCleanupReport["scenarios"][number]
+		>()
 		const runToken = randomUUID().slice(0, 8)
 		const rawSessionLane = params.retrievalLane === "raw-session"
 		// C-039: QA material for LLM-judged answer accuracy, captured from the
@@ -950,6 +964,14 @@ export class MongoDBManagerBenchmarkOps {
 			if (checkpointScenario.storageFailure) {
 				storageFailures.push(checkpointScenario.storageFailure)
 			}
+			cleanupByIndex.set(
+				checkpointScenario.index,
+				restoreScenarioCleanup(checkpointScenario.cleanup, {
+					runId: params.runContext.runId,
+					scenarioId: checkpointScenario.scenarioId,
+					registry: cleanupRegistry(BENCHMARK_SCENARIO_COLLECTION_SUFFIXES),
+				}),
+			)
 		}
 		// Slice B: durable QA protocol preflight — separate judge provider,
 		// dated answer prompts, anscheck-verified hypotheses persisted to a
@@ -1087,6 +1109,10 @@ export class MongoDBManagerBenchmarkOps {
 			let scenarioStorageCollections: BenchmarkTenantStorageMeasurement["collections"] =
 				[]
 			let scenarioStorageFailure: string | undefined
+			let scenarioCleanup: BenchmarkScenarioCleanupOutcome | undefined
+			// The error leaving this scenario, if any: cleanup failure is
+			// attached to it instead of replacing it.
+			let propagatingError: unknown
 			let scenarioManager: MongoDBManagerHost = this.host
 			let closeScenarioManager = async (): Promise<void> => {}
 			let scenarioWorkspaceDir: string | undefined
@@ -1102,6 +1128,52 @@ export class MongoDBManagerBenchmarkOps {
 			// is only assigned inside the try, so a scoring throw propagates
 			// through the finally without ever reaching the checkpoint write.
 			let officialScenarioComplete = true
+			// Closes the scenario manager, measures storage and records cleanup.
+			// A close/measurement error stays primary over the scenario error;
+			// a cleanup failure is attached to whichever error propagates.
+			const finishScenario = async (): Promise<void> => {
+				let closeError: { error: unknown } | undefined
+				try {
+					if (scenarioManager !== this.host) {
+						await closeScenarioManager()
+						const measurement = await collectBenchmarkTenantStorage({
+							db: this.host.db,
+							agentId: scenarioManager.agentId,
+							collectionNames: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(
+								(suffix) => `${this.host.prefix}${suffix}`,
+							),
+						})
+						if (measurement.unavailableReason) {
+							scenarioStorageFailure = `${scenario.scenarioId}: ${measurement.unavailableReason}`
+							storageFailures.push(scenarioStorageFailure)
+						}
+						scenarioStorageCollections = measurement.collections
+						addStorageRows(measurement.collections)
+					} else {
+						scenarioStorageFailure = `${scenario.scenarioId}: scenario did not use an isolated benchmark agent`
+						storageFailures.push(scenarioStorageFailure)
+					}
+				} catch (error) {
+					closeError = { error }
+					propagatingError = error
+				}
+				try {
+					scenarioCleanup = await this.recordBenchmarkScenarioCleanup({
+						runId: params.runContext.runId,
+						scenarioId: scenario.scenarioId,
+						ownedAgentId: ownedScenarioAgentId,
+						agentId:
+							scenarioManager !== this.host
+								? scenarioManager.agentId
+								: ownedScenarioAgentId,
+						propagatingError,
+					})
+				} finally {
+					if (scenarioWorkspaceDir)
+						await rm(scenarioWorkspaceDir, { recursive: true, force: true })
+				}
+				if (closeError) throw closeError.error
+			}
 			// Official QA: dataset session dates (haystack timestamps) by
 			// session id, so pass-0 passages can carry the dates of the
 			// sessions they were retrieved from into the dated answer prompt.
@@ -1934,46 +2006,13 @@ export class MongoDBManagerBenchmarkOps {
 								: String(scenarioErr),
 					},
 				)
+				propagatingError = scenarioErr
 				throw scenarioErr
 			} finally {
-				try {
-					if (scenarioManager !== this.host) {
-						await closeScenarioManager()
-						const measurement = await collectBenchmarkTenantStorage({
-							db: this.host.db,
-							agentId: scenarioManager.agentId,
-							collectionNames: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(
-								(suffix) => `${this.host.prefix}${suffix}`,
-							),
-						})
-						if (measurement.unavailableReason) {
-							scenarioStorageFailure = `${scenario.scenarioId}: ${measurement.unavailableReason}`
-							storageFailures.push(scenarioStorageFailure)
-						}
-						scenarioStorageCollections = measurement.collections
-						addStorageRows(measurement.collections)
-					} else {
-						scenarioStorageFailure = `${scenario.scenarioId}: scenario did not use an isolated benchmark agent`
-						storageFailures.push(scenarioStorageFailure)
-					}
-				} finally {
-					try {
-						if (
-							ownedScenarioAgentId &&
-							process.env.MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA !== "1"
-						) {
-							await this.cleanupBenchmarkScenarioData(
-								scenarioManager !== this.host
-									? scenarioManager.agentId
-									: ownedScenarioAgentId,
-							)
-						}
-					} finally {
-						if (scenarioWorkspaceDir)
-							await rm(scenarioWorkspaceDir, { recursive: true, force: true })
-					}
-				}
+				await finishScenario()
 			}
+
+			if (scenarioCleanup) cleanupByIndex.set(index, scenarioCleanup)
 
 			// Slice B round 2: the checkpoint write happens after the finally
 			// block's worker stop / storage measurement / cleanup, and only for
@@ -2009,6 +2048,7 @@ export class MongoDBManagerBenchmarkOps {
 					...(scenarioStorageFailure
 						? { storageFailure: scenarioStorageFailure }
 						: {}),
+					...(scenarioCleanup ? { cleanup: scenarioCleanup } : {}),
 				}
 				completedCheckpointScenarios.push(checkpointScenario)
 				completedCheckpointScenarios.sort(
@@ -2166,6 +2206,11 @@ export class MongoDBManagerBenchmarkOps {
 					expectedSessionMap,
 					expectedTurnMap,
 				}),
+				scenarioCleanup: summarizeScenarioCleanup(
+					Array.from(cleanupByIndex)
+						.sort(([left], [right]) => left - right)
+						.map(([, outcome]) => outcome),
+				),
 			},
 			latencySamples: executions.map((e) => e.latencyMs),
 			...(e2eQa ? { e2eQa } : {}),
@@ -2358,8 +2403,63 @@ export class MongoDBManagerBenchmarkOps {
 		return this.scenario.readinessSkips
 	}
 
-	async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
+	async cleanupBenchmarkScenarioData(
+		agentId: string,
+	): Promise<BenchmarkScenarioCleanupAttempt> {
 		return this.scenario.cleanupBenchmarkScenarioData(agentId)
+	}
+
+	/**
+	 * B08:C03: the scenario's cleanup outcome. KEEP_SCENARIO_DATA retains rows.
+	 * A cleanup failure is appended (sanitized) to an error that is already
+	 * propagating instead of replacing it; with no such error a thrown cleanup
+	 * still fails the run.
+	 */
+	async recordBenchmarkScenarioCleanup(params: {
+		runId: string
+		scenarioId: string
+		ownedAgentId: string | undefined
+		agentId: string | undefined
+		propagatingError: unknown
+	}): Promise<BenchmarkScenarioCleanupOutcome> {
+		const base = {
+			version: 1 as const,
+			runId: params.runId,
+			scenarioId: params.scenarioId,
+			agentId: params.agentId ?? null,
+			registry: cleanupRegistry(BENCHMARK_SCENARIO_COLLECTION_SUFFIXES),
+			collections: [],
+		}
+		let outcome: BenchmarkScenarioCleanupOutcome
+		if (!params.ownedAgentId || !params.agentId) {
+			outcome = { ...base, status: "not-attempted" }
+		} else if (process.env.MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA === "1") {
+			outcome = { ...base, status: "retained" }
+		} else {
+			try {
+				const attempt = await this.cleanupBenchmarkScenarioData(params.agentId)
+				outcome = {
+					...base,
+					status: attempt.status,
+					registry: attempt.registry,
+					collections: attempt.collections,
+				}
+			} catch (cleanupErr) {
+				if (params.propagatingError === undefined) throw cleanupErr
+				outcome = {
+					...base,
+					status: "failed",
+					errorName: sanitizedCleanupError(cleanupErr).errorName,
+				}
+			}
+		}
+		if (
+			outcome.status === "failed" &&
+			params.propagatingError instanceof Error
+		) {
+			params.propagatingError.message += `; ${describeScenarioCleanupFailure(outcome)}`
+		}
+		return outcome
 	}
 
 	async listBenchmarkEventSessions(

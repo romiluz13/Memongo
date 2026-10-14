@@ -7,6 +7,7 @@ import {
 } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import type {
 	BenchmarkCostAccounting,
+	BenchmarkScenarioCleanupOutcome,
 	BenchmarkTenantStorageMeasurement,
 } from "../../packages/memory-engine/src/types.js"
 import { hasCompleteConfigurationCoverage } from "./benchmark-run-configuration-schema.js"
@@ -30,6 +31,8 @@ export type BenchmarkCheckpointScenario = {
 	expectedTurnEntries: Array<[string, string[]]>
 	storageCollections: BenchmarkTenantStorageMeasurement["collections"]
 	storageFailure?: string
+	/** Absent in checkpoints written before cleanup outcomes; read as unknown. */
+	cleanup?: BenchmarkScenarioCleanupOutcome
 }
 
 export type BenchmarkCheckpoint = {

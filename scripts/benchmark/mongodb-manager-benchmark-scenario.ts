@@ -30,6 +30,10 @@ import {
 	BENCHMARK_MONGO_CLIENT_SETTING_NAMES,
 } from "./benchmark-run-configuration-schema.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
+import {
+	cleanupRegistry,
+	sanitizedCleanupError,
+} from "./benchmark-scenario-cleanup.js"
 import { mongodbDeploymentIdentity } from "../../packages/memory-engine/src/mongodb-capability-registry.js"
 import { renderEventChunkText } from "../../packages/memory-engine/src/mongodb-events.js"
 import {
@@ -68,6 +72,8 @@ import {
 	vectorSearch,
 } from "../../packages/memory-engine/src/mongodb-search.js"
 import type {
+	BenchmarkCleanupCollectionResult,
+	BenchmarkScenarioCleanupAttempt,
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkTurn,
@@ -1206,22 +1212,50 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		)
 	}
 
-	async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
+	/**
+	 * B08:C03: deletes this agent's rows from every registered collection and
+	 * reports each outcome. A rejected deleteMany may still have deleted some
+	 * rows, and an unacknowledged one proves nothing, so both fail the attempt.
+	 */
+	async cleanupBenchmarkScenarioData(
+		agentId: string,
+	): Promise<BenchmarkScenarioCleanupAttempt> {
 		const settled = await Promise.allSettled(
-			BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(async (suffix) => {
-				await this.host.db
+			BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map((suffix) =>
+				this.host.db
 					.collection(`${this.host.prefix}${suffix}`)
-					.deleteMany({ agentId })
-			}),
+					.deleteMany({ agentId }),
+			),
 		)
-		for (const [index, result] of settled.entries()) {
-			if (result.status === "rejected") {
-				log.warn("benchmark scenario cleanup failed", {
-					agentId,
-					collection: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES[index],
-					error: result.reason,
-				})
-			}
+		const collections = settled.map(
+			(result, index): BenchmarkCleanupCollectionResult => {
+				const suffix = BENCHMARK_SCENARIO_COLLECTION_SUFFIXES[index] as string
+				if (result.status === "rejected") {
+					const error = sanitizedCleanupError(result.reason)
+					log.warn("benchmark scenario cleanup failed", {
+						agentId,
+						collection: suffix,
+						...error,
+					})
+					return { suffix, status: "rejected", ...error }
+				}
+				return result.value?.acknowledged === true &&
+					Number.isInteger(result.value.deletedCount)
+					? {
+							suffix,
+							status: "acknowledged",
+							deletedCount: result.value.deletedCount,
+						}
+					: { suffix, status: "unacknowledged" }
+			},
+		)
+		return {
+			status: collections.every((entry) => entry.status === "acknowledged")
+				? "acknowledged"
+				: "failed",
+			agentId,
+			registry: cleanupRegistry(BENCHMARK_SCENARIO_COLLECTION_SUFFIXES),
+			collections,
 		}
 	}
 
