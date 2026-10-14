@@ -35,6 +35,11 @@ export function buildRemoteBaseUrlPolicy(
 	}
 }
 
+// Error text reaches logs and benchmark output: name the endpoint, never the
+// userinfo, query or fragment, which can carry credentials.
+function describeEndpoint(url: URL): string {
+	return `${url.protocol}//${url.host}${url.pathname}`
+}
 export async function withRemoteHttpResponse<T>(params: {
 	url: string
 	init?: RequestInit
@@ -51,18 +56,20 @@ export async function withRemoteHttpResponse<T>(params: {
 	try {
 		parsedUrl = new URL(params.url)
 	} catch {
-		throw new SsrFBlockedError(`SSRF guard rejected invalid URL: ${params.url}`)
+		throw new SsrFBlockedError("SSRF guard rejected invalid URL")
 	}
 	if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
 		throw new SsrFBlockedError(
-			`SSRF guard rejected non-HTTP URL: ${params.url}`,
+			`SSRF guard rejected non-HTTP URL: ${describeEndpoint(parsedUrl)}`,
 		)
 	}
 	const policy = params.ssrfPolicy ?? defaultSsrfPolicy
 	// Hostname pinning: when the caller configured an allow predicate (e.g. from
 	// the operator's baseUrl), the request must target that exact host.
 	if (policy.isAllowed && !policy.isAllowed(params.url)) {
-		throw new SsrFBlockedError(`SSRF guard blocked request to ${params.url}`)
+		throw new SsrFBlockedError(
+			`SSRF guard blocked request to ${describeEndpoint(parsedUrl)}`,
+		)
 	}
 	// Fail closed by default: block private/loopback/metadata targets unless the
 	// operator explicitly opted into a private network. This runs even when a
@@ -80,7 +87,9 @@ export async function withRemoteHttpResponse<T>(params: {
 		redirect: "manual",
 	})
 	if (response.status >= 300 && response.status < 400) {
-		throw new SsrFBlockedError(`SSRF guard refused redirect from ${params.url}`)
+		throw new SsrFBlockedError(
+			`SSRF guard refused redirect from ${describeEndpoint(parsedUrl)}`,
+		)
 	}
 	return await params.onResponse(response)
 }
