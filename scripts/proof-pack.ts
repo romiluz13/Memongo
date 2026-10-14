@@ -1,6 +1,7 @@
 import { MemongoClient } from "@memongo/client"
 import proofPackBaseline from "./proof-pack-baseline.js"
 import { writeProofArtifact } from "./proof-artifacts.js"
+import { exitCodeForVerdict, requiredChecksPassed } from "./proof-verdict.js"
 
 type CheckResult = {
 	name: string
@@ -330,6 +331,7 @@ async function main() {
 	}
 
 	const report = {
+		ok: requiredChecksPassed(checks),
 		baseUrl,
 		agentId,
 		sessionScope,
@@ -350,9 +352,7 @@ async function main() {
 		),
 	)
 
-	if (summary.failed > 0) {
-		process.exitCode = 1
-	}
+	process.exitCode = exitCodeForVerdict(report.ok)
 }
 
 await main()

@@ -24,6 +24,8 @@ export type MemoryEvalCaseResult = {
 	ok: boolean
 	score: number
 	failures: string[]
+	/** Same-run control role: positive authorized retrieval or negative evidence that depends on one. */
+	control?: { agentId: string; role: "positive" | "negative" }
 	metrics: {
 		latencyMs: number
 		scopeLeak: boolean
@@ -57,6 +59,8 @@ export type MemoryEvalRun = {
 	fixtureId: string
 	agentId: string
 	sessionId: string
+	/** True only when at least one case ran and every case passed. */
+	ok: boolean
 	cases: MemoryEvalCaseResult[]
 	summary: MemoryEvalRunSummary
 }
@@ -178,13 +182,32 @@ function collectContextBundleText(response: {
 		.toLowerCase()
 }
 
+function searchHealthFailures(
+	response: Pick<MemongoSearchDetailedResponse, "metadata" | "degradation">,
+): string[] {
+	const failures: string[] = []
+	if (response.metadata.throttled) {
+		failures.push(
+			`search throttled (retryAfterMs=${response.metadata.throttled.retryAfterMs})`,
+		)
+	}
+	if (response.degradation) {
+		failures.push(`search degraded (${response.degradation.kind})`)
+	}
+	return failures
+}
+
 export function evaluateSearchDetailedCase(
 	testCase: SearchDetailedEvalCase,
-	response: Pick<MemongoSearchDetailedResponse, "results" | "metadata">,
+	response: Pick<
+		MemongoSearchDetailedResponse,
+		"results" | "metadata" | "degradation"
+	>,
 	latencyMs: number,
 ): MemoryEvalCaseResult {
 	const failures: string[] = []
 	const checks: boolean[] = []
+	let excludedEvidenceFound = false
 	const haystack = collectSearchText(response)
 	const evidenceCoverage = response.metadata
 		.evidenceCoverage as EvidenceCoverage
@@ -195,8 +218,19 @@ export function evaluateSearchDetailedCase(
 		const ok = results.length === 0
 		checks.push(ok)
 		if (!ok) {
+			excludedEvidenceFound = true
 			failures.push("expected no results")
 		}
+	}
+
+	const negativeEvidence =
+		testCase.expect.expectNoResults === true ||
+		testCase.expect.requireNoDirectEvidenceReason === true
+	// Empty-because-blocked is not abstention: a throttled or degraded search proves nothing about absence.
+	if (negativeEvidence) {
+		const healthFailures = searchHealthFailures(response)
+		checks.push(healthFailures.length === 0)
+		failures.push(...healthFailures)
 	}
 
 	if (testCase.expect.requireNoDirectEvidenceReason) {
@@ -219,6 +253,7 @@ export function evaluateSearchDetailedCase(
 		const ok = !haystack.includes(normalizeText(phrase))
 		checks.push(ok)
 		if (!ok) {
+			excludedEvidenceFound = true
 			failures.push(`found disallowed text: ${phrase}`)
 		}
 	}
@@ -263,6 +298,9 @@ export function evaluateSearchDetailedCase(
 	}
 
 	const ok = failures.length === 0
+	const agentId = testCase.request.agentId
+	const positiveControl =
+		!negativeEvidence && (testCase.expect.mustIncludeAll?.length ?? 0) > 0
 	return {
 		id: testCase.id,
 		title: testCase.title,
@@ -271,14 +309,24 @@ export function evaluateSearchDetailedCase(
 		ok,
 		score: scoreFromChecks(checks),
 		failures,
+		...(negativeEvidence || positiveControl
+			? {
+					control: {
+						agentId,
+						role: negativeEvidence
+							? ("negative" as const)
+							: ("positive" as const),
+					},
+				}
+			: {}),
 		metrics: {
 			latencyMs,
 			scopeLeak:
 				testCase.tags?.includes("scope-isolation") === true &&
-				failures.length > 0,
+				excludedEvidenceFound,
 			staleFailure:
 				testCase.tags?.includes("stale-supersession") === true &&
-				failures.length > 0,
+				excludedEvidenceFound,
 			abstentionSuccess: testCase.tags?.includes("abstention") === true && ok,
 			evidenceCoverage,
 			topConfidence,
@@ -439,6 +487,7 @@ function evaluateContextBundleCase(
 ): MemoryEvalCaseResult {
 	const failures: string[] = []
 	const checks: boolean[] = []
+	let excludedEvidenceFound = false
 	const haystack = collectContextBundleText(response)
 	const sectionKinds = (response.sections ?? []).map((section) =>
 		String(section.kind ?? ""),
@@ -468,6 +517,7 @@ function evaluateContextBundleCase(
 		const ok = !haystack.includes(normalizeText(phrase))
 		checks.push(ok)
 		if (!ok) {
+			excludedEvidenceFound = true
 			failures.push(`found disallowed bundle text: ${phrase}`)
 		}
 	}
@@ -497,10 +547,10 @@ function evaluateContextBundleCase(
 			latencyMs,
 			scopeLeak:
 				testCase.tags?.includes("scope-isolation") === true &&
-				failures.length > 0,
+				excludedEvidenceFound,
 			staleFailure:
 				testCase.tags?.includes("stale-supersession") === true &&
-				failures.length > 0,
+				excludedEvidenceFound,
 			abstentionSuccess: false,
 			evidenceCoverage,
 			topConfidence,
@@ -688,6 +738,39 @@ export function compareEvalRuns(params: {
 	}
 }
 
+/**
+ * Negative evidence (abstention, foreign absence) only counts when the same run
+ * also proved authorized retrieval works for that agent; otherwise a no-op or
+ * blind backend would pass every absence check.
+ */
+export function requireSameRunPositiveControls(
+	cases: MemoryEvalCaseResult[],
+): MemoryEvalCaseResult[] {
+	const provenAgents = new Set(
+		cases
+			.filter((entry) => entry.control?.role === "positive" && entry.ok)
+			.map((entry) => entry.control?.agentId),
+	)
+	return cases.map((entry) => {
+		if (
+			entry.control?.role !== "negative" ||
+			provenAgents.has(entry.control.agentId)
+		) {
+			return entry
+		}
+		return {
+			...entry,
+			ok: false,
+			score: 0,
+			failures: [
+				...entry.failures,
+				`no passing owner positive control in the same run for agent ${entry.control.agentId}`,
+			],
+			metrics: { ...entry.metrics, abstentionSuccess: false },
+		}
+	})
+}
+
 export async function runMemoryEvalSuite(params: {
 	client: MemongoClient
 	label: string
@@ -701,16 +784,18 @@ export async function runMemoryEvalSuite(params: {
 		await executeSeedStep(params.client, step)
 	}
 
-	const cases: MemoryEvalCaseResult[] = []
+	const observed: MemoryEvalCaseResult[] = []
 	for (const testCase of fixture.cases) {
-		cases.push(await runCase(params.client, testCase))
+		observed.push(await runCase(params.client, testCase))
 	}
+	const cases = requireSameRunPositiveControls(observed)
 
 	return {
 		label: params.label,
 		fixtureId: fixture.id,
 		agentId: fixture.primaryAgentId,
 		sessionId: fixture.primarySessionId,
+		ok: cases.length > 0 && cases.every((entry) => entry.ok),
 		cases,
 		summary: summarizeEvalRun({
 			label: params.label,
