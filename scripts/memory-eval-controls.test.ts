@@ -5,6 +5,7 @@ import { buildPhase6MemoryEvalFixture } from "../packages/memory-engine/src/test
 import {
 	compareEvalRuns,
 	evaluateSearchDetailedCase,
+	requireSameRunPositiveControls,
 	runMemoryEvalSuite,
 	summarizeEvalRun,
 } from "./memory-eval-core.js"
@@ -297,5 +298,50 @@ describe("memory-eval comparison gate", () => {
 		expect(
 			compareEvalRuns({ baseline: good, candidate: good }).summary.releaseReady,
 		).toBe(true)
+	})
+})
+
+describe("positive control eligibility", () => {
+	it("a degraded or throttled positive cannot license a healthy empty abstention", () => {
+		const positiveCase = {
+			id: "owner-positive",
+			title: "positive",
+			kind: "search-detailed" as const,
+			request: { agentId: "owner", query: "release window" },
+			expect: { mustIncludeAll: ["Monday"] },
+		}
+		const found = {
+			results: [{ path: "structured:a", snippet: "Monday" }],
+			metadata: { evidenceCoverage: "direct" },
+		}
+		for (const unhealthy of [
+			{ ...found, degradation: { kind: "throttled", status: 429 } },
+			{
+				...found,
+				metadata: { ...found.metadata, throttled: { retryAfterMs: 1 } },
+			},
+		]) {
+			const positive = evaluateSearchDetailedCase(
+				positiveCase,
+				unhealthy as never,
+				1,
+			)
+			const negative = evaluateSearchDetailedCase(
+				abstentionCase,
+				{ results: [], metadata: emptyMetadata } as never,
+				1,
+			)
+			const gated = requireSameRunPositiveControls([positive, negative])
+			expect(gated[1]?.ok).toBe(false)
+		}
+		const healthy = evaluateSearchDetailedCase(positiveCase, found as never, 1)
+		const negative = evaluateSearchDetailedCase(
+			abstentionCase,
+			{ results: [], metadata: emptyMetadata } as never,
+			1,
+		)
+		expect(requireSameRunPositiveControls([healthy, negative])[1]?.ok).toBe(
+			true,
+		)
 	})
 })

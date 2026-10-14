@@ -303,8 +303,11 @@ export function evaluateSearchDetailedCase(
 
 	const ok = failures.length === 0
 	const agentId = testCase.request.agentId
+	// Only a healthy retrieval proves the owner can be found; a throttled or degraded one cannot license absence elsewhere.
 	const positiveControl =
-		!negativeEvidence && (testCase.expect.mustIncludeAll?.length ?? 0) > 0
+		!negativeEvidence &&
+		(testCase.expect.mustIncludeAll?.length ?? 0) > 0 &&
+		searchHealthFailures(response).length === 0
 	return {
 		id: testCase.id,
 		title: testCase.title,

@@ -322,7 +322,8 @@ export function buildPhase6MemoryEvalFixture(
 				agentId: secondaryAgentId,
 				sessionId: `${seed}-session-foreign`,
 				role: "user",
-				scope: "session",
+				// Agent scope so the foreign owner's default read and the primary's abstention share one scope kind.
+				scope: "agent",
 				timestamp: isoOffset(anchor, 4),
 				body: "The foreign launch codeword is Red Kite.",
 			},
