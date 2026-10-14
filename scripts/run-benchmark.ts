@@ -484,8 +484,8 @@ export async function main(
 		)
 	}
 	// Every run binds its credentials under the operator's fingerprint key, so
-	// refuse here, before the live recall gate or manager acquisition touches
-	// the database or a provider.
+	// refuse here, before the recall-test subprocess, manager acquisition (the
+	// run's first database connection) or any provider call.
 	try {
 		parseBenchmarkFingerprintKey(process.env)
 	} catch (error) {

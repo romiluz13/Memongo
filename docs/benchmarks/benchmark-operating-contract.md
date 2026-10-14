@@ -243,11 +243,16 @@ refuse a resume but never merge. An absent credential is `null`.
 `credentialFingerprintKeyId`, an HMAC of a fixed label under the same key,
 names the key domain inside the hash; it is an equality tag, not provenance.
 
-The key is exactly 64 hex characters (32 bytes), supplied by the operator and
-never generated, stored, recorded or logged by the benchmark. Every
-`scripts/run-benchmark.ts` run requires it and refuses a missing or malformed
-key right after the MongoDB URI check, before the live recall gate, manager
-acquisition or any provider call. The producer refuses too, which protects
+The key is 32 bytes written as exactly 64 hex characters. The operator owns
+it and must create it as a fresh, cryptographically random value (RFC 2104
+section 3 requires random keys), for example with `openssl rand -hex 32`. The
+parser checks only the format, not randomness, so a patterned value or the
+synthetic keys in tests and docs must never be used for a real run. The
+benchmark never generates, persists, records or logs the key; it only reads it
+from the environment for the run. Every `scripts/run-benchmark.ts` run requires
+it and refuses a missing or malformed key right after the MongoDB URI check,
+before the recall-test subprocess (which runs a mocked suite), manager
+acquisition (the run's first database connection) or any provider call. The producer refuses too, which protects
 direct callers of the benchmark ops only from that point on: a caller that
 acquires its own manager has already connected by then. Rotating the key is a
 deliberate operator act: the key id and every fingerprint change, so resume
