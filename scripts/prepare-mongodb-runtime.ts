@@ -8,8 +8,7 @@ import {
 	isSearchIndexQueryable,
 	type SearchIndexDescription,
 } from "../packages/memory-engine/src/mongodb-schema.ts"
-import { resolveMemoryBackendConfig } from "../packages/memory-engine/src/backend-config.ts"
-import { buildMemongoConfig } from "../packages/memory-bridge/src/memory-config.ts"
+import { resolveConfiguredMongoDB } from "./mongodb-target.ts"
 import type {
 	MemoryMongoDBDeploymentProfile,
 	MemoryMongoDBEmbeddingMode,
@@ -49,12 +48,8 @@ export function ignoredLegacyTargetEnvVars(
 	)
 }
 
-function readPositiveInt(
-	name: string,
-	fallback: number,
-	env: NodeJS.ProcessEnv,
-): number {
-	const raw = env[name]?.trim()
+function readPositiveInt(name: string, fallback: number): number {
+	const raw = process.env[name]?.trim()
 	if (!raw) return fallback
 	const parsed = Number(raw)
 	if (!Number.isInteger(parsed) || parsed < 0) {
@@ -65,23 +60,13 @@ function readPositiveInt(
 
 /**
  * Resolve the preparation target and schema options through the same
- * configuration path the application bootstrap uses (bridge buildMemongoConfig
- * -> engine resolveMemoryBackendConfig). An invalid explicitly selected or
- * malformed config file throws here, before any connection or mutation.
+ * configuration path the application bootstrap uses (resolveConfiguredMongoDB:
+ * bridge buildMemongoConfig -> engine resolveMemoryBackendConfig), from
+ * process.env only. An invalid explicitly selected or malformed config file
+ * throws here, before any connection or mutation.
  */
-export function resolvePrepareOptions(
-	env: NodeJS.ProcessEnv = process.env,
-): PrepareOptions {
-	const cfg = buildMemongoConfig(env)
-	// Preparation is not agent-scoped (P2.1 shared physical collections); the
-	// resolver only requires the parameter.
-	const mongo = resolveMemoryBackendConfig({
-		cfg,
-		agentId: "mongodb-prepare",
-	}).mongodb
-	if (!mongo) {
-		throw new Error("MongoDB backend resolution returned no mongodb config")
-	}
+export function resolvePrepareOptions(): PrepareOptions {
+	const mongo = resolveConfiguredMongoDB()
 	return {
 		uri: mongo.uri,
 		database: mongo.database,
@@ -93,8 +78,8 @@ export function resolvePrepareOptions(
 		memoryTtlDays: mongo.memoryTtlDays,
 		episodesRetentionDays: mongo.episodesRetentionDays,
 		relevanceRetentionDays: mongo.relevance.retention.days,
-		waitMs: readPositiveInt("MEMONGO_PREPARE_WAIT_MS", 120_000, env),
-		pollMs: readPositiveInt("MEMONGO_PREPARE_POLL_MS", 5_000, env),
+		waitMs: readPositiveInt("MEMONGO_PREPARE_WAIT_MS", 120_000),
+		pollMs: readPositiveInt("MEMONGO_PREPARE_POLL_MS", 5_000),
 	}
 }
 

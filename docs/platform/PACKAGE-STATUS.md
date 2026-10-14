@@ -26,6 +26,31 @@ Use this table to decide whether something belongs in the public product story.
 | `scripts/check-publishability.ts` | supported | npm/tarball/install validation |
 | `scripts/check-mongodb-runtime-parity.ts` | supported | MongoDB runtime compatibility check |
 
+### MongoDB target for prepare, preflight and parity
+
+`mongodb:prepare`, `mongodb:cluster-preflight` and the active arm of
+`mongodb:parity` resolve the same target as the benchmark runner and the
+application: URI `MEMONGO_FORCE_MONGODB_URI` > `MEMONGO_MONGODB_URI` >
+`memory.mongodb.uri`; database `MEMONGO_MONGODB_DATABASE` >
+`memory.mongodb.database` > `memongo`; prefix
+`MEMONGO_MONGODB_COLLECTION_PREFIX` > `memory.mongodb.collectionPrefix` >
+`memongo_`. A missing URI or a malformed config file fails all three before
+connecting.
+
+- Preflight refuses a `--prefix` that differs from the configured prefix and a
+  legacy `MEMONGO_DB_NAME` that differs from the configured database. Set
+  `MEMONGO_MONGODB_COLLECTION_PREFIX` / `MEMONGO_MONGODB_DATABASE` instead; the
+  prefix must still start with `memongo_bench_`.
+- Parity's active arm (no `MEMONGO_CLOUD_MONGODB_URI` or
+  `MEMONGO_LOCAL_MONGODB_URI`) now inspects the configured prefix (default
+  `memongo_`, previously `memongo_default_`) and database. It refuses a
+  `MEMONGO_PARITY_DATABASE` or `MEMONGO_PARITY_COLLECTION_PREFIX` that differs
+  from them.
+- Parity's explicit cloud/local arms compare deployments, not the run target:
+  they keep `MEMONGO_PARITY_DATABASE` (default `memongo`) and
+  `MEMONGO_PARITY_COLLECTION_PREFIX` (default `memongo_default_`), and
+  `MEMONGO_FORCE_MONGODB_URI` does not apply to them.
+
 ## Not shipped
 
 Historical research, raw artifacts, diagnostic runs, and planning notes are preserved

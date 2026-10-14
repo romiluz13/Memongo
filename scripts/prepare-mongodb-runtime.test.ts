@@ -11,6 +11,15 @@ import {
 	runSchemaOnly,
 	schemaOnlyReceiptLines,
 } from "./prepare-mongodb-runtime.js"
+import { resolveConfiguredMongoDB } from "./mongodb-target.js"
+
+vi.mock("./mongodb-target.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./mongodb-target.js")>()
+	return {
+		...actual,
+		resolveConfiguredMongoDB: vi.fn(actual.resolveConfiguredMongoDB),
+	}
+})
 
 // Hermetic resolver contract: `mongodb:prepare` must resolve its target and
 // schema options through the application configuration path (bridge
@@ -188,6 +197,26 @@ describe("prepare-mongodb-runtime configuration resolution", () => {
 			expect(message).not.toContain("SECRET-CREDENTIAL")
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("resolves the target once through the shared resolver, from process.env only", () => {
+		const { env, cleanup } = writeConfig(configuredFile)
+		try {
+			process.env = { ...env }
+			vi.mocked(resolveConfiguredMongoDB).mockClear()
+			const options = resolvePrepareOptions()
+			expect(resolveConfiguredMongoDB).toHaveBeenCalledTimes(1)
+			expect(resolvePrepareOptions.length).toBe(0)
+			const shared = vi.mocked(resolveConfiguredMongoDB).mock.results[0]?.value
+			expect(options).toMatchObject({
+				uri: shared.uri,
+				database: shared.database,
+				prefix: shared.collectionPrefix,
+				memoryTtlDays: shared.memoryTtlDays,
+			})
+		} finally {
+			cleanup()
 		}
 	})
 
