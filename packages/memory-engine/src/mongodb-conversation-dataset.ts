@@ -172,6 +172,7 @@ function normalizeConversation(
 
 function conversationsFromJson(
 	value: unknown,
+	line: number | null,
 	rejections: ConversationImportRejection[],
 ): ConversationDatasetConversation[] {
 	const candidates = Array.isArray(value)
@@ -183,16 +184,29 @@ function conversationsFromJson(
 			: [value]
 	return candidates
 		.map((candidate, conversationIndex) =>
-			normalizeConversation(
-				candidate,
-				{ line: null, conversationIndex },
-				rejections,
-			),
+			normalizeConversation(candidate, { line, conversationIndex }, rejections),
 		)
 		.filter(
 			(conversation): conversation is ConversationDatasetConversation =>
 				conversation !== null,
 		)
+}
+
+// Value-free counts so an all-rejected file still says why.
+function noValidConversations(
+	rejections: ConversationImportRejection[],
+	failedLines = 0,
+): Error {
+	const reasons = new Map<string, number>()
+	for (const entry of rejections)
+		reasons.set(entry.reason, (reasons.get(entry.reason) ?? 0) + 1)
+	const detail = [
+		...(failedLines > 0 ? [`failedLines=${failedLines}`] : []),
+		...Array.from(reasons, ([reason, count]) => `${reason}=${count}`),
+	]
+	return new Error(
+		`conversation dataset contains no valid conversations${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`,
+	)
 }
 
 export async function loadConversationDataset(
@@ -208,10 +222,16 @@ export async function loadConversationDataset(
 	if (!raw.trim()) throw new Error("conversation dataset is empty")
 	try {
 		const rejections: ConversationImportRejection[] = []
-		const conversations = conversationsFromJson(JSON.parse(raw), rejections)
-		if (conversations.length === 0) {
-			throw new Error("conversation dataset contains no valid conversations")
-		}
+		// A document on one physical line has a knowable line for every record.
+		const contentLines = raw
+			.split("\n")
+			.flatMap((text, index) => (text.trim() ? [index + 1] : []))
+		const conversations = conversationsFromJson(
+			JSON.parse(raw),
+			contentLines.length === 1 ? (contentLines[0] ?? null) : null,
+			rejections,
+		)
+		if (conversations.length === 0) throw noValidConversations(rejections)
 		return {
 			name: basename(resolvedPath),
 			datasetKind: "generic",
@@ -242,9 +262,8 @@ export async function loadConversationDataset(
 		)
 		if (conversation) conversations.push(conversation)
 	}
-	if (conversations.length === 0) {
-		throw new Error("conversation dataset contains no valid conversations")
-	}
+	if (conversations.length === 0)
+		throw noValidConversations(rejections, failedLines)
 	return {
 		name: basename(resolvedPath),
 		datasetKind: "generic",

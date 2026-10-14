@@ -103,7 +103,7 @@ describe("B01 malformed import rejections", () => {
 		})
 		expect(receipt.rejections).toEqual(
 			[...EXPECTED_TURN_REJECTIONS, ...EXPECTED_CONVERSATION_REJECTIONS]
-				.map((entry) => ({ line: null, ...entry }))
+				.map((entry) => ({ line: 1, ...entry }))
 				.toSorted(
 					(a, b) =>
 						a.conversationIndex - b.conversationIndex ||
@@ -184,7 +184,7 @@ describe("B01 malformed import rejections", () => {
 			expect(sink.written[0]?.timestamp).toBeUndefined()
 			expect(receipt.rejections).toEqual([
 				{
-					line: null,
+					line: 1,
 					conversationIndex: 0,
 					turnIndex: 1,
 					reason: "invalid-timestamp",
@@ -290,5 +290,76 @@ describe("B01 timestamp parsing is independent of host TZ", () => {
 			null,
 		])
 		expect(far).toEqual(utc)
+	})
+})
+
+describe("B01 review corrections", () => {
+	it("keeps years 0-99, sub-millisecond digits and padded values on the right instant", async () => {
+		const { parseExplicitTimestamp } = await import(
+			"./conversation-timestamp.js"
+		)
+		expect(parseExplicitTimestamp("0050-06-01")?.toISOString()).toBe(
+			"0050-06-01T00:00:00.000Z",
+		)
+		expect(parseExplicitTimestamp("0000-02-29")?.toISOString()).toBe(
+			"0000-02-29T00:00:00.000Z",
+		)
+		expect(parseExplicitTimestamp("0100-02-29")).toBeNull()
+		expect(
+			parseExplicitTimestamp("2024-01-02T03:04:05.123456+00:00")?.toISOString(),
+		).toBe("2024-01-02T03:04:05.123Z")
+		expect(
+			parseExplicitTimestamp(" 2024-01-02T03:04:05Z ")?.toISOString(),
+		).toBe("2024-01-02T03:04:05.000Z")
+		expect(
+			parseExplicitTimestamp("2024-01-01T00:30:00-01:30")?.toISOString(),
+		).toBe("2024-01-01T02:00:00.000Z")
+		for (const canonical of [
+			"2024-02-29T23:59:59.123Z",
+			"1999-12-31T23:00:00+05:45",
+			"2024-07-01T00:00Z",
+		])
+			expect(parseExplicitTimestamp(canonical)?.getTime()).toBe(
+				new Date(canonical).getTime(),
+			)
+	})
+
+	it("reports pretty-printed JSON rejections with a null line", async () => {
+		const file = await datasetFile(
+			"pretty.json",
+			JSON.stringify(
+				[{ turns: [valid("keep"), { role: "x", body: "y" }] }],
+				null,
+				2,
+			),
+		)
+		const receipt = await importConversationDataset({
+			datasetPath: file,
+			writeTurns: capture().writeTurns,
+		})
+		expect(receipt.rejections).toEqual([
+			{
+				line: null,
+				conversationIndex: 0,
+				turnIndex: 1,
+				reason: "invalid-role",
+			},
+		])
+	})
+
+	it("says why when every record is rejected, without values", async () => {
+		const file = await datasetFile(
+			"bad.jsonl",
+			[
+				JSON.stringify({ turns: [valid(SECRET_BODY, BAD_STAMP)] }),
+				"{not json",
+			].join("\n"),
+		)
+		const error = await loadConversationDataset(file).catch((e: Error) => e)
+		expect(String(error)).toContain(
+			"no valid conversations (failedLines=1, invalid-timestamp=1, no-valid-turns=1)",
+		)
+		expect(String(error)).not.toContain(SECRET_BODY)
+		expect(String(error)).not.toContain(BAD_STAMP)
 	})
 })
