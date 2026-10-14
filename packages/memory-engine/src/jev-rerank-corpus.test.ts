@@ -7,6 +7,8 @@ import {
 	JEV_RERANK_CORPUS,
 	JEV_RERANK_CORPUS_MANIFEST,
 	JEV_RERANK_STRATA,
+	type JevRerankFixture,
+	SLOT_POOLS,
 	computeJevRerankCorpusManifest,
 	generateJevRerankCorpus,
 	type JevRerankRelevance,
@@ -203,5 +205,78 @@ describe("jev rerank corpus: disclosure", () => {
 	it("carries the corpus version and seed in the manifest", () => {
 		expect(JEV_RERANK_CORPUS_MANIFEST.corpusVersion).toBe(CORPUS_VERSION)
 		expect(JEV_RERANK_CORPUS_MANIFEST.seed).toBe(CORPUS_SEED)
+	})
+})
+
+function slotValuesIn(text: string, pool: readonly string[]): string[] {
+	return pool.filter((value) =>
+		new RegExp(`\\b${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(
+			text,
+		),
+	)
+}
+
+/**
+ * A relevant (>=3) answer that names a value from a pool the query uses must
+ * also name the query's value; names such as "Thursday Tales" can legitimately
+ * carry a second value from the same pool.
+ */
+function incoherentAnswers(fixture: JevRerankFixture): string[] {
+	const problems: string[] = []
+	for (const [key, pool] of Object.entries(SLOT_POOLS)) {
+		// Hide other slots' values that embed this pool's words, e.g. a club named "Thursday Tales".
+		const embedding = Object.entries(SLOT_POOLS)
+			.filter(([other]) => other !== key)
+			.flatMap(([, values]) => values)
+			.filter((value) => slotValuesIn(value, pool).length > 0)
+		const mask = (text: string) =>
+			embedding.reduce((masked, value) => masked.split(value).join(" "), text)
+		const asked = slotValuesIn(mask(fixture.query), pool)
+		if (asked.length === 0) continue
+		for (const candidate of fixture.candidates) {
+			if (candidate.relevance < 3) continue
+			const named = slotValuesIn(mask(candidate.text), pool)
+			if (named.length > 0 && !named.some((value) => asked.includes(value))) {
+				problems.push(`${fixture.id}/${candidate.id} ${key}=${named.join("|")}`)
+			}
+		}
+	}
+	return problems
+}
+
+describe("jev-rerank direct-answer coherence", () => {
+	it("every relevant answer uses the same scenario slots as its query", () => {
+		expect(JEV_RERANK_CORPUS.flatMap(incoherentAnswers)).toEqual([])
+	})
+
+	it("detects a deliberately wrong answer entity", () => {
+		const fixture = JEV_RERANK_CORPUS.find((entry) =>
+			entry.candidates.some(
+				(candidate) =>
+					candidate.relevance === 4 &&
+					Object.values(SLOT_POOLS).some(
+						(pool) => slotValuesIn(entry.query, pool).length > 0,
+					),
+			),
+		)
+		if (!fixture) throw new Error("no fixture with slotted query")
+		const [key, pool] = Object.entries(SLOT_POOLS).find(
+			([, values]) => slotValuesIn(fixture.query, values).length > 0,
+		) ?? ["", []]
+		const asked = slotValuesIn(fixture.query, pool)[0] ?? ""
+		const wrong =
+			pool.find((value) => value !== asked && !fixture.query.includes(value)) ??
+			""
+		const mutated: JevRerankFixture = {
+			...fixture,
+			candidates: [
+				...fixture.candidates,
+				{ id: "mutant", text: `The answer is ${wrong}.`, relevance: 4 },
+			],
+		}
+		expect(key).not.toBe("")
+		expect(incoherentAnswers(mutated).some((p) => p.includes("mutant"))).toBe(
+			true,
+		)
 	})
 })

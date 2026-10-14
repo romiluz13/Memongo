@@ -45,7 +45,9 @@ export type JevRerankFixture = {
 }
 
 export const CORPUS_SEED = 20260918
-export const CORPUS_VERSION = "jev-rerank-corpus-v1"
+// v2 binds one scenario per fixture so queries and relevant answers agree;
+// v1 digests and calibration results do not describe v2 data.
+export const CORPUS_VERSION = "jev-rerank-corpus-v2"
 export const JEV_RERANK_STRATA: readonly JevRerankStratum[] = [
 	"direct",
 	"paraphrase",
@@ -66,7 +68,7 @@ const MAX_CANDIDATES = 20
  * artifact reviewed for calibration admission.
  */
 export const FROZEN_CORPUS_SHA256 =
-	"93394ce912d5a9157f38766abb46894020e80872c578e06af4d82b026b8abcf6"
+	"092b1ef36652562021c208d7cf0e4f9710701f3ffa93657f9704b5b4ea610e5b"
 
 const DISCLOSURE = [
 	"Dev and heldout splits use disjoint template families.",
@@ -120,7 +122,7 @@ function shuffle<T>(values: T[], rng: Rng): T[] {
 // Shared slot pools and generic level-0 distractors
 // ---------------------------------------------------------------------------
 
-const SLOT_POOLS: Record<string, readonly string[]> = {
+export const SLOT_POOLS: Record<string, readonly string[]> = {
 	name: ["Dara", "Miguel", "Priya", "Tomas", "Lena", "Aisha", "Ruben", "Ines"],
 	street: ["Miller", "Corvin", "Alder", "Hastings"],
 	weekday: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
@@ -780,6 +782,18 @@ function buildFixture(
 ): JevRerankFixture {
 	const slots = SLOT_POOLS
 	const fill = (template: string) => fillTemplate(template, rng, slots)
+	// One scenario per fixture: the query and its related answers (levels 2-4)
+	// share slot values; topical and generic distractors stay independently filled.
+	const scenario = new Map<string, string>()
+	const fillScenario = (template: string) =>
+		template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key: string) => {
+			const pool = slots[key]
+			if (!pool) return `{${key}}`
+			const bound = scenario.get(key) ?? pick(rng, pool)
+			scenario.set(key, bound)
+			return bound
+		})
+	const query = fillScenario(spec.query)
 	const levelTemplates = (level: JevRerankRelevance): readonly string[] => {
 		const raw = spec.levels[level]
 		if (raw === undefined) return []
@@ -788,7 +802,10 @@ function buildFixture(
 	const entries: { text: string; relevance: JevRerankRelevance }[] = []
 	for (const level of [4, 3, 2, 1, 0] as const) {
 		for (const template of levelTemplates(level)) {
-			entries.push({ text: fill(template), relevance: level })
+			entries.push({
+				text: level >= 2 ? fillScenario(template) : fill(template),
+				relevance: level,
+			})
 		}
 	}
 	// Every fixture carries at least one clearly unrelated candidate.
@@ -818,7 +835,7 @@ function buildFixture(
 		split: spec.split,
 		familyId: spec.key,
 		stratum: spec.stratum,
-		query: fill(spec.query),
+		query,
 		candidates: entries.map((entry, index) => ({
 			id: `c${index}`,
 			text: entry.text,
