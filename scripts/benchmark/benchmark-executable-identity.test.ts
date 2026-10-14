@@ -403,6 +403,86 @@ describe("computeExecutableDigest", () => {
 
 	it.each([
 		[
+			"a static import with a comment before the specifier",
+			'import { id } from /* note */ "@memongo/web"\nexport const m = id\n',
+		],
+		[
+			"an escaped specifier",
+			'import "\\u0040memongo/web"\nexport const m = 1\n',
+		],
+		["a re-export", 'export { id } from "@memongo/web"\n'],
+		["a namespace re-export", "export * as web from '@memongo/web'\n"],
+		[
+			"a dynamic import split by a comment",
+			'export const load = () =>\n\timport(\n\t\t// why\n\t\t"@memongo/web"\n\t)\n',
+		],
+		[
+			"a template-literal dynamic import",
+			"export const load = () => import(`@memongo/web`)\n",
+		],
+		[
+			"an import-equals require",
+			'import web = require("@memongo/web")\nexport const m = web\n',
+		],
+	])("covers a workspace import written as %s", async (_name, source) => {
+		await put("packages/memory-engine/src/manager.ts", source)
+		const before = await available()
+		expect(before.build.packages.map((entry) => entry.path)).toContain(
+			"packages/web",
+		)
+		await put("packages/web/dist/index.js", "export const id = 99\n")
+		expect((await available()).digest).not.toBe(before.digest)
+	})
+
+	it("parses an entry point that starts with a hashbang", async () => {
+		await put(
+			"scripts/run-benchmark.ts",
+			'#!/usr/bin/env bun\nimport "@memongo/memory-bridge"\nimport { m } from "../packages/memory-engine/src/manager.js"\nexport const x = m\n',
+		)
+		expect((await available()).build.packages).toHaveLength(3)
+	})
+
+	it("refuses identity when the running Bun scanner finds an import the parser missed", async () => {
+		vi.stubGlobal("Bun", {
+			Transpiler: class {
+				scanImports() {
+					return [{ path: "@memongo/hidden" }]
+				}
+			},
+		})
+		try {
+			const identity = await computeExecutableDigest(repo)
+			expect(identity).toMatchObject({ status: "unavailable" })
+			expect(identity.status === "unavailable" && identity.reason).toContain(
+				"the runtime finds but the parser does not",
+			)
+		} finally {
+			vi.unstubAllGlobals()
+		}
+	})
+
+	it("covers a commented workspace import inside build output", async () => {
+		await put(
+			"packages/memory-engine/dist/internal/ranking.js",
+			'import { id } from /* note */ "@memongo/web"\nexport const r = id\n',
+		)
+		expect(
+			(await available()).build.packages.map((entry) => entry.path),
+		).toContain("packages/web")
+	})
+
+	it.each([
+		[
+			"a template-literal dynamic import with a substitution",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source text
+			"const n = 'web'\nexport const load = () => import(`@memongo/${n}`)\n",
+		],
+		[
+			"a require of a computed name",
+			"const n = '@memongo/web'\nexport const m = require(n)\n",
+		],
+		["source that does not parse", 'import { from "@memongo/web"\n'],
+		[
 			"a dynamic import the source graph cannot follow",
 			"const name = './x.js'\nexport const load = () => import(name)\n",
 		],

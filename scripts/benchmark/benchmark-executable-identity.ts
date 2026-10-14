@@ -4,6 +4,10 @@ import { lstat, readFile, readdir, realpath } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
+import {
+	ModuleSyntaxError,
+	moduleRequests,
+} from "./benchmark-module-requests.js"
 
 const execFileAsync = promisify(execFile)
 
@@ -333,7 +337,11 @@ async function hashBuildTree(
 					`\0${relative}\0${createHash("sha256").update(bytes).digest("hex")}`,
 				)
 				if (/\.[cm]?js$/.test(entry.name))
-					for (const specifier of importSpecifiers(bytes.toString("utf8")))
+					for (const specifier of requestsOf(
+						full,
+						bytes.toString("utf8"),
+						`${label} dist/${relative}`,
+					))
 						if (specifier.startsWith("@memongo/"))
 							imports.push({ importer: full, specifier })
 				files += 1
@@ -354,13 +362,14 @@ function packageName(specifier: string): string {
 	return specifier.split("/").slice(0, 2).join("/")
 }
 
-// Static, re-export, side-effect, and literal dynamic imports or requires.
-// Type-only imports are included; resolving them only adds coverage.
-const IMPORT_SPECIFIER =
-	/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']/g
-
-function importSpecifiers(text: string): string[] {
-	return [...text.matchAll(IMPORT_SPECIFIER)].map((match) => match[1] ?? "")
+function requestsOf(file: string, text: string, label: string): string[] {
+	try {
+		return moduleRequests(file, text)
+	} catch (error) {
+		if (error instanceof ModuleSyntaxError)
+			throw new BuildTopologyError(`${label} ${error.message}`)
+		throw error
+	}
 }
 
 function repoRelative(repoReal: string, file: string): string {
@@ -417,11 +426,7 @@ async function walkSourceGraph(repoReal: string): Promise<WorkspaceImport[]> {
 		seen.add(file)
 		const label = repoRelative(repoReal, file)
 		const text = await readFile(file, "utf8")
-		if (/\bimport\s*\(\s*[^"'\s]/.test(text))
-			throw new BuildTopologyError(
-				`${label} has a dynamic import the source graph cannot follow`,
-			)
-		for (const specifier of importSpecifiers(text)) {
+		for (const specifier of requestsOf(file, text, label)) {
 			if (specifier.startsWith("@memongo/")) {
 				imports.push({ importer: file, specifier })
 				continue
