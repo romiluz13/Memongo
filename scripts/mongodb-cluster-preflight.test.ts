@@ -232,4 +232,47 @@ describe("mongodb:cluster-preflight refusals", () => {
 		expect(h.calls.uris).toEqual([])
 		expect(h.calls.fetches).toBe(0)
 	})
+
+	it.each([
+		["malformed", "{not json", /not valid JSON/],
+		["missing", undefined, /config file not found/],
+	])("fails closed on a %s selected config file before any client or fetch", async (_kind, body, message) => {
+		useEnv({ MEMONGO_MONGODB_URI: ENV_URI })
+		const configPath = path.join(dirs[0] as string, "selected.json")
+		if (body !== undefined) fs.writeFileSync(configPath, body)
+		vi.stubEnv("MEMONGO_CONFIG_PATH", configPath)
+		const h = harness(["--verify-atlas-model-key"])
+		await expect(h.run()).rejects.toThrow(message)
+		expect(h.calls.uris).toEqual([])
+		expect(h.calls.fetches).toBe(0)
+	})
+
+	it("closes the client when inspection fails after connecting", async () => {
+		useEnv({
+			MEMONGO_MONGODB_URI: ENV_URI,
+			MEMONGO_MONGODB_COLLECTION_PREFIX: BENCH,
+		})
+		let closes = 0
+		const run = main({
+			argv: [],
+			createClient: (() => ({
+				connect: async () => undefined,
+				close: async () => {
+					closes += 1
+				},
+				db: () => ({
+					listCollections: () => ({
+						toArray: async () => {
+							throw new Error("synthetic listCollections failure")
+						},
+					}),
+				}),
+			})) as never,
+			fetchFn: (async () => new Response("{}")) as never,
+			stdout: () => undefined,
+			stderr: () => undefined,
+		})
+		await expect(run).rejects.toThrow("synthetic listCollections failure")
+		expect(closes).toBe(1)
+	})
 })

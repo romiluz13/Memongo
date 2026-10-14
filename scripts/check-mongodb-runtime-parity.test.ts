@@ -169,6 +169,44 @@ describe("mongodb:parity active arm", () => {
 		await expect(h.run()).rejects.toThrow(/MongoDB URI required/)
 		expect(h.clients).toEqual([])
 	})
+
+	it.each([
+		["malformed", "{not json", /not valid JSON/],
+		["missing", undefined, /config file not found/],
+	])("fails closed on a %s selected config file before any client", async (_kind, body, message) => {
+		useEnv({ MEMONGO_MONGODB_URI: ENV_URI })
+		const configPath = path.join(dirs[0] as string, "selected.json")
+		if (body !== undefined) fs.writeFileSync(configPath, body)
+		vi.stubEnv("MEMONGO_CONFIG_PATH", configPath)
+		const h = harness()
+		await expect(h.run()).rejects.toThrow(message)
+		expect(h.clients).toEqual([])
+	})
+
+	it("reports a connection failure and still closes the client", async () => {
+		useEnv({ MEMONGO_MONGODB_URI: ENV_URI })
+		let closes = 0
+		const out: string[] = []
+		const code = await main({
+			argv: [],
+			createClient: (() => ({
+				connect: async () => {
+					throw new Error("synthetic connect failure")
+				},
+				close: async () => {
+					closes += 1
+				},
+				db: () => {
+					throw new Error("unreachable")
+				},
+			})) as never,
+			stdout: (text) => out.push(text),
+			stderr: () => undefined,
+		})
+		expect(code).toBe(1)
+		expect(closes).toBe(1)
+		expect(out.join("\n")).toContain("error: synthetic connect failure")
+	})
 })
 
 describe("mongodb:parity explicit arms", () => {
