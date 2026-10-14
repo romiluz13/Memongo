@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import type { BenchmarkScenarioCleanupReport } from "../../packages/memory-engine/src/types.js"
+import {
+	cleanupRegistry,
+	restoreScenarioCleanup,
+} from "./benchmark-scenario-cleanup.js"
 import { buildBenchmarkRunReport } from "./mongodb-benchmark-runner.js"
 import { BENCHMARK_SCENARIO_COLLECTION_SUFFIXES } from "./mongodb-manager-benchmark.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
@@ -9,6 +13,9 @@ import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-
 const PREFIX = "memongo_bench_cleanup_"
 const AGENT = "benchmark-agent-1"
 const CANARY = "mongodb+srv://cnryUser:cnryPass@cleanup.invalid"
+// Shaped like an identifier, so a regex-only name/code filter passes it.
+const IDENT_CANARY = "SYNTHETIC_PRIVATE_CANARY_1138"
+const REGISTRY = cleanupRegistry(BENCHMARK_SCENARIO_COLLECTION_SUFFIXES)
 
 type Behavior =
 	| { kind: "ack"; deletedCount: number }
@@ -152,25 +159,19 @@ function outcome(
 		scenarioId,
 		agentId: `agent-${scenarioId}`,
 		status,
-		registry: { version: 1 as const, digest: "f".repeat(64), collections: 1 },
+		registry: REGISTRY,
 		collections:
-			status === "acknowledged"
-				? [
-						{
-							suffix: "events",
-							status: "acknowledged" as const,
-							deletedCount: 1,
-						},
-					]
-				: status === "failed"
-					? [
-							{
-								suffix: "events",
-								status: "rejected" as const,
-								errorName: "MongoServerError",
-							},
-						]
-					: [],
+			status === "acknowledged" || status === "failed"
+				? BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map((suffix, index) =>
+						status === "failed" && index === 0
+							? {
+									suffix,
+									status: "rejected" as const,
+									errorName: "MongoServerError",
+								}
+							: { suffix, status: "acknowledged" as const, deletedCount: 1 },
+					)
+				: [],
 	}
 }
 
@@ -238,5 +239,185 @@ describe("scenario-cleanup release gate", () => {
 		expect(report.publicationDecision.blockingGates).toContain(
 			"scenario-cleanup",
 		)
+	})
+})
+
+describe("1139.4 corrections", () => {
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	it("R3: keeps only known driver error names and numeric codes in outcome and log", async () => {
+		const written: string[] = []
+		for (const stream of [process.stdout, process.stderr])
+			vi.spyOn(stream, "write").mockImplementation((chunk: unknown) => {
+				written.push(String(chunk))
+				return true
+			})
+		for (const method of ["log", "info", "warn", "error", "debug"] as const)
+			vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+				written.push(args.map(String).join(" "))
+			})
+		const named = new Error(CANARY) as Error & { code?: unknown }
+		named.name = IDENT_CANARY
+		named.code = IDENT_CANARY
+		const known = new Error(CANARY) as Error & { code?: unknown }
+		known.name = "MongoServerError"
+		known.code = IDENT_CANARY
+		const attempt = await cleanup({
+			events: { kind: "reject", error: named },
+			chunks: { kind: "reject", error: known },
+		}).run()
+		expect(attempt.collections.slice(0, 2)).toEqual([
+			{ suffix: "events", status: "rejected", errorName: "unknown" },
+			{ suffix: "chunks", status: "rejected", errorName: "MongoServerError" },
+		])
+		expect(JSON.stringify(attempt)).not.toContain("CANARY")
+		expect(written.join("\n")).not.toContain("CANARY")
+		expect(written.join("\n")).not.toContain("cnry")
+	})
+
+	it("R3: a fulfilled delete with a negative deletedCount is not acknowledged", async () => {
+		const attempt = await cleanup({
+			events: { kind: "ack", deletedCount: -1 },
+		}).run()
+		expect(attempt.status).toBe("failed")
+		expect(attempt.collections[0]).toEqual({
+			suffix: "events",
+			status: "unacknowledged",
+		})
+	})
+
+	const expected = { runId: "run-1", scenarioId: "s1" }
+	type Outcome = ReturnType<typeof outcome>
+	it.each([
+		[
+			"a duplicate suffix replacing another",
+			(o: Outcome) => {
+				o.collections[1] = { ...o.collections[0] } as never
+			},
+		],
+		[
+			"a foreign suffix",
+			(o: Outcome) => {
+				o.collections[1] = {
+					suffix: "foreign_unregistered",
+					status: "acknowledged",
+					deletedCount: 1,
+				} as never
+			},
+		],
+		[
+			"a negative deletedCount",
+			(o: Outcome) => {
+				o.collections[0] = {
+					suffix: "events",
+					status: "acknowledged",
+					deletedCount: -1,
+				} as never
+			},
+		],
+		[
+			"a null agent",
+			(o: Outcome) => {
+				o.agentId = null as never
+			},
+		],
+		[
+			"an unknown restored error name",
+			(o: Outcome) => {
+				o.status = "failed"
+				o.collections[0] = {
+					suffix: "events",
+					status: "rejected",
+					errorName: IDENT_CANARY,
+				} as never
+			},
+		],
+		[
+			"a restored string error code",
+			(o: Outcome) => {
+				o.status = "failed"
+				o.collections[0] = {
+					suffix: "events",
+					status: "rejected",
+					errorName: "MongoServerError",
+					errorCode: IDENT_CANARY,
+				} as never
+			},
+		],
+	])("R1: restores %s as unknown", (_name, corrupt) => {
+		const valid = outcome("s1", "acknowledged")
+		expect(restoreScenarioCleanup(valid, expected).status).toBe("acknowledged")
+		const corrupted = structuredClone(valid)
+		corrupt(corrupted)
+		const restored = restoreScenarioCleanup(corrupted, expected)
+		expect(restored).toEqual({ scenarioId: "s1", status: "unknown" })
+		const { gate } = cleanupGate({
+			version: 1,
+			status: "acknowledged",
+			coverage: "registered-scenario-collections",
+			scenarios: [restored],
+		})
+		expect(gate?.status).not.toBe("passed")
+	})
+
+	it("R1: restores a valid failed outcome as failed", () => {
+		expect(
+			restoreScenarioCleanup(outcome("s1", "failed"), expected).status,
+		).toBe("failed")
+	})
+
+	it.each([
+		["an empty acknowledged summary", "empty"],
+		["an acknowledged label over a malformed scenario", "malformed"],
+		["an acknowledged label over an unknown scenario", "unknown"],
+	])("R2: does not pass %s", (_name, kind) => {
+		const malformed = { ...outcome("s1", "acknowledged"), collections: [] }
+		const scenarios =
+			kind === "malformed"
+				? [malformed]
+				: kind === "unknown"
+					? [{ scenarioId: "s1", status: "unknown" as const }]
+					: []
+		const { report, gate } = cleanupGate({
+			version: 1,
+			status: "acknowledged",
+			coverage: "registered-scenario-collections",
+			scenarios,
+		})
+		expect(gate?.status).toBe("not-run")
+		expect(report.publicationDecision.blockingGates).toContain(
+			"scenario-cleanup",
+		)
+	})
+
+	it("R2/R3: the report carries only rebuilt outcomes, never raw input payloads", () => {
+		const raw = {
+			...outcome("s1", "acknowledged"),
+			extra: IDENT_CANARY,
+			collections: [],
+		}
+		const { report } = cleanupGate({
+			version: 1,
+			status: "acknowledged",
+			coverage: "registered-scenario-collections",
+			scenarios: [raw as never],
+		})
+		expect(report.scenarioCleanup).toMatchObject({
+			status: "incomplete",
+			scenarios: [{ scenarioId: "s1", status: "unknown" }],
+		})
+		expect(JSON.stringify(report)).not.toContain("CANARY")
+	})
+
+	it("R2: an acknowledged label over a failed scenario fails the gate", () => {
+		const { gate } = cleanupGate({
+			version: 1,
+			status: "acknowledged",
+			coverage: "registered-scenario-collections",
+			scenarios: [outcome("s1", "failed")],
+		})
+		expect(gate?.status).toBe("failed")
 	})
 })

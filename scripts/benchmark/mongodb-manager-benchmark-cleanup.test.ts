@@ -408,6 +408,22 @@ describe("scenario cleanup evidence reaches the run result and checkpoint", () =
 		expect((error as Error).message).not.toContain("cnry")
 	})
 
+	it("R4: a cleanup-only throw fails the run with a sanitized error", async () => {
+		const h = await harness({ cleanupThrows: true })
+		const error = (await h.run().then(
+			() => undefined,
+			(caught: unknown) => caught,
+		)) as Error
+		expect(error).toBeInstanceOf(Error)
+		expect(error.message).toBe(
+			"benchmark scenario cleanup failed: scenario=scenario-1 error=MongoServerError",
+		)
+		expect(error.cause).toBeUndefined()
+		expect(
+			JSON.stringify(error, Object.getOwnPropertyNames(error)),
+		).not.toContain("cnry")
+	})
+
 	it("leaves an acknowledged cleanup out of a propagating error", async () => {
 		const h = await harness({ failure: "late" })
 		const error = (await h.run().then(

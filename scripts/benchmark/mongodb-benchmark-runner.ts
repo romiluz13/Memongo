@@ -11,6 +11,7 @@ import {
 } from "./benchmark-parity-envelope.js"
 import type { BenchmarkExecutableIdentity } from "./benchmark-executable-identity.js"
 import type { BenchmarkReadinessSkip } from "./mongodb-manager-benchmark-scenario.js"
+import { summarizeScenarioCleanup } from "./benchmark-scenario-cleanup.js"
 import type { MemorySearchResult } from "../../packages/memory-engine/src/types.js"
 import type {
 	BenchmarkCostAccounting,
@@ -256,6 +257,28 @@ type BenchmarkReportInput = {
 	scenarioCleanup?: BenchmarkScenarioCleanupReport
 }
 
+/**
+ * The summary as reported: status and outcomes are re-derived from consistent
+ * outcomes (the input label is not trusted), and a failed label stays failed.
+ */
+function reconcileScenarioCleanup(
+	cleanup: BenchmarkScenarioCleanupReport | undefined,
+): BenchmarkScenarioCleanupReport | undefined {
+	if (!cleanup) return undefined
+	const derived = summarizeScenarioCleanup(cleanup.scenarios)
+	return {
+		...derived,
+		status:
+			cleanup.status === "failed"
+				? "failed"
+				: cleanup.status === "acknowledged"
+					? derived.status
+					: derived.status === "failed"
+						? "failed"
+						: "incomplete",
+	}
+}
+
 function buildScenarioCleanupGate(
 	cleanup: BenchmarkScenarioCleanupReport | undefined,
 ): MemoryBenchmarkRunReport["releaseGates"][number] {
@@ -270,17 +293,17 @@ function buildScenarioCleanupGate(
 		cleanup.scenarios
 			.filter((scenario) => scenario.status === status)
 			.map((scenario) => scenario.scenarioId)
-	if (cleanup.status === "acknowledged")
-		return {
-			gate: "scenario-cleanup",
-			status: "passed",
-			evidence: `${cleanup.scenarios.length} scenarios: every delete was acknowledged in the registered collections only; this does not prove the namespace is empty or that later writes were fenced`,
-		}
 	if (cleanup.status === "failed")
 		return {
 			gate: "scenario-cleanup",
 			status: "failed",
 			evidence: `scenario cleanup failed or was unacknowledged: ${byStatus("failed").join(", ")}`,
+		}
+	if (cleanup.status === "acknowledged")
+		return {
+			gate: "scenario-cleanup",
+			status: "passed",
+			evidence: `${cleanup.scenarios.length} scenarios: every delete was acknowledged in the registered collections only; this does not prove the namespace is empty or that later writes were fenced`,
 		}
 	return {
 		gate: "scenario-cleanup",
@@ -794,6 +817,7 @@ export function buildBenchmarkRunReport(
 	params: BenchmarkReportInput,
 ): MemoryBenchmarkRunReport {
 	const build = readBuildIdentity(params.observedBuild)
+	const scenarioCleanup = reconcileScenarioCleanup(params.scenarioCleanup)
 	const executionFailed = (params.execution?.failedCases ?? 0) > 0
 	const internalStatus =
 		params.cases > 0 && !executionFailed ? "passed" : "failed"
@@ -838,7 +862,7 @@ export function buildBenchmarkRunReport(
 					? "queryGovernance candidates are advisory-only"
 					: "no queryGovernance candidates attached",
 		},
-		buildScenarioCleanupGate(params.scenarioCleanup),
+		buildScenarioCleanupGate(scenarioCleanup),
 	]
 	const blockingGates = releaseGates
 		.filter(
@@ -896,9 +920,7 @@ export function buildBenchmarkRunReport(
 		...(params.latency ? { latency: params.latency } : {}),
 		...(params.cost ? { cost: params.cost } : {}),
 		...(params.e2eQa ? { e2eQa: params.e2eQa } : {}),
-		...(params.scenarioCleanup
-			? { scenarioCleanup: params.scenarioCleanup }
-			: {}),
+		...(scenarioCleanup ? { scenarioCleanup } : {}),
 	}
 }
 

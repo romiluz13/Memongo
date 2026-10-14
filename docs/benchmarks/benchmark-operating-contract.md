@@ -101,8 +101,14 @@ After each scenario, the runner deletes that scenario agent's rows from the
 fixed registry of benchmark collections and records the outcome per scenario:
 run id, scenario id, agent id, registry version and digest, and each
 collection's result. The same outcome is stored in the checkpoint and restored on
-resume. A failed delete keeps only the driver error name and code, never the
-message.
+resume. A failed delete keeps only a known MongoDB driver error class name
+(any other name is recorded as `unknown`) and a numeric error code, never the
+message. A restored or reported outcome counts only when it is consistent with
+the current registry: an acknowledged scenario must list every registered
+collection exactly once with a non-negative deleted count and an agent id.
+Anything else reads as unknown. The gate derives its status from the scenario
+outcomes, not from the summary label, so an empty or contradictory summary
+cannot pass.
 
 The `scenario-cleanup` release gate passes only when every scenario's
 registered deletes were acknowledged. It fails when any delete was rejected
@@ -116,6 +122,8 @@ also does not establish namespace ownership.
 
 When a scenario, close or storage-measurement error is already ending the run,
 a cleanup failure is appended to that error's message instead of replacing it.
+When cleanup itself throws and nothing else failed, the run fails with a new
+error that carries only that sanitized description.
 
 Set at least one build identifier before release or public reporting:
 

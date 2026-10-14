@@ -522,8 +522,13 @@ describe("benchmark scenario queue settling", () => {
 		})
 
 		try {
-			if (["startup", "late", "close", "cleanup"].includes(failure))
+			if (["startup", "late", "close"].includes(failure))
 				await expect(run).rejects.toThrow(`${failure} failure`)
+			else if (failure === "cleanup")
+				// The raw cleanup error never escapes; a sanitized one does.
+				await expect(run).rejects.toThrow(
+					"benchmark scenario cleanup failed: scenario=scenario-1 error=unknown",
+				)
 			else {
 				const outcome = await run
 				if (failure === "measurement")

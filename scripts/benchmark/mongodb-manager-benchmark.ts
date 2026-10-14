@@ -40,6 +40,7 @@ import {
 } from "./benchmark-executable-identity.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import {
+	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
 	cleanupRegistry,
 	describeScenarioCleanupFailure,
 	restoreScenarioCleanup,
@@ -149,30 +150,7 @@ import type { Collection, Document } from "mongodb"
 
 const log = createSubsystemLogger("memory:mongodb")
 
-export const BENCHMARK_SCENARIO_COLLECTION_SUFFIXES = [
-	"events",
-	"chunks",
-	"session_chunks",
-	"memory_evidence",
-	"structured_mem",
-	"structured_mem_revisions",
-	"procedures",
-	"procedure_revisions",
-	"entities",
-	"relations",
-	"entity_links",
-	"episodes",
-	"ingest_runs",
-	"projection_runs",
-	"lane_coverage",
-	"relevance_runs",
-	"relevance_regressions",
-	"relevance_artifacts",
-	"recall_traces",
-	"memory_jobs",
-	"consolidation_runs",
-	"memory_mutations",
-] as const
+export { BENCHMARK_SCENARIO_COLLECTION_SUFFIXES }
 
 export function isLegacyBenchmarkFallbackCandidate(err: unknown): boolean {
 	return (
@@ -969,7 +947,6 @@ export class MongoDBManagerBenchmarkOps {
 				restoreScenarioCleanup(checkpointScenario.cleanup, {
 					runId: params.runContext.runId,
 					scenarioId: checkpointScenario.scenarioId,
-					registry: cleanupRegistry(BENCHMARK_SCENARIO_COLLECTION_SUFFIXES),
 				}),
 			)
 		}
@@ -2413,7 +2390,7 @@ export class MongoDBManagerBenchmarkOps {
 	 * B08:C03: the scenario's cleanup outcome. KEEP_SCENARIO_DATA retains rows.
 	 * A cleanup failure is appended (sanitized) to an error that is already
 	 * propagating instead of replacing it; with no such error a thrown cleanup
-	 * still fails the run.
+	 * still fails the run, with a sanitized error.
 	 */
 	async recordBenchmarkScenarioCleanup(params: {
 		runId: string
@@ -2445,12 +2422,15 @@ export class MongoDBManagerBenchmarkOps {
 					collections: attempt.collections,
 				}
 			} catch (cleanupErr) {
-				if (params.propagatingError === undefined) throw cleanupErr
 				outcome = {
 					...base,
 					status: "failed",
 					errorName: sanitizedCleanupError(cleanupErr).errorName,
 				}
+				// The raw cleanup error can carry driver text; only the
+				// sanitized description leaves this method.
+				if (params.propagatingError === undefined)
+					throw new Error(describeScenarioCleanupFailure(outcome))
 			}
 		}
 		if (

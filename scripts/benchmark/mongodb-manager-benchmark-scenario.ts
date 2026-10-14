@@ -1240,7 +1240,8 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					return { suffix, status: "rejected", ...error }
 				}
 				return result.value?.acknowledged === true &&
-					Number.isInteger(result.value.deletedCount)
+					Number.isSafeInteger(result.value.deletedCount) &&
+					result.value.deletedCount >= 0
 					? {
 							suffix,
 							status: "acknowledged",

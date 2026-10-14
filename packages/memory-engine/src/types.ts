@@ -1612,7 +1612,8 @@ export type BenchmarkTenantStorageMeasurement = {
 
 /**
  * One registered collection's delete in a benchmark scenario cleanup. Errors
- * keep only the driver error name and code, never the message.
+ * keep only a known driver error class name (else "unknown") and a numeric
+ * code, never the message.
  */
 export type BenchmarkCleanupCollectionResult =
 	| { suffix: string; status: "acknowledged"; deletedCount: number }
@@ -1621,7 +1622,7 @@ export type BenchmarkCleanupCollectionResult =
 			suffix: string
 			status: "rejected"
 			errorName: string
-			errorCode?: string | number
+			errorCode?: number
 	  }
 
 /** The fixed collection-suffix registry a cleanup covered. */
