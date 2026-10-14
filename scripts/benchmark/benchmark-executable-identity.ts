@@ -5,9 +5,19 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import {
-	ModuleSyntaxError,
-	moduleRequests,
-} from "./benchmark-module-requests.js"
+	type BenchmarkSourceGraph,
+	BuildTopologyError,
+	inventorySourceGraph,
+	repoRelative,
+	requestsOf,
+	type WorkspaceImport,
+	walkSourceGraph,
+} from "./benchmark-source-graph.js"
+
+export {
+	type BenchmarkSourceGraph,
+	benchmarkWorkspaceImports,
+} from "./benchmark-source-graph.js"
 
 const execFileAsync = promisify(execFile)
 
@@ -29,12 +39,6 @@ const EXECUTABLE_PATHSPECS = [
 
 export type BenchmarkRuntimeVersions = { node: string; bun: string | null }
 
-// The benchmark process entry point. Its relative source graph is walked to
-// find every file that imports a workspace package by name: those packages
-// load from ignored dist output (exports -> ./dist), which git never sees, and
-// each import resolves from its own file's directory.
-const BENCHMARK_ENTRY = "scripts/run-benchmark.ts"
-
 export type BenchmarkWorkspaceBuild = {
 	/** Bytes observed on disk at admission; whether tracked source produced them is not checked. */
 	relation: "not-verified"
@@ -53,10 +57,11 @@ export type BenchmarkExecutableIdentity =
 			digest: string
 			headCommit: string
 			trackedFiles: number
-			/** Tracked executable files differ from HEAD or untracked ones exist. */
+			/** Executable files or reached source differ from HEAD, or are untracked. */
 			dirty: boolean
 			runtime: BenchmarkRuntimeVersions
 			build: BenchmarkWorkspaceBuild
+			sourceGraph: BenchmarkSourceGraph
 	  }
 	| {
 			status: "unavailable"
@@ -154,33 +159,39 @@ export async function computeExecutableDigest(
 		)
 	}
 	let build: BenchmarkWorkspaceBuild
+	let sourceGraph: BenchmarkSourceGraph
 	try {
-		build = await observeWorkspaceBuild(repoRoot)
+		const repoReal = await realpath(repoRoot)
+		const graph = await walkSourceGraph(repoReal)
+		build = await observeWorkspaceBuild(repoReal, graph.imports)
+		sourceGraph = await inventorySourceGraph(repoReal, graph.files, (args) =>
+			git(repoRoot, args),
+		)
 	} catch (error) {
 		return {
 			status: "unavailable",
 			reason:
 				error instanceof BuildTopologyError
 					? error.message
-					: "workspace build output is unreadable",
+					: "workspace build output or source graph is unreadable",
 			runtime,
 		}
 	}
 	for (const entry of build.packages)
 		hash.update(`\0build\0${entry.path}\0${entry.name}\0${entry.digest}`)
+	for (const entry of sourceGraph.files)
+		hash.update(`\0source\0${entry.path}\0${entry.sha256}`)
 	return {
 		status: "available",
 		digest: hash.digest("hex"),
 		headCommit,
 		trackedFiles: files.length,
-		dirty,
+		dirty: dirty || sourceGraph.files.some((entry) => entry.status !== "clean"),
 		runtime,
 		build,
+		sourceGraph,
 	}
 }
-
-/** Unsupported or ambiguous build topology; messages carry no absolute paths. */
-class BuildTopologyError extends Error {}
 
 // Only these export conditions are modeled; the runtime's ESM resolution
 // (import/bun/default) selects default for them, while any other condition
@@ -356,105 +367,15 @@ async function hashBuildTree(
 	return files
 }
 
-type WorkspaceImport = { importer: string; specifier: string }
-
 function packageName(specifier: string): string {
 	return specifier.split("/").slice(0, 2).join("/")
 }
 
-function requestsOf(file: string, text: string, label: string): string[] {
-	try {
-		return moduleRequests(file, text)
-	} catch (error) {
-		if (error instanceof ModuleSyntaxError)
-			throw new BuildTopologyError(`${label} ${error.message}`)
-		throw error
-	}
-}
-
-function repoRelative(repoReal: string, file: string): string {
-	return path.relative(repoReal, file).split(path.sep).join("/")
-}
-
-async function isFile(file: string): Promise<boolean> {
-	return (await lstat(file).catch(() => null))?.isFile() ?? false
-}
-
-// TypeScript ESM style: "./x.js" names x.ts on disk.
-async function resolveRelativeSource(
-	from: string,
-	specifier: string,
-): Promise<string | null> {
-	const base = path.resolve(path.dirname(from), specifier)
-	for (const candidate of [
-		base,
-		base.replace(/\.js$/, ".ts"),
-		base.replace(/\.mjs$/, ".mts"),
-		`${base}.ts`,
-		path.join(base, "index.ts"),
-	])
-		if (await isFile(candidate)) return candidate
-	return null
-}
-
-/**
- * Every workspace package import in the benchmark's source graph, from the
- * entry point through relative static and literal dynamic imports. An import
- * the walk cannot follow refuses identity rather than leave a gap.
- */
-export async function benchmarkWorkspaceImports(
-	repoRoot: string,
-): Promise<WorkspaceImport[]> {
-	const repoReal = await realpath(repoRoot)
-	return (await walkSourceGraph(repoReal)).map((entry) => ({
-		importer: repoRelative(repoReal, entry.importer),
-		specifier: entry.specifier,
-	}))
-}
-
-async function walkSourceGraph(repoReal: string): Promise<WorkspaceImport[]> {
-	const entry = path.join(repoReal, BENCHMARK_ENTRY)
-	if (!(await isFile(entry)))
-		throw new BuildTopologyError(
-			`benchmark entry ${BENCHMARK_ENTRY} is missing`,
-		)
-	const seen = new Set<string>()
-	const queue = [entry]
-	const imports: WorkspaceImport[] = []
-	for (let file = queue.pop(); file; file = queue.pop()) {
-		if (seen.has(file)) continue
-		seen.add(file)
-		const label = repoRelative(repoReal, file)
-		const text = await readFile(file, "utf8")
-		for (const specifier of requestsOf(file, text, label)) {
-			if (specifier.startsWith("@memongo/")) {
-				imports.push({ importer: file, specifier })
-				continue
-			}
-			if (!specifier.startsWith(".")) continue
-			const target = await resolveRelativeSource(file, specifier)
-			const relative = target ? repoRelative(repoReal, target) : ".."
-			if (
-				!target ||
-				relative.startsWith("..") ||
-				relative
-					.split("/")
-					.some((part) => part === "node_modules" || part === "dist")
-			)
-				throw new BuildTopologyError(
-					`${label} imports ${specifier}, which is not tracked-style source in the repository`,
-				)
-			queue.push(target)
-		}
-	}
-	return imports
-}
-
 async function observeWorkspaceBuild(
-	repoRoot: string,
+	repoReal: string,
+	imports: WorkspaceImport[],
 ): Promise<BenchmarkWorkspaceBuild> {
-	const repoReal = await realpath(repoRoot)
-	const pending = await walkSourceGraph(repoReal)
+	const pending = [...imports]
 	const resolvedFrom = new Set<string>()
 	const packages = new Map<
 		string,

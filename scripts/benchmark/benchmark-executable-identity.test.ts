@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import {
 	chmod,
 	cp,
 	mkdir,
 	mkdtemp,
+	readFile,
 	rm,
 	symlink,
 	writeFile,
@@ -21,6 +23,7 @@ import {
 	readBenchmarkCheckpoint,
 	writeBenchmarkCheckpointAtomic,
 } from "./mongodb-benchmark-checkpoint.js"
+import { buildBenchmarkRunReport } from "./mongodb-benchmark-runner.js"
 
 let repo: string
 
@@ -665,5 +668,172 @@ describe("benchmark source graph", () => {
 			importer: "packages/memory-engine/src/mongodb-manager.ts",
 			specifier: "@memongo/lib",
 		})
+	})
+})
+
+describe("benchmark source graph inventory", () => {
+	const ENTRY_IMPORTS =
+		'import "@memongo/memory-bridge"\nimport { m } from "../packages/memory-engine/src/manager.js"\n'
+
+	// Commits an entry point importing `specifier`, leaving `file` as written.
+	async function reach(
+		file: string,
+		specifier: string,
+		track: "tracked" | "untracked",
+	): Promise<void> {
+		await put(file, "export const h = 1\n")
+		await put(
+			"scripts/run-benchmark.ts",
+			`${ENTRY_IMPORTS}import { h } from "${specifier}"\nexport const x = m + h\n`,
+		)
+		git("add", "scripts/run-benchmark.ts", ".gitignore")
+		if (track === "tracked") git("add", file)
+		git("commit", "-q", "-m", "reach")
+	}
+
+	function completeness(identity: Awaited<ReturnType<typeof available>>) {
+		return (
+			buildBenchmarkRunReport({
+				datasetVersion: "v1",
+				cases: 1,
+				hitRate: 1,
+				emptyRate: 0,
+				avgTopScore: 1,
+				p95LatencyMs: 1,
+				observedBuild: identity,
+			}).releaseGates.find((gate) => gate.gate === "evidence-completeness")
+				?.evidence ?? ""
+		)
+	}
+
+	async function writeCheckpoint(digest: string): Promise<string> {
+		const { configuration, configurationHash } = producedRunConfiguration()
+		const checkpointPath = path.join(repo, "benchmarks/results/run.json")
+		await writeBenchmarkCheckpointAtomic(checkpointPath, {
+			version: 2,
+			runId: "run-1",
+			datasetSha256: "a".repeat(64),
+			configurationHash,
+			configuration,
+			executableDigest: digest,
+			totalScenarios: 1,
+			scenarioIds: ["scenario-1"],
+			completedScenarios: [],
+			accounting: {
+				currency: null,
+				totalCost: null,
+				unavailableReason: "prices unavailable",
+				operations: [],
+			},
+			updatedAt: "2026-10-14T00:00:00.000Z",
+		})
+		return checkpointPath
+	}
+
+	async function resume(checkpointPath: string) {
+		return readBenchmarkCheckpoint(checkpointPath, {
+			datasetSha256: "a".repeat(64),
+			configurationHash: producedRunConfiguration().configurationHash,
+			executableDigest: (await available()).digest,
+			scenarioIds: ["scenario-1"],
+		})
+	}
+
+	it("lists every reached file of a clean tracked graph with its bytes", async () => {
+		const identity = await available()
+		const manager = await readFile(
+			path.join(repo, "packages/memory-engine/src/manager.ts"),
+		)
+		expect(identity.sourceGraph.files).toEqual([
+			{
+				path: "packages/memory-engine/src/manager.ts",
+				sha256: createHash("sha256").update(manager).digest("hex"),
+				status: "clean",
+			},
+			expect.objectContaining({
+				path: "scripts/run-benchmark.ts",
+				status: "clean",
+			}),
+		])
+		expect(identity.dirty).toBe(false)
+		expect(completeness(identity)).not.toContain(
+			"uncommitted executable source",
+		)
+		expect((await available()).digest).toBe(identity.digest)
+	})
+
+	it.each([
+		[
+			"an untracked scripts file",
+			"scripts/benchmark/helper.ts",
+			"./benchmark/helper.js",
+		],
+		["an untracked repository-root file", "shared.ts", "../shared.js"],
+		["an ignored scripts file", "scripts/helper.local.ts", "./helper.local.js"],
+	])("binds and refuses to publish %s the graph reaches", async (_name, file, specifier) => {
+		await put(".gitignore", "dist\nnode_modules\n*.local.ts\n")
+		await reach(file, specifier, "untracked")
+		const admitted = await available()
+		expect(admitted.sourceGraph.files).toContainEqual(
+			expect.objectContaining({ path: file, status: "untracked" }),
+		)
+		expect(admitted.dirty).toBe(true)
+		expect(completeness(admitted)).toContain("uncommitted executable source")
+		const checkpointPath = await writeCheckpoint(admitted.digest)
+		await expect(resume(checkpointPath)).resolves.toMatchObject({
+			runId: "run-1",
+		})
+		await put(file, "export const h = 2\n")
+		expect((await available()).digest).not.toBe(admitted.digest)
+		await expect(resume(checkpointPath)).rejects.toThrow(
+			"executable digest does not match",
+		)
+	})
+
+	it("binds a tracked repository-root file outside the executable pathspecs", async () => {
+		await reach("shared.ts", "../shared.js", "tracked")
+		const admitted = await available()
+		expect(admitted.sourceGraph.files).toContainEqual(
+			expect.objectContaining({ path: "shared.ts", status: "clean" }),
+		)
+		expect(admitted.dirty).toBe(false)
+		const checkpointPath = await writeCheckpoint(admitted.digest)
+		await put("shared.ts", "export const h = 2\n")
+		const edited = await available()
+		expect(edited.digest).not.toBe(admitted.digest)
+		expect(edited.dirty).toBe(true)
+		expect(edited.sourceGraph.files).toContainEqual(
+			expect.objectContaining({ path: "shared.ts", status: "modified" }),
+		)
+		expect(completeness(edited)).toContain("uncommitted executable source")
+		await expect(resume(checkpointPath)).rejects.toThrow(
+			"executable digest does not match",
+		)
+	})
+
+	it("ignores untracked files the graph does not reach", async () => {
+		const before = await available()
+		await put("benchmarks/results/other.json", "{}\n")
+		await put("tmp/unrelated.ts", "export const u = 1\n")
+		const after = await available()
+		expect(after.digest).toBe(before.digest)
+		expect(after.dirty).toBe(before.dirty)
+		expect(after.sourceGraph).toEqual(before.sourceGraph)
+	})
+
+	it("refuses identity for source reached through a directory link", async () => {
+		await symlink(
+			"../packages/memory-engine/src",
+			path.join(repo, "scripts/linked"),
+		)
+		await put(
+			"scripts/run-benchmark.ts",
+			`${ENTRY_IMPORTS}import { m as n } from "./linked/manager.js"\nexport const x = m + n\n`,
+		)
+		const identity = await computeExecutableDigest(repo)
+		expect(identity).toMatchObject({ status: "unavailable" })
+		expect(identity.status === "unavailable" && identity.reason).not.toContain(
+			repo,
+		)
 	})
 })

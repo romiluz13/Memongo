@@ -1417,6 +1417,14 @@ export type MemoryBenchmarkBuildIdentity = {
 			digest: string
 		}>
 	}
+	/** Every source file the benchmark's import walk reached, bound into executableDigest. */
+	sourceGraph?: {
+		files: Array<{
+			path: string
+			sha256: string
+			status: "clean" | "modified" | "untracked"
+		}>
+	}
 	unavailableReason?: string
 }
 

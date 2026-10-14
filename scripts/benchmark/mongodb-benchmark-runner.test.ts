@@ -1299,6 +1299,15 @@ describe("benchmark report build identity is observed, not claimed", () => {
 			},
 		],
 	}
+	const sourceGraph = {
+		files: [
+			{
+				path: "scripts/run-benchmark.ts",
+				sha256: "c".repeat(64),
+				status: "clean" as const,
+			},
+		],
+	}
 	const observed = (overrides: Record<string, unknown> = {}) => ({
 		status: "available" as const,
 		digest: "d".repeat(64),
@@ -1307,6 +1316,7 @@ describe("benchmark report build identity is observed, not claimed", () => {
 		dirty: false,
 		runtime,
 		build,
+		sourceGraph,
 		...overrides,
 	})
 	const report = (
@@ -1358,6 +1368,7 @@ describe("benchmark report build identity is observed, not claimed", () => {
 			sourceDirty: false,
 			runtime,
 			workspaceBuild: build,
+			sourceGraph,
 		})
 	})
 

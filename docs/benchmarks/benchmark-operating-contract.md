@@ -36,7 +36,17 @@ benchmark's source graph (walked from `scripts/run-benchmark.ts` through
 relative static and literal dynamic imports) or by those packages' `dist`
 files. Files are parsed with the installed TypeScript compiler, not matched
 by pattern, so comments and escapes cannot hide an import. Each import is resolved from its own file's directory with fresh
-filesystem reads, so nested copies are covered separately. The report lists
+filesystem reads, so nested copies are covered separately. Every source file the
+walk reaches is also inventoried under `build.sourceGraph` by repository-relative
+path, content sha256 and Git status (`clean`, `modified` or `untracked`, which
+includes ignored files) and bound into the digest, whether or not it lies under
+the tracked executable pathspecs. Editing any reached file therefore refuses
+resume. A reached file that is not `clean` marks the source dirty, so the
+evidence-completeness gate refuses publication; a tracked, unmodified file
+outside the pathspecs, such as one at the repository root, stays publishable
+because HEAD and the inventory identify it. A reached file whose real path
+differs from its walked path, through a file or directory link, refuses
+identity. The report lists
 each package under `build.workspaceBuild` with `relation: "not-verified"`. The
 digest records which bytes were on disk when the run was admitted, after the
 benchmark's modules had already loaded. It does not prove that those bytes

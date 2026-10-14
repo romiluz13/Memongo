@@ -292,6 +292,7 @@ function readBuildIdentity(
 			sourceDirty: observed.dirty,
 			runtime: observed.runtime,
 			workspaceBuild: observed.build,
+			sourceGraph: observed.sourceGraph,
 			...claims,
 		}
 	}
