@@ -138,56 +138,85 @@ describe("withRemoteHttpResponse SSRF guard", () => {
 })
 
 describe("withRemoteHttpResponse SSRF error text", () => {
-	const SECRETS = ["cnryUser", "cnryPass", "cnryToken"]
+	// Any part of a configured URL can carry a secret: userinfo, path, query.
+	const SECRETS = ["cnryUser", "cnryPass", "cnryPath", "cnryToken"]
+	const PATH_URL =
+		"https://api.example.test/v1/cnryPath/chat?api_key=cnryToken#cnryToken"
 
 	async function failure(
 		params: Partial<Parameters<typeof withRemoteHttpResponse>[0]>,
-	): Promise<string> {
+	): Promise<{ error: Error | null; fetches: number }> {
+		let fetches = 0
 		const error = await withRemoteHttpResponse({
-			url: "http://cnryUser:cnryPass@api.example.test/v1/chat?api_key=cnryToken#cnryToken",
+			url: PATH_URL,
 			onResponse: async (response) => response.status,
 			ssrfPolicy: { allowPrivateNetwork: true },
-			fetchFn: async () =>
-				new Response(null, {
+			fetchFn: async (input) => {
+				fetches += 1
+				// The runtime's own Request rejects some URLs, echoing them.
+				new Request(input)
+				return new Response(null, {
 					status: 307,
 					headers: { location: "https://elsewhere.test/" },
-				}),
+				})
+			},
 			...params,
 		}).then(
 			() => null,
 			(reason: Error) => reason,
 		)
+		return { error, fetches }
+	}
+
+	function expectNoSecret(error: Error | null) {
 		expect(error).toBeInstanceOf(SsrFBlockedError)
-		return error?.message ?? ""
+		const text = `${error?.message} ${String(error?.cause ?? "")} ${JSON.stringify(error)}`
+		for (const secret of SECRETS) expect(text).not.toContain(secret)
 	}
 
 	it.each([
-		["a refused redirect", {}],
+		["a refused redirect", {}, 1],
 		[
 			"a request off the pinned host",
-			{
-				ssrfPolicy: {
-					allowPrivateNetwork: true,
-					isAllowed: () => false,
-				},
-			},
+			{ ssrfPolicy: { allowPrivateNetwork: true, isAllowed: () => false } },
+			0,
 		],
+		["a non-HTTP URL", { url: "file:///srv/cnryPath?api_key=cnryToken" }, 0],
 		[
-			"a non-HTTP URL",
-			{ url: "ftp://cnryUser:cnryPass@api.example.test/v1?api_key=cnryToken" },
+			"an unparseable URL",
+			{
+				url: "http://cnryUser:cnryPass@[not-a-host/cnryPath?api_key=cnryToken",
+			},
+			0,
 		],
-	])("names the endpoint but never its credentials for %s", async (_name, params) => {
-		const message = await failure(params)
-		expect(message).toContain("SSRF guard")
-		expect(message).toContain("api.example.test/v1")
-		for (const secret of SECRETS) expect(message).not.toContain(secret)
+	])("keeps every URL part out of %s", async (_name, params, expectedFetches) => {
+		const { error, fetches } = await failure(params)
+		expect(error?.message).toContain("SSRF guard")
+		expectNoSecret(error)
+		expect(fetches).toBe(expectedFetches)
 	})
 
-	it("does not echo an unparseable URL", async () => {
-		const message = await failure({
-			url: "http://cnryUser:cnryPass@[not-a-host/?api_key=cnryToken",
+	it("refuses embedded credentials before the request is constructed", async () => {
+		const { error, fetches } = await failure({
+			url: "https://cnryUser:cnryPass@api.example.test/v1/cnryPath?api_key=cnryToken",
 		})
-		expect(message).toContain("SSRF guard rejected invalid URL")
-		for (const secret of SECRETS) expect(message).not.toContain(secret)
+		expectNoSecret(error)
+		expect(error?.message).toContain("embedded credentials")
+		expect(fetches).toBe(0)
+	})
+
+	it("still sends a credential-free URL unchanged", async () => {
+		let received: unknown = null
+		const status = await withRemoteHttpResponse({
+			url: PATH_URL,
+			ssrfPolicy: { allowPrivateNetwork: true },
+			fetchFn: async (input) => {
+				received = input
+				return new Response("{}", { status: 200 })
+			},
+			onResponse: async (response) => response.status,
+		})
+		expect(status).toBe(200)
+		expect(received).toBe(PATH_URL)
 	})
 })

@@ -26,25 +26,39 @@ const C = {
 	enrichmentUser: "cnryEU5h1Bc",
 	enrichmentPass: "cnryEP/9+Wv",
 	enrichmentToken: "cnryET2k6Hs",
+	enrichmentPath: "cnryEZ4d8Jn",
 	answerUser: "cnryAU8m3Qj",
 	answerPass: "cnryAP:4@Ny",
 	answerToken: "cnryAT6r1Fg",
+	answerPath: "cnryAZ2b5Mw",
 	judgeUser: "cnryJU1s5Kd",
 	judgePass: "cnryJP%7Ux",
 	judgeToken: "cnryJT9v2Ce",
+	judgePath: "cnryJZ7c3Lq",
 	mongoUser: "cnryMU3t7Ab",
 	mongoPass: "cnryMP#2Yz",
 	mongoToken: "cnryMT5p8Gw",
 }
 
-function url(user: string, pass: string, token: string, query = "api_key") {
-	return `http://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@127.0.0.1:9/v1?${query}=${encodeURIComponent(token)}`
+function url(
+	user: string,
+	pass: string,
+	segment: string,
+	token: string,
+	query = "api_key",
+) {
+	return `http://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@127.0.0.1:9/${encodeURIComponent(segment)}/v1?${query}=${encodeURIComponent(token)}`
 }
 
 const URLS = {
-	enrichment: url(C.enrichmentUser, C.enrichmentPass, C.enrichmentToken),
-	answer: url(C.answerUser, C.answerPass, C.answerToken),
-	judge: url(C.judgeUser, C.judgePass, C.judgeToken, "key"),
+	enrichment: url(
+		C.enrichmentUser,
+		C.enrichmentPass,
+		C.enrichmentPath,
+		C.enrichmentToken,
+	),
+	answer: url(C.answerUser, C.answerPass, C.answerPath, C.answerToken),
+	judge: url(C.judgeUser, C.judgePass, C.judgePath, C.judgeToken, "key"),
 	mongo: `mongodb://${encodeURIComponent(C.mongoUser)}:${encodeURIComponent(C.mongoPass)}@synthetic.invalid:27017/db?authSource=admin&tlsCertificateKeyFilePassword=${encodeURIComponent(C.mongoToken)}`,
 }
 
@@ -341,7 +355,15 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 		expect(exposures(output.join("\n"))).toEqual([])
 	})
 
-	it("keeps every credential out of a provider preflight failure and its capture", async () => {
+	it.each([
+		["embedded credentials, refused before any request", URLS.answer, 0],
+		[
+			"path and query tokens, refused on redirect",
+			`http://127.0.0.1:9/${encodeURIComponent(C.answerPath)}/v1?api_key=${encodeURIComponent(C.answerToken)}`,
+			1,
+		],
+	])("keeps every credential out of a provider preflight failure with %s", async (_name, answerUrl, minimumFetches) => {
+		process.env.MEMONGO_BENCHMARK_ANSWER_BASE_URL = answerUrl
 		const dir = await mkdtemp(path.join(tmpdir(), "credential-canary-"))
 		dirs.push(dir)
 		const checkpointPath = path.join(dir, "preflight.json")
@@ -356,8 +378,10 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 			(failure: Error) => failure,
 		)
 		expect(error?.message).toContain("preflight failed")
-		expect(fetchCalls).toBeGreaterThan(0)
-		const files = await filesUnder(dir)
-		expect(exposures(`${error?.message}\n${files}`)).toEqual([])
+		expect(error?.message).toContain("SSRF guard")
+		expect(fetchCalls).toBeGreaterThanOrEqual(minimumFetches)
+		if (minimumFetches === 0) expect(fetchCalls).toBe(0)
+		const text = `${error?.message}\n${String(error?.cause ?? "")}\n${await filesUnder(dir)}`
+		expect(exposures(text)).toEqual([])
 	})
 })

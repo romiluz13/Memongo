@@ -35,11 +35,9 @@ export function buildRemoteBaseUrlPolicy(
 	}
 }
 
-// Error text reaches logs and benchmark output: name the endpoint, never the
-// userinfo, query or fragment, which can carry credentials.
-function describeEndpoint(url: URL): string {
-	return `${url.protocol}//${url.host}${url.pathname}`
-}
+// Error text reaches logs and benchmark output. Any part of a configured URL
+// (userinfo, path, query, even the host) can carry a secret, so messages
+// describe the failure and never echo the URL.
 export async function withRemoteHttpResponse<T>(params: {
 	url: string
 	init?: RequestInit
@@ -59,8 +57,13 @@ export async function withRemoteHttpResponse<T>(params: {
 		throw new SsrFBlockedError("SSRF guard rejected invalid URL")
 	}
 	if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+		throw new SsrFBlockedError("SSRF guard rejected a non-HTTP URL")
+	}
+	// Node's Request throws on embedded credentials and echoes the whole URL
+	// in its TypeError; refuse first so no runtime ever reflects them.
+	if (parsedUrl.username || parsedUrl.password) {
 		throw new SsrFBlockedError(
-			`SSRF guard rejected non-HTTP URL: ${describeEndpoint(parsedUrl)}`,
+			"SSRF guard rejected a URL with embedded credentials",
 		)
 	}
 	const policy = params.ssrfPolicy ?? defaultSsrfPolicy
@@ -68,7 +71,7 @@ export async function withRemoteHttpResponse<T>(params: {
 	// the operator's baseUrl), the request must target that exact host.
 	if (policy.isAllowed && !policy.isAllowed(params.url)) {
 		throw new SsrFBlockedError(
-			`SSRF guard blocked request to ${describeEndpoint(parsedUrl)}`,
+			"SSRF guard blocked a request outside the configured endpoint",
 		)
 	}
 	// Fail closed by default: block private/loopback/metadata targets unless the
@@ -88,7 +91,7 @@ export async function withRemoteHttpResponse<T>(params: {
 	})
 	if (response.status >= 300 && response.status < 400) {
 		throw new SsrFBlockedError(
-			`SSRF guard refused redirect from ${describeEndpoint(parsedUrl)}`,
+			"SSRF guard refused redirect from the configured endpoint",
 		)
 	}
 	return await params.onResponse(response)
