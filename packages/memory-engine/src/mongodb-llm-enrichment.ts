@@ -721,7 +721,9 @@ export function createAnthropicProvider(
 // fixed-text errors pass through; anything else keeps at most its runtime class
 // (and with it the retry decision) under fixed text.
 function providerFailure(err: unknown, timeoutMs: number): Error {
-	if (err instanceof Error && ownFailures.has(err)) return err
+	// Consumed here: once returned, a caller can change the error and hand it
+	// back through an injected fetch, so it is never trusted twice.
+	if (err instanceof Error && ownFailures.delete(err)) return err
 	// An injected transport may signal a status through the exported class;
 	// only the status (and so the retry decision) survives.
 	if (err instanceof EnrichmentHttpError && Number.isInteger(err.statusCode))
@@ -744,7 +746,8 @@ function providerFailure(err: unknown, timeoutMs: number): Error {
 }
 
 // Identity, not class: an injected fetch can throw the exported error classes
-// with any message, cause or fields.
+// with any message, cause or fields. Each entry lives only from its throw to
+// the enclosing provider catch, with no await in between.
 const ownFailures = new WeakSet<Error>()
 
 function ownFailure<T extends Error>(error: T): T {

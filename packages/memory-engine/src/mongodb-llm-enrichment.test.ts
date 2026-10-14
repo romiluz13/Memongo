@@ -2168,6 +2168,33 @@ describe("provider failure diagnostics never carry provider or runtime payloads"
 			expect(fetchFn).toHaveBeenCalledOnce()
 			expectNoPayload(error)
 		})
+
+		it("does not trust its own error from an earlier call once a caller has changed it", async () => {
+			let earlier: unknown
+			const fetchFn = vi.fn(
+				async (input: RequestInfo | URL, init?: RequestInit) => {
+					if (earlier === undefined) {
+						new Request(input, init)
+						return new Response("denied", { status: 401 })
+					}
+					throw earlier
+				},
+			) as unknown as typeof fetch
+			const provider = make(fetchFn)
+			earlier = await call(provider).catch((e: unknown) => e)
+			expect((earlier as EnrichmentHttpError).statusCode).toBe(401)
+			Object.assign(earlier as Error, {
+				message: `HTTP 401 ${KEY}`,
+				cause: new Error(HOST),
+			})
+			const error = await call(provider).catch((e: unknown) => e)
+			expect(error).not.toBe(earlier)
+			expect((error as EnrichmentHttpError).statusCode).toBe(401)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed: HTTP 401 (transport error withheld)",
+			)
+			expectNoPayload(error)
+		})
 	})
 
 	it("reports an Anthropic non-JSON success body as a non-retryable malformed body", async () => {
