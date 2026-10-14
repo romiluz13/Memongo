@@ -5,6 +5,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, it } from "vitest"
 import {
+	ConversationImportRejectedError,
 	importConversationDataset,
 	loadConversationDataset,
 	type ConversationReplayBatchTurn,
@@ -361,5 +362,127 @@ describe("B01 review corrections", () => {
 		)
 		expect(String(error)).not.toContain(SECRET_BODY)
 		expect(String(error)).not.toContain(BAD_STAMP)
+	})
+})
+
+describe("B01 all-invalid imports fail closed with per-record diagnostics", () => {
+	async function rejectAll(name: string, content: string) {
+		const file = await datasetFile(name, content)
+		const sink = capture()
+		const error = await importConversationDataset({
+			datasetPath: file,
+			writeTurns: sink.writeTurns,
+		}).catch((e: unknown) => e)
+		expect(sink.written).toEqual([])
+		expect(error).toBeInstanceOf(ConversationImportRejectedError)
+		const rejected = error as ConversationImportRejectedError
+		expect(rejected.message).toContain(
+			"conversation dataset contains no valid conversations",
+		)
+		const text = JSON.stringify({
+			message: rejected.message,
+			rejections: rejected.rejections,
+		})
+		expect(text).not.toContain(SECRET_BODY)
+		expect(text).not.toContain(BAD_STAMP)
+		expect(text).not.toContain(path.dirname(file))
+		return rejected
+	}
+
+	it("JSON: every rejected turn and conversation keeps its coordinates", async () => {
+		const error = await rejectAll(
+			"all-bad.json",
+			JSON.stringify(
+				[
+					{
+						turns: [
+							valid(SECRET_BODY, BAD_STAMP),
+							{ role: "robot", body: "x" },
+						],
+					},
+					{ turns: "nope" },
+				],
+				null,
+				2,
+			),
+		)
+		expect(error).toMatchObject({
+			failedLines: 0,
+			rejectedTurns: 2,
+			rejectedConversations: 2,
+		})
+		expect(error.rejections).toEqual([
+			{
+				line: null,
+				conversationIndex: 0,
+				turnIndex: 0,
+				reason: "invalid-timestamp",
+			},
+			{
+				line: null,
+				conversationIndex: 0,
+				turnIndex: 1,
+				reason: "invalid-role",
+			},
+			{
+				line: null,
+				conversationIndex: 0,
+				turnIndex: null,
+				reason: "no-valid-turns",
+			},
+			{
+				line: null,
+				conversationIndex: 1,
+				turnIndex: null,
+				reason: "turns-not-array",
+			},
+		])
+	})
+
+	it("JSONL semantic: rejections carry physical lines; syntax failures stay failedLines", async () => {
+		const error = await rejectAll(
+			"all-bad.jsonl",
+			[
+				"{not json",
+				JSON.stringify({ turns: [valid(SECRET_BODY, "")] }),
+				"",
+				JSON.stringify([1, 2]),
+			].join("\n"),
+		)
+		expect(error).toMatchObject({
+			failedLines: 1,
+			rejectedTurns: 1,
+			rejectedConversations: 2,
+		})
+		expect(error.rejections).toEqual([
+			{
+				line: 2,
+				conversationIndex: 0,
+				turnIndex: 0,
+				reason: "invalid-timestamp",
+			},
+			{
+				line: 2,
+				conversationIndex: 0,
+				turnIndex: null,
+				reason: "no-valid-turns",
+			},
+			{
+				line: 4,
+				conversationIndex: 1,
+				turnIndex: null,
+				reason: "conversation-not-object",
+			},
+		])
+	})
+
+	it("JSONL syntax-only: no records, only failedLines", async () => {
+		const error = await rejectAll("syntax.jsonl", "{not json\n[oops\n")
+		expect(error).toMatchObject({
+			failedLines: 2,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
+			rejections: [],
+		})
 	})
 })

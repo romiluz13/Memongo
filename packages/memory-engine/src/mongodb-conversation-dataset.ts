@@ -192,21 +192,35 @@ function conversationsFromJson(
 		)
 }
 
-// Value-free counts so an all-rejected file still says why.
-function noValidConversations(
-	rejections: ConversationImportRejection[],
-	failedLines = 0,
-): Error {
-	const reasons = new Map<string, number>()
-	for (const entry of rejections)
-		reasons.set(entry.reason, (reasons.get(entry.reason) ?? 0) + 1)
-	const detail = [
-		...(failedLines > 0 ? [`failedLines=${failedLines}`] : []),
-		...Array.from(reasons, ([reason, count]) => `${reason}=${count}`),
-	]
-	return new Error(
-		`conversation dataset contains no valid conversations${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`,
-	)
+/**
+ * Thrown when no conversation in a dataset is valid. Nothing is written; the
+ * error carries the same value-free diagnostics an import receipt would.
+ */
+export class ConversationImportRejectedError extends Error {
+	readonly failedLines: number
+	readonly rejectedTurns: number
+	readonly rejectedConversations: number
+	readonly rejections: ConversationImportRejection[]
+
+	constructor(rejections: ConversationImportRejection[], failedLines = 0) {
+		const reasons = new Map<string, number>()
+		for (const entry of rejections)
+			reasons.set(entry.reason, (reasons.get(entry.reason) ?? 0) + 1)
+		const detail = [
+			...(failedLines > 0 ? [`failedLines=${failedLines}`] : []),
+			...Array.from(reasons, ([reason, count]) => `${reason}=${count}`),
+		]
+		super(
+			`conversation dataset contains no valid conversations${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`,
+		)
+		this.name = "ConversationImportRejectedError"
+		this.failedLines = failedLines
+		this.rejectedTurns = rejections.filter(
+			(entry) => entry.turnIndex !== null,
+		).length
+		this.rejectedConversations = rejections.length - this.rejectedTurns
+		this.rejections = rejections
+	}
 }
 
 export async function loadConversationDataset(
@@ -231,7 +245,8 @@ export async function loadConversationDataset(
 			contentLines.length === 1 ? (contentLines[0] ?? null) : null,
 			rejections,
 		)
-		if (conversations.length === 0) throw noValidConversations(rejections)
+		if (conversations.length === 0)
+			throw new ConversationImportRejectedError(rejections)
 		return {
 			name: basename(resolvedPath),
 			datasetKind: "generic",
@@ -263,7 +278,7 @@ export async function loadConversationDataset(
 		if (conversation) conversations.push(conversation)
 	}
 	if (conversations.length === 0)
-		throw noValidConversations(rejections, failedLines)
+		throw new ConversationImportRejectedError(rejections, failedLines)
 	return {
 		name: basename(resolvedPath),
 		datasetKind: "generic",

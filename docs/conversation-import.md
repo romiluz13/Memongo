@@ -50,9 +50,11 @@ Coordinates:
 `no-valid-turns`, `turn-not-object`, `invalid-role`, `empty-body` or
 `invalid-timestamp`. Rejections never include turn text or the rejected value.
 
-When no conversation is valid, the import fails, and the error lists counts
-by reason (for example `failedLines=1, invalid-timestamp=1, no-valid-turns=1`)
-without any values.
+When no conversation is valid, nothing is written and the import throws
+`ConversationImportRejectedError`. It carries the same `failedLines`,
+`rejectedTurns`, `rejectedConversations` and `rejections` as a receipt, and its
+message lists counts by reason (for example `failedLines=1, invalid-timestamp=1,
+no-valid-turns=1`). Neither includes any value.
 
 JSONL lines that parse as JSON but are not a valid conversation are counted
 in `rejectedConversations`, no longer in `failedLines`.

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
 import type { MemoryConversationImportResult } from "./types.js"
 import {
+	ConversationImportRejectedError,
 	loadConversationDataset,
 	resolveConversationDatasetPath,
 	type ConversationDatasetConversation,
@@ -13,7 +14,11 @@ import { parseExplicitTimestamp } from "./conversation-timestamp.js"
 
 const log = createSubsystemLogger("memory:mongodb:conversation-import")
 
-export { loadConversationDataset, resolveConversationDatasetPath }
+export {
+	ConversationImportRejectedError,
+	loadConversationDataset,
+	resolveConversationDatasetPath,
+}
 
 /**
  * B6: bound for importer write batches submitted to
