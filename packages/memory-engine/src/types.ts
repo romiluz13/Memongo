@@ -1681,6 +1681,14 @@ export type BenchmarkStorageFootprint = {
 export type BenchmarkLatencyDistribution = {
 	p50Ms: number
 	p95Ms: number
+	/** Which cases the samples are: scored cases only, or every attempted case including failures. Absent on older reports. */
+	denominator?: "scored-cases" | "all-attempts"
+	samples?: number
+	/**
+	 * Nearest-rank p95 is the sample maximum below 20 samples, so it is
+	 * descriptive only; no basis claims a stable tail estimate.
+	 */
+	p95Basis?: "no-samples" | "sample-maximum" | "nearest-rank"
 }
 
 export type BenchmarkOperationName =
@@ -1795,6 +1803,7 @@ export type MemoryBenchmarkRunReport = {
 			emptyRate: number
 			avgTopScore: number
 			p95LatencyMs: number
+			scoredLatency?: BenchmarkLatencyDistribution
 			rAt5?: number
 			rAt10?: number
 			ndcgAt10?: number

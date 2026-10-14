@@ -198,6 +198,7 @@ export type BenchmarkSummary = {
 	emptyRate: number
 	avgTopScore: number
 	p95LatencyMs: number
+	scoredLatency?: BenchmarkLatencyDistribution
 	laneLatencyP95?: MemoryBenchmarkLaneLatencySummary
 	rAt5: number
 	rAt10: number
@@ -229,6 +230,7 @@ type BenchmarkReportInput = {
 	emptyRate: number
 	avgTopScore: number
 	p95LatencyMs: number
+	scoredLatency?: BenchmarkLatencyDistribution
 	rAt5?: number
 	rAt10?: number
 	ndcgAt10?: number
@@ -405,6 +407,52 @@ function buildBenchmarkWarnings(params: BenchmarkReportInput): string[] {
 		warnings.push(`${params.ingest?.failedTurns} benchmark turns failed ingest`)
 	}
 	return warnings
+}
+
+/** Text suffix naming a latency's denominator and how far its p95 can be read. */
+export function describeLatencyBasis(
+	latency: BenchmarkLatencyDistribution | undefined,
+): string {
+	if (!latency?.denominator) return ""
+	const basis =
+		latency.p95Basis === "sample-maximum"
+			? "; descriptive only: below 20 samples p95 is the sample maximum"
+			: latency.p95Basis === "no-samples"
+				? "; no samples"
+				: ""
+	return ` (${latency.denominator}, n=${latency.samples ?? 0}${basis})`
+}
+
+// Cases from a partially ingested corpus were scored against missing
+// evidence, so a run with ingest failures is never complete.
+function buildExecutionCompletenessGate(
+	params: BenchmarkReportInput,
+): MemoryBenchmarkRunReport["releaseGates"][number] {
+	const failedTurns = params.ingest?.failedTurns ?? 0
+	const failedLines = params.ingest?.failedLines ?? 0
+	const ingestFailures = [
+		...(failedLines > 0
+			? [`${failedLines} dataset lines failed to parse`]
+			: []),
+		...(failedTurns > 0 ? [`${failedTurns} turns failed ingest`] : []),
+	]
+	if (!params.execution)
+		return {
+			gate: "execution-completeness",
+			status: "failed",
+			evidence: "per-case execution outcomes are absent",
+		}
+	return {
+		gate: "execution-completeness",
+		status:
+			params.execution.failedCases === 0 && ingestFailures.length === 0
+				? "passed"
+				: "failed",
+		evidence: [
+			`${params.execution.succeededCases}/${params.execution.attemptedCases} cases executed successfully; ${params.execution.failedCases} failed`,
+			...ingestFailures,
+		].join("; "),
+	}
 }
 
 function buildBenchmarkDegradations(params: BenchmarkReportInput): string[] {
@@ -829,16 +877,7 @@ export function buildBenchmarkRunReport(
 			status: internalStatus,
 			evidence: `${params.cases} cases, ${params.scoredCases ?? params.cases} scored`,
 		},
-		{
-			gate: "execution-completeness",
-			status:
-				params.execution && params.execution.failedCases === 0
-					? "passed"
-					: "failed",
-			evidence: params.execution
-				? `${params.execution.succeededCases}/${params.execution.attemptedCases} cases executed successfully; ${params.execution.failedCases} failed`
-				: "per-case execution outcomes are absent",
-		},
+		buildExecutionCompletenessGate(params),
 		buildQualityThresholdGate(params),
 		...(answerQualityGate ? [answerQualityGate] : []),
 		buildEvidenceCompletenessGate(params, build),
@@ -896,6 +935,9 @@ export function buildBenchmarkRunReport(
 				emptyRate: params.emptyRate,
 				avgTopScore: params.avgTopScore,
 				p95LatencyMs: params.p95LatencyMs,
+				...(params.scoredLatency
+					? { scoredLatency: params.scoredLatency }
+					: {}),
 				...(params.rAt5 != null ? { rAt5: params.rAt5 } : {}),
 				...(params.rAt10 != null ? { rAt10: params.rAt10 } : {}),
 				...(params.ndcgAt10 != null ? { ndcgAt10: params.ndcgAt10 } : {}),
@@ -2044,6 +2086,7 @@ export function summarizeBenchmarkExecutions(params: {
 				? topScores.reduce((sum, value) => sum + value, 0) / topScores.length
 				: 0,
 		p95LatencyMs: percentile(latencies, 95),
+		scoredLatency: percentile50And95(latencies, "scored-cases"),
 		...(laneLatencyP95 ? { laneLatencyP95 } : {}),
 		rAt5:
 			scored.length > 0

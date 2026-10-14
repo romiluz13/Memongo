@@ -95,6 +95,29 @@ Every standalone benchmark run through `bun run benchmark` includes a
 - `degradations`
 - `scenarioCleanup` when the run used isolated scenario agents
 
+### Latency denominators
+
+Two latency figures are reported, each naming its denominator and sample count:
+
+- `metrics.internal.p95LatencyMs` and `metrics.internal.scoredLatency` cover
+  scored cases only (`denominator: "scored-cases"`).
+- `latency` covers every attempted case of the gate pass, including failed
+  ones (`denominator: "all-attempts"`).
+
+Each case's latency is elapsed wall time for its search, including any
+retries inside that call. Percentiles use nearest rank. Below 20 samples the
+p95 is the sample maximum, so it is marked `p95Basis: "sample-maximum"` and
+the CLI prints it as descriptive only. Seven samples can be reported, but they
+do not support a stable p95 claim, and no basis claims one.
+
+### Ingest completeness
+
+The `execution-completeness` gate fails when any dataset line failed to parse
+or any turn failed ingest, even if every case then executed. Those cases were
+scored against an incomplete corpus, so the run is not complete QA evidence.
+Ingest counts are checkpointed per scenario, so a resumed run keeps the
+failure.
+
 ### Scenario cleanup
 
 After each scenario, the runner deletes that scenario agent's rows from the
@@ -399,6 +422,8 @@ A claim may be published only when all are true:
 5. `warnings` and `degradations` are reviewed and disclosed when material.
 6. The conversation recall regression test is run for any recall-plane change.
 7. The `scenario-cleanup` gate passed.
+8. The `execution-completeness` gate passed, so no case failed and ingest was
+   complete.
 
 If `datasetKind` is `legacy-query` or `officialMetrics` is absent, the result is
 an internal diagnostic, not a benchmark win.

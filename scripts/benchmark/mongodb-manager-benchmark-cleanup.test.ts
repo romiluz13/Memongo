@@ -204,11 +204,14 @@ function scenario(id: string) {
 	}
 }
 
+type Harness = Awaited<ReturnType<typeof harness>>
+
 async function harness(params: {
 	rejectedSuffixes?: string[]
 	failure?: Failure
 	scenarioIds?: string[]
 	cleanupThrows?: boolean
+	failedTurns?: number
 }) {
 	const { ingestBenchmarkConversations } = await import(
 		"./mongodb-benchmark-harness.js"
@@ -220,7 +223,7 @@ async function harness(params: {
 		turnsIngested: 1,
 		skippedConversations: 0,
 		failedLines: 0,
-		failedTurns: 0,
+		failedTurns: params.failedTurns ?? 0,
 		startedAt: new Date("2026-10-14T12:00:00.000Z"),
 		completedAt: new Date("2026-10-14T12:00:01.000Z"),
 	})
@@ -488,5 +491,43 @@ describe("resumed cleanup evidence", () => {
 			scenarioId: "scenario-1",
 			status: "unknown",
 		})
+	})
+})
+
+describe("B08 measurement evidence through the real scenario loop", () => {
+	const completeness = (
+		result: Awaited<ReturnType<Harness["run"]>>["result"],
+	) =>
+		attachBenchmarkOperationsReport(result).benchmarkReport?.releaseGates.find(
+			(gate) => gate.gate === "execution-completeness",
+		)
+
+	it("passes completeness on a full ingest and names an empty scored-case latency", async () => {
+		const h = await harness({})
+		const { result } = await h.run()
+		expect(completeness(result)?.status).toBe("passed")
+		expect(result.scoredLatency).toMatchObject({
+			denominator: "scored-cases",
+			samples: 0,
+			p95Basis: "no-samples",
+		})
+		expect(
+			attachBenchmarkOperationsReport(result).benchmarkReport?.metrics.internal
+				.scoredLatency?.denominator,
+		).toBe("scored-cases")
+	})
+
+	it("keeps a partially ingested run out of complete evidence, also after resume", async () => {
+		const h = await harness({ failedTurns: 3 })
+		const { result } = await h.run()
+		expect(result.ingest?.failedTurns).toBe(3)
+		expect(completeness(result)).toMatchObject({
+			status: "failed",
+			evidence: expect.stringContaining("3 turns failed ingest"),
+		})
+		const resumed = await harness({})
+		const replay = await resumed.run(await h.checkpoint())
+		expect(replay.result.ingest?.failedTurns).toBe(3)
+		expect(completeness(replay.result)?.status).toBe("failed")
 	})
 })

@@ -342,9 +342,18 @@ function percentile(values: number[], p: number): number {
 
 export function percentile50And95(
 	latencies: number[],
+	denominator: "scored-cases" | "all-attempts" = "all-attempts",
 ): BenchmarkLatencyDistribution {
 	return {
 		p50Ms: percentile(latencies, 50),
 		p95Ms: percentile(latencies, 95),
+		denominator,
+		samples: latencies.length,
+		p95Basis:
+			latencies.length === 0
+				? "no-samples"
+				: latencies.length < 20
+					? "sample-maximum"
+					: "nearest-rank",
 	}
 }

@@ -46,6 +46,7 @@ import {
 	benchmarkAnswerModelName,
 	resolveBenchmarkAnswerProvider,
 } from "./benchmark/benchmark-answer-provider.js"
+import { describeLatencyBasis } from "./benchmark/mongodb-benchmark-runner.js"
 import { MongoDBManagerBenchmarkOps } from "./benchmark/mongodb-manager-benchmark.js"
 
 const REPO_ROOT = path.resolve(
@@ -682,7 +683,15 @@ export async function main(
 	console.log(`  emptyRate      : ${result.emptyRate.toFixed(4)}`)
 	console.log(`  R@5            : ${result.rAt5?.toFixed(4) ?? "n/a"}`)
 	console.log(`  nDCG@10        : ${result.ndcgAt10?.toFixed(4) ?? "n/a"}`)
-	console.log(`  p95 latency ms : ${result.p95LatencyMs.toFixed(0)}`)
+	console.log(
+		`  p95 latency ms : ${result.p95LatencyMs.toFixed(0)}${describeLatencyBasis(result.scoredLatency)}`,
+	)
+	const allAttemptLatency = result.benchmarkReport?.latency
+	if (allAttemptLatency?.denominator === "all-attempts") {
+		console.log(
+			`  all-attempt p95: ${allAttemptLatency.p95Ms.toFixed(0)}${describeLatencyBasis(allAttemptLatency)}`,
+		)
+	}
 	const laneLatency = Object.entries(result.laneLatencyP95 ?? {}).toSorted(
 		([, left], [, right]) => right.p95Ms - left.p95Ms,
 	)

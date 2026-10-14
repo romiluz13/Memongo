@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "@memongo/lib"
 import type { Db } from "mongodb"
 import { relevanceRegressionsCollection } from "../../packages/memory-engine/src/mongodb-schema.js"
 import type {
+	BenchmarkLatencyDistribution,
 	BenchmarkScenarioCleanupReport,
 	MemoryBenchmarkCaseOutcome,
 	MemoryBenchmarkDatasetKind,
@@ -46,6 +47,8 @@ export type RelevanceBenchmarkResult = {
 	emptyRate: number
 	avgTopScore: number
 	p95LatencyMs: number
+	/** Scored-case latency with its denominator, sample count and p95 basis. */
+	scoredLatency?: BenchmarkLatencyDistribution
 	laneLatencyP95?: MemoryBenchmarkLaneLatencySummary
 	measurementPasses?: MemoryBenchmarkMeasurementPasses
 	rAt5?: number

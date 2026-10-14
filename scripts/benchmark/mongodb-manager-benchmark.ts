@@ -2158,6 +2158,7 @@ export class MongoDBManagerBenchmarkOps {
 				emptyRate: summary.emptyRate,
 				avgTopScore: summary.avgTopScore,
 				p95LatencyMs: summary.p95LatencyMs,
+				scoredLatency: summary.scoredLatency,
 				...(summary.laneLatencyP95
 					? { laneLatencyP95: summary.laneLatencyP95 }
 					: {}),
