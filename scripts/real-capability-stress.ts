@@ -16,11 +16,16 @@ import {
 	expandGraph,
 	evolveProcedure,
 	synthesizeProfile,
-	updateLaneCoverage,
 } from "@memongo/memory-engine/internal"
 import { buildMemongoConfig } from "../packages/memory-bridge/src/memory-config.ts"
 import { resolveMemoryBackendConfig } from "../packages/memory-engine/src/backend-config.ts"
 import { writeProofArtifact } from "./proof-artifacts.js"
+import {
+	coldLanes,
+	exitCodeForVerdict,
+	type ProofSkip,
+	requiredChecksPassed,
+} from "./proof-verdict.js"
 import {
 	getKBStats,
 	ingestToKB,
@@ -189,13 +194,13 @@ async function fetchJson(pathname: string): Promise<unknown> {
 	return await response.json()
 }
 
-async function runRealAgentLane(): Promise<CapabilityCheck> {
+async function runRealAgentLane(): Promise<CapabilityCheck | ProofSkip> {
 	if (
 		!process.env.MEMONGO_LLM_API_KEY?.trim() ||
 		!process.env.MEMONGO_LLM_BASE_URL?.trim() ||
 		!process.env.MEMONGO_LLM_MODEL?.trim()
 	) {
-		return pass("real-agent", "skipped: MEMONGO_LLM_* env not set")
+		return { name: "real-agent", reason: "MEMONGO_LLM_* env not set" }
 	}
 
 	const stdoutChunks: string[] = []
@@ -594,14 +599,6 @@ async function main() {
 			graphExpansion !== null && graphExpansion.connections.length > 0,
 			"graph expansion did not return connections",
 		)
-		await updateLaneCoverage({
-			db,
-			prefix: mongoCfg.collectionPrefix,
-			agentId,
-			increments: {
-				graph: Math.max(entityExtraction.entities.length, 1),
-			},
-		})
 		checks.push(
 			pass(
 				"graph-extract-expand",
@@ -1127,15 +1124,15 @@ async function main() {
 			typeof vectorProbe.ok === "boolean",
 			"vector probe did not return ok",
 		)
+		const probeDetails = `embedding=${String(embeddingProbe.ok)}, vector=${String(vectorProbe.ok)}`
 		checks.push(
-			pass(
-				"probes",
-				`embedding=${String(embeddingProbe.ok)}, vector=${String(vectorProbe.ok)}`,
-			),
+			embeddingProbe.ok === true && vectorProbe.ok === true
+				? pass("probes", probeDetails)
+				: fail("probes", probeDetails),
 		)
 
 		const repeatedQuery = "Phoenix deploy checklist process"
-		await client.searchDetailed({
+		const firstRepeat = await client.searchDetailed({
 			agentId,
 			query: repeatedQuery,
 			limit: 5,
@@ -1143,7 +1140,7 @@ async function main() {
 			sourcePreference: ["procedural"],
 			returnPlan: true,
 		})
-		await client.searchDetailed({
+		const secondRepeat = await client.searchDetailed({
 			agentId,
 			query: repeatedQuery,
 			limit: 5,
@@ -1151,12 +1148,11 @@ async function main() {
 			sourcePreference: ["procedural"],
 			returnPlan: true,
 		})
-
+		const repeatDetails = `results=${firstRepeat.results.length},${secondRepeat.results.length}`
 		checks.push(
-			pass(
-				"live-retrieval-repeat",
-				"two identical detailed searches completed without result reuse",
-			),
+			firstRepeat.results.length > 0 && secondRepeat.results.length > 0
+				? pass("live-retrieval-repeat", repeatDetails)
+				: fail("live-retrieval-repeat", repeatDetails),
 		)
 
 		const relevanceExplain = asRelevanceExplainResponse(
@@ -1221,24 +1217,27 @@ async function main() {
 		assert(removedDoc, "KB cleanup document was not removed")
 		checks.push(pass("kb-remove", `removed=${kbPathDisposable}`))
 
-		const laneCoverage =
-			(
+		const laneCoverage = {
+			...emptyLaneCoverage(),
+			...(
 				await getLaneCoverage({
 					db,
 					prefix: mongoCfg.collectionPrefix,
 					agentId,
 				})
-			)?.lanes ?? emptyLaneCoverage()
+			)?.lanes,
+		}
 		const laneSummary = Object.entries(laneCoverage).map(([lane, status]) => ({
 			lane,
 			count: status.count,
 			hasData: status.hasData,
 		}))
-		const coldLanes = laneSummary
-			.filter((entry) => entry.hasData === false || entry.count === 0)
-			.map((entry) => entry.lane)
-		if (coldLanes.length > 0) {
-			throw new Error(`retrieval lanes still cold: ${coldLanes.join(", ")}`)
+		const coldLaneNames = coldLanes(
+			laneCoverage,
+			Object.keys(emptyLaneCoverage()),
+		)
+		if (coldLaneNames.length > 0) {
+			throw new Error(`retrieval lanes still cold: ${coldLaneNames.join(", ")}`)
 		}
 		checks.push(
 			pass(
@@ -1247,10 +1246,16 @@ async function main() {
 			),
 		)
 
-		checks.push(await runRealAgentLane())
+		const skipped: ProofSkip[] = []
+		const realAgent = await runRealAgentLane()
+		if ("reason" in realAgent) {
+			skipped.push(realAgent)
+		} else {
+			checks.push(realAgent)
+		}
 
 		const report = {
-			ok: checks.every((check) => check.ok),
+			ok: requiredChecksPassed(checks),
 			baseUrl,
 			agentId,
 			sessionId,
@@ -1266,6 +1271,8 @@ async function main() {
 				},
 			],
 			checks,
+			// Optional diagnostics that did not run; never counted toward ok.
+			skipped,
 		}
 		const artifactPath = await writeProofArtifact({
 			suite: "real-capability-stress",
@@ -1279,6 +1286,7 @@ async function main() {
 				2,
 			),
 		)
+		process.exitCode = exitCodeForVerdict(report.ok)
 	} finally {
 		await mongo.close().catch(() => undefined)
 		if (disposableWorkspaceCreated) {
