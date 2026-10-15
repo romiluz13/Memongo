@@ -2,6 +2,18 @@
 
 All notable changes to Memongo will be documented in this file.
 
+## 2.2.4 — 2026-10-15
+
+- Avoid argument-limit failures when importing conversations with large numbers
+  of rejected turns, while retaining individual rejection diagnostics.
+- Withhold benchmark completion scores when ingestion failed, including resumed
+  runs, and reject malformed checkpoint failure counters.
+- Parse supported benchmark timestamps with explicit UTC semantics and validate
+  them before ingestion. Version the parser treatment and resume identity;
+  existing benchmark baselines and checkpoints require fresh runs.
+
+See [release details and validation limits](docs/platform/releases/2.2.4.md).
+
 ## 2.2.3 — 2026-10-13
 
 - Preserve explicitly requested autoEmbed scalar and binary quantization when
