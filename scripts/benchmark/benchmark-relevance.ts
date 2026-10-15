@@ -62,6 +62,8 @@ export type RelevanceBenchmarkResult = {
 		skippedConversations: number
 		failedLines: number
 		failedTurns: number
+		rejectedTurns?: number
+		rejectedConversations?: number
 	}
 	regressions: BenchmarkRegression[]
 	queryGovernance?: QueryGovernanceReport

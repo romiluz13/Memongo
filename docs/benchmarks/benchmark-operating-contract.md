@@ -112,11 +112,19 @@ do not support a stable p95 claim, and no basis claims one.
 
 ### Ingest completeness
 
-The `execution-completeness` gate fails when any dataset line failed to parse
-or any turn failed ingest, even if every case then executed. Those cases were
-scored against an incomplete corpus, so the run is not complete QA evidence.
-Ingest counts are checkpointed per scenario, so a resumed run keeps the
-failure.
+The `execution-completeness` gate fails when any dataset line failed to parse,
+the generic loader rejected any conversation or turn, or any turn failed
+ingest, even if every case then executed. Those cases were scored against an
+incomplete corpus, so the run is not complete QA evidence. Ingest counts are
+checkpointed per scenario, so a resumed run keeps the failure.
+
+The generic JSON/JSONL loader counts a line as `failedLines` only when it is
+not valid JSON. Valid JSON with an invalid shape becomes a typed rejection
+with the same `{line, conversationIndex, turnIndex, reason}` coordinates and
+reasons as the [conversation importer](../conversation-import.md); receipts
+report `rejectedTurns` and `rejectedConversations`. A publication run refuses
+any rejection. The LongMemEval and LoCoMo adapters do not yet report
+rejections; malformed records in those formats can still be skipped.
 
 The same failure labels the QA evidence. The official and custom-judge
 summaries report `coverage: "partial"` and `accountingCompleteness:
@@ -503,12 +511,13 @@ by [ECMA-262 Date.parse](https://tc39.es/ecma262/multipage/numbers-and-dates.htm
 
 The policy version is bound into the run configuration and benchmark replay
 idempotency keys. Resume rejects older or different policies, executable
-identities, malformed ingest counters and a line-failure count that disagrees
-with the loaded dataset. Start a fresh benchmark scope after a policy change.
+identities, malformed ingest counters and a line-failure or rejection count
+that disagrees with the loaded dataset. Start a fresh benchmark scope after a policy change.
 The production conversation importer retains its own timestamp and key contract.
 
-Comparison inference also requires `failedLines: 0` and valid nonnegative
-integer scenario ingest counters with `failedTurns: 0`. Unknown or failed
+Comparison inference also requires `failedLines: 0`, `rejectedTurns: 0`,
+`rejectedConversations: 0` and valid nonnegative integer scenario ingest
+counters with `failedTurns: 0`. Unknown or failed
 ingestion keeps a b2-join result descriptive and exits nonzero even when every
 question has a verdict. Historical checkpoints without these fields cannot
 establish complete ingestion.

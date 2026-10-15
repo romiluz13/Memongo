@@ -204,6 +204,8 @@ export async function readB2RunIdentity(
 		...(checkpoint?.version === 2 ? [] : ["version"]),
 		...invalidFields(checkpoint, fields),
 		...(checkpoint?.failedLines === 0 &&
+		checkpoint?.rejectedTurns === 0 &&
+		checkpoint?.rejectedConversations === 0 &&
 		Array.isArray(checkpoint?.completedScenarios) &&
 		checkpoint.completedScenarios.every(
 			(scenario: { ingest?: unknown } | null) =>

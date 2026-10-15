@@ -82,8 +82,10 @@ import type {
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkTurn,
 	MemoryBenchmarkIngestResult,
+	MemoryConversationImportRejection,
 	MemorySearchResult,
 } from "../../packages/memory-engine/src/types.js"
+import { countBenchmarkRejections } from "./mongodb-benchmark-dataset.js"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { MemoryScope } from "@memongo/lib"
 import type { Collection, Document } from "mongodb"
@@ -399,6 +401,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		datasetKind?: MemoryBenchmarkDatasetKind
 		conversations: MemoryBenchmarkConversation[]
 		failedLines?: number
+		rejections?: MemoryConversationImportRejection[]
 		scope?: MemoryScope
 		metadata?: Record<string, unknown>
 	}): Promise<MemoryBenchmarkIngestResult> {
@@ -554,6 +557,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			skippedConversations,
 			failedLines: params.failedLines ?? 0,
 			failedTurns,
+			...countBenchmarkRejections(params.rejections),
 			startedAt,
 			completedAt: new Date(),
 		}

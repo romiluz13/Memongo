@@ -84,13 +84,27 @@ export function buildUnavailableE2eQaEnvelope(params: {
 	}
 }
 
+/** Rejection counts are optional only for callers that never load a dataset. */
+export type BenchmarkIngestFailureCounts = {
+	failedTurns: number
+	failedLines: number
+	rejectedTurns?: number
+	rejectedConversations?: number
+}
+
 /** B08:C06: value-free ingest failure counts, empty when ingest was whole. */
 export function describeIngestFailures(
-	ingest: { failedTurns: number; failedLines: number } | undefined,
+	ingest: BenchmarkIngestFailureCounts | undefined,
 ): string[] {
 	return [
 		...((ingest?.failedLines ?? 0) > 0
 			? [`${ingest?.failedLines} dataset lines failed to parse`]
+			: []),
+		...((ingest?.rejectedConversations ?? 0) > 0
+			? [`${ingest?.rejectedConversations} dataset conversations were rejected`]
+			: []),
+		...((ingest?.rejectedTurns ?? 0) > 0
+			? [`${ingest?.rejectedTurns} dataset turns were rejected`]
 			: []),
 		...((ingest?.failedTurns ?? 0) > 0
 			? [`${ingest?.failedTurns} turns failed ingest`]
@@ -180,7 +194,7 @@ export async function runBenchmarkJudgedAnswers(params: {
 	materialByCaseId: Map<string, BenchmarkJudgedAnswerMaterial>
 	resumedFromCheckpoint: boolean
 	/** B08:C06: run-level ingest failures, checkpoint-restored scenarios included. */
-	ingest?: { failedTurns: number; failedLines: number }
+	ingest?: BenchmarkIngestFailureCounts
 	accounting?: BenchmarkRunAccounting
 }): Promise<BenchmarkE2eQaEnvelope | undefined> {
 	if (params.datasetKind !== "longmemeval") {

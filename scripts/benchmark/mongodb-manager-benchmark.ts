@@ -1,4 +1,8 @@
 import {
+	BenchmarkInputRejectedError,
+	countBenchmarkRejections,
+} from "./mongodb-benchmark-dataset.js"
+import {
 	endOfBenchmarkUtcDay,
 	normalizeBenchmarkConversationTimestamps,
 	requireBenchmarkTimestamp,
@@ -143,6 +147,7 @@ import type {
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkIngestResult,
+	MemoryConversationImportRejection,
 	MemorySearchResult,
 	BenchmarkRerankerConfig,
 	BenchmarkLatencyDistribution,
@@ -161,9 +166,10 @@ export { BENCHMARK_SCENARIO_COLLECTION_SUFFIXES }
 
 export function isLegacyBenchmarkFallbackCandidate(err: unknown): boolean {
 	return (
-		err instanceof Error &&
-		(err.message === "benchmark dataset contains no valid conversations" ||
-			err.message === "benchmark dataset contains no evaluation cases")
+		err instanceof BenchmarkInputRejectedError ||
+		(err instanceof Error &&
+			(err.message === "benchmark dataset contains no valid conversations" ||
+				err.message === "benchmark dataset contains no evaluation cases"))
 	)
 }
 
@@ -891,6 +897,21 @@ export class MongoDBManagerBenchmarkOps {
 			throw new Error(
 				"benchmark checkpoint failedLines count does not match loaded dataset",
 			)
+		// Absent counts predate B01:C07; such checkpoints also carry an older
+		// executable digest, so they never pass resume identity.
+		const loadedRejections = countBenchmarkRejections(params.dataset.rejections)
+		if (
+			params.resumeCheckpoint &&
+			((params.resumeCheckpoint.rejectedTurns !== undefined &&
+				params.resumeCheckpoint.rejectedTurns !==
+					loadedRejections.rejectedTurns) ||
+				(params.resumeCheckpoint.rejectedConversations !== undefined &&
+					params.resumeCheckpoint.rejectedConversations !==
+						loadedRejections.rejectedConversations))
+		)
+			throw new Error(
+				"benchmark checkpoint rejection counts do not match loaded dataset",
+			)
 		if (
 			params.resumeCheckpoint?.completedScenarios.some(
 				(scenario) => !hasValidBenchmarkIngestCounts(scenario.ingest),
@@ -933,10 +954,15 @@ export class MongoDBManagerBenchmarkOps {
 			skippedConversations: 0,
 			failedLines: params.dataset.failedLines ?? 0,
 			failedTurns: 0,
+			...countBenchmarkRejections(params.dataset.rejections),
 		}
-		if (params.publicationRun && ingest.failedLines > 0) {
+		if (
+			params.publicationRun &&
+			ingest.failedLines + ingest.rejectedTurns + ingest.rejectedConversations >
+				0
+		) {
 			throw new Error(
-				`publication benchmark dataset parse incomplete: failedLines=${ingest.failedLines}`,
+				`publication benchmark dataset parse incomplete: failedLines=${ingest.failedLines}, rejectedConversations=${ingest.rejectedConversations}, rejectedTurns=${ingest.rejectedTurns}`,
 			)
 		}
 		if (params.checkpointPath && !params.datasetSha256) {
@@ -1090,6 +1116,8 @@ export class MongoDBManagerBenchmarkOps {
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
 					version: 2,
 					failedLines: ingest.failedLines,
+					rejectedTurns: ingest.rejectedTurns,
+					rejectedConversations: ingest.rejectedConversations,
 					runId: params.runContext.runId,
 					datasetSha256: seedDatasetSha256,
 					configurationHash: params.runContext.configurationHash,
@@ -2082,6 +2110,8 @@ export class MongoDBManagerBenchmarkOps {
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
 					version: 2,
 					failedLines: ingest.failedLines,
+					rejectedTurns: ingest.rejectedTurns,
+					rejectedConversations: ingest.rejectedConversations,
 					runId: params.runContext.runId,
 					datasetSha256,
 					configurationHash: params.runContext.configurationHash,
@@ -2364,6 +2394,7 @@ export class MongoDBManagerBenchmarkOps {
 		datasetKind?: MemoryBenchmarkDatasetKind
 		conversations: MemoryBenchmarkConversation[]
 		failedLines?: number
+		rejections?: MemoryConversationImportRejection[]
 		scope?: MemoryScope
 		metadata?: Record<string, unknown>
 	}): Promise<MemoryBenchmarkIngestResult> {

@@ -122,6 +122,8 @@ async function produceRun(
 	await writeBenchmarkCheckpointAtomic(checkpointPath, {
 		version: 2,
 		failedLines: 0,
+		rejectedTurns: 0,
+		rejectedConversations: 0,
 		runId: runContext.runId,
 		datasetSha256: DATASET,
 		configurationHash: runContext.configurationHash,
@@ -642,6 +644,26 @@ describe("b2-join ingestion completeness", () => {
 						completedScenarios: { ingest: { failedTurns: number } }[]
 					}
 					raw.completedScenarios[0]!.ingest.failedTurns = 1
+				}
+			},
+		)
+		expectRefused(result, "ingest completeness")
+	})
+	it.each([
+		["rejectedTurns", undefined],
+		["rejectedTurns", 1],
+		["rejectedConversations", undefined],
+		["rejectedConversations", 1],
+	])("refuses unknown or nonzero %s %s", async (field, count) => {
+		const result = await compare(
+			DEDICATED,
+			DEDICATED,
+			[],
+			(checkpoint, label) => {
+				if (label === "b") {
+					const raw = checkpoint as unknown as Record<string, unknown>
+					if (count === undefined) delete raw[field]
+					else raw[field] = count
 				}
 			},
 		)

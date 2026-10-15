@@ -211,6 +211,8 @@ export type BenchmarkSummary = {
 		skippedConversations: number
 		failedLines: number
 		failedTurns: number
+		rejectedTurns?: number
+		rejectedConversations?: number
 	}
 }
 
@@ -406,6 +408,14 @@ function buildBenchmarkWarnings(params: BenchmarkReportInput): string[] {
 	if ((params.ingest?.failedTurns ?? 0) > 0) {
 		warnings.push(`${params.ingest?.failedTurns} benchmark turns failed ingest`)
 	}
+	if ((params.ingest?.rejectedConversations ?? 0) > 0) {
+		warnings.push(
+			`${params.ingest?.rejectedConversations} dataset conversations were rejected`,
+		)
+	}
+	if ((params.ingest?.rejectedTurns ?? 0) > 0) {
+		warnings.push(`${params.ingest?.rejectedTurns} dataset turns were rejected`)
+	}
 	return warnings
 }
 
@@ -426,9 +436,17 @@ export function describeLatencyBasis(
 function describeIngestFailures(params: BenchmarkReportInput): string[] {
 	const failedTurns = params.ingest?.failedTurns ?? 0
 	const failedLines = params.ingest?.failedLines ?? 0
+	const rejectedConversations = params.ingest?.rejectedConversations ?? 0
+	const rejectedTurns = params.ingest?.rejectedTurns ?? 0
 	return [
 		...(failedLines > 0
 			? [`${failedLines} dataset lines failed to parse`]
+			: []),
+		...(rejectedConversations > 0
+			? [`${rejectedConversations} dataset conversations were rejected`]
+			: []),
+		...(rejectedTurns > 0
+			? [`${rejectedTurns} dataset turns were rejected`]
 			: []),
 		...(failedTurns > 0 ? [`${failedTurns} turns failed ingest`] : []),
 	]

@@ -1155,6 +1155,8 @@ export type MemoryBenchmarkDataset = {
 	evaluations?: MemoryBenchmarkEvaluationCase[]
 	scenarios?: MemoryBenchmarkScenario[]
 	failedLines?: number
+	/** B01:C07: value-free coordinates of records the loader rejected; never written. */
+	rejections?: MemoryConversationImportRejection[]
 }
 
 export type MemoryBenchmarkIngestResult = {
@@ -1165,6 +1167,8 @@ export type MemoryBenchmarkIngestResult = {
 	skippedConversations: number
 	failedLines: number
 	failedTurns: number
+	rejectedTurns: number
+	rejectedConversations: number
 	startedAt: Date
 	completedAt: Date
 }
