@@ -1,8 +1,9 @@
 import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import { setImmediate } from "node:timers/promises"
 import type { Collection, Document } from "mongodb"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
+import { SYNTHETIC_FINGERPRINT_KEY } from "./benchmark-run-configuration.fixture.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 
 function fixture(lane: "text" | "vector", status = "FAILED") {
@@ -47,6 +48,9 @@ function fixture(lane: "text" | "vector", status = "FAILED") {
 				: ops.waitForBenchmarkVectorSearchCollectionConvergence(params),
 	}
 }
+beforeEach(() => {
+	vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", SYNTHETIC_FINGERPRINT_KEY)
+})
 afterEach(() => {
 	vi.restoreAllMocks()
 	vi.unstubAllEnvs()

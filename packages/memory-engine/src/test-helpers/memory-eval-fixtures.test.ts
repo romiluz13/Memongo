@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { resolveScopeIdentity } from "../mongodb-scope.js"
 import { buildPhase6MemoryEvalFixture } from "./memory-eval-fixtures.js"
 
 describe("memory-eval-fixtures", () => {
@@ -14,6 +15,7 @@ describe("memory-eval-fixtures", () => {
 		expect(fixture.cases.map((entry) => entry.id)).toEqual([
 			"current-release-window",
 			"no-scope-leak-red-kite",
+			"foreign-owner-red-kite",
 			"session-owner-isolation",
 			"active-slate",
 			"what-changed",
@@ -55,5 +57,35 @@ describe("memory-eval-fixtures", () => {
 		).toBe(true)
 
 		vi.useRealTimers()
+	})
+})
+
+describe("foreign sentinel scope", () => {
+	it("the foreign owner reads the same scope its sentinel was written to, and the primary reads its own", () => {
+		const fixture = buildPhase6MemoryEvalFixture("scope")
+		const sentinel = fixture.seed.find(
+			(step) =>
+				step.kind === "write-event" &&
+				step.agentId === fixture.secondaryAgentId,
+		)
+		const owner = fixture.cases.find((c) => c.id === "foreign-owner-red-kite")
+		const abstention = fixture.cases.find(
+			(c) => c.id === "no-scope-leak-red-kite",
+		)
+		if (
+			sentinel?.kind !== "write-event" ||
+			owner?.kind !== "search-detailed" ||
+			abstention?.kind !== "search-detailed"
+		)
+			throw new Error("fixture")
+		const read = (request: typeof owner.request) =>
+			resolveScopeIdentity({
+				agentId: request.agentId,
+				sessionId: request.conversationScope?.sessionKey,
+			})
+		const written = resolveScopeIdentity(sentinel)
+		expect(read(owner.request)).toEqual(written)
+		expect(read(abstention.request).scope).toBe(written.scope)
+		expect(read(abstention.request).scopeRef).not.toBe(written.scopeRef)
 	})
 })

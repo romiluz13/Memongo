@@ -9,7 +9,9 @@ import {
 	resolveDatasetSha256,
 	resolveRetrievalUnit,
 } from "./benchmark-parity-envelope.js"
+import type { BenchmarkExecutableIdentity } from "./benchmark-executable-identity.js"
 import type { BenchmarkReadinessSkip } from "./mongodb-manager-benchmark-scenario.js"
+import { summarizeScenarioCleanup } from "./benchmark-scenario-cleanup.js"
 import type { MemorySearchResult } from "../../packages/memory-engine/src/types.js"
 import type {
 	BenchmarkCostAccounting,
@@ -19,6 +21,7 @@ import type {
 	BenchmarkQualityThresholds,
 	BenchmarkRerankerConfig,
 	BenchmarkRunIdentity,
+	BenchmarkScenarioCleanupReport,
 	BenchmarkStorageFootprint,
 	BenchmarkTenantStorageMeasurement,
 	MemoryBenchmarkDatasetKind,
@@ -195,6 +198,7 @@ export type BenchmarkSummary = {
 	emptyRate: number
 	avgTopScore: number
 	p95LatencyMs: number
+	scoredLatency?: BenchmarkLatencyDistribution
 	laneLatencyP95?: MemoryBenchmarkLaneLatencySummary
 	rAt5: number
 	rAt10: number
@@ -211,6 +215,8 @@ export type BenchmarkSummary = {
 }
 
 type BenchmarkReportInput = {
+	/** Executable source identity observed once at run admission. */
+	observedBuild?: BenchmarkExecutableIdentity
 	datasetVersion: string
 	datasetName?: string
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
@@ -224,6 +230,7 @@ type BenchmarkReportInput = {
 	emptyRate: number
 	avgTopScore: number
 	p95LatencyMs: number
+	scoredLatency?: BenchmarkLatencyDistribution
 	rAt5?: number
 	rAt10?: number
 	ndcgAt10?: number
@@ -248,10 +255,69 @@ type BenchmarkReportInput = {
 		status: "passed" | "failed"
 		evidence: string
 	}
+	/** B08:C03: absent means cleanup is unknown, which blocks publication. */
+	scenarioCleanup?: BenchmarkScenarioCleanupReport
 }
 
-function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
-	const commitSha =
+/**
+ * The summary as reported: status and outcomes are re-derived from consistent
+ * outcomes (the input label is not trusted), and a failed label stays failed.
+ */
+function reconcileScenarioCleanup(
+	cleanup: BenchmarkScenarioCleanupReport | undefined,
+): BenchmarkScenarioCleanupReport | undefined {
+	if (!cleanup) return undefined
+	const derived = summarizeScenarioCleanup(cleanup.scenarios)
+	return {
+		...derived,
+		status:
+			cleanup.status === "failed"
+				? "failed"
+				: cleanup.status === "acknowledged"
+					? derived.status
+					: derived.status === "failed"
+						? "failed"
+						: "incomplete",
+	}
+}
+
+function buildScenarioCleanupGate(
+	cleanup: BenchmarkScenarioCleanupReport | undefined,
+): MemoryBenchmarkRunReport["releaseGates"][number] {
+	if (!cleanup)
+		return {
+			gate: "scenario-cleanup",
+			status: "not-run",
+			evidence:
+				"no scenario cleanup outcome was recorded; cleanup is unknown and the run is not a clean proof",
+		}
+	const byStatus = (status: string) =>
+		cleanup.scenarios
+			.filter((scenario) => scenario.status === status)
+			.map((scenario) => scenario.scenarioId)
+	if (cleanup.status === "failed")
+		return {
+			gate: "scenario-cleanup",
+			status: "failed",
+			evidence: `scenario cleanup failed or was unacknowledged: ${byStatus("failed").join(", ")}`,
+		}
+	if (cleanup.status === "acknowledged")
+		return {
+			gate: "scenario-cleanup",
+			status: "passed",
+			evidence: `${cleanup.scenarios.length} scenarios: every delete was acknowledged in the registered collections only; this does not prove the namespace is empty or that later writes were fenced`,
+		}
+	return {
+		gate: "scenario-cleanup",
+		status: "not-run",
+		evidence: `scenario cleanup is not established: retained=${byStatus("retained").length} not-attempted=${byStatus("not-attempted").length} unknown=${byStatus("unknown").length} scenarios=${cleanup.scenarios.length}`,
+	}
+}
+
+function readBuildIdentity(
+	observed: BenchmarkExecutableIdentity | undefined,
+): MemoryBenchmarkRunReport["build"] {
+	const claimedCommitSha =
 		process.env.MEMONGO_BUILD_COMMIT?.trim() ||
 		process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
 		process.env.GITHUB_SHA?.trim() ||
@@ -266,11 +332,37 @@ function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
 		process.env.npm_package_version?.trim() ||
 		""
 
-	return {
-		source: commitSha || buildId || buildLabel ? "env" : "unknown",
-		...(commitSha ? { commitSha } : {}),
+	// A malformed claim may carry anything, including credential URLs: record
+	// only that it was invalid.
+	const claimValid = /^[0-9a-f]{7,40}$/i.test(claimedCommitSha)
+	const claims = {
+		...(claimedCommitSha && claimValid
+			? { claimedCommitSha: claimedCommitSha.toLowerCase() }
+			: {}),
+		...(claimedCommitSha && !claimValid
+			? { claimedCommitInvalid: true as const }
+			: {}),
 		...(buildId ? { buildId } : {}),
 		...(buildLabel ? { buildLabel } : {}),
+	}
+	if (observed?.status === "available") {
+		return {
+			source: "git-worktree",
+			commitSha: observed.headCommit,
+			executableDigest: observed.digest,
+			sourceDirty: observed.dirty,
+			runtime: observed.runtime,
+			workspaceBuild: observed.build,
+			sourceGraph: observed.sourceGraph,
+			...claims,
+		}
+	}
+	return {
+		source: "unknown",
+		unavailableReason:
+			observed?.reason ?? "executable source was not observed for this run",
+		...(observed ? { runtime: observed.runtime } : {}),
+		...claims,
 	}
 }
 
@@ -315,6 +407,56 @@ function buildBenchmarkWarnings(params: BenchmarkReportInput): string[] {
 		warnings.push(`${params.ingest?.failedTurns} benchmark turns failed ingest`)
 	}
 	return warnings
+}
+
+/** Text suffix naming a latency's denominator and how far its p95 can be read. */
+export function describeLatencyBasis(
+	latency: BenchmarkLatencyDistribution | undefined,
+): string {
+	if (!latency?.denominator) return ""
+	const basis =
+		latency.p95Basis === "sample-maximum"
+			? "; descriptive only: below 20 samples p95 is the sample maximum"
+			: latency.p95Basis === "no-samples"
+				? "; no samples"
+				: ""
+	return ` (${latency.denominator}, n=${latency.samples ?? 0}${basis})`
+}
+
+function describeIngestFailures(params: BenchmarkReportInput): string[] {
+	const failedTurns = params.ingest?.failedTurns ?? 0
+	const failedLines = params.ingest?.failedLines ?? 0
+	return [
+		...(failedLines > 0
+			? [`${failedLines} dataset lines failed to parse`]
+			: []),
+		...(failedTurns > 0 ? [`${failedTurns} turns failed ingest`] : []),
+	]
+}
+
+// Cases from a partially ingested corpus were scored against missing
+// evidence, so a run with ingest failures is never complete.
+function buildExecutionCompletenessGate(
+	params: BenchmarkReportInput,
+): MemoryBenchmarkRunReport["releaseGates"][number] {
+	const ingestFailures = describeIngestFailures(params)
+	if (!params.execution)
+		return {
+			gate: "execution-completeness",
+			status: "failed",
+			evidence: "per-case execution outcomes are absent",
+		}
+	return {
+		gate: "execution-completeness",
+		status:
+			params.execution.failedCases === 0 && ingestFailures.length === 0
+				? "passed"
+				: "failed",
+		evidence: [
+			`${params.execution.succeededCases}/${params.execution.attemptedCases} cases executed successfully; ${params.execution.failedCases} failed`,
+			...ingestFailures,
+		].join("; "),
+	}
 }
 
 function buildBenchmarkDegradations(params: BenchmarkReportInput): string[] {
@@ -552,6 +694,16 @@ function buildQualityThresholdGate(
 function buildAnswerQualityGate(
 	params: BenchmarkReportInput,
 ): MemoryBenchmarkRunReport["releaseGates"][number] | null {
+	// B08:C06: emitted QA evidence over a partly ingested corpus fails this
+	// gate even when no answer thresholds are declared.
+	const ingestFailures = describeIngestFailures(params)
+	if (params.e2eQa && ingestFailures.length > 0) {
+		return {
+			gate: "e2e-answer-quality",
+			status: "failed",
+			evidence: `${ingestFailures.join("; ")}; QA evidence is incomplete`,
+		}
+	}
 	const thresholds = params.qualityThresholds
 	if (!thresholds) {
 		return null
@@ -648,9 +800,19 @@ function buildEvidenceCompletenessGate(
 	build: MemoryBenchmarkRunReport["build"],
 ): MemoryBenchmarkRunReport["releaseGates"][number] {
 	const missing: string[] = []
-	if (build.source !== "env" || !build.commitSha) {
+	if (build.source !== "git-worktree" || !build.commitSha) {
 		missing.push("build commit identity")
+	} else {
+		if (build.sourceDirty !== false)
+			missing.push("uncommitted executable source")
+		if (
+			build.claimedCommitSha &&
+			!build.commitSha.startsWith(build.claimedCommitSha)
+		)
+			missing.push("claimed build commit does not match observed HEAD")
 	}
+	if (build.claimedCommitInvalid)
+		missing.push("claimed build commit is not a commit SHA")
 	if (!params.runIdentity?.runId || !params.runIdentity.configurationHash) {
 		missing.push("immutable run identity")
 	}
@@ -704,7 +866,7 @@ function buildEvidenceCompletenessGate(
 				gate: "evidence-completeness",
 				status: "passed",
 				evidence:
-					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete",
+					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete; executable identity covers tracked source at HEAD plus workspace build bytes observed on disk at admission; it does not attest that those bytes were built from that source or are the ones loaded in memory",
 			}
 		: {
 				gate: "evidence-completeness",
@@ -716,7 +878,8 @@ function buildEvidenceCompletenessGate(
 export function buildBenchmarkRunReport(
 	params: BenchmarkReportInput,
 ): MemoryBenchmarkRunReport {
-	const build = readBuildIdentity()
+	const build = readBuildIdentity(params.observedBuild)
+	const scenarioCleanup = reconcileScenarioCleanup(params.scenarioCleanup)
 	const executionFailed = (params.execution?.failedCases ?? 0) > 0
 	const internalStatus =
 		params.cases > 0 && !executionFailed ? "passed" : "failed"
@@ -728,16 +891,7 @@ export function buildBenchmarkRunReport(
 			status: internalStatus,
 			evidence: `${params.cases} cases, ${params.scoredCases ?? params.cases} scored`,
 		},
-		{
-			gate: "execution-completeness",
-			status:
-				params.execution && params.execution.failedCases === 0
-					? "passed"
-					: "failed",
-			evidence: params.execution
-				? `${params.execution.succeededCases}/${params.execution.attemptedCases} cases executed successfully; ${params.execution.failedCases} failed`
-				: "per-case execution outcomes are absent",
-		},
+		buildExecutionCompletenessGate(params),
 		buildQualityThresholdGate(params),
 		...(answerQualityGate ? [answerQualityGate] : []),
 		buildEvidenceCompletenessGate(params, build),
@@ -761,6 +915,7 @@ export function buildBenchmarkRunReport(
 					? "queryGovernance candidates are advisory-only"
 					: "no queryGovernance candidates attached",
 		},
+		buildScenarioCleanupGate(scenarioCleanup),
 	]
 	const blockingGates = releaseGates
 		.filter(
@@ -794,6 +949,9 @@ export function buildBenchmarkRunReport(
 				emptyRate: params.emptyRate,
 				avgTopScore: params.avgTopScore,
 				p95LatencyMs: params.p95LatencyMs,
+				...(params.scoredLatency
+					? { scoredLatency: params.scoredLatency }
+					: {}),
 				...(params.rAt5 != null ? { rAt5: params.rAt5 } : {}),
 				...(params.rAt10 != null ? { rAt10: params.rAt10 } : {}),
 				...(params.ndcgAt10 != null ? { ndcgAt10: params.ndcgAt10 } : {}),
@@ -818,6 +976,7 @@ export function buildBenchmarkRunReport(
 		...(params.latency ? { latency: params.latency } : {}),
 		...(params.cost ? { cost: params.cost } : {}),
 		...(params.e2eQa ? { e2eQa: params.e2eQa } : {}),
+		...(scenarioCleanup ? { scenarioCleanup } : {}),
 	}
 }
 
@@ -1941,6 +2100,7 @@ export function summarizeBenchmarkExecutions(params: {
 				? topScores.reduce((sum, value) => sum + value, 0) / topScores.length
 				: 0,
 		p95LatencyMs: percentile(latencies, 95),
+		scoredLatency: percentile50And95(latencies, "scored-cases"),
 		...(laneLatencyP95 ? { laneLatencyP95 } : {}),
 		rAt5:
 			scored.length > 0

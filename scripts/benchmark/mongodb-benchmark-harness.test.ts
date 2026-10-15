@@ -4,11 +4,59 @@ import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import {
 	IMPORT_WRITE_BATCH_SIZE,
+	ingestBenchmarkConversations,
 	ingestBenchmarkDataset,
 	importConversationDataset,
 	loadBenchmarkDataset,
 	type ConversationReplayBatchTurn,
+	type ConversationReplayTurn,
 } from "./mongodb-benchmark-harness.js"
+
+describe("benchmark explicit timestamp preflight", () => {
+	it.each([
+		null,
+		"",
+		"2024-02-30T00:00:00Z",
+		"2024-01-02T10:00:00",
+	])("rejects an invalid explicit value before any write (%s)", async (timestamp) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "benchmark-date-"))
+		const datasetPath = path.join(dir, "dataset.json")
+		const writeTurn = vi.fn(async () => {})
+		try {
+			await writeFile(
+				datasetPath,
+				JSON.stringify([
+					{
+						turns: [
+							{ role: "user", body: "valid first", timestamp: "2024-01-01" },
+							{ role: "user", body: "invalid second", timestamp },
+						],
+					},
+				]),
+			)
+			await expect(
+				ingestBenchmarkDataset({ datasetPath, writeTurn }),
+			).rejects.toThrow("timestamp")
+			expect(writeTurn).not.toHaveBeenCalled()
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+	it("preflights direct replay before writing the first valid conversation", async () => {
+		const writeTurns = vi.fn(async () => [{ ok: true as const }])
+		await expect(
+			ingestBenchmarkConversations({
+				datasetPath: "synthetic.json",
+				conversations: [
+					{ turns: [{ role: "user", body: "first", timestamp: "2024-01-01" }] },
+					{ turns: [{ role: "user", body: "second", timestamp: "bad" }] },
+				],
+				writeTurns,
+			}),
+		).rejects.toThrow("timestamp")
+		expect(writeTurns).not.toHaveBeenCalled()
+	})
+})
 
 describe("benchmark harness", () => {
 	it("loads a benchmark conversation dataset from JSON", async () => {
@@ -51,7 +99,7 @@ describe("benchmark harness", () => {
 	it("imports conversation datasets through the canonical write callback without benchmark metadata", async () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-import-"))
 		const datasetPath = path.join(dir, "history.json")
-		const writeTurn = vi.fn(async () => undefined)
+		const writeTurn = vi.fn(async (_turn: ConversationReplayTurn) => undefined)
 		try {
 			await writeFile(
 				datasetPath,
@@ -282,7 +330,7 @@ describe("benchmark harness", () => {
 	it("replays benchmark turns through the canonical write callback", async () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-bench-"))
 		const datasetPath = path.join(dir, "dataset.jsonl")
-		const writeTurn = vi.fn(async () => undefined)
+		const writeTurn = vi.fn(async (_turn: ConversationReplayTurn) => undefined)
 		try {
 			await writeFile(
 				datasetPath,

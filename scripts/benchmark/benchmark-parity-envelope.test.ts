@@ -393,7 +393,7 @@ describe("percentile50And95", () => {
 	})
 
 	it("returns 0/0 for empty latency set", () => {
-		expect(percentile50And95([])).toEqual({ p50Ms: 0, p95Ms: 0 })
+		expect(percentile50And95([])).toMatchObject({ p50Ms: 0, p95Ms: 0 })
 	})
 
 	it("returns the single value for both percentiles when one sample", () => {

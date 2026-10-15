@@ -1,19 +1,27 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { hashOperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
 import {
 	readBenchmarkCheckpoint,
 	writeBenchmarkCheckpointAtomic,
 	type BenchmarkCheckpoint,
 } from "./mongodb-benchmark-checkpoint.js"
 
+const { configuration: CONFIGURATION, configurationHash: CONFIGURATION_HASH } =
+	producedRunConfiguration()
+
 function checkpoint(): BenchmarkCheckpoint {
 	return {
-		version: 1,
+		version: 2,
+		failedLines: 0,
 		runId: "run-1",
 		datasetSha256: "a".repeat(64),
-		configurationHash: "b".repeat(64),
+		configurationHash: CONFIGURATION_HASH,
+		configuration: structuredClone(CONFIGURATION),
+		executableDigest: "d".repeat(64),
 		totalScenarios: 2,
 		scenarioIds: ["scenario-1", "scenario-2"],
 		completedScenarios: [
@@ -54,7 +62,8 @@ describe("benchmark scenario checkpoint", () => {
 			await expect(
 				readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
-					configurationHash: "b".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),
 			).resolves.toMatchObject({
@@ -75,9 +84,204 @@ describe("benchmark scenario checkpoint", () => {
 				readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
 					configurationHash: "c".repeat(64),
+					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),
 			).rejects.toThrow("configuration hash does not match")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects a checkpoint written by different executable source", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-checkpoint-"))
+		const checkpointPath = path.join(dir, "release.json")
+		try {
+			await writeBenchmarkCheckpointAtomic(checkpointPath, checkpoint())
+			await expect(
+				readBenchmarkCheckpoint(checkpointPath, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: "e".repeat(64),
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow("executable digest does not match")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("refuses to resume when the current executable identity is unavailable", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-checkpoint-"))
+		const checkpointPath = path.join(dir, "release.json")
+		try {
+			await writeBenchmarkCheckpointAtomic(checkpointPath, checkpoint())
+			await expect(
+				readBenchmarkCheckpoint(checkpointPath, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: null,
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow("executable identity is unavailable")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("keeps an unbound version 1 checkpoint historical instead of resuming it", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-checkpoint-"))
+		const checkpointPath = path.join(dir, "release.json")
+		try {
+			const { executableDigest: _digest, ...legacy } = checkpoint()
+			await writeFile(checkpointPath, JSON.stringify({ ...legacy, version: 1 }))
+			await expect(
+				readBenchmarkCheckpoint(checkpointPath, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: "d".repeat(64),
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow("not bound to executable source")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		[
+			"missing",
+			(cp: BenchmarkCheckpoint) => Reflect.deleteProperty(cp, "configuration"),
+		],
+		[
+			"tampered",
+			(cp: BenchmarkCheckpoint) =>
+				Reflect.set(cp.configuration.settings, "numCandidates", 999),
+		],
+		[
+			"incomplete rehashed",
+			(cp: BenchmarkCheckpoint) => {
+				Reflect.deleteProperty(
+					cp.configuration.settings,
+					"env.MEMONGO_BENCHMARK_JUDGE_BASE_URL.hmac",
+				)
+				cp.configurationHash = hashOperationRunConfiguration(cp.configuration)
+			},
+		],
+		[
+			"older-coverage",
+			(cp: BenchmarkCheckpoint) =>
+				Reflect.deleteProperty(
+					cp.configuration.settings,
+					"configurationCoverage",
+				),
+		],
+	])("refuses to resume a %s configuration manifest", async (_name, edit) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-checkpoint-"))
+		const checkpointPath = path.join(dir, "release.json")
+		try {
+			const stored = checkpoint()
+			edit(stored)
+			await writeFile(checkpointPath, JSON.stringify(stored))
+			await expect(
+				readBenchmarkCheckpoint(checkpointPath, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: stored.configurationHash,
+					executableDigest: "d".repeat(64),
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow("configuration manifest is missing")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("checkpoint ingest integrity", () => {
+	it.each([
+		undefined,
+		null,
+		-1,
+		0.5,
+		"0",
+		Number.NaN,
+	])("refuses malformed resumed failure counts (%s)", async (bad) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-count-"))
+		const file = path.join(dir, "checkpoint.json")
+		try {
+			const cp = checkpoint()
+			Reflect.set(cp.completedScenarios[0]!.ingest, "failedTurns", bad)
+			await writeBenchmarkCheckpointAtomic(file, cp)
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: cp.datasetSha256,
+					configurationHash: cp.configurationHash,
+					executableDigest: cp.executableDigest,
+					scenarioIds: cp.scenarioIds,
+				}),
+			).rejects.toThrow("ingest")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+	it("binds the timestamp policy into the produced configuration", () => {
+		expect(CONFIGURATION.settings.timestampPolicyVersion).toBe(
+			"benchmark-timestamp-utc-fields-literal12h-v1",
+		)
+	})
+})
+
+describe("timestamp policy resume identity", () => {
+	it("refuses a self-consistent checkpoint from another timestamp policy", async () => {
+		const cp = checkpoint()
+		cp.configuration.settings.timestampPolicyVersion = "older-policy"
+		cp.configurationHash = hashOperationRunConfiguration(cp.configuration)
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-policy-"))
+		try {
+			const file = path.join(dir, "checkpoint.json")
+			await writeBenchmarkCheckpointAtomic(file, cp)
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: cp.datasetSha256,
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: cp.executableDigest,
+					scenarioIds: cp.scenarioIds,
+				}),
+			).rejects.toThrow("configuration hash does not match")
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: cp.datasetSha256,
+					configurationHash: cp.configurationHash,
+					executableDigest: cp.executableDigest,
+					scenarioIds: cp.scenarioIds,
+				}),
+			).rejects.toThrow("manifest")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("checkpoint line counter admission", () => {
+	it.each([
+		undefined,
+		null,
+		-1,
+		0.5,
+		"0",
+	])("rejects invalid failedLines %s", async (failedLines) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-lines-"))
+		try {
+			const file = path.join(dir, "checkpoint.json")
+			await writeFile(file, JSON.stringify({ ...checkpoint(), failedLines }))
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: "d".repeat(64),
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow("failedLines")
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}

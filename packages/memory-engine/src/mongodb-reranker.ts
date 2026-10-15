@@ -3,7 +3,7 @@ import { resolveEffectiveRerankTopN } from "./http-rerank-config.js"
 import { createSubsystemLogger } from "@memongo/lib"
 import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
 import type { AdmissionToken } from "./mongodb-write-fence.js"
-import { withRemoteHttpResponse } from "./remote-http.js"
+import { withRemoteHttpResponse, withoutRemotePayload } from "./remote-http.js"
 import type { MemorySearchResult } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:reranker")
@@ -113,6 +113,9 @@ export function resolveRerankTimeoutMs(
 // - Direct Voyage AI Key (pa-...) → api.voyageai.com (Voyage platform)
 const VOYAGE_RERANK_URL_ATLAS = "https://ai.mongodb.com/v1/rerank"
 const VOYAGE_RERANK_URL_DIRECT = "https://api.voyageai.com/v1/rerank"
+
+// This module's own strict failures: fixed text, safe to rethrow as is.
+class RerankApiError extends Error {}
 
 function resolveRerankUrl(apiKey: string): string {
 	return apiKey.startsWith("al-")
@@ -326,7 +329,7 @@ export async function crossEncoderRerank(params: {
 			recordProviderCall("failed")
 			const message = `rerank API returned non-OK status: ${response.status}`
 			if (isStrictRerankMode()) {
-				throw new Error(message)
+				throw new RerankApiError(message)
 			}
 			log.warn("rerank API returned non-OK status", {
 				status: response.status,
@@ -358,7 +361,9 @@ export async function crossEncoderRerank(params: {
 		if (!body.data || !Array.isArray(body.data)) {
 			recordProviderCall("failed")
 			if (isStrictRerankMode()) {
-				throw new Error("rerank API returned unexpected response shape")
+				throw new RerankApiError(
+					"rerank API returned unexpected response shape",
+				)
 			}
 			log.warn("rerank API returned unexpected response shape")
 			emitLeafTelemetry(
@@ -385,15 +390,21 @@ export async function crossEncoderRerank(params: {
 					r.index < 0 ||
 					r.index >= validCandidates.length
 				) {
+					// Only a number is echoed; anything else is provider text.
+					const numeric = typeof r.index === "number"
 					if (isStrictRerankMode()) {
-						throw new Error(
-							`rerank API returned out-of-bounds index: ${r.index}`,
+						throw new RerankApiError(
+							numeric
+								? `rerank API returned out-of-bounds index: ${r.index}`
+								: "rerank API returned a non-numeric index",
 						)
 					}
-					log.warn("rerank API returned out-of-bounds index", {
-						index: r.index,
-						max: validCandidates.length - 1,
-					})
+					if (numeric)
+						log.warn("rerank API returned out-of-bounds index", {
+							index: r.index,
+							max: validCandidates.length - 1,
+						})
+					else log.warn("rerank API returned a non-numeric index")
 					return false
 				}
 				return true
@@ -445,7 +456,15 @@ export async function crossEncoderRerank(params: {
 		}
 	} catch (err) {
 		recordProviderCall("failed")
-		log.warn("rerank failed, falling back to input order", { error: err })
+		// Runtime, DNS and guard errors can quote the key or the body; only the
+		// class of an external error is kept, here and in the strict rethrow.
+		const failure =
+			err instanceof RerankApiError
+				? err
+				: withoutRemotePayload(err, "rerank request")
+		log.warn("rerank failed, falling back to input order", {
+			errorClass: failure.name,
+		})
 		// M1: Emit failure telemetry in catch block
 		emitLeafTelemetry(
 			db,
@@ -460,7 +479,7 @@ export async function crossEncoderRerank(params: {
 			params.admission,
 		)
 		if (isStrictRerankMode()) {
-			throw err
+			throw failure
 		}
 		return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 	}

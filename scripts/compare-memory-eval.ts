@@ -3,6 +3,7 @@ import { MemongoClient } from "@memongo/client"
 
 import { compareEvalRuns, runMemoryEvalSuite } from "./memory-eval-core.js"
 import { writeProofArtifact } from "./proof-artifacts.js"
+import { exitCodeForVerdict } from "./proof-verdict.js"
 
 function readBaseUrl(name: string, fallback?: string): string {
 	const value = process.env[name]?.trim() || fallback
@@ -68,6 +69,7 @@ async function main() {
 			2,
 		),
 	)
+	process.exitCode = exitCodeForVerdict(comparison.summary.releaseReady)
 }
 
 await main()

@@ -18,6 +18,7 @@ import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import {
 	buildRemoteBaseUrlPolicy,
 	withRemoteHttpResponse,
+	withoutRemotePayload,
 } from "./remote-http.js"
 import type {
 	MemoryBenchmarkConversation,
@@ -498,10 +499,12 @@ export function createHttpProvider(
 				})
 
 				if (!response.ok) {
-					const text = await response.text().catch(() => "")
-					throw new EnrichmentHttpError(
-						`LLM enrichment request failed: ${response.status} ${text}`,
-						response.status,
+					discardBody(response)
+					throw ownFailure(
+						new EnrichmentHttpError(
+							`LLM enrichment request failed: HTTP ${response.status} (response body withheld)`,
+							response.status,
+						),
 					)
 				}
 
@@ -564,20 +567,7 @@ export function createHttpProvider(
 					? { content, usage, responseMeta: classified.responseMeta }
 					: { content, responseMeta: classified.responseMeta }
 			} catch (err) {
-				// Wrap AbortError (timeout) as retryable 408
-				if (isAbortError(err)) {
-					throw new EnrichmentHttpError(
-						`LLM enrichment request timed out after ${timeoutMs}ms`,
-						408,
-					)
-				}
-				if (isFetchTransportError(err)) {
-					throw new EnrichmentHttpError(
-						`LLM enrichment transport failed: ${err.message}`,
-						503,
-					)
-				}
-				throw err
+				throw providerFailure(err, timeoutMs)
 			} finally {
 				clearTimeout(timer)
 			}
@@ -649,17 +639,33 @@ export function createAnthropicProvider(
 				})
 
 				if (!response.ok) {
-					const text = await response.text().catch(() => "")
-					throw new EnrichmentHttpError(
-						`LLM enrichment request failed: ${response.status} ${text}`,
-						response.status,
+					discardBody(response)
+					throw ownFailure(
+						new EnrichmentHttpError(
+							`LLM enrichment request failed: HTTP ${response.status} (response body withheld)`,
+							response.status,
+						),
 					)
 				}
 
-				const json = (await response.json()) as {
+				let json: {
 					content?: Array<{ type?: string; text?: string }>
 					usage?: { input_tokens?: number; output_tokens?: number }
 					stop_reason?: unknown
+				}
+				try {
+					json = (await response.json()) as typeof json
+				} catch (err) {
+					// The parser quotes the body; a body that is not JSON is a
+					// provider failure, never retried and never a silent degrade.
+					if (err instanceof SyntaxError)
+						throw ownFailure(
+							new EnrichmentResponseError(
+								"LLM enrichment response body was not valid JSON",
+								"malformed-body",
+							),
+						)
+					throw err
 				}
 				const content =
 					json.content
@@ -702,24 +708,57 @@ export function createAnthropicProvider(
 					...(responseMeta ? { responseMeta } : {}),
 				}
 			} catch (err) {
-				if (isAbortError(err)) {
-					throw new EnrichmentHttpError(
-						`LLM enrichment request timed out after ${timeoutMs}ms`,
-						408,
-					)
-				}
-				if (isFetchTransportError(err)) {
-					throw new EnrichmentHttpError(
-						`LLM enrichment transport failed: ${err.message}`,
-						503,
-					)
-				}
-				throw err
+				throw providerFailure(err, timeoutMs)
 			} finally {
 				clearTimeout(timer)
 			}
 		},
 	}
+}
+
+// Provider bodies may echo the request, and runtime, DNS and guard errors can
+// quote a header value, the host or the body, so only this module's own
+// fixed-text errors pass through; anything else keeps at most its runtime class
+// (and with it the retry decision) under fixed text.
+function providerFailure(err: unknown, timeoutMs: number): Error {
+	// Consumed here: once returned, a caller can change the error and hand it
+	// back through an injected fetch, so it is never trusted twice.
+	if (err instanceof Error && ownFailures.delete(err)) return err
+	// An injected transport may signal a status through the exported class;
+	// only the status (and so the retry decision) survives.
+	if (err instanceof EnrichmentHttpError && Number.isInteger(err.statusCode))
+		return new EnrichmentHttpError(
+			`LLM enrichment request failed: HTTP ${err.statusCode} (transport error withheld)`,
+			err.statusCode,
+		)
+	// Timeouts are a retryable 408.
+	if (isAbortError(err))
+		return new EnrichmentHttpError(
+			`LLM enrichment request timed out after ${timeoutMs}ms`,
+			408,
+		)
+	if (isFetchTransportError(err))
+		return new EnrichmentHttpError(
+			"LLM enrichment transport failed (TypeError)",
+			503,
+		)
+	return withoutRemotePayload(err, "LLM enrichment request")
+}
+
+// Identity, not class: an injected fetch can throw the exported error classes
+// with any message, cause or fields. Each entry lives only from its throw to
+// the enclosing provider catch, with no await in between.
+const ownFailures = new WeakSet<Error>()
+
+function ownFailure<T extends Error>(error: T): T {
+	ownFailures.add(error)
+	return error
+}
+
+// The body is never read. Cancelling is best effort and not awaited, so neither
+// its failure nor a stalled stream can replace the status or hold the call open.
+function discardBody(response: Response): void {
+	response.body?.cancel().catch(() => {})
 }
 
 export class EnrichmentHttpError extends Error {

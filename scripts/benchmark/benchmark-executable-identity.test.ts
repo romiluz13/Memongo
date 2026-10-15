@@ -1,0 +1,841 @@
+import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import {
+	chmod,
+	cp,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises"
+import { createRequire } from "node:module"
+import os from "node:os"
+import path from "node:path"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+	benchmarkWorkspaceImports,
+	computeExecutableDigest,
+} from "./benchmark-executable-identity.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
+import {
+	readBenchmarkCheckpoint,
+	writeBenchmarkCheckpointAtomic,
+} from "./mongodb-benchmark-checkpoint.js"
+import { buildBenchmarkRunReport } from "./mongodb-benchmark-runner.js"
+
+let repo: string
+
+function git(...args: string[]): void {
+	execFileSync("git", args, { cwd: repo, stdio: "ignore" })
+}
+
+async function put(relative: string, content: string): Promise<void> {
+	await mkdir(path.dirname(path.join(repo, relative)), { recursive: true })
+	await writeFile(path.join(repo, relative), content)
+}
+
+beforeEach(async () => {
+	repo = await mkdtemp(path.join(os.tmpdir(), "memongo-executable-"))
+	git("init", "-q")
+	git("config", "user.email", "fixture@example.invalid")
+	git("config", "user.name", "fixture")
+	await put("package.json", "{}\n")
+	await put("bun.lock", "lock\n")
+	await put("scripts/benchmark/run.ts", "export const a = 1\n")
+	await put("packages/engine/src/index.ts", "export const b = 2\n")
+	await put("docs/readme.md", "docs\n")
+	await put(
+		"scripts/run-benchmark.ts",
+		'import "@memongo/memory-bridge"\nimport { m } from "../packages/memory-engine/src/manager.js"\nexport const x = m\n',
+	)
+	await put(
+		"packages/memory-engine/src/manager.ts",
+		'import { id } from "@memongo/lib"\nexport const m = id\n',
+	)
+	await workspace()
+	git("add", ".")
+	git("commit", "-q", "-m", "fixture")
+})
+
+// Workspace packages as the benchmark resolves them: ignored dist trees and
+// node_modules/@memongo symlinks, bridge -> engine -> lib, plus web outside
+// the closure.
+const PACKAGES: Array<[dir: string, name: string, deps: string[]]> = [
+	["lib", "@memongo/lib", []],
+	["memory-engine", "@memongo/memory-engine", ["@memongo/lib"]],
+	[
+		"memory-bridge",
+		"@memongo/memory-bridge",
+		["@memongo/memory-engine", "@memongo/lib"],
+	],
+	["web", "@memongo/web", ["@memongo/lib"]],
+]
+
+function manifest(name: string, deps: string[], exports?: unknown): string {
+	return `${JSON.stringify({
+		name,
+		exports: exports ?? {
+			".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+		},
+		dependencies: Object.fromEntries(deps.map((dep) => [dep, "workspace:*"])),
+	})}\n`
+}
+
+async function workspace(): Promise<void> {
+	await put(".gitignore", "dist\nnode_modules\n")
+	for (const [dir, name, deps] of PACKAGES) {
+		await put(`packages/${dir}/package.json`, manifest(name, deps))
+		await put(
+			`packages/${dir}/dist/index.js`,
+			`${deps.map((dep) => `import "${dep}"\n`).join("")}export const id = "${dir}"\n`,
+		)
+		await put(`packages/${dir}/dist/index.d.ts`, "export {}\n")
+		await put(
+			`packages/${dir}/dist/internal/ranking.js`,
+			"export const r = 1\n",
+		)
+		await mkdir(path.join(repo, "node_modules/@memongo"), { recursive: true })
+		await symlink(
+			`../../packages/${dir}`,
+			path.join(repo, `node_modules/${name}`),
+		)
+	}
+}
+
+async function available(root = repo) {
+	const identity = await computeExecutableDigest(root)
+	if (identity.status !== "available")
+		throw new Error(`expected available: ${identity.reason}`)
+	return identity
+}
+
+// Temp directories a test creates outside the fixture repository.
+const owned: string[] = []
+
+afterEach(async () => {
+	await rm(repo, { recursive: true, force: true })
+	for (const dir of owned.splice(0))
+		await rm(dir, { recursive: true, force: true })
+})
+
+describe("computeExecutableDigest", () => {
+	it("binds HEAD and is stable for an unchanged tree", async () => {
+		const first = await computeExecutableDigest(repo)
+		const second = await computeExecutableDigest(repo)
+		if (first.status !== "available") throw new Error("expected available")
+		expect(first.digest).toMatch(/^[a-f0-9]{64}$/)
+		expect(first.headCommit).toMatch(/^[a-f0-9]{40}$/)
+		expect(second.digest).toBe(first.digest)
+	})
+
+	it("changes when a tracked benchmark source file is edited without committing", async () => {
+		const before = await computeExecutableDigest(repo)
+		await put("scripts/benchmark/run.ts", "export const a = 2\n")
+		const after = await computeExecutableDigest(repo)
+		expect(after.digest).not.toBe(before.digest)
+	})
+
+	it("ignores checkpoints, results, tmp, untracked output and non-executable docs", async () => {
+		const before = await computeExecutableDigest(repo)
+		await put("benchmarks/results/checkpoint.json", "{}\n")
+		await put("benchmarks/results/run.predictions.jsonl", "{}\n")
+		await put("tmp/scratch.txt", "x\n")
+		await put("scripts/benchmark/untracked-output.json", "{}\n")
+		await put("docs/readme.md", "edited docs\n")
+		const after = await computeExecutableDigest(repo)
+		expect(after.digest).toBe(before.digest)
+	})
+
+	it("changes with the lockfile and runtime versions", async () => {
+		const before = await computeExecutableDigest(repo)
+		await put("bun.lock", "lock changed\n")
+		expect((await computeExecutableDigest(repo)).digest).not.toBe(before.digest)
+		const otherRuntime = await computeExecutableDigest(repo, {
+			node: "v0.0.0",
+			bun: null,
+		})
+		expect(otherRuntime.digest).not.toBe(before.digest)
+	})
+
+	it("treats a deleted tracked file as a change, not as unavailable", async () => {
+		const before = await computeExecutableDigest(repo)
+		await rm(path.join(repo, "scripts/benchmark/run.ts"))
+		const deleted = await computeExecutableDigest(repo)
+		expect(deleted.status).toBe("available")
+		expect(deleted.digest).not.toBe(before.digest)
+		expect((await computeExecutableDigest(repo)).digest).toBe(deleted.digest)
+	})
+
+	it("reports unavailable when a tracked file cannot be read", async () => {
+		const file = path.join(repo, "scripts/benchmark/run.ts")
+		try {
+			await chmod(file, 0o000)
+			const first = await computeExecutableDigest(repo)
+			await chmod(file, 0o600)
+			await writeFile(file, "export const a = 99\n")
+			await chmod(file, 0o000)
+			const second = await computeExecutableDigest(repo)
+			expect(first).toMatchObject({ status: "unavailable" })
+			expect(second).toMatchObject({ status: "unavailable" })
+			expect(first.digest).toBeUndefined()
+		} finally {
+			await chmod(file, 0o600)
+		}
+	})
+
+	it("reports whether executable source differs from HEAD", async () => {
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: false })
+		await put("docs/readme.md", "edited docs\n")
+		await put("benchmarks/results/run.json", "{}\n")
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: false })
+		await put("scripts/benchmark/new-module.ts", "export const c = 3\n")
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: true })
+		await rm(path.join(repo, "scripts/benchmark/new-module.ts"))
+		await put("packages/engine/src/index.ts", "export const b = 3\n")
+		expect(await computeExecutableDigest(repo)).toMatchObject({ dirty: true })
+	})
+
+	it("ignores inherited Git repository and index overrides", async () => {
+		const clean = await computeExecutableDigest(repo)
+		if (clean.status !== "available") throw new Error("expected available")
+		const foreign = await mkdtemp(path.join(os.tmpdir(), "memongo-foreign-"))
+		const saved = { ...process.env }
+		try {
+			execFileSync("git", ["init", "-q"], { cwd: foreign })
+			execFileSync(
+				"git",
+				[
+					"-c",
+					"user.email=f@example.invalid",
+					"-c",
+					"user.name=f",
+					"commit",
+					"-q",
+					"--allow-empty",
+					"-m",
+					"foreign",
+				],
+				{ cwd: foreign },
+			)
+			const alternateIndex = path.join(foreign, "alternate-index")
+			execFileSync("git", ["read-tree", "--empty"], {
+				cwd: repo,
+				env: { ...process.env, GIT_INDEX_FILE: alternateIndex },
+			})
+			process.env.GIT_DIR = path.join(foreign, ".git")
+			process.env.GIT_WORK_TREE = repo
+			expect(await computeExecutableDigest(repo)).toMatchObject({
+				status: "available",
+				digest: clean.digest,
+				headCommit: clean.headCommit,
+			})
+			delete process.env.GIT_DIR
+			delete process.env.GIT_WORK_TREE
+			process.env.GIT_INDEX_FILE = alternateIndex
+			expect(await computeExecutableDigest(repo)).toMatchObject({
+				digest: clean.digest,
+				trackedFiles: clean.trackedFiles,
+				dirty: false,
+			})
+		} finally {
+			for (const key of Object.keys(process.env))
+				if (!(key in saved)) delete process.env[key]
+			Object.assign(process.env, saved)
+			await rm(foreign, { recursive: true, force: true })
+		}
+	})
+
+	it("observes a linked worktree as its own checkout", async () => {
+		const linked = path.join(
+			await mkdtemp(path.join(os.tmpdir(), "memongo-linked-")),
+			"wt",
+		)
+		try {
+			git("worktree", "add", "-q", "--detach", linked)
+			// Ignored build output is not checked out; identity needs those bytes.
+			expect(await computeExecutableDigest(linked)).toMatchObject({
+				status: "unavailable",
+			})
+			await cp(
+				path.join(repo, "node_modules"),
+				path.join(linked, "node_modules"),
+				{ recursive: true, verbatimSymlinks: true },
+			)
+			for (const [dir] of PACKAGES)
+				await cp(
+					path.join(repo, `packages/${dir}/dist`),
+					path.join(linked, `packages/${dir}/dist`),
+					{ recursive: true },
+				)
+			const main = await computeExecutableDigest(repo)
+			const identity = await computeExecutableDigest(linked)
+			expect(identity).toMatchObject({
+				status: "available",
+				headCommit: main.status === "available" ? main.headCommit : "",
+				digest: main.digest,
+				dirty: false,
+			})
+		} finally {
+			await rm(path.dirname(linked), { recursive: true, force: true })
+		}
+	})
+
+	it("refuses a directory that is not the top of its work tree", async () => {
+		expect(
+			await computeExecutableDigest(path.join(repo, "scripts")),
+		).toMatchObject({ status: "unavailable" })
+	})
+
+	it("reports unavailable outside a git work tree", async () => {
+		const plain = await mkdtemp(path.join(os.tmpdir(), "memongo-plain-"))
+		try {
+			const identity = await computeExecutableDigest(plain)
+			expect(identity).toMatchObject({ status: "unavailable" })
+			expect(identity.digest).toBeUndefined()
+		} finally {
+			await rm(plain, { recursive: true, force: true })
+		}
+	})
+
+	it("binds the workspace build closure the benchmark resolves", async () => {
+		const identity = await available()
+		expect(identity.build).toEqual({
+			relation: "not-verified",
+			packages: [
+				expect.objectContaining({
+					name: "@memongo/lib",
+					path: "packages/lib",
+					files: 3,
+				}),
+				expect.objectContaining({
+					name: "@memongo/memory-bridge",
+					path: "packages/memory-bridge",
+					files: 3,
+				}),
+				expect.objectContaining({
+					name: "@memongo/memory-engine",
+					path: "packages/memory-engine",
+					files: 3,
+				}),
+			],
+		})
+		expect((await available()).digest).toBe(identity.digest)
+	})
+
+	it.each([
+		[
+			"a non-entry file of a root package",
+			"packages/memory-bridge/dist/internal/ranking.js",
+		],
+		[
+			"a transitive dependency's dist",
+			"packages/memory-engine/dist/internal/ranking.js",
+		],
+		["a shared dependency's entry", "packages/lib/dist/index.js"],
+	])("changes when ignored build output changes in %s", async (_name, file) => {
+		const before = await available()
+		await put(file, "export const r = 2 // stale build\n")
+		const after = await available()
+		expect(after.digest).not.toBe(before.digest)
+		expect(after.dirty).toBe(before.dirty)
+	})
+
+	it("ignores build output of workspace packages the benchmark does not load", async () => {
+		const before = await available()
+		await put("packages/web/dist/internal/ranking.js", "export const r = 9\n")
+		expect((await available()).digest).toBe(before.digest)
+	})
+
+	it("covers the nested package copy the runtime actually resolves", async () => {
+		const nested = "packages/memory-engine/node_modules/@memongo/lib"
+		await put(`${nested}/package.json`, manifest("@memongo/lib", []))
+		await put(`${nested}/dist/index.js`, "export const id = 'nested'\n")
+		const before = await available()
+		expect(before.build.packages.map((entry) => entry.path)).toContain(nested)
+		await put(`${nested}/dist/index.js`, "export const id = 'nested-stale'\n")
+		expect((await available()).digest).not.toBe(before.digest)
+	})
+
+	it("covers the package copy a source importer resolves outside the entry directories", async () => {
+		const nested = "packages/memory-engine/src/node_modules/@memongo/lib"
+		await put(`${nested}/package.json`, manifest("@memongo/lib", []))
+		await put(`${nested}/dist/index.js`, "export const id = 7\n")
+		const before = await available()
+		expect(before.build.packages.map((entry) => entry.path)).toContain(nested)
+		await put(`${nested}/dist/index.js`, "export const id = 8\n")
+		const after = await available()
+		expect(after.digest).not.toBe(before.digest)
+		expect(after.dirty).toBe(before.dirty)
+	})
+
+	it("resolves package subpath imports to the package's build", async () => {
+		await put(
+			"packages/lib/package.json",
+			manifest("@memongo/lib", [], {
+				".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+				"./types/memory": { default: "./dist/types.memory.js" },
+			}),
+		)
+		await put("packages/lib/dist/types.memory.js", "export const t = 1\n")
+		await put(
+			"packages/memory-engine/src/manager.ts",
+			'import { t } from "@memongo/lib/types/memory"\nexport const m = t\n',
+		)
+		const before = await available()
+		expect(before.build.packages).toContainEqual(
+			expect.objectContaining({ name: "@memongo/lib", path: "packages/lib" }),
+		)
+		await put("packages/lib/dist/types.memory.js", "export const t = 2\n")
+		expect((await available()).digest).not.toBe(before.digest)
+	})
+
+	it("follows workspace imports the build output makes, declared or not", async () => {
+		await put(
+			"packages/memory-engine/dist/internal/ranking.js",
+			'import "@memongo/web"\nexport const r = 1\n',
+		)
+		const before = await available()
+		expect(before.build.packages.map((entry) => entry.path)).toContain(
+			"packages/web",
+		)
+		await put("packages/web/dist/internal/ranking.js", "export const r = 9\n")
+		expect((await available()).digest).not.toBe(before.digest)
+	})
+
+	it.each([
+		[
+			"a static import with a comment before the specifier",
+			'import { id } from /* note */ "@memongo/web"\nexport const m = id\n',
+		],
+		[
+			"an escaped specifier",
+			'import "\\u0040memongo/web"\nexport const m = 1\n',
+		],
+		["a re-export", 'export { id } from "@memongo/web"\n'],
+		["a namespace re-export", "export * as web from '@memongo/web'\n"],
+		[
+			"a dynamic import split by a comment",
+			'export const load = () =>\n\timport(\n\t\t// why\n\t\t"@memongo/web"\n\t)\n',
+		],
+		[
+			"a template-literal dynamic import",
+			"export const load = () => import(`@memongo/web`)\n",
+		],
+		[
+			"an import-equals require",
+			'import web = require("@memongo/web")\nexport const m = web\n',
+		],
+	])("covers a workspace import written as %s", async (_name, source) => {
+		await put("packages/memory-engine/src/manager.ts", source)
+		const before = await available()
+		expect(before.build.packages.map((entry) => entry.path)).toContain(
+			"packages/web",
+		)
+		await put("packages/web/dist/index.js", "export const id = 99\n")
+		expect((await available()).digest).not.toBe(before.digest)
+	})
+
+	it("parses an entry point that starts with a hashbang", async () => {
+		await put(
+			"scripts/run-benchmark.ts",
+			'#!/usr/bin/env bun\nimport "@memongo/memory-bridge"\nimport { m } from "../packages/memory-engine/src/manager.js"\nexport const x = m\n',
+		)
+		expect((await available()).build.packages).toHaveLength(3)
+	})
+
+	it("refuses identity when the running Bun scanner finds an import the parser missed", async () => {
+		vi.stubGlobal("Bun", {
+			Transpiler: class {
+				scanImports() {
+					return [{ path: "@memongo/hidden" }]
+				}
+			},
+		})
+		try {
+			const identity = await computeExecutableDigest(repo)
+			expect(identity).toMatchObject({ status: "unavailable" })
+			expect(identity.status === "unavailable" && identity.reason).toContain(
+				"the runtime finds but the parser does not",
+			)
+		} finally {
+			vi.unstubAllGlobals()
+		}
+	})
+
+	it("covers a commented workspace import inside build output", async () => {
+		await put(
+			"packages/memory-engine/dist/internal/ranking.js",
+			'import { id } from /* note */ "@memongo/web"\nexport const r = id\n',
+		)
+		expect(
+			(await available()).build.packages.map((entry) => entry.path),
+		).toContain("packages/web")
+	})
+
+	it.each([
+		[
+			"a template-literal dynamic import with a substitution",
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: fixture source text
+			"const n = 'web'\nexport const load = () => import(`@memongo/${n}`)\n",
+		],
+		[
+			"a require of a computed name",
+			"const n = '@memongo/web'\nexport const m = require(n)\n",
+		],
+		["source that does not parse", 'import { from "@memongo/web"\n'],
+		[
+			"a dynamic import the source graph cannot follow",
+			"const name = './x.js'\nexport const load = () => import(name)\n",
+		],
+		[
+			"a relative source import that does not resolve",
+			'import "./missing.js"\nexport const m = 1\n',
+		],
+	])("refuses identity for %s", async (_name, source) => {
+		await put("packages/memory-engine/src/manager.ts", source)
+		const identity = await computeExecutableDigest(repo)
+		expect(identity).toMatchObject({ status: "unavailable" })
+		expect(identity.status === "unavailable" && identity.reason).not.toContain(
+			repo,
+		)
+	})
+
+	it.each([
+		[
+			"a missing dist tree",
+			() =>
+				rm(path.join(repo, "packages/memory-engine/dist"), { recursive: true }),
+		],
+		[
+			"an unresolvable dependency",
+			() => rm(path.join(repo, "node_modules/@memongo/memory-engine")),
+		],
+		[
+			"a package link resolving outside the repository",
+			async () => {
+				const outside = await mkdtemp(
+					path.join(os.tmpdir(), "memongo-outside-"),
+				)
+				owned.push(outside)
+				await writeFile(
+					path.join(outside, "package.json"),
+					manifest("@memongo/lib", []),
+				)
+				await mkdir(path.join(outside, "dist"))
+				await writeFile(path.join(outside, "dist/index.js"), "export {}\n")
+				await rm(path.join(repo, "node_modules/@memongo/lib"))
+				await symlink(outside, path.join(repo, "node_modules/@memongo/lib"))
+			},
+		],
+		[
+			"a symlink inside dist",
+			() =>
+				symlink(
+					"../../lib/dist/index.js",
+					path.join(repo, "packages/memory-engine/dist/linked.js"),
+				),
+		],
+		[
+			"a symlinked dist directory",
+			async () => {
+				await rm(path.join(repo, "packages/lib/dist"), { recursive: true })
+				await symlink("../web/dist", path.join(repo, "packages/lib/dist"))
+			},
+		],
+		[
+			"node_modules inside dist",
+			() => put("packages/lib/dist/node_modules/x/index.js", "export {}\n"),
+		],
+		[
+			"export conditions the resolver check does not model",
+			() =>
+				put(
+					"packages/lib/package.json",
+					manifest("@memongo/lib", [], {
+						".": { import: "./dist/index.js", default: "./dist/index.js" },
+					}),
+				),
+		],
+		[
+			"an entry outside dist",
+			() =>
+				put(
+					"packages/lib/package.json",
+					manifest("@memongo/lib", [], { ".": { default: "./src/index.js" } }),
+				).then(() => put("packages/lib/src/index.js", "export {}\n")),
+		],
+	])("refuses identity for %s", async (_name, change) => {
+		await change()
+		const identity = await computeExecutableDigest(repo)
+		expect(identity).toMatchObject({ status: "unavailable" })
+		expect(identity.digest).toBeUndefined()
+		if (identity.status === "unavailable")
+			expect(identity.reason).not.toContain(repo)
+	})
+
+	it("cross-checks the running Bun resolver and refuses a mismatch", async () => {
+		const modeled = await available()
+		vi.stubGlobal("Bun", {
+			resolveSync: (specifier: string, from: string) =>
+				createRequire(path.join(from, "importer.js")).resolve(specifier),
+		})
+		try {
+			expect((await available()).digest).toBe(modeled.digest)
+			// e.g. tsconfig paths mapping a workspace package to its source
+			await put("packages/lib/src/index.js", "export const id = 0\n")
+			vi.stubGlobal("Bun", {
+				resolveSync: (specifier: string, from: string) =>
+					specifier === "@memongo/lib"
+						? path.join(repo, "packages/lib/src/index.js")
+						: createRequire(path.join(from, "importer.js")).resolve(specifier),
+			})
+			const identity = await computeExecutableDigest(repo)
+			expect(identity).toMatchObject({ status: "unavailable" })
+			expect(identity.digest).toBeUndefined()
+			expect(identity.status === "unavailable" && identity.reason).toContain(
+				"@memongo/lib",
+			)
+		} finally {
+			vi.unstubAllGlobals()
+		}
+	})
+
+	it("refuses identity when a build file cannot be read", async () => {
+		const file = path.join(repo, "packages/lib/dist/internal/ranking.js")
+		try {
+			await chmod(file, 0o000)
+			expect(await computeExecutableDigest(repo)).toMatchObject({
+				status: "unavailable",
+			})
+		} finally {
+			await chmod(file, 0o600)
+		}
+	})
+
+	it("refuses to resume a checkpoint after the build output changed", async () => {
+		const { configuration, configurationHash } = producedRunConfiguration()
+		const scenarioIds = ["scenario-1"]
+		const admitted = await available()
+		const checkpointPath = path.join(repo, "benchmarks/results/run.json")
+		await writeBenchmarkCheckpointAtomic(checkpointPath, {
+			version: 2,
+			failedLines: 0,
+			runId: "run-1",
+			datasetSha256: "a".repeat(64),
+			configurationHash,
+			configuration,
+			executableDigest: admitted.digest,
+			totalScenarios: 1,
+			scenarioIds,
+			completedScenarios: [],
+			accounting: {
+				currency: null,
+				totalCost: null,
+				unavailableReason: "prices unavailable",
+				operations: [],
+			},
+			updatedAt: "2026-10-14T00:00:00.000Z",
+		})
+		const expected = async () => ({
+			datasetSha256: "a".repeat(64),
+			configurationHash,
+			executableDigest: (await available()).digest,
+			scenarioIds,
+		})
+		await expect(
+			readBenchmarkCheckpoint(checkpointPath, await expected()),
+		).resolves.toMatchObject({ runId: "run-1" })
+		await put(
+			"packages/memory-engine/dist/internal/ranking.js",
+			"export const r = 3\n",
+		)
+		await expect(
+			readBenchmarkCheckpoint(checkpointPath, await expected()),
+		).rejects.toThrow("executable digest does not match")
+	})
+})
+
+describe("benchmark source graph", () => {
+	it("reaches workspace imports made from engine source, not only entry points", async () => {
+		const root = path.resolve(import.meta.dirname, "../..")
+		const imports = await benchmarkWorkspaceImports(root)
+		expect(imports).toContainEqual({
+			importer: "scripts/run-benchmark.ts",
+			specifier: "@memongo/memory-bridge",
+		})
+		expect(imports).toContainEqual({
+			importer: "packages/memory-engine/src/mongodb-manager.ts",
+			specifier: "@memongo/lib",
+		})
+	})
+})
+
+describe("benchmark source graph inventory", () => {
+	const ENTRY_IMPORTS =
+		'import "@memongo/memory-bridge"\nimport { m } from "../packages/memory-engine/src/manager.js"\n'
+
+	// Commits an entry point importing `specifier`, leaving `file` as written.
+	async function reach(
+		file: string,
+		specifier: string,
+		track: "tracked" | "untracked",
+	): Promise<void> {
+		await put(file, "export const h = 1\n")
+		await put(
+			"scripts/run-benchmark.ts",
+			`${ENTRY_IMPORTS}import { h } from "${specifier}"\nexport const x = m + h\n`,
+		)
+		git("add", "scripts/run-benchmark.ts", ".gitignore")
+		if (track === "tracked") git("add", file)
+		git("commit", "-q", "-m", "reach")
+	}
+
+	function completeness(identity: Awaited<ReturnType<typeof available>>) {
+		return (
+			buildBenchmarkRunReport({
+				datasetVersion: "v1",
+				cases: 1,
+				hitRate: 1,
+				emptyRate: 0,
+				avgTopScore: 1,
+				p95LatencyMs: 1,
+				observedBuild: identity,
+			}).releaseGates.find((gate) => gate.gate === "evidence-completeness")
+				?.evidence ?? ""
+		)
+	}
+
+	async function writeCheckpoint(digest: string): Promise<string> {
+		const { configuration, configurationHash } = producedRunConfiguration()
+		const checkpointPath = path.join(repo, "benchmarks/results/run.json")
+		await writeBenchmarkCheckpointAtomic(checkpointPath, {
+			version: 2,
+			failedLines: 0,
+			runId: "run-1",
+			datasetSha256: "a".repeat(64),
+			configurationHash,
+			configuration,
+			executableDigest: digest,
+			totalScenarios: 1,
+			scenarioIds: ["scenario-1"],
+			completedScenarios: [],
+			accounting: {
+				currency: null,
+				totalCost: null,
+				unavailableReason: "prices unavailable",
+				operations: [],
+			},
+			updatedAt: "2026-10-14T00:00:00.000Z",
+		})
+		return checkpointPath
+	}
+
+	async function resume(checkpointPath: string) {
+		return readBenchmarkCheckpoint(checkpointPath, {
+			datasetSha256: "a".repeat(64),
+			configurationHash: producedRunConfiguration().configurationHash,
+			executableDigest: (await available()).digest,
+			scenarioIds: ["scenario-1"],
+		})
+	}
+
+	it("lists every reached file of a clean tracked graph with its bytes", async () => {
+		const identity = await available()
+		const manager = await readFile(
+			path.join(repo, "packages/memory-engine/src/manager.ts"),
+		)
+		expect(identity.sourceGraph.files).toEqual([
+			{
+				path: "packages/memory-engine/src/manager.ts",
+				sha256: createHash("sha256").update(manager).digest("hex"),
+				status: "clean",
+			},
+			expect.objectContaining({
+				path: "scripts/run-benchmark.ts",
+				status: "clean",
+			}),
+		])
+		expect(identity.dirty).toBe(false)
+		expect(completeness(identity)).not.toContain(
+			"uncommitted executable source",
+		)
+		expect((await available()).digest).toBe(identity.digest)
+	})
+
+	it.each([
+		[
+			"an untracked scripts file",
+			"scripts/benchmark/helper.ts",
+			"./benchmark/helper.js",
+		],
+		["an untracked repository-root file", "shared.ts", "../shared.js"],
+		["an ignored scripts file", "scripts/helper.local.ts", "./helper.local.js"],
+	])("binds and refuses to publish %s the graph reaches", async (_name, file, specifier) => {
+		await put(".gitignore", "dist\nnode_modules\n*.local.ts\n")
+		await reach(file, specifier, "untracked")
+		const admitted = await available()
+		expect(admitted.sourceGraph.files).toContainEqual(
+			expect.objectContaining({ path: file, status: "untracked" }),
+		)
+		expect(admitted.dirty).toBe(true)
+		expect(completeness(admitted)).toContain("uncommitted executable source")
+		const checkpointPath = await writeCheckpoint(admitted.digest)
+		await expect(resume(checkpointPath)).resolves.toMatchObject({
+			runId: "run-1",
+		})
+		await put(file, "export const h = 2\n")
+		expect((await available()).digest).not.toBe(admitted.digest)
+		await expect(resume(checkpointPath)).rejects.toThrow(
+			"executable digest does not match",
+		)
+	})
+
+	it("binds a tracked repository-root file outside the executable pathspecs", async () => {
+		await reach("shared.ts", "../shared.js", "tracked")
+		const admitted = await available()
+		expect(admitted.sourceGraph.files).toContainEqual(
+			expect.objectContaining({ path: "shared.ts", status: "clean" }),
+		)
+		expect(admitted.dirty).toBe(false)
+		const checkpointPath = await writeCheckpoint(admitted.digest)
+		await put("shared.ts", "export const h = 2\n")
+		const edited = await available()
+		expect(edited.digest).not.toBe(admitted.digest)
+		expect(edited.dirty).toBe(true)
+		expect(edited.sourceGraph.files).toContainEqual(
+			expect.objectContaining({ path: "shared.ts", status: "modified" }),
+		)
+		expect(completeness(edited)).toContain("uncommitted executable source")
+		await expect(resume(checkpointPath)).rejects.toThrow(
+			"executable digest does not match",
+		)
+	})
+
+	it("ignores untracked files the graph does not reach", async () => {
+		const before = await available()
+		await put("benchmarks/results/other.json", "{}\n")
+		await put("tmp/unrelated.ts", "export const u = 1\n")
+		const after = await available()
+		expect(after.digest).toBe(before.digest)
+		expect(after.dirty).toBe(before.dirty)
+		expect(after.sourceGraph).toEqual(before.sourceGraph)
+	})
+
+	it("refuses identity for source reached through a directory link", async () => {
+		await symlink(
+			"../packages/memory-engine/src",
+			path.join(repo, "scripts/linked"),
+		)
+		await put(
+			"scripts/run-benchmark.ts",
+			`${ENTRY_IMPORTS}import { m as n } from "./linked/manager.js"\nexport const x = m + n\n`,
+		)
+		const identity = await computeExecutableDigest(repo)
+		expect(identity).toMatchObject({ status: "unavailable" })
+		expect(identity.status === "unavailable" && identity.reason).not.toContain(
+			repo,
+		)
+	})
+})

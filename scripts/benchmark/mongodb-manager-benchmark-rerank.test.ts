@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url"
 import type { MemongoConfig } from "@memongo/lib"
 import type { Db } from "mongodb"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { resolveMemoryBackendConfig } from "../../packages/memory-engine/src/backend-config.js"
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import { crossEncoderRerank } from "../../packages/memory-engine/src/mongodb-reranker.js"
@@ -10,7 +10,15 @@ import {
 	createBenchmarkRunContext,
 	type BenchmarkRetrievalLane,
 } from "./benchmark-parity-envelope.js"
+import { SYNTHETIC_FINGERPRINT_KEY } from "./benchmark-run-configuration.fixture.js"
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
+
+beforeEach(() => {
+	vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", SYNTHETIC_FINGERPRINT_KEY)
+})
+afterEach(() => {
+	vi.unstubAllEnvs()
+})
 
 vi.mock("node:dns/promises", () => ({
 	lookup: vi.fn(async () => [{ address: "203.0.113.10", family: 4 }]),

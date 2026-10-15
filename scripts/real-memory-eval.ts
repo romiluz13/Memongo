@@ -3,6 +3,7 @@ import { MemongoClient } from "@memongo/client"
 
 import { runMemoryEvalSuite } from "./memory-eval-core.js"
 import { writeProofArtifact } from "./proof-artifacts.js"
+import { exitCodeForVerdict } from "./proof-verdict.js"
 
 const baseUrl = (
 	process.env.MEMONGO_API_URL?.trim() ?? "http://127.0.0.1:3847"
@@ -36,6 +37,7 @@ async function main() {
 			2,
 		),
 	)
+	process.exitCode = exitCodeForVerdict(report.ok)
 }
 
 await main()

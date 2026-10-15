@@ -57,11 +57,26 @@ bun run benchmark --resume
 
 Each completed scenario is written atomically to
 `benchmarks/results/checkpoints/`. `--resume` accepts that checkpoint only when
-the dataset digest, complete scenario manifest, and configuration hash match.
+the dataset digest, complete scenario manifest, configuration hash, and
+executable digest match. The executable digest covers HEAD plus the working-tree
+bytes of tracked files under `packages/`, `apps/`, `scripts/`, `bun.lock`, and
+`package.json`, plus the Node and Bun versions; results, checkpoints, and
+untracked files are excluded. Resume requires a git work tree. Checkpoints
+written before this binding are refused; keep them for historical analysis only.
 Use `--checkpoint <path>` to choose another file or `--no-checkpoint` for a
 throwaway run. Transient MongoDB read failures are retried at bounded
 idempotent boundaries; incomplete ingest and unsettled workers fail publication
 runs rather than producing partial metrics.
+
+The report's source identity is observed the same way, once at run admission,
+with inherited `GIT_*` overrides ignored: it records HEAD, the executable
+digest, and whether tracked executable source is dirty. `MEMONGO_BUILD_COMMIT`
+and CI commit variables are kept only as `claimedCommitSha` metadata; a value
+that is not a commit SHA is withheld and marked invalid. The
+evidence-completeness gate fails when the tree was not observed, is dirty, or
+the claim is invalid or names a different commit. This is source identity, not
+a build or executable attestation: generated workspace `dist/` modules
+(`@memongo/lib`, `@memongo/memory-bridge`) are not covered.
 
 ### Why LongMemEval first, and not LoCoMo
 

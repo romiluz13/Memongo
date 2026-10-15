@@ -1,3 +1,9 @@
+import {
+	endOfBenchmarkUtcDay,
+	normalizeBenchmarkConversationTimestamps,
+	requireBenchmarkTimestamp,
+} from "./benchmark-timestamp.js"
+import { hasValidBenchmarkIngestCounts } from "./mongodb-benchmark-checkpoint.js"
 /**
  * Benchmark seam extracted from `mongodb-manager.ts` (P4.3): parity-envelope
  * helpers, convergence probes, and replay metadata used by the benchmark
@@ -19,6 +25,7 @@ import {
 	resolveDatasetSha256,
 	resolveBenchmarkRetrievalLane,
 	resolveBenchmarkExecutionProfile,
+	percentile50And95,
 } from "./benchmark-parity-envelope.js"
 import type {
 	BenchmarkExecutionProfile,
@@ -33,7 +40,20 @@ import {
 	type BenchmarkCheckpoint,
 	type BenchmarkCheckpointScenario,
 } from "./mongodb-benchmark-checkpoint.js"
+import {
+	BENCHMARK_REPO_ROOT,
+	type BenchmarkExecutableIdentity,
+	computeExecutableDigest,
+} from "./benchmark-executable-identity.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
+import {
+	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
+	cleanupRegistry,
+	describeScenarioCleanupFailure,
+	restoreScenarioCleanup,
+	sanitizedCleanupError,
+	summarizeScenarioCleanup,
+} from "./benchmark-scenario-cleanup.js"
 import {
 	ingestBenchmarkDataset,
 	ingestBenchmarkConversations,
@@ -115,6 +135,9 @@ import {
 import type {
 	BenchmarkE2eQaEnvelope,
 	BenchmarkQualityThresholds,
+	BenchmarkScenarioCleanupAttempt,
+	BenchmarkScenarioCleanupOutcome,
+	BenchmarkScenarioCleanupReport,
 	BenchmarkTenantStorageMeasurement,
 	MemoryBenchmarkDataset,
 	MemoryBenchmarkDatasetKind,
@@ -134,30 +157,7 @@ import type { Collection, Document } from "mongodb"
 
 const log = createSubsystemLogger("memory:mongodb")
 
-export const BENCHMARK_SCENARIO_COLLECTION_SUFFIXES = [
-	"events",
-	"chunks",
-	"session_chunks",
-	"memory_evidence",
-	"structured_mem",
-	"structured_mem_revisions",
-	"procedures",
-	"procedure_revisions",
-	"entities",
-	"relations",
-	"entity_links",
-	"episodes",
-	"ingest_runs",
-	"projection_runs",
-	"lane_coverage",
-	"relevance_runs",
-	"relevance_regressions",
-	"relevance_artifacts",
-	"recall_traces",
-	"memory_jobs",
-	"consolidation_runs",
-	"memory_mutations",
-] as const
+export { BENCHMARK_SCENARIO_COLLECTION_SUFFIXES }
 
 export function isLegacyBenchmarkFallbackCandidate(err: unknown): boolean {
 	return (
@@ -214,31 +214,23 @@ export function benchmarkSearchProbeTerm(value: unknown): string | undefined {
 	return terms.find((term) => term.length >= 4) ?? terms[0]
 }
 
-export function parseBenchmarkTurnTimestamp(value?: string): Date | undefined {
-	if (!value) return undefined
-	const parsed = new Date(value)
-	return Number.isNaN(parsed.getTime()) ? undefined : parsed
+export function parseBenchmarkTurnTimestamp(
+	value?: string,
+	datasetKind: MemoryBenchmarkDatasetKind = "longmemeval",
+): Date | undefined {
+	return value === undefined
+		? undefined
+		: requireBenchmarkTimestamp(datasetKind, value, {
+				field: "turn.timestamp",
+				conversationIndex: 0,
+				sessionIndex: null,
+				turnIndex: null,
+			})
 }
 
-/**
- * LongMemEval quirk (backlog B3): `question_date` carries a wall-clock
- * timestamp in the nonstandard `YYYY/MM/DD (Ddd) HH:MM` format, which both
- * this driver and the engine parse leniently with `new Date()` — in the
- * machine's LOCAL timezone, not UTC. Answer sessions can sit at a later
- * time-of-day on the question's own day, so the engine's correct production
- * guard (`validAt <= questionDate`) would drop them. The benchmark driver
- * therefore widens the reference date it passes to search to the end of the
- * question's calendar day IN THE SAME LOCAL FRAME as that lenient parse, so
- * the boundary is machine-timezone-independent: any session later on the
- * question's wall-clock day stays eligible, and nothing from the next day
- * leaks in (a UTC end-of-day would overshoot by the machine's UTC offset).
- * Engine semantics are unchanged; production callers keep passing exact
- * timestamps.
- */
+/** Same-day sessions remain eligible; the cutoff uses the parser's UTC calendar. */
 export function endOfBenchmarkQuestionDay(date: Date): Date {
-	const endOfDay = new Date(date.getTime())
-	endOfDay.setHours(23, 59, 59, 999)
-	return endOfDay
+	return endOfBenchmarkUtcDay(date)
 }
 
 export function buildBenchmarkReplayMetadata(params: {
@@ -273,6 +265,7 @@ export function attachBenchmarkOperationsReport(
 		status: "passed" | "failed"
 		evidence: string
 	},
+	observedBuild?: BenchmarkExecutableIdentity,
 ): RelevanceBenchmarkResult {
 	const queryGovernance = buildQueryGovernanceReport(result)
 	// C-039: project the QA envelope into the official LongMemEval metrics so
@@ -288,6 +281,7 @@ export function attachBenchmarkOperationsReport(
 		queryGovernance,
 		benchmarkReport: buildBenchmarkRunReport({
 			...result,
+			...(observedBuild ? { observedBuild } : {}),
 			...(officialMetrics !== result.officialMetrics
 				? { officialMetrics }
 				: {}),
@@ -478,7 +472,9 @@ export class MongoDBManagerBenchmarkOps {
 			runId: randomUUID(),
 			configuration: runConfiguration,
 		})
-		let dataset: MemoryBenchmarkDataset
+		// Observed once at admission: resume binding and report identity share it.
+		const executable = await computeExecutableDigest(BENCHMARK_REPO_ROOT)
+		let dataset: Awaited<ReturnType<typeof loadBenchmarkDataset>>
 		try {
 			dataset = await loadBenchmarkDataset(resolvedDatasetPath, {
 				baseDir: this.host.workspaceDir,
@@ -516,6 +512,7 @@ export class MongoDBManagerBenchmarkOps {
 				qualityThresholds,
 				undefined,
 				params?.conversationRecallRegression,
+				executable,
 			)
 		}
 		if (
@@ -559,6 +556,7 @@ export class MongoDBManagerBenchmarkOps {
 				qualityThresholds,
 				undefined,
 				params?.conversationRecallRegression,
+				executable,
 			)
 		}
 		const checkpointPath = params?.checkpointPath
@@ -572,6 +570,7 @@ export class MongoDBManagerBenchmarkOps {
 				? await readBenchmarkCheckpoint(checkpointPath, {
 						datasetSha256,
 						configurationHash: runContext.configurationHash,
+						executableDigest: executable?.digest ?? null,
 						scenarioIds: (dataset.scenarios ?? []).map(
 							(scenario) => scenario.scenarioId,
 						),
@@ -596,6 +595,7 @@ export class MongoDBManagerBenchmarkOps {
 			publicationRun: Boolean(qualityThresholds),
 			checkpointPath,
 			resumeCheckpoint,
+			executableDigest: executable?.digest ?? "unavailable",
 			datasetSha256,
 			runContext,
 		})
@@ -608,13 +608,26 @@ export class MongoDBManagerBenchmarkOps {
 			runContext,
 			tenantStorage: scenario.storage,
 		})
-		return attachBenchmarkOperationsReport(
+		const result = attachBenchmarkOperationsReport(
 			scenario.result,
 			parity,
 			qualityThresholds,
 			scenario.e2eQa,
 			params?.conversationRecallRegression,
+			executable,
 		)
+		const validation = dataset.timestampValidation
+		if (result.benchmarkReport && validation) {
+			if (validation.weekdayMismatches > 0)
+				result.benchmarkReport.warnings.push(
+					`timestamp policy ${validation.policyVersion}: ${validation.weekdayMismatches} weekday labels disagree with numeric dates; numeric UTC fields used`,
+				)
+			if (validation.literalMidnightLabels > 0)
+				result.benchmarkReport.warnings.push(
+					`timestamp policy ${validation.policyVersion}: ${validation.literalMidnightLabels} twelve-am labels interpreted literally as midnight; historical noon intent is unresolved`,
+				)
+		}
+		return result
 	}
 
 	/**
@@ -810,6 +823,11 @@ export class MongoDBManagerBenchmarkOps {
 				scoredCases: cases.length,
 				skippedCases: 0,
 				...metrics,
+				// Every legacy case is scored, so the scored-case sample is all cases.
+				scoredLatency: percentile50And95(
+					evaluations.map((entry) => entry.latencyMs),
+					"scored-cases",
+				),
 				rAt5: 0,
 				rAt10: 0,
 				ndcgAt10: 0,
@@ -831,6 +849,8 @@ export class MongoDBManagerBenchmarkOps {
 		publicationRun?: boolean
 		checkpointPath?: string
 		resumeCheckpoint?: BenchmarkCheckpoint
+		/** Written into every checkpoint; "unavailable" never resumes. */
+		executableDigest?: string
 		datasetSha256?: string
 		runContext: BenchmarkRunContext
 	}): Promise<{
@@ -840,6 +860,44 @@ export class MongoDBManagerBenchmarkOps {
 		storage: BenchmarkTenantStorageMeasurement
 	}> {
 		const scenarios = params.dataset.scenarios ?? []
+		const normalizedConversations = scenarios.map((scenario) =>
+			normalizeBenchmarkConversationTimestamps(
+				scenario.conversations,
+				params.dataset.datasetKind,
+			),
+		)
+		const questionDates = new WeakMap<object, Date>()
+		for (const [index, scenario] of scenarios.entries())
+			for (const evaluation of scenario.evaluations) {
+				if (evaluation.metadata?.questionDate !== undefined)
+					questionDates.set(
+						evaluation,
+						requireBenchmarkTimestamp(
+							params.dataset.datasetKind,
+							evaluation.metadata.questionDate,
+							{
+								field: "question_date",
+								conversationIndex: index,
+								sessionIndex: null,
+								turnIndex: null,
+							},
+						),
+					)
+			}
+		if (
+			params.resumeCheckpoint &&
+			params.resumeCheckpoint.failedLines !== (params.dataset.failedLines ?? 0)
+		)
+			throw new Error(
+				"benchmark checkpoint failedLines count does not match loaded dataset",
+			)
+		if (
+			params.resumeCheckpoint?.completedScenarios.some(
+				(scenario) => !hasValidBenchmarkIngestCounts(scenario.ingest),
+			)
+		)
+			throw new Error("benchmark checkpoint ingest counts are invalid")
+
 		const measurementPasses = resolveBenchmarkMeasurementPasses()
 		// #66: index 0 is the gate pass — the one the published result, the
 		// release gates, and the regression baseline are computed from.
@@ -855,6 +913,10 @@ export class MongoDBManagerBenchmarkOps {
 			{ documents: number; logicalBytes: number }
 		>()
 		const storageFailures: string[] = []
+		const cleanupByIndex = new Map<
+			number,
+			BenchmarkScenarioCleanupReport["scenarios"][number]
+		>()
 		const runToken = randomUUID().slice(0, 8)
 		const rawSessionLane = params.retrievalLane === "raw-session"
 		// C-039: QA material for LLM-judged answer accuracy, captured from the
@@ -934,6 +996,13 @@ export class MongoDBManagerBenchmarkOps {
 			if (checkpointScenario.storageFailure) {
 				storageFailures.push(checkpointScenario.storageFailure)
 			}
+			cleanupByIndex.set(
+				checkpointScenario.index,
+				restoreScenarioCleanup(checkpointScenario.cleanup, {
+					runId: params.runContext.runId,
+					scenarioId: checkpointScenario.scenarioId,
+				}),
+			)
 		}
 		// Slice B: durable QA protocol preflight — separate judge provider,
 		// dated answer prompts, anscheck-verified hypotheses persisted to a
@@ -1019,10 +1088,13 @@ export class MongoDBManagerBenchmarkOps {
 			}
 			if (!checkpointExists) {
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
-					version: 1,
+					version: 2,
+					failedLines: ingest.failedLines,
 					runId: params.runContext.runId,
 					datasetSha256: seedDatasetSha256,
 					configurationHash: params.runContext.configurationHash,
+					configuration: params.runContext.configuration,
+					executableDigest: params.executableDigest ?? "unavailable",
 					totalScenarios: scenarios.length,
 					scenarioIds: scenarios.map((entry) => entry.scenarioId),
 					completedScenarios: [],
@@ -1069,6 +1141,10 @@ export class MongoDBManagerBenchmarkOps {
 			let scenarioStorageCollections: BenchmarkTenantStorageMeasurement["collections"] =
 				[]
 			let scenarioStorageFailure: string | undefined
+			let scenarioCleanup: BenchmarkScenarioCleanupOutcome | undefined
+			// The error leaving this scenario, if any: cleanup failure is
+			// attached to it instead of replacing it.
+			let propagatingError: unknown
 			let scenarioManager: MongoDBManagerHost = this.host
 			let closeScenarioManager = async (): Promise<void> => {}
 			let scenarioWorkspaceDir: string | undefined
@@ -1084,6 +1160,52 @@ export class MongoDBManagerBenchmarkOps {
 			// is only assigned inside the try, so a scoring throw propagates
 			// through the finally without ever reaching the checkpoint write.
 			let officialScenarioComplete = true
+			// Closes the scenario manager, measures storage and records cleanup.
+			// A close/measurement error stays primary over the scenario error;
+			// a cleanup failure is attached to whichever error propagates.
+			const finishScenario = async (): Promise<void> => {
+				let closeError: { error: unknown } | undefined
+				try {
+					if (scenarioManager !== this.host) {
+						await closeScenarioManager()
+						const measurement = await collectBenchmarkTenantStorage({
+							db: this.host.db,
+							agentId: scenarioManager.agentId,
+							collectionNames: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(
+								(suffix) => `${this.host.prefix}${suffix}`,
+							),
+						})
+						if (measurement.unavailableReason) {
+							scenarioStorageFailure = `${scenario.scenarioId}: ${measurement.unavailableReason}`
+							storageFailures.push(scenarioStorageFailure)
+						}
+						scenarioStorageCollections = measurement.collections
+						addStorageRows(measurement.collections)
+					} else {
+						scenarioStorageFailure = `${scenario.scenarioId}: scenario did not use an isolated benchmark agent`
+						storageFailures.push(scenarioStorageFailure)
+					}
+				} catch (error) {
+					closeError = { error }
+					propagatingError = error
+				}
+				try {
+					scenarioCleanup = await this.recordBenchmarkScenarioCleanup({
+						runId: params.runContext.runId,
+						scenarioId: scenario.scenarioId,
+						ownedAgentId: ownedScenarioAgentId,
+						agentId:
+							scenarioManager !== this.host
+								? scenarioManager.agentId
+								: ownedScenarioAgentId,
+						propagatingError,
+					})
+				} finally {
+					if (scenarioWorkspaceDir)
+						await rm(scenarioWorkspaceDir, { recursive: true, force: true })
+				}
+				if (closeError) throw closeError.error
+			}
 			// Official QA: dataset session dates (haystack timestamps) by
 			// session id, so pass-0 passages can carry the dates of the
 			// sessions they were retrieved from into the dated answer prompt.
@@ -1157,6 +1279,7 @@ export class MongoDBManagerBenchmarkOps {
 							: await ingestBenchmarkConversations({
 									datasetPath: params.datasetPath,
 									datasetName: params.dataset.name,
+									datasetKind: params.dataset.datasetKind,
 									conversations: scenario.conversations,
 									scope: "agent",
 									metadata: {
@@ -1260,7 +1383,7 @@ export class MongoDBManagerBenchmarkOps {
 										this.host.db,
 										this.host.prefix,
 									),
-									conversations: scenario.conversations,
+									conversations: normalizedConversations[index],
 									agentId: scenarioManager.agentId,
 									scope: "agent",
 									scopeRef,
@@ -1273,7 +1396,7 @@ export class MongoDBManagerBenchmarkOps {
 										this.host.db,
 										this.host.prefix,
 									),
-									conversations: scenario.conversations,
+									conversations: normalizedConversations[index],
 									agentId: scenarioManager.agentId,
 									scope: "agent",
 									scopeRef,
@@ -1440,7 +1563,7 @@ export class MongoDBManagerBenchmarkOps {
 										this.host.db,
 										this.host.prefix,
 									),
-									conversations: scenario.conversations,
+									conversations: normalizedConversations[index],
 									agentId: scenarioManager.agentId,
 									scope: "agent",
 									scopeRef,
@@ -1550,15 +1673,7 @@ export class MongoDBManagerBenchmarkOps {
 					const passExecutions = executionsByPass[pass]!
 					for (const evaluation of scenario.evaluations) {
 						const startedAt = Date.now()
-						// Parse questionDate from evaluation metadata for temporal scoring
-						const evalQuestionDate =
-							typeof evaluation.metadata?.questionDate === "string"
-								? new Date(evaluation.metadata.questionDate)
-								: undefined
-						const validQuestionDate =
-							evalQuestionDate && !Number.isNaN(evalQuestionDate.getTime())
-								? evalQuestionDate
-								: undefined
+						const validQuestionDate = questionDates.get(evaluation)
 						// B3: search with the end of the question's calendar day (see
 						// endOfBenchmarkQuestionDay) so same-day answer sessions remain
 						// eligible under the engine's validAt guard.
@@ -1916,46 +2031,13 @@ export class MongoDBManagerBenchmarkOps {
 								: String(scenarioErr),
 					},
 				)
+				propagatingError = scenarioErr
 				throw scenarioErr
 			} finally {
-				try {
-					if (scenarioManager !== this.host) {
-						await closeScenarioManager()
-						const measurement = await collectBenchmarkTenantStorage({
-							db: this.host.db,
-							agentId: scenarioManager.agentId,
-							collectionNames: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(
-								(suffix) => `${this.host.prefix}${suffix}`,
-							),
-						})
-						if (measurement.unavailableReason) {
-							scenarioStorageFailure = `${scenario.scenarioId}: ${measurement.unavailableReason}`
-							storageFailures.push(scenarioStorageFailure)
-						}
-						scenarioStorageCollections = measurement.collections
-						addStorageRows(measurement.collections)
-					} else {
-						scenarioStorageFailure = `${scenario.scenarioId}: scenario did not use an isolated benchmark agent`
-						storageFailures.push(scenarioStorageFailure)
-					}
-				} finally {
-					try {
-						if (
-							ownedScenarioAgentId &&
-							process.env.MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA !== "1"
-						) {
-							await this.cleanupBenchmarkScenarioData(
-								scenarioManager !== this.host
-									? scenarioManager.agentId
-									: ownedScenarioAgentId,
-							)
-						}
-					} finally {
-						if (scenarioWorkspaceDir)
-							await rm(scenarioWorkspaceDir, { recursive: true, force: true })
-					}
-				}
+				await finishScenario()
 			}
+
+			if (scenarioCleanup) cleanupByIndex.set(index, scenarioCleanup)
 
 			// Slice B round 2: the checkpoint write happens after the finally
 			// block's worker stop / storage measurement / cleanup, and only for
@@ -1991,16 +2073,20 @@ export class MongoDBManagerBenchmarkOps {
 					...(scenarioStorageFailure
 						? { storageFailure: scenarioStorageFailure }
 						: {}),
+					...(scenarioCleanup ? { cleanup: scenarioCleanup } : {}),
 				}
 				completedCheckpointScenarios.push(checkpointScenario)
 				completedCheckpointScenarios.sort(
 					(left, right) => left.index - right.index,
 				)
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
-					version: 1,
+					version: 2,
+					failedLines: ingest.failedLines,
 					runId: params.runContext.runId,
 					datasetSha256,
 					configurationHash: params.runContext.configurationHash,
+					configuration: params.runContext.configuration,
+					executableDigest: params.executableDigest ?? "unavailable",
 					totalScenarios: scenarios.length,
 					scenarioIds: scenarios.map((entry) => entry.scenarioId),
 					completedScenarios: completedCheckpointScenarios,
@@ -2093,6 +2179,9 @@ export class MongoDBManagerBenchmarkOps {
 				// startup orphans stay lost no matter what this run covered.
 				resumedFromCheckpoint: params.resumeCheckpoint !== undefined,
 				startupLostQuestionIds: officialStartupLostQuestionIds,
+				// B08:C06: run totals include checkpoint-restored scenarios, so a
+				// resumed run keeps the failures it restored.
+				ingest,
 			})
 			e2eQa = officialSummary.envelope
 		} else {
@@ -2100,6 +2189,7 @@ export class MongoDBManagerBenchmarkOps {
 				datasetKind: params.dataset.datasetKind,
 				materialByCaseId: e2eQaMaterialByCaseId,
 				resumedFromCheckpoint: restoredCheckpointScenarioCount > 0,
+				ingest,
 				accounting: params.runContext?.accounting,
 			})
 		}
@@ -2121,6 +2211,7 @@ export class MongoDBManagerBenchmarkOps {
 				emptyRate: summary.emptyRate,
 				avgTopScore: summary.avgTopScore,
 				p95LatencyMs: summary.p95LatencyMs,
+				scoredLatency: summary.scoredLatency,
 				...(summary.laneLatencyP95
 					? { laneLatencyP95: summary.laneLatencyP95 }
 					: {}),
@@ -2146,6 +2237,11 @@ export class MongoDBManagerBenchmarkOps {
 					expectedSessionMap,
 					expectedTurnMap,
 				}),
+				scenarioCleanup: summarizeScenarioCleanup(
+					Array.from(cleanupByIndex)
+						.sort(([left], [right]) => left - right)
+						.map(([, outcome]) => outcome),
+				),
 			},
 			latencySamples: executions.map((e) => e.latencyMs),
 			...(e2eQa ? { e2eQa } : {}),
@@ -2338,8 +2434,66 @@ export class MongoDBManagerBenchmarkOps {
 		return this.scenario.readinessSkips
 	}
 
-	async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
+	async cleanupBenchmarkScenarioData(
+		agentId: string,
+	): Promise<BenchmarkScenarioCleanupAttempt> {
 		return this.scenario.cleanupBenchmarkScenarioData(agentId)
+	}
+
+	/**
+	 * B08:C03: the scenario's cleanup outcome. KEEP_SCENARIO_DATA retains rows.
+	 * A cleanup failure is appended (sanitized) to an error that is already
+	 * propagating instead of replacing it; with no such error a thrown cleanup
+	 * still fails the run, with a sanitized error.
+	 */
+	async recordBenchmarkScenarioCleanup(params: {
+		runId: string
+		scenarioId: string
+		ownedAgentId: string | undefined
+		agentId: string | undefined
+		propagatingError: unknown
+	}): Promise<BenchmarkScenarioCleanupOutcome> {
+		const base = {
+			version: 1 as const,
+			runId: params.runId,
+			scenarioId: params.scenarioId,
+			agentId: params.agentId ?? null,
+			registry: cleanupRegistry(BENCHMARK_SCENARIO_COLLECTION_SUFFIXES),
+			collections: [],
+		}
+		let outcome: BenchmarkScenarioCleanupOutcome
+		if (!params.ownedAgentId || !params.agentId) {
+			outcome = { ...base, status: "not-attempted" }
+		} else if (process.env.MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA === "1") {
+			outcome = { ...base, status: "retained" }
+		} else {
+			try {
+				const attempt = await this.cleanupBenchmarkScenarioData(params.agentId)
+				outcome = {
+					...base,
+					status: attempt.status,
+					registry: attempt.registry,
+					collections: attempt.collections,
+				}
+			} catch (cleanupErr) {
+				outcome = {
+					...base,
+					status: "failed",
+					errorName: sanitizedCleanupError(cleanupErr).errorName,
+				}
+				// The raw cleanup error can carry driver text; only the
+				// sanitized description leaves this method.
+				if (params.propagatingError === undefined)
+					throw new Error(describeScenarioCleanupFailure(outcome))
+			}
+		}
+		if (
+			outcome.status === "failed" &&
+			params.propagatingError instanceof Error
+		) {
+			params.propagatingError.message += `; ${describeScenarioCleanupFailure(outcome)}`
+		}
+		return outcome
 	}
 
 	async listBenchmarkEventSessions(

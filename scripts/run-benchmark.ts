@@ -35,6 +35,7 @@ import {
 	memongoBridgeGetManager,
 	memongoBridgeShutdown,
 } from "@memongo/memory-bridge"
+import { parseBenchmarkFingerprintKey } from "./benchmark/benchmark-credential-fingerprint.js"
 import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark/benchmark-quality-contracts.js"
 import { OFFICIAL_LONGMEMEVAL_QA_JUDGE_MODEL } from "./benchmark/longmemeval-official-qa.js"
 import {
@@ -45,6 +46,7 @@ import {
 	benchmarkAnswerModelName,
 	resolveBenchmarkAnswerProvider,
 } from "./benchmark/benchmark-answer-provider.js"
+import { describeLatencyBasis } from "./benchmark/mongodb-benchmark-runner.js"
 import { MongoDBManagerBenchmarkOps } from "./benchmark/mongodb-manager-benchmark.js"
 
 const REPO_ROOT = path.resolve(
@@ -482,6 +484,14 @@ export async function main(
 				"  The benchmark runs against a real cluster; there is no offline mode.",
 		)
 	}
+	// Every run binds its credentials under the operator's fingerprint key, so
+	// refuse here, before the recall-test subprocess, manager acquisition (the
+	// run's first database connection) or any provider call.
+	try {
+		parseBenchmarkFingerprintKey(process.env)
+	} catch (error) {
+		fail((error as Error).message)
+	}
 
 	// B7: --no-rerank must take effect before the manager is acquired (the
 	// resolved config is built at acquisition time) and before the benchmark
@@ -673,7 +683,15 @@ export async function main(
 	console.log(`  emptyRate      : ${result.emptyRate.toFixed(4)}`)
 	console.log(`  R@5            : ${result.rAt5?.toFixed(4) ?? "n/a"}`)
 	console.log(`  nDCG@10        : ${result.ndcgAt10?.toFixed(4) ?? "n/a"}`)
-	console.log(`  p95 latency ms : ${result.p95LatencyMs.toFixed(0)}`)
+	console.log(
+		`  p95 latency ms : ${result.p95LatencyMs.toFixed(0)}${describeLatencyBasis(result.scoredLatency)}`,
+	)
+	const allAttemptLatency = result.benchmarkReport?.latency
+	if (allAttemptLatency?.denominator === "all-attempts") {
+		console.log(
+			`  all-attempt p95: ${allAttemptLatency.p95Ms.toFixed(0)}${describeLatencyBasis(allAttemptLatency)}`,
+		)
+	}
 	const laneLatency = Object.entries(result.laneLatencyP95 ?? {}).toSorted(
 		([, left], [, right]) => right.p95Ms - left.p95Ms,
 	)

@@ -1947,3 +1947,295 @@ describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
 		}
 	})
 })
+
+// Synthetic credentials only. Every failure below is produced offline: the
+// injected fetch builds a real Request (so the runtime validates headers) and
+// answers with a synthetic Response; DNS is an injected guard.
+describe("provider failure diagnostics never carry provider or runtime payloads", () => {
+	const KEY = "cnryDiagKey3V"
+	const TOKEN = "cnryDiagPath6W"
+	const HOST = "cnrydiaghost8x.example.test"
+	const SECRETS = [KEY, TOKEN, HOST]
+	const BASE_URL = `https://api.example.test/${TOKEN}/v1`
+
+	function expectNoPayload(error: unknown) {
+		expect(error).toBeInstanceOf(Error)
+		const failure = error as Error
+		const text = [
+			String(failure),
+			failure.stack ?? "",
+			JSON.stringify(failure),
+			JSON.stringify(Object.getOwnPropertyNames(failure)),
+		].join("\n")
+		for (const secret of SECRETS) expect(text).not.toContain(secret)
+		expect(failure.cause).toBeUndefined()
+		expect(
+			Object.keys(failure).filter(
+				// The error classes' own declared fields; values are checked above.
+				(key) =>
+					![
+						"statusCode",
+						"shape",
+						"finishReason",
+						"refusal",
+						"usage",
+						"name",
+					].includes(key),
+			),
+		).toEqual([])
+	}
+
+	const providers = [
+		[
+			"openai-compatible",
+			(fetchFn: typeof fetch, transport = TEST_TRANSPORT, apiKey = KEY) =>
+				createHttpProvider(
+					{ baseUrl: BASE_URL, apiKey, model: "m" },
+					fetchFn,
+					transport,
+				),
+		],
+		[
+			"anthropic",
+			(fetchFn: typeof fetch, transport = TEST_TRANSPORT, apiKey = KEY) =>
+				createAnthropicProvider(
+					{ baseUrl: BASE_URL, apiKey, model: "m", provider: "anthropic" },
+					fetchFn,
+					transport,
+				),
+		],
+	] as const
+
+	function respond(make: () => Response) {
+		return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			new Request(input, init)
+			return make()
+		}) as unknown as typeof fetch & ReturnType<typeof vi.fn>
+	}
+
+	const call = (provider: EnrichmentProvider) =>
+		provider.chatCompletion({
+			model: "m",
+			messages: [{ role: "user", content: "hi" }],
+		})
+
+	describe.each(providers)("%s", (_name, make) => {
+		it.each([
+			[401, `{"error":{"message":"Incorrect API key provided: ${KEY}"}}`],
+			[404, `no route for /${TOKEN}/v1/chat/completions`],
+			[503, `upstream ${HOST} unavailable`],
+		])("withholds an HTTP %i response body", async (status, body) => {
+			const fetchFn = respond(() => new Response(body, { status }))
+			const error = await call(make(fetchFn)).catch((e: unknown) => e)
+			expect(error).toBeInstanceOf(EnrichmentHttpError)
+			expect((error as EnrichmentHttpError).statusCode).toBe(status)
+			expect((error as Error).message).toBe(
+				`LLM enrichment request failed: HTTP ${status} (response body withheld)`,
+			)
+			expectNoPayload(error)
+		})
+
+		it("keeps the HTTP status when discarding the body fails or never settles", async () => {
+			for (const cancel of [
+				() => Promise.reject(new Error(`cancel ${KEY}`)),
+				() => new Promise<void>(() => {}),
+			]) {
+				const fetchFn = respond(() => {
+					const response = new Response("x", { status: 429 })
+					Object.defineProperty(response, "body", { value: { cancel } })
+					return response
+				})
+				const error = await call(make(fetchFn)).catch((e: unknown) => e)
+				expect((error as EnrichmentHttpError).statusCode).toBe(429)
+				expectNoPayload(error)
+			}
+		})
+
+		it("reports a header the runtime rejects as a retryable 503 without the key", async () => {
+			const fetchFn = respond(() => new Response("{}"))
+			const provider = make(fetchFn, TEST_TRANSPORT, `${KEY}\nX`)
+			const error = await withRetry(() => call(provider), 2, 0).catch(
+				(e: unknown) => e,
+			)
+			expect(error).toBeInstanceOf(EnrichmentHttpError)
+			expect((error as EnrichmentHttpError).statusCode).toBe(503)
+			expect((error as Error).message).toBe(
+				"LLM enrichment transport failed (TypeError)",
+			)
+			expect(fetchFn).toHaveBeenCalledTimes(3)
+			expectNoPayload(error)
+		})
+
+		it("reports a DNS failure without the host, code or lookup fields and does not retry", async () => {
+			const fetchFn = respond(() => new Response("{}"))
+			const guard = vi.fn(async (hostname: string) => {
+				throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${HOST}`), {
+					code: "ENOTFOUND",
+					syscall: "getaddrinfo",
+					hostname,
+				})
+			})
+			const error = await withRetry(
+				() => call(make(fetchFn, { verifyPublicHostname: guard })),
+				2,
+				0,
+			).catch((e: unknown) => e)
+			expect((error as Error).constructor).toBe(Error)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed before a response",
+			)
+			expect(guard).toHaveBeenCalledOnce()
+			expect(fetchFn).not.toHaveBeenCalled()
+			expectNoPayload(error)
+		})
+
+		it("replaces a guard error that names the host but keeps the guard's own wording", async () => {
+			const fetchFn = respond(() => new Response("{}"))
+			const blocked = await call(
+				make(fetchFn, {
+					verifyPublicHostname: async () => {
+						throw new SsrFBlockedError(`Blocked private/internal IP: ${HOST}`)
+					},
+				}),
+			).catch((e: unknown) => e)
+			expect(blocked).toBeInstanceOf(SsrFBlockedError)
+			expect((blocked as Error).message).toBe(
+				"SSRF guard blocked a private or disallowed host",
+			)
+			expectNoPayload(blocked)
+			const redirect = await call(
+				make(respond(() => new Response(null, { status: 307 }))),
+			).catch((e: unknown) => e)
+			expect(redirect).toBeInstanceOf(SsrFBlockedError)
+			expect((redirect as Error).message).toBe(
+				"SSRF guard refused redirect from the configured endpoint",
+			)
+		})
+
+		it("replaces a thrown non-Error value with a fixed, non-retryable failure", async () => {
+			const fetchFn = vi.fn(async () => {
+				throw `raw ${KEY}`
+			}) as unknown as typeof fetch
+			const error = await withRetry(() => call(make(fetchFn)), 2, 0).catch(
+				(e: unknown) => e,
+			)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed before a response",
+			)
+			expect(fetchFn).toHaveBeenCalledOnce()
+			expectNoPayload(error)
+		})
+
+		it("keeps only the status of an EnrichmentHttpError thrown by an injected transport", async () => {
+			const thrown = Object.assign(
+				new EnrichmentHttpError(`HTTP 503 ${KEY}`, 503),
+				{ cause: new Error(HOST) },
+			)
+			const fetchFn = vi.fn(async () => {
+				throw thrown
+			}) as unknown as typeof fetch
+			const error = await withRetry(() => call(make(fetchFn)), 2, 0).catch(
+				(e: unknown) => e,
+			)
+			expect(error).not.toBe(thrown)
+			expect(error).toBeInstanceOf(EnrichmentHttpError)
+			expect((error as EnrichmentHttpError).statusCode).toBe(503)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed: HTTP 503 (transport error withheld)",
+			)
+			expect(fetchFn).toHaveBeenCalledTimes(3)
+			expectNoPayload(error)
+		})
+
+		it("does not pass through an EnrichmentResponseError thrown by an injected transport", async () => {
+			const thrown = new EnrichmentResponseError(
+				`bad ${KEY}`,
+				"refusal",
+				TOKEN,
+				true,
+				{ inputTokens: 1, outputTokens: 1 },
+			)
+			const fetchFn = vi.fn(async () => {
+				throw thrown
+			}) as unknown as typeof fetch
+			const error = await withRetry(() => call(make(fetchFn)), 2, 0).catch(
+				(e: unknown) => e,
+			)
+			expect(error).not.toBe(thrown)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed before a response",
+			)
+			expect(fetchFn).toHaveBeenCalledOnce()
+			expectNoPayload(error)
+		})
+
+		it("does not trust its own error from an earlier call once a caller has changed it", async () => {
+			let earlier: unknown
+			const fetchFn = vi.fn(
+				async (input: RequestInfo | URL, init?: RequestInit) => {
+					if (earlier === undefined) {
+						new Request(input, init)
+						return new Response("denied", { status: 401 })
+					}
+					throw earlier
+				},
+			) as unknown as typeof fetch
+			const provider = make(fetchFn)
+			earlier = await call(provider).catch((e: unknown) => e)
+			expect((earlier as EnrichmentHttpError).statusCode).toBe(401)
+			Object.assign(earlier as Error, {
+				message: `HTTP 401 ${KEY}`,
+				cause: new Error(HOST),
+			})
+			const error = await call(provider).catch((e: unknown) => e)
+			expect(error).not.toBe(earlier)
+			expect((error as EnrichmentHttpError).statusCode).toBe(401)
+			expect((error as Error).message).toBe(
+				"LLM enrichment request failed: HTTP 401 (transport error withheld)",
+			)
+			expectNoPayload(error)
+		})
+	})
+
+	it("reports an Anthropic non-JSON success body as a non-retryable malformed body", async () => {
+		const fetchFn = respond(() => new Response(`${KEY} rejected`))
+		const provider = providers[1][1](fetchFn)
+		const error = await withRetry(() => call(provider), 2, 0).catch(
+			(e: unknown) => e,
+		)
+		expect(error).toBeInstanceOf(EnrichmentResponseError)
+		expect((error as EnrichmentResponseError).shape).toBe("malformed-body")
+		expect(fetchFn).toHaveBeenCalledOnce()
+		expectNoPayload(error)
+	})
+
+	it("keeps failureSamples free of provider payloads", async () => {
+		const fetchFn = respond(
+			() => new Response(`invalid key ${KEY}`, { status: 401 }),
+		)
+		const result = await enrichSessionsWithLLM({
+			provider: providers[0][1](fetchFn),
+			model: "m",
+			mode: "enabled",
+			conversations: [
+				{
+					conversationId: "c",
+					sessionId: "s1",
+					turns: [
+						{ role: "user", body: "hello", timestamp: "2026-01-15T10:00:00Z" },
+					],
+				},
+			],
+			agentId: "a",
+			scope: "agent",
+			scopeRef: "r",
+			eventIds: new Map([["s1", ["e1"]]]),
+		})
+		expect(result.sessionsFailed).toBe(1)
+		expect(result.failureSamples[0]).toMatchObject({
+			errorName: "EnrichmentHttpError",
+			statusCode: 401,
+		})
+		expect(JSON.stringify(result.failureSamples)).not.toContain(KEY)
+	})
+})

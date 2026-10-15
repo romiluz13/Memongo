@@ -1,3 +1,7 @@
+import {
+	BENCHMARK_TIMESTAMP_POLICY_VERSION,
+	normalizeBenchmarkConversationTimestamps,
+} from "./benchmark-timestamp.js"
 /**
  * Benchmark scenario-lifecycle collaborator extracted from `mongodb-manager.ts`
  * (P4.3): run configuration snapshots, scenario manager settling, fast ingest,
@@ -15,10 +19,25 @@ import type {
 } from "./benchmark-parity-envelope.js"
 import { benchmarkAnswerProviderSource } from "./benchmark-answer-provider.js"
 import {
+	benchmarkCredentialFingerprint,
+	benchmarkCredentialKeyId,
+	parseBenchmarkFingerprintKey,
+} from "./benchmark-credential-fingerprint.js"
+import {
 	isTerminalSearchIndexStatus,
 	readSearchIndexStatus,
 } from "./mongodb-benchmark-readiness.js"
+import {
+	BENCHMARK_CONFIGURATION_COVERAGE,
+	BENCHMARK_CONFIGURATION_ENV_KEYS,
+	BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS,
+	BENCHMARK_MONGO_CLIENT_SETTING_NAMES,
+} from "./benchmark-run-configuration-schema.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
+import {
+	cleanupRegistry,
+	sanitizedCleanupError,
+} from "./benchmark-scenario-cleanup.js"
 import { mongodbDeploymentIdentity } from "../../packages/memory-engine/src/mongodb-capability-registry.js"
 import { renderEventChunkText } from "../../packages/memory-engine/src/mongodb-events.js"
 import {
@@ -57,6 +76,8 @@ import {
 	vectorSearch,
 } from "../../packages/memory-engine/src/mongodb-search.js"
 import type {
+	BenchmarkCleanupCollectionResult,
+	BenchmarkScenarioCleanupAttempt,
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkTurn,
@@ -166,13 +187,25 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		qualityContractVersion?: string
 	}): BenchmarkRunConfiguration {
 		const mongoCfg = this.host.config.mongodb!
+		// Refuses before any identity exists: a run without the key would have
+		// no way to bind (or later compare) its credentials.
+		const fingerprintKey = parseBenchmarkFingerprintKey(process.env)
 		const deploymentIdentitySha256 = createHash("sha256")
 			.update(mongodbDeploymentIdentity(mongoCfg.uri, mongoCfg.database))
 			.digest("hex")
 		const settings: BenchmarkRunConfiguration["settings"] = {
+			configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE,
+			timestampPolicyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
 			qualityContractId: params.qualityContractId ?? null,
 			qualityContractVersion: params.qualityContractVersion ?? null,
 			deploymentIdentitySha256,
+			// The exact URI the client is built from: any byte change (password,
+			// option order, path) refuses resume and comparison by design.
+			mongodbUriHmac: benchmarkCredentialFingerprint(
+				fingerprintKey,
+				"mongodb.uri",
+				mongoCfg.uri,
+			),
 			collectionPrefix: mongoCfg.collectionPrefix,
 			deploymentProfile: mongoCfg.deploymentProfile,
 			numCandidates: mongoCfg.numCandidates,
@@ -197,11 +230,14 @@ export class MongoDBManagerBenchmarkScenarioOps {
 						.update(mongoCfg.reranking.instruction)
 						.digest("hex")
 				: null,
-			rerankerApiKeySha256: mongoCfg.reranking?.voyageApiKey
-				? createHash("sha256")
-						.update(mongoCfg.reranking.voyageApiKey)
-						.digest("hex")
+			rerankerApiKeyHmac: mongoCfg.reranking?.voyageApiKey
+				? benchmarkCredentialFingerprint(
+						fingerprintKey,
+						"reranking.voyageApiKey",
+						mongoCfg.reranking.voyageApiKey,
+					)
 				: null,
+			credentialFingerprintKeyId: benchmarkCredentialKeyId(fingerprintKey),
 			queryRewritingEnabled: mongoCfg.queryRewriting.enabled,
 			queryRewritingMethod: mongoCfg.queryRewriting.method,
 			queryRewritingMaxTokens: mongoCfg.queryRewriting.maxTokens,
@@ -235,93 +271,20 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				300_000,
 			),
 		}
-		const environmentKeys = [
-			// B1: the answerer and the extraction LLM are separately
-			// configurable, so both must be part of the scenario identity.
-			"MEMONGO_BENCHMARK_ANSWER_ALLOW_PRIVATE_NETWORK",
-			"MEMONGO_BENCHMARK_ANSWER_AUTH_STYLE",
-			"MEMONGO_BENCHMARK_ANSWER_MODEL",
-			"MEMONGO_BENCHMARK_ANSWER_PROVIDER",
-			"MEMONGO_BENCHMARK_ANSWER_TOKEN_PARAM",
-			"MEMONGO_BENCHMARK_STRICT",
-			"MEMONGO_BENCHMARK_DERIVED_WORK_MODE",
-			"MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS",
-			"MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS",
-			"MEMONGO_BENCHMARK_FAST_INGEST",
-			"MEMONGO_BENCHMARK_FAST_INGEST_BATCH_SIZE",
-			"MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA",
-			"MEMONGO_BENCHMARK_MEASUREMENT_PASSES",
-			"MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS",
-			"MEMONGO_BENCHMARK_RETRY_ATTEMPTS",
-			"MEMONGO_BENCHMARK_RETRY_BASE_DELAY_MS",
-			"MEMONGO_BENCHMARK_RETRY_MAX_DELAY_MS",
-			"MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE",
-			"MEMONGO_BENCHMARK_TURN_PRECISION_MODE",
-			"MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS",
-			"MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS",
-			"MEMONGO_ENRICHMENT_CONCURRENCY",
-			"MEMONGO_ENRICHMENT_ALLOW_PRIVATE_NETWORK",
-			"MEMONGO_ENRICHMENT_AUTH_STYLE",
-			"MEMONGO_ENRICHMENT_MODEL",
-			"MEMONGO_ENRICHMENT_PROVIDER",
-			"MEMONGO_ENRICHMENT_TOKEN_PARAM",
-			"MEMONGO_EVIDENCE_SETTLE_MS",
-			"MEMONGO_EVIDENCE_MIRROR_MODE",
-			// B1: extraction-off changes what gets written, so it must not
-			// hash identically to an extraction-on run.
-			"MEMONGO_EXTRACTION_LLM",
-			"MEMONGO_LLM_ENRICHMENT_MAX_RETRIES",
-			"MEMONGO_LLM_ENRICHMENT_MAX_TOKENS",
-			"MEMONGO_LLM_ENRICHMENT_MODE",
-			"MEMONGO_LLM_ENRICHMENT_STRICT",
-			"MEMONGO_LLM_ENRICHMENT_TIMEOUT_MS",
-			"MEMONGO_PREFERENCE_EVIDENCE_MODE",
-			"MEMONGO_QUERY_DECOMPOSITION_MODE",
-			// #66: reranking costs ~715ms of p95 and changes ranking, so a
-			// rerank-off run must not hash identically to a rerank-on one.
-			"MEMONGO_RERANKING_ENABLED",
-			"MEMONGO_RERANK_MIN_SCORE",
-			"MEMONGO_RERANK_STRICT",
-			"MEMONGO_SCORING_ABLATION",
-			"MEMONGO_SEARCH_MAX_TIME_MS",
-			"MEMONGO_SESSION_EVIDENCE_MODE",
-			"MEMONGO_STRICT_SEARCH_INDEX_READY",
-			"MEMONGO_TEMPORAL_COVERAGE_MODE",
-			"MEMONGO_USERFACT_EVIDENCE_MODE",
-			"MEMONGO_VECTOR_INDEXING_METHOD",
-			"MEMONGO_VECTOR_STORED_SOURCE",
-		] as const
-		for (const key of environmentKeys) {
+		for (const name of BENCHMARK_MONGO_CLIENT_SETTING_NAMES) {
+			settings[`configuredMongoClient.${name}`] = mongoCfg[name] ?? null
+		}
+		for (const key of BENCHMARK_CONFIGURATION_ENV_KEYS) {
 			settings[`env.${key}`] = process.env[key]?.trim() || null
 		}
-		const enrichmentApiKey =
-			process.env.MEMONGO_ENRICHMENT_API_KEY?.trim() ?? ""
-		settings["env.MEMONGO_ENRICHMENT_API_KEY.sha256"] = enrichmentApiKey
-			? createHash("sha256").update(enrichmentApiKey).digest("hex")
-			: null
-		// B1: a dedicated benchmark answerer gets the same hashed treatment
-		// (never the raw secret) so checkpoint reuse reflects which answerer
-		// produced a run.
-		const benchmarkAnswerApiKey =
-			process.env.MEMONGO_BENCHMARK_ANSWER_API_KEY?.trim() ?? ""
-		settings["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.sha256"] =
-			benchmarkAnswerApiKey
-				? createHash("sha256").update(benchmarkAnswerApiKey).digest("hex")
+		// Credentials and endpoints are fingerprinted, never recorded raw. The
+		// trimmed value is exactly what the provider resolvers use.
+		for (const key of BENCHMARK_CONFIGURATION_FINGERPRINT_KEYS) {
+			const value = process.env[key]?.trim() ?? ""
+			settings[`env.${key}.hmac`] = value
+				? benchmarkCredentialFingerprint(fingerprintKey, key, value)
 				: null
-		const enrichmentBaseUrl =
-			process.env.MEMONGO_ENRICHMENT_BASE_URL?.trim() ?? ""
-		settings["env.MEMONGO_ENRICHMENT_BASE_URL.sha256"] = enrichmentBaseUrl
-			? createHash("sha256").update(enrichmentBaseUrl).digest("hex")
-			: null
-		// F-B1-3: the answer endpoint is part of the answerer identity. Hashed
-		// like the enrichment base URL (never raw), so a checkpoint from a
-		// different answer endpoint cannot be resumed silently.
-		const benchmarkAnswerBaseUrl =
-			process.env.MEMONGO_BENCHMARK_ANSWER_BASE_URL?.trim() ?? ""
-		settings["env.MEMONGO_BENCHMARK_ANSWER_BASE_URL.sha256"] =
-			benchmarkAnswerBaseUrl
-				? createHash("sha256").update(benchmarkAnswerBaseUrl).digest("hex")
-				: null
+		}
 		// F-B1-2: record which provider config the answerer resolved from, so
 		// an enrichment-fallback run is never mistaken for a dedicated one.
 		settings.answerProviderSource = benchmarkAnswerProviderSource(process.env)
@@ -439,6 +402,10 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		scope?: MemoryScope
 		metadata?: Record<string, unknown>
 	}): Promise<MemoryBenchmarkIngestResult> {
+		const conversations = normalizeBenchmarkConversationTimestamps(
+			params.conversations,
+			params.datasetKind,
+		)
 		const startedAt = new Date()
 		const eventDocs: Document[] = []
 		const chunkDocs: Document[] = []
@@ -448,7 +415,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		let skippedConversations = 0
 		let failedTurns = 0
 
-		for (const [index, conversation] of params.conversations.entries()) {
+		for (const [index, conversation] of conversations.entries()) {
 			const turns = conversation.turns
 			if (turns.length === 0) {
 				skippedConversations++
@@ -471,7 +438,8 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				try {
 					const eventId = randomUUID()
 					const timestamp =
-						parseBenchmarkTurnTimestamp(turn.timestamp) ?? new Date()
+						parseBenchmarkTurnTimestamp(turn.timestamp, params.datasetKind) ??
+						new Date()
 					const metadata = buildBenchmarkReplayMetadata({
 						baseMetadata: params.metadata,
 						turnMetadata: turn.metadata,
@@ -1254,22 +1222,51 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		)
 	}
 
-	async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
+	/**
+	 * B08:C03: deletes this agent's rows from every registered collection and
+	 * reports each outcome. A rejected deleteMany may still have deleted some
+	 * rows, and an unacknowledged one proves nothing, so both fail the attempt.
+	 */
+	async cleanupBenchmarkScenarioData(
+		agentId: string,
+	): Promise<BenchmarkScenarioCleanupAttempt> {
 		const settled = await Promise.allSettled(
-			BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map(async (suffix) => {
-				await this.host.db
+			BENCHMARK_SCENARIO_COLLECTION_SUFFIXES.map((suffix) =>
+				this.host.db
 					.collection(`${this.host.prefix}${suffix}`)
-					.deleteMany({ agentId })
-			}),
+					.deleteMany({ agentId }),
+			),
 		)
-		for (const [index, result] of settled.entries()) {
-			if (result.status === "rejected") {
-				log.warn("benchmark scenario cleanup failed", {
-					agentId,
-					collection: BENCHMARK_SCENARIO_COLLECTION_SUFFIXES[index],
-					error: result.reason,
-				})
-			}
+		const collections = settled.map(
+			(result, index): BenchmarkCleanupCollectionResult => {
+				const suffix = BENCHMARK_SCENARIO_COLLECTION_SUFFIXES[index] as string
+				if (result.status === "rejected") {
+					const error = sanitizedCleanupError(result.reason)
+					log.warn("benchmark scenario cleanup failed", {
+						agentId,
+						collection: suffix,
+						...error,
+					})
+					return { suffix, status: "rejected", ...error }
+				}
+				return result.value?.acknowledged === true &&
+					Number.isSafeInteger(result.value.deletedCount) &&
+					result.value.deletedCount >= 0
+					? {
+							suffix,
+							status: "acknowledged",
+							deletedCount: result.value.deletedCount,
+						}
+					: { suffix, status: "unacknowledged" }
+			},
+		)
+		return {
+			status: collections.every((entry) => entry.status === "acknowledged")
+				? "acknowledged"
+				: "failed",
+			agentId,
+			registry: cleanupRegistry(BENCHMARK_SCENARIO_COLLECTION_SUFFIXES),
+			collections,
 		}
 	}
 

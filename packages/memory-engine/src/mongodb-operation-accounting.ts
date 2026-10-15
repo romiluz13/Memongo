@@ -247,9 +247,19 @@ export function createOperationRunContext(params: {
 	}
 }
 
-function hashOperationRunConfiguration(
+export function hashOperationRunConfiguration(
 	configuration: OperationRunConfiguration,
 ): string {
+	// JSON.stringify writes NaN and Infinity as null, which would alias a
+	// non-finite setting with an explicit null under one hash.
+	for (const value of [
+		configuration.maxResults,
+		configuration.minScore,
+		...Object.values(configuration.settings),
+	]) {
+		if (typeof value === "number" && !Number.isFinite(value))
+			throw new RangeError("operation configuration numbers must be finite")
+	}
 	return createHash("sha256")
 		.update(
 			JSON.stringify({

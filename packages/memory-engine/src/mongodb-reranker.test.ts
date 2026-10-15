@@ -1173,18 +1173,21 @@ describe("original-admission rerank telemetry", () => {
 		vi.mocked(emitTelemetry).mockRejectedValueOnce(
 			new Error("telemetry fixture"),
 		)
-		await expect(
-			crossEncoderRerank({
-				db: DB,
-				prefix: PREFIX,
-				agentId: AGENT_ID,
-				query: QUERY,
-				results: makeResults(3),
-				config: makeConfig(),
-				admission,
-				fetchFn: vi.fn().mockRejectedValue(error),
-			}),
-		).rejects.toBe(error)
+		// An external error keeps its class but never its text (1130).
+		const thrown = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig(),
+			admission,
+			fetchFn: vi.fn().mockRejectedValue(error),
+		}).catch((e: unknown) => e)
+		expect(thrown).toBeInstanceOf(Error)
+		expect((thrown as Error).message).toBe(
+			"rerank request failed before a response",
+		)
 		expect(emitTelemetry).toHaveBeenCalledWith(DB, PREFIX, expect.any(Object), {
 			admission,
 		})
@@ -1211,4 +1214,170 @@ describe("original-admission rerank telemetry", () => {
 		})
 		expect(out.results).toBe(results)
 	}, 1_000)
+})
+
+// Synthetic key only; the injected fetch builds a real Request, so the runtime
+// validates headers, and DNS is the module mock above.
+describe("rerank failure diagnostics never carry provider or runtime payloads", () => {
+	const KEY = "cnryRerankKey2Z"
+	afterEach(() => vi.unstubAllEnvs())
+
+	function expectNoPayload(error: unknown) {
+		const failure = error as Error
+		const text = [
+			String(failure),
+			failure.stack ?? "",
+			JSON.stringify(failure),
+		].join("\n")
+		expect(text).not.toContain(KEY)
+		expect(failure.cause).toBeUndefined()
+		expect(Object.keys(failure).filter((key) => key !== "name")).toEqual([])
+	}
+
+	const rerank = (fetchFn: typeof fetch, voyageApiKey = KEY) =>
+		crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig({ voyageApiKey }),
+			fetchFn,
+		})
+
+	const requestThen = (make: () => Response) =>
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			new Request(input, init)
+			return make()
+		}) as unknown as typeof fetch
+
+	it("rethrows a rejected header in strict mode as a TypeError without the key", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "1")
+		const error = await rerank(
+			requestThen(() => new Response("{}")),
+			`${KEY}\nX`,
+		).catch((e: unknown) => e)
+		expect(error).toBeInstanceOf(TypeError)
+		expect((error as Error).message).toBe("rerank request could not be sent")
+		expectNoPayload(error)
+	})
+
+	it("rethrows a non-JSON body in strict mode as a SyntaxError without the body", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "1")
+		const error = await rerank(
+			requestThen(() => new Response(`${KEY} rejected`)),
+		).catch((e: unknown) => e)
+		expect(error).toBeInstanceOf(SyntaxError)
+		expect((error as Error).message).toBe(
+			"rerank request response was not valid JSON",
+		)
+		expectNoPayload(error)
+	})
+
+	it("rethrows a DNS failure in strict mode without its text or lookup fields", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "1")
+		const { lookup } = await import("node:dns/promises")
+		vi.mocked(lookup).mockRejectedValueOnce(
+			Object.assign(new Error(`getaddrinfo ENOTFOUND ${KEY}`), {
+				code: "ENOTFOUND",
+				hostname: KEY,
+			}),
+		)
+		const fetchFn = requestThen(() => new Response("{}"))
+		const error = await rerank(fetchFn).catch((e: unknown) => e)
+		expect((error as Error).constructor).toBe(Error)
+		expect((error as Error).message).toBe(
+			"rerank request failed before a response",
+		)
+		expect(fetchFn).not.toHaveBeenCalled()
+		expectNoPayload(error)
+	})
+
+	it("never echoes a non-numeric index from the response in strict mode", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "1")
+		const error = await rerank(
+			requestThen(
+				() =>
+					new Response(
+						JSON.stringify({ data: [{ index: KEY, relevance_score: 1 }] }),
+					),
+			),
+		).catch((e: unknown) => e)
+		expect((error as Error).message).toBe(
+			"rerank API returned a non-numeric index",
+		)
+		expectNoPayload(error)
+	})
+
+	it("keeps its own strict non-OK status text", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "1")
+		await expect(
+			rerank(requestThen(() => new Response(KEY, { status: 503 }))),
+		).rejects.toThrow("rerank API returned non-OK status: 503")
+	})
+
+	it("falls back without logging the key when not strict", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "0")
+		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "0")
+		const lines: string[] = []
+		const spies = (["warn", "error", "log", "info"] as const).map((level) =>
+			vi.spyOn(console, level).mockImplementation((...args) => {
+				lines.push(args.map(String).join(" "))
+			}),
+		)
+		try {
+			const results = makeResults(3)
+			const out = await crossEncoderRerank({
+				db: DB,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				query: QUERY,
+				results,
+				config: makeConfig({ voyageApiKey: `${KEY}\nX` }),
+				fetchFn: requestThen(() => new Response("{}")),
+			})
+			expect(out.reranked).toBe(false)
+			expect(out.results).toBe(results)
+		} finally {
+			for (const spy of spies) spy.mockRestore()
+		}
+		expect(lines.some((line) => line.includes("rerank failed"))).toBe(true)
+		expect(lines.join("\n")).not.toContain(KEY)
+	})
+
+	it("never logs a non-numeric index from the response when not strict", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "0")
+		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "0")
+		const lines: string[] = []
+		const spies = (["warn", "error", "log", "info"] as const).map((level) =>
+			vi.spyOn(console, level).mockImplementation((...args) => {
+				lines.push(
+					args
+						.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+						.join(" "),
+				)
+			}),
+		)
+		try {
+			const out = await rerank(
+				requestThen(
+					() =>
+						new Response(
+							JSON.stringify({
+								data: [
+									{ index: KEY, relevance_score: 1 },
+									{ index: 1, relevance_score: 0.9 },
+								],
+							}),
+						),
+				),
+			)
+			expect(out.reranked).toBe(true)
+			expect(out.results[0]?.path).toBe("path/1")
+		} finally {
+			for (const spy of spies) spy.mockRestore()
+		}
+		expect(lines.some((line) => line.includes("index"))).toBe(true)
+		expect(lines.join("\n")).not.toContain(KEY)
+	})
 })

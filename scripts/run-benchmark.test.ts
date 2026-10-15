@@ -91,6 +91,9 @@ const offlineDeps = {
 	assertQuestionsSubset: async () => {},
 }
 
+// Synthetic credential fingerprint key; never a real secret.
+const FINGERPRINT_KEY = "fe".repeat(32)
+
 const officialJudgeEnv = {
 	MEMONGO_BENCHMARK_JUDGE_API_KEY: "judge-key",
 	MEMONGO_BENCHMARK_JUDGE_BASE_URL: "http://judge.local",
@@ -103,6 +106,7 @@ const officialJudgeEnv = {
  */
 function stubFullRunEnv(overrides: Record<string, string | undefined> = {}) {
 	vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://offline-test")
+	vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", FINGERPRINT_KEY)
 	vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", "official")
 	for (const [key, value] of Object.entries(officialJudgeEnv)) {
 		vi.stubEnv(key, value)
@@ -468,6 +472,38 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 		expect(resolveEnrichmentProviderMock).not.toHaveBeenCalled()
 	})
 
+	it.each([
+		["missing", undefined],
+		["63 hex characters", "f".repeat(63)],
+		["non-hex", `${"f".repeat(40)}x${"f".repeat(23)}`],
+	])("refuses a %s fingerprint key before the recall gate or manager", async (_name, key) => {
+		stubFullRunEnv({ MEMONGO_BENCHMARK_FINGERPRINT_KEY: key })
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+		vi.spyOn(console, "log").mockImplementation(() => {})
+		const recall = vi.fn(offlineDeps.runRecallRegression)
+		const readDigest = vi.fn(offlineDeps.readDatasetDigest)
+
+		await expect(
+			main([], {
+				...offlineDeps,
+				runRecallRegression: recall,
+				readDatasetDigest: readDigest,
+			}),
+		).rejects.toThrow("process.exit called")
+		expect(consoleError).toHaveBeenCalledWith(
+			expect.stringContaining("MEMONGO_BENCHMARK_FINGERPRINT_KEY must be"),
+		)
+		if (key)
+			expect(consoleError).not.toHaveBeenCalledWith(
+				expect.stringContaining(key),
+			)
+		expect(readDigest).not.toHaveBeenCalled()
+		expect(recall).not.toHaveBeenCalled()
+		expect(getManagerMock).not.toHaveBeenCalled()
+		expect(relevanceBenchmarkMock).not.toHaveBeenCalled()
+		expect(resolveEnrichmentProviderMock).not.toHaveBeenCalled()
+	})
+
 	it("refuses an explicit custom-v1 full run before any external work", async () => {
 		stubFullRunEnv({ MEMONGO_BENCHMARK_QA_PROTOCOL: "custom-v1" })
 		vi.spyOn(console, "error").mockImplementation(() => {})
@@ -632,6 +668,7 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 		// Protocol unset, no judge env, no answer provider: a sample run must
 		// still proceed to the (mocked) manager exactly as before Slice C.
 		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://offline-test")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", FINGERPRINT_KEY)
 		delete process.env.MEMONGO_BENCHMARK_QA_PROTOCOL
 		vi.spyOn(console, "log").mockImplementation(() => {})
 		vi.spyOn(console, "error").mockImplementation(() => {})
@@ -664,6 +701,7 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 		// the dataset is the questions file itself and maxResults must be 50
 		// or recall@50 silently degenerates to recall@10.
 		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://offline-test")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", FINGERPRINT_KEY)
 		delete process.env.MEMONGO_BENCHMARK_QA_PROTOCOL
 		vi.spyOn(console, "log").mockImplementation(() => {})
 		vi.spyOn(console, "error").mockImplementation(() => {})
@@ -697,6 +735,7 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 
 	it("refuses --questions together with --sample before any external work", async () => {
 		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://offline-test")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", FINGERPRINT_KEY)
 		vi.spyOn(console, "log").mockImplementation(() => {})
 		vi.spyOn(console, "error").mockImplementation(() => {})
 
@@ -709,6 +748,7 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 
 	it("refuses --questions without a file path", async () => {
 		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://offline-test")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", FINGERPRINT_KEY)
 		vi.spyOn(console, "log").mockImplementation(() => {})
 		vi.spyOn(console, "error").mockImplementation(() => {})
 

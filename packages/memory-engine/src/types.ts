@@ -1178,8 +1178,28 @@ export type MemoryConversationImportResult = {
 	skippedConversations: number
 	failedLines: number
 	failedTurns: number
+	/** Turns rejected by the loader as malformed; not written. */
+	rejectedTurns?: number
+	/** Conversations rejected by the loader as malformed or left with no valid turn. */
+	rejectedConversations?: number
+	/** Value-free coordinates and reasons for every loader rejection. */
+	rejections?: MemoryConversationImportRejection[]
 	startedAt: Date
 	completedAt: Date
+}
+
+export type MemoryConversationImportRejection = {
+	line: number | null
+	conversationIndex: number
+	turnIndex: number | null
+	reason:
+		| "conversation-not-object"
+		| "turns-not-array"
+		| "no-valid-turns"
+		| "turn-not-object"
+		| "invalid-role"
+		| "empty-body"
+		| "invalid-timestamp"
 }
 
 export type MemoryBenchmarkQuestionTypeMetrics = {
@@ -1394,10 +1414,38 @@ export type QueryGovernanceReport = {
 }
 
 export type MemoryBenchmarkBuildIdentity = {
-	source: "env" | "unknown"
+	/** "env" appears only in reports written before the tree was observed. */
+	source: "git-worktree" | "env" | "unknown"
+	/** Observed HEAD for "git-worktree"; legacy "env" reports hold an unverified claim. */
 	commitSha?: string
+	/** Environment-supplied labels are metadata, never proof of identity. */
+	claimedCommitSha?: string
+	/** An environment commit claim was present but not a commit SHA; its value is withheld. */
+	claimedCommitInvalid?: true
 	buildId?: string
 	buildLabel?: string
+	executableDigest?: string
+	sourceDirty?: boolean
+	runtime?: { node: string; bun: string | null }
+	/** Workspace build bytes observed at admission and folded into executableDigest; not tied to source. */
+	workspaceBuild?: {
+		relation: "not-verified"
+		packages: Array<{
+			name: string
+			path: string
+			files: number
+			digest: string
+		}>
+	}
+	/** Every source file the benchmark's import walk reached, bound into executableDigest. */
+	sourceGraph?: {
+		files: Array<{
+			path: string
+			sha256: string
+			status: "clean" | "modified" | "untracked"
+		}>
+	}
+	unavailableReason?: string
 }
 
 export type MemoryBenchmarkReleaseGate = {
@@ -1410,6 +1458,7 @@ export type MemoryBenchmarkReleaseGate = {
 		| "evidence-completeness"
 		| "conversation-recall-regression"
 		| "query-governance"
+		| "scenario-cleanup"
 	status: "passed" | "failed" | "warning" | "not-run" | "advisory-only"
 	evidence: string
 	checks?: Array<{
@@ -1581,6 +1630,60 @@ export type BenchmarkTenantStorageMeasurement = {
 	unavailableReason?: string
 }
 
+/**
+ * One registered collection's delete in a benchmark scenario cleanup. Errors
+ * keep only a known driver error class name (else "unknown") and a numeric
+ * code, never the message.
+ */
+export type BenchmarkCleanupCollectionResult =
+	| { suffix: string; status: "acknowledged"; deletedCount: number }
+	| { suffix: string; status: "unacknowledged" }
+	| {
+			suffix: string
+			status: "rejected"
+			errorName: string
+			errorCode?: number
+	  }
+
+/** The fixed collection-suffix registry a cleanup covered. */
+export type BenchmarkCleanupRegistry = {
+	version: 1
+	digest: string
+	collections: number
+}
+
+export type BenchmarkScenarioCleanupAttempt = {
+	status: "acknowledged" | "failed"
+	agentId: string
+	registry: BenchmarkCleanupRegistry
+	collections: BenchmarkCleanupCollectionResult[]
+}
+
+/**
+ * Acknowledged deletes are operation evidence for the registered collections
+ * only: they do not prove the namespace is empty or fence later writes.
+ */
+export type BenchmarkScenarioCleanupOutcome = {
+	version: 1
+	runId: string
+	scenarioId: string
+	agentId: string | null
+	status: "acknowledged" | "failed" | "retained" | "not-attempted"
+	registry: BenchmarkCleanupRegistry
+	collections: BenchmarkCleanupCollectionResult[]
+	errorName?: string
+}
+
+export type BenchmarkScenarioCleanupReport = {
+	version: 1
+	/** acknowledged only when every scenario's registered deletes were acknowledged. */
+	status: "acknowledged" | "failed" | "incomplete"
+	coverage: "registered-scenario-collections"
+	scenarios: Array<
+		BenchmarkScenarioCleanupOutcome | { scenarioId: string; status: "unknown" }
+	>
+}
+
 export type BenchmarkStorageFootprint = {
 	basis: "benchmark-agent-logical-plus-shared-physical"
 	tenant: BenchmarkTenantStorageMeasurement
@@ -1598,6 +1701,14 @@ export type BenchmarkStorageFootprint = {
 export type BenchmarkLatencyDistribution = {
 	p50Ms: number
 	p95Ms: number
+	/** Which cases the samples are: scored cases only, or every attempted case including failures. Absent on older reports. */
+	denominator?: "scored-cases" | "all-attempts"
+	samples?: number
+	/**
+	 * Nearest-rank p95 is the sample maximum below 20 samples, so it is
+	 * descriptive only; no basis claims a stable tail estimate.
+	 */
+	p95Basis?: "no-samples" | "sample-maximum" | "nearest-rank"
 }
 
 export type BenchmarkOperationName =
@@ -1712,6 +1823,7 @@ export type MemoryBenchmarkRunReport = {
 			emptyRate: number
 			avgTopScore: number
 			p95LatencyMs: number
+			scoredLatency?: BenchmarkLatencyDistribution
 			rAt5?: number
 			rAt10?: number
 			ndcgAt10?: number
@@ -1735,6 +1847,7 @@ export type MemoryBenchmarkRunReport = {
 	latency?: BenchmarkLatencyDistribution
 	cost?: BenchmarkCostAccounting
 	e2eQa?: BenchmarkE2eQaEnvelope
+	scenarioCleanup?: BenchmarkScenarioCleanupReport
 }
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,20 @@ export function buildUnavailableE2eQaEnvelope(params: {
 	}
 }
 
+/** B08:C06: value-free ingest failure counts, empty when ingest was whole. */
+export function describeIngestFailures(
+	ingest: { failedTurns: number; failedLines: number } | undefined,
+): string[] {
+	return [
+		...((ingest?.failedLines ?? 0) > 0
+			? [`${ingest?.failedLines} dataset lines failed to parse`]
+			: []),
+		...((ingest?.failedTurns ?? 0) > 0
+			? [`${ingest?.failedTurns} turns failed ingest`]
+			: []),
+	]
+}
+
 /**
  * Project the QA envelope into `officialMetrics.longMemEval.answerQuality`.
  * Pure: returns the input unchanged when there is nothing to merge (no
@@ -165,6 +179,8 @@ export async function runBenchmarkJudgedAnswers(params: {
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
 	materialByCaseId: Map<string, BenchmarkJudgedAnswerMaterial>
 	resumedFromCheckpoint: boolean
+	/** B08:C06: run-level ingest failures, checkpoint-restored scenarios included. */
+	ingest?: { failedTurns: number; failedLines: number }
 	accounting?: BenchmarkRunAccounting
 }): Promise<BenchmarkE2eQaEnvelope | undefined> {
 	if (params.datasetKind !== "longmemeval") {
@@ -274,5 +290,20 @@ export async function runBenchmarkJudgedAnswers(params: {
 		completed: envelope.cases.completed,
 		failed: envelope.cases.failed,
 	})
+	// B08:C06: a judged question may lack its ingested evidence, so the
+	// headline accuracy is withheld; per-case results and counts stay.
+	const ingestFailures = describeIngestFailures(params.ingest)
+	if (ingestFailures.length > 0) {
+		return {
+			...envelope,
+			accuracy: null,
+			unavailableReason: [
+				envelope.unavailableReason,
+				`QA evidence is incomplete: ${ingestFailures.join("; ")}; accuracy is withheld because judged questions may lack ingested evidence`,
+			]
+				.filter(Boolean)
+				.join("; "),
+		}
+	}
 	return envelope
 }

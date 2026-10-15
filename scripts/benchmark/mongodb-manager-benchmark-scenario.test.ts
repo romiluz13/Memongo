@@ -6,6 +6,10 @@ import type { MemorySearchResult } from "../../packages/memory-engine/src/types.
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
+import {
+	producedRunConfiguration,
+	SYNTHETIC_FINGERPRINT_KEY,
+} from "./benchmark-run-configuration.fixture.js"
 import { readBenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
 import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import {
@@ -315,6 +319,7 @@ vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
 describe("benchmark run configuration identity", () => {
 	it("records query model and conversation evidence mode", () => {
 		vi.stubEnv("MEMONGO_SEARCH_MAX_TIME_MS", "4321")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", SYNTHETIC_FINGERPRINT_KEY)
 		const host = {
 			config: {
 				mongodb: {
@@ -539,10 +544,13 @@ describe("runScenarioBenchmarkDataset", () => {
 			}),
 		} as unknown as MongoDBMemoryManager
 		const resumeCheckpoint: BenchmarkCheckpoint = {
-			version: 1,
+			version: 2,
+			failedLines: 0,
 			runId: runContext.runId,
 			datasetSha256: "a".repeat(64),
 			configurationHash: runContext.configurationHash,
+			configuration: runContext.configuration,
+			executableDigest: "d".repeat(64),
 			totalScenarios: 2,
 			scenarioIds: ["scenario-1", "scenario-2"],
 			completedScenarios: [
@@ -751,7 +759,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				retrievalLane: "native",
 				maxResults: 10,
 				minScore: 0.1,
-				settings: {},
+				settings: producedRunConfiguration().configuration.settings,
 			},
 		})
 	}
@@ -761,10 +769,13 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 		completedScenarios: BenchmarkCheckpoint["completedScenarios"],
 	): BenchmarkCheckpoint {
 		return {
-			version: 1,
+			version: 2,
+			failedLines: 0,
 			runId: runContext.runId,
 			datasetSha256: "a".repeat(64),
 			configurationHash: runContext.configurationHash,
+			configuration: runContext.configuration,
+			executableDigest: "d".repeat(64),
 			totalScenarios: 2,
 			scenarioIds: ["scenario-1", "scenario-2"],
 			completedScenarios,
@@ -1103,6 +1114,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 					sidecarPath: `${checkpointPath}.predictions.json`,
 					sidecar: createOfficialPredictionSidecar(identity),
 					stats: {
+						unreliable: { answerGeneration: 0, answerJudge: 0 },
 						attempts: { answerGeneration: 0, answerJudge: 0 },
 						successes: { answerGeneration: 0, answerJudge: 0 },
 						failures: { answerGeneration: 0, answerJudge: 0 },
@@ -1123,6 +1135,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 							scenarioId: params.scenarioId,
 							complete: true,
 							judgedCaseIds: [...params.declaredCaseIds],
+							unreliableCaseIds: [],
 							unavailable: [],
 						}
 					},
@@ -1193,6 +1206,10 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 					vi.mocked(summarizeOfficialBenchmarkQaRun).mock.calls[0]?.[0]
 						?.coveredCaseIds,
 				).toEqual(new Set(["case-1", "case-2"]))
+				// B08:C06: the summary receives the run-level ingest totals.
+				expect(
+					vi.mocked(summarizeOfficialBenchmarkQaRun).mock.calls[0]?.[0]?.ingest,
+				).toMatchObject({ failedTurns: 0, failedLines: 0 })
 				// The published envelope is the official one; the custom-v1
 				// judged-answers path never ran (no provider chat calls).
 				expect(result.e2eQa?.official).toEqual(officialSummary)
@@ -1388,7 +1405,14 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 			}
 		})
 
-		it("real scoring: seeded checkpoint survives a mid-scenario crash; resume completes with honestly incomplete accounting (round 2)", async () => {
+		it.each([
+			{ failedLines: 0, failedTurns: 0 },
+			{ failedLines: 1, failedTurns: 0 },
+			{ failedLines: 0, failedTurns: 2 },
+		])("real scoring: crash and repeat resume preserve ingest failures %j", async ({
+			failedLines,
+			failedTurns,
+		}) => {
 			stubOfficialEnv()
 			enrichmentProbe.reset()
 			const checkpointDir = await mkdtemp(
@@ -1401,13 +1425,14 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				const checkpointPath = path.join(checkpointDir, "checkpoint.json")
 				const runParams = {
 					datasetPath: "/tmp/benchmark.json",
-					dataset: officialLongMemEvalDataset(),
+					dataset: { ...officialLongMemEvalDataset(), failedLines },
 					datasetVersion: "w5-harness-v1",
 					datasetSha256: "a".repeat(64),
 					maxResults: 10,
 					minScore: 0.1,
 					executionProfile: "shipped" as const,
 					checkpointPath,
+					executableDigest: "d".repeat(64),
 					runContext,
 				}
 
@@ -1423,6 +1448,11 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 					await readFile(checkpointPath, "utf8"),
 				) as BenchmarkCheckpoint
 				expect(seeded.completedScenarios).toEqual([])
+				expect(seeded).toMatchObject({
+					version: 2,
+					failedLines,
+					executableDigest: "d".repeat(64),
+				})
 				// The sidecar kept the answered row, so the crash never re-pays
 				// the answer generation.
 				const sidecarAfterCrash = JSON.parse(
@@ -1437,6 +1467,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				const restored = await readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
 					configurationHash: runContext.configurationHash,
+					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				})
 				const resumed = await benchmarkOps(manager).runScenarioBenchmarkDataset(
@@ -1445,14 +1476,16 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				// Phase-1 scenario-1 retrieval + phase-2 scenario-1 re-run +
 				// phase-2 scenario-2 (the seed checkpoint restored nothing).
 				expect(search).toHaveBeenCalledTimes(3)
-				expect(resumed.e2eQa?.official?.coverage).toBe("full")
+				expect(resumed.e2eQa?.official?.coverage).toBe(
+					failedLines ? "partial" : "full",
+				)
 				expect(resumed.e2eQa?.official?.accountingCompleteness).toBe(
 					"incomplete",
 				)
 				expect(resumed.e2eQa?.official?.lostPreCheckpointQuestionIds).toEqual(
 					[],
 				)
-				expect(resumed.e2eQa?.accuracy).toBe(1)
+				expect(resumed.e2eQa?.accuracy).toBe(failedLines ? null : 1)
 				// B8-2 preflight probe + case-1 judge only (answered row
 				// reused) + case-2 answer+judge.
 				expect(enrichmentProbe.chatCompletions).toBe(4)
@@ -1464,8 +1497,10 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				const restoredAgain = await readBenchmarkCheckpoint(checkpointPath, {
 					datasetSha256: "a".repeat(64),
 					configurationHash: runContext.configurationHash,
+					executableDigest: "d".repeat(64),
 					scenarioIds: ["scenario-1", "scenario-2"],
 				})
+				restoredAgain.completedScenarios[0]!.ingest.failedTurns = failedTurns
 				const repeated = await benchmarkOps(
 					manager,
 				).runScenarioBenchmarkDataset({
@@ -1474,7 +1509,13 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				})
 				// No additional retrieval: both scenarios were restored.
 				expect(search).toHaveBeenCalledTimes(3)
-				expect(repeated.e2eQa?.official?.coverage).toBe("full")
+				expect(repeated.e2eQa?.official?.coverage).toBe(
+					failedLines || failedTurns ? "partial" : "full",
+				)
+				expect(repeated.e2eQa?.accuracy).toBe(
+					failedLines || failedTurns ? null : 1,
+				)
+				expect(repeated.e2eQa?.official?.perType[0]?.accuracy).toBe(1)
 				expect(repeated.e2eQa?.official?.accountingCompleteness).toBe(
 					"incomplete",
 				)
@@ -1561,6 +1602,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 					sidecarPath: `${checkpointPath}.predictions.json`,
 					sidecar: createOfficialPredictionSidecar(identity),
 					stats: {
+						unreliable: { answerGeneration: 0, answerJudge: 0 },
 						attempts: { answerGeneration: 0, answerJudge: 0 },
 						successes: { answerGeneration: 0, answerJudge: 0 },
 						failures: { answerGeneration: 0, answerJudge: 0 },
@@ -1581,6 +1623,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 							scenarioId: params.scenarioId,
 							complete: true,
 							judgedCaseIds: [...params.declaredCaseIds],
+							unreliableCaseIds: [],
 							unavailable: [],
 						}
 					},

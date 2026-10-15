@@ -1,4 +1,8 @@
-import { MongoClient } from "mongodb"
+import { MongoClient, type MongoClientOptions } from "mongodb"
+import {
+	MongoTargetRefusal,
+	resolveConfiguredMongoDB,
+} from "./mongodb-target.ts"
 
 type ActiveOperation = {
 	appName?: string
@@ -43,39 +47,64 @@ const DEFAULT_REQUIRED_ENV = [
 	"MEMONGO_LLM_MODEL",
 ] as const
 
-function readArg(name: string): string | undefined {
-	return process.argv
+type PreflightClient = Pick<MongoClient, "connect" | "db" | "close">
+
+export type PreflightDeps = {
+	argv: string[]
+	createClient: (uri: string, options: MongoClientOptions) => PreflightClient
+	fetchFn: typeof fetch
+	stdout: (text: string) => void
+	stderr: (text: string) => void
+}
+
+function readArg(argv: string[], name: string): string | undefined {
+	return argv
 		.find((arg) => arg.startsWith(`--${name}=`))
 		?.slice(name.length + 3)
 		.trim()
 }
 
-function readDatabaseName(): string {
-	return process.env.MEMONGO_DB_NAME?.trim() || "memongo"
-}
-
-function readPrefix(): string {
-	const prefix =
-		readArg("prefix") || process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
-	if (!prefix) {
-		throw new Error(
-			"pass --prefix=memongo_bench_<lane>_<date>_<suffix>_ or set MEMONGO_MONGODB_COLLECTION_PREFIX",
+/**
+ * The runner's database and prefix (resolveConfiguredMongoDB), refusing
+ * operator inputs that would make preflight inspect a different namespace than
+ * the run uses. Refusals name settings, never values.
+ */
+function resolveTarget(argv: string[]): {
+	uri: string
+	database: string
+	prefix: string
+} {
+	const target = resolveConfiguredMongoDB()
+	const prefixArg = readArg(argv, "prefix")
+	if (prefixArg && prefixArg !== target.collectionPrefix) {
+		throw new MongoTargetRefusal(
+			"--prefix differs from the configured collection prefix (MEMONGO_MONGODB_COLLECTION_PREFIX or memory.mongodb.collectionPrefix). Remove --prefix or set MEMONGO_MONGODB_COLLECTION_PREFIX to that value, then rerun.",
 		)
 	}
-	validateCollectionPrefix(prefix)
-	return prefix
+	const legacyDatabase = process.env.MEMONGO_DB_NAME?.trim()
+	if (legacyDatabase && legacyDatabase !== target.database) {
+		throw new MongoTargetRefusal(
+			"MEMONGO_DB_NAME is a legacy setting the benchmark runner ignores and differs from the configured database (MEMONGO_MONGODB_DATABASE or memory.mongodb.database). Unset MEMONGO_DB_NAME or set MEMONGO_MONGODB_DATABASE to the intended database, then rerun.",
+		)
+	}
+	validateCollectionPrefix(target.collectionPrefix)
+	return {
+		uri: target.uri,
+		database: target.database,
+		prefix: target.collectionPrefix,
+	}
 }
 
 function validateCollectionPrefix(prefix: string): void {
 	if (!/^memongo_bench_[a-z0-9][a-z0-9_-]*_$/.test(prefix)) {
-		throw new Error(
-			"collection prefix must start with memongo_bench_, contain only lowercase letters, numbers, underscores, and hyphens, and end with _",
+		throw new MongoTargetRefusal(
+			"collection prefix must start with memongo_bench_, contain only lowercase letters, numbers, underscores, and hyphens, and end with _; set MEMONGO_MONGODB_COLLECTION_PREFIX (or memory.mongodb.collectionPrefix) to memongo_bench_<lane>_<date>_<suffix>_, then rerun.",
 		)
 	}
 }
 
-function hasArg(name: string): boolean {
-	return process.argv.includes(`--${name}`)
+function hasArg(argv: string[], name: string): boolean {
+	return argv.includes(`--${name}`)
 }
 
 function readBooleanEnv(name: string): boolean {
@@ -84,9 +113,9 @@ function readBooleanEnv(name: string): boolean {
 	)
 }
 
-function readRequiredEnvNames(): string[] {
+function readRequiredEnvNames(argv: string[]): string[] {
 	const raw =
-		readArg("required-env") ||
+		readArg(argv, "required-env") ||
 		process.env.MEMONGO_CLUSTER_PREFLIGHT_REQUIRED_ENV?.trim() ||
 		process.env.MEMONGO_BENCHMARK_PREFLIGHT_REQUIRED_ENV?.trim()
 	if (!raw) return [...DEFAULT_REQUIRED_ENV]
@@ -113,7 +142,7 @@ function listKeyFailures(): string[] {
 	return failures
 }
 
-async function verifyAtlasModelKey(): Promise<{
+async function verifyAtlasModelKey(fetchFn: typeof fetch): Promise<{
 	ok: boolean
 	status?: number
 	error?: string
@@ -126,7 +155,7 @@ async function verifyAtlasModelKey(): Promise<{
 	const controller = new AbortController()
 	const timeout = setTimeout(() => controller.abort(), 15_000)
 	try {
-		const response = await fetch("https://ai.mongodb.com/v1/embeddings", {
+		const response = await fetchFn("https://ai.mongodb.com/v1/embeddings", {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${voyageKey}`,
@@ -158,7 +187,7 @@ async function verifyAtlasModelKey(): Promise<{
 }
 
 async function listActiveOperations(
-	client: MongoClient,
+	client: PreflightClient,
 	database: string,
 ): Promise<{ operations: ActiveOperation[]; warning?: string }> {
 	try {
@@ -240,56 +269,66 @@ function renderText(report: PreflightReport): string {
 	return lines.join("\n")
 }
 
-const database = readDatabaseName()
-const prefix = readPrefix()
-const requiredEnv = readRequiredEnvNames()
-const missingEnv = listMissingEnv(requiredEnv)
-const keyFailures = listKeyFailures()
-const warnings: string[] = []
-const requireEmptyDb = hasArg("require-empty-db")
-const shouldVerifyAtlasModelKey =
-	hasArg("verify-atlas-model-key") ||
-	readBooleanEnv("MEMONGO_CLUSTER_PREFLIGHT_VERIFY_ATLAS_MODEL_KEY") ||
-	readBooleanEnv("MEMONGO_BENCHMARK_VERIFY_ATLAS_MODEL_KEY")
+/**
+ * Read-only inspection of the runner's configured target. Returns the exit
+ * code; target refusals print to stderr and return 1 before any client or
+ * fetch call.
+ */
+export async function main(deps: PreflightDeps): Promise<number> {
+	let target: ReturnType<typeof resolveTarget>
+	try {
+		target = resolveTarget(deps.argv)
+	} catch (error) {
+		if (!(error instanceof MongoTargetRefusal)) throw error
+		deps.stderr(`mongodb:cluster-preflight REFUSED\n${error.message}`)
+		return 1
+	}
+	const { database, prefix } = target
+	const requiredEnv = readRequiredEnvNames(deps.argv)
+	const missingEnv = listMissingEnv(requiredEnv)
+	const keyFailures = listKeyFailures()
+	const warnings: string[] = []
+	const requireEmptyDb = hasArg(deps.argv, "require-empty-db")
+	const shouldVerifyAtlasModelKey =
+		hasArg(deps.argv, "verify-atlas-model-key") ||
+		readBooleanEnv("MEMONGO_CLUSTER_PREFLIGHT_VERIFY_ATLAS_MODEL_KEY") ||
+		readBooleanEnv("MEMONGO_BENCHMARK_VERIFY_ATLAS_MODEL_KEY")
 
-const atlasModelKeyProbe = shouldVerifyAtlasModelKey
-	? await verifyAtlasModelKey()
-	: undefined
-if (atlasModelKeyProbe && !atlasModelKeyProbe.ok) {
-	keyFailures.push(
-		`VOYAGE_API_KEY failed MongoDB Atlas Embedding API probe${
-			atlasModelKeyProbe.status ? ` (HTTP ${atlasModelKeyProbe.status})` : ""
-		}`,
-	)
-}
+	const atlasModelKeyProbe = shouldVerifyAtlasModelKey
+		? await verifyAtlasModelKey(deps.fetchFn)
+		: undefined
+	if (atlasModelKeyProbe && !atlasModelKeyProbe.ok) {
+		keyFailures.push(
+			`VOYAGE_API_KEY failed MongoDB Atlas Embedding API probe${
+				atlasModelKeyProbe.status ? ` (HTTP ${atlasModelKeyProbe.status})` : ""
+			}`,
+		)
+	}
 
-let report: PreflightReport = {
-	ok: false,
-	database,
-	prefix,
-	requireEmptyDb,
-	verifyAtlasModelKey: shouldVerifyAtlasModelKey,
-	requiredEnv,
-	missingEnv,
-	keyFailures,
-	atlasModelKeyProbe,
-	collections: {
-		total: 0,
-		nonSystem: 0,
-		benchmark: 0,
-		matchingPrefix: 0,
-		names: [],
-		benchmarkNames: [],
-		matchingPrefixNames: [],
-	},
-	activeOperations: [],
-	warnings,
-}
+	let report: PreflightReport = {
+		ok: false,
+		database,
+		prefix,
+		requireEmptyDb,
+		verifyAtlasModelKey: shouldVerifyAtlasModelKey,
+		requiredEnv,
+		missingEnv,
+		keyFailures,
+		atlasModelKeyProbe,
+		collections: {
+			total: 0,
+			nonSystem: 0,
+			benchmark: 0,
+			matchingPrefix: 0,
+			names: [],
+			benchmarkNames: [],
+			matchingPrefixNames: [],
+		},
+		activeOperations: [],
+		warnings,
+	}
 
-if (!process.env.MEMONGO_MONGODB_URI?.trim()) {
-	report.warnings.push("MEMONGO_MONGODB_URI is required for publication runs")
-} else {
-	const client = new MongoClient(process.env.MEMONGO_MONGODB_URI.trim(), {
+	const client = deps.createClient(target.uri, {
 		appName: "memongo-mongodb-cluster-preflight-readonly",
 		serverSelectionTimeoutMS: 10_000,
 	})
@@ -325,21 +364,29 @@ if (!process.env.MEMONGO_MONGODB_URI?.trim()) {
 	} finally {
 		await client.close()
 	}
+
+	report.ok =
+		report.missingEnv.length === 0 &&
+		report.keyFailures.length === 0 &&
+		report.collections.matchingPrefix === 0 &&
+		report.collections.benchmark === 0 &&
+		(!report.requireEmptyDb || report.collections.nonSystem === 0)
+
+	if (deps.argv.includes("--json")) {
+		deps.stdout(JSON.stringify(report, null, 2))
+	} else {
+		deps.stdout(renderText(report))
+	}
+
+	return report.ok ? 0 : 1
 }
 
-report.ok =
-	report.missingEnv.length === 0 &&
-	report.keyFailures.length === 0 &&
-	report.collections.matchingPrefix === 0 &&
-	report.collections.benchmark === 0 &&
-	(!report.requireEmptyDb || report.collections.nonSystem === 0)
-
-if (process.argv.includes("--json")) {
-	console.log(JSON.stringify(report, null, 2))
-} else {
-	console.log(renderText(report))
-}
-
-if (!report.ok) {
-	process.exitCode = 1
+if (import.meta.main) {
+	process.exitCode = await main({
+		argv: process.argv,
+		createClient: (uri, options) => new MongoClient(uri, options),
+		fetchFn: fetch,
+		stdout: (text) => console.log(text),
+		stderr: (text) => console.error(text),
+	})
 }

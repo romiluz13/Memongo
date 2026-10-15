@@ -543,4 +543,62 @@ describe("runBenchmarkJudgedAnswers", () => {
 			},
 		])
 	})
+
+	it.each([
+		[
+			"failedTurns",
+			{ failedTurns: 3, failedLines: 0 },
+			"3 turns failed ingest",
+		],
+		[
+			"failedLines",
+			{ failedTurns: 0, failedLines: 2 },
+			"2 dataset lines failed to parse",
+		],
+	])("withholds measured accuracy but keeps per-case results when %s > 0 (B08:C06)", async (_name, ingest, text) => {
+		process.env.MEMONGO_ENRICHMENT_API_KEY = "test-key"
+		process.env.MEMONGO_ENRICHMENT_BASE_URL = "https://bench.example.invalid"
+		process.env.MEMONGO_ENRICHMENT_MODEL = "answer-model"
+		process.env.MEMONGO_BENCHMARK_JUDGE_MODEL = "judge-model"
+		const { unavailableReason: _unused, ...base } =
+			buildUnavailableE2eQaEnvelope({ reason: "unused", eligibleCases: 1 })
+		const measured = {
+			...base,
+			answerModel: "answer-model",
+			judge: "judge-model",
+			accuracy: 1,
+			judgeFalsePositiveRate: 0,
+			cases: { eligible: 1, attempted: 1, completed: 1, failed: 0 },
+			caseResults: [
+				{
+					caseId: "case-1",
+					candidateAnswer: "a",
+					correct: true,
+					abstention: false,
+					latencyMs: 5,
+				},
+			],
+		}
+		vi.mocked(runE2eQa).mockResolvedValue(measured)
+		const clean = await runBenchmarkJudgedAnswers({
+			datasetKind: "longmemeval",
+			materialByCaseId: oneAnswerMaterial(),
+			resumedFromCheckpoint: false,
+			ingest: { failedTurns: 0, failedLines: 0 },
+		})
+		expect(clean?.accuracy).toBe(1)
+		expect(clean?.unavailableReason).toBeUndefined()
+		const envelope = await runBenchmarkJudgedAnswers({
+			datasetKind: "longmemeval",
+			materialByCaseId: oneAnswerMaterial(),
+			resumedFromCheckpoint: false,
+			ingest,
+		})
+		expect(envelope?.accuracy).toBeNull()
+		expect(envelope?.unavailableReason).toContain(text)
+		expect(envelope?.unavailableReason).toContain("QA evidence is incomplete")
+		expect(envelope?.cases).toEqual(measured.cases)
+		expect(envelope?.caseResults).toEqual(measured.caseResults)
+		expect(envelope?.judgeFalsePositiveRate).toBe(0)
+	})
 })
