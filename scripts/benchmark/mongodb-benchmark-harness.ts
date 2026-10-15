@@ -1,3 +1,7 @@
+import {
+	BENCHMARK_TIMESTAMP_POLICY_VERSION,
+	normalizeBenchmarkConversationTimestamps,
+} from "./benchmark-timestamp.js"
 import { createHash } from "node:crypto"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
 import type {
@@ -60,8 +64,7 @@ function parseTimestamp(value?: string): Date | undefined {
 	if (!value) {
 		return undefined
 	}
-	const parsed = new Date(value)
-	return Number.isNaN(parsed.getTime()) ? undefined : parsed
+	return new Date(value)
 }
 
 function buildReplayMetadata(params: {
@@ -110,6 +113,9 @@ function buildReplayIdempotencyKey(params: {
 	const fingerprint = createHash("sha256")
 		.update(
 			[
+				...(params.metadataFlavor === "benchmark"
+					? [BENCHMARK_TIMESTAMP_POLICY_VERSION]
+					: []),
 				params.datasetPath,
 				String(params.turnOrdinal),
 				params.sessionId,
@@ -155,6 +161,19 @@ async function replayConversationDataset(params: {
 			"replayConversationDataset requires a writeTurn or writeTurns callback",
 		)
 	}
+
+	let selectedCount = 0
+	const selected: MemoryBenchmarkConversation[] = []
+	for (const conversation of params.conversations) {
+		if (selectedCount >= conversationLimit) break
+		const turns = conversation.turns.slice(0, turnLimit)
+		selected.push({ ...conversation, turns })
+		if (turns.length) selectedCount++
+	}
+	const conversations = normalizeBenchmarkConversationTimestamps(
+		selected,
+		params.datasetKind,
+	)
 
 	let conversationsImported = 0
 	let turnsImported = 0
@@ -228,7 +247,7 @@ async function replayConversationDataset(params: {
 		}
 	}
 
-	for (const [index, conversation] of params.conversations.entries()) {
+	for (const [index, conversation] of conversations.entries()) {
 		if (conversationsImported >= conversationLimit) {
 			break
 		}
@@ -313,6 +332,7 @@ async function replayConversationDataset(params: {
 export async function ingestBenchmarkConversations(params: {
 	datasetPath: string
 	datasetName?: string
+	datasetKind?: MemoryBenchmarkDatasetKind
 	conversations: MemoryBenchmarkConversation[]
 	failedLines?: number
 	scope?: MemoryScope
@@ -327,6 +347,7 @@ export async function ingestBenchmarkConversations(params: {
 	const result = await replayConversationDataset({
 		datasetPath: params.datasetPath,
 		datasetName: params.datasetName,
+		datasetKind: params.datasetKind,
 		conversations: params.conversations,
 		failedLines: params.failedLines,
 		scope: params.scope,
@@ -370,6 +391,7 @@ export async function ingestBenchmarkDataset(params: {
 	return ingestBenchmarkConversations({
 		datasetPath: params.datasetPath,
 		datasetName: dataset.name,
+		datasetKind: dataset.datasetKind,
 		conversations: dataset.conversations,
 		failedLines: dataset.failedLines,
 		scope: params.scope,

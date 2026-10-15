@@ -121,6 +121,7 @@ async function produceRun(
 	const checkpointPath = path.join(dir, `${label}.json`)
 	await writeBenchmarkCheckpointAtomic(checkpointPath, {
 		version: 2,
+		failedLines: 0,
 		runId: runContext.runId,
 		datasetSha256: DATASET,
 		configurationHash: runContext.configurationHash,
@@ -608,5 +609,42 @@ describe("b2-join configuration identity from the real producer", () => {
 		)
 		expectRefused(result, "run A: configuration manifest")
 		expect(result.reasons).toContain("run B: configuration manifest")
+	})
+})
+
+describe("b2-join ingestion completeness", () => {
+	it.each([
+		undefined,
+		null,
+		-1,
+		0.5,
+		1,
+	])("refuses unknown or failed line count %s", async (failedLines) => {
+		const result = await compare(
+			DEDICATED,
+			DEDICATED,
+			[],
+			(checkpoint, label) => {
+				if (label === "b") Object.assign(checkpoint, { failedLines })
+			},
+		)
+		expectRefused(result, "ingest completeness")
+		expect(result.report.questionCount).toBe(20)
+	})
+	it("refuses failed turns even when all question verdicts exist", async () => {
+		const result = await compare(
+			DEDICATED,
+			DEDICATED,
+			[],
+			(checkpoint, label) => {
+				if (label === "b") {
+					const raw = checkpoint as unknown as {
+						completedScenarios: { ingest: { failedTurns: number } }[]
+					}
+					raw.completedScenarios[0]!.ingest.failedTurns = 1
+				}
+			},
+		)
+		expectRefused(result, "ingest completeness")
 	})
 })

@@ -6,6 +6,7 @@ import { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-m
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import { testOperationRunContext } from "../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
 import type { MemoryBenchmarkDataset } from "../../packages/memory-engine/src/types.js"
+import { runBenchmarkJudgedAnswers } from "./benchmark-answer-quality.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
 import {
 	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
@@ -28,6 +29,15 @@ vi.mock("./benchmark-quality-contracts.js", async (importOriginal) =>
 		)
 	).benchmarkQualityContractsModuleMock(importOriginal),
 )
+
+vi.mock("./benchmark-answer-quality.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("./benchmark-answer-quality.js")>()
+	return {
+		...actual,
+		runBenchmarkJudgedAnswers: vi.fn(actual.runBenchmarkJudgedAnswers),
+	}
+})
 
 vi.mock("./benchmark-relevance.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./benchmark-relevance.js")>()),
@@ -529,6 +539,20 @@ describe("B08 measurement evidence through the real scenario loop", () => {
 		const replay = await resumed.run(await h.checkpoint())
 		expect(replay.result.ingest?.failedTurns).toBe(3)
 		expect(completeness(replay.result)?.status).toBe("failed")
+	})
+
+	it("hands run-level ingest failures to the QA builder, also after resume (B08:C06)", async () => {
+		const qaIngest = () =>
+			vi.mocked(runBenchmarkJudgedAnswers).mock.calls.at(-1)?.[0].ingest
+		const h = await harness({ failedTurns: 3 })
+		await h.run()
+		expect(qaIngest()).toMatchObject({ failedTurns: 3, failedLines: 0 })
+		const resumed = await harness({})
+		await resumed.run(await h.checkpoint())
+		expect(qaIngest()).toMatchObject({ failedTurns: 3, failedLines: 0 })
+		const clean = await harness({})
+		await clean.run()
+		expect(qaIngest()).toMatchObject({ failedTurns: 0, failedLines: 0 })
 	})
 })
 

@@ -16,6 +16,7 @@ const { configuration: CONFIGURATION, configurationHash: CONFIGURATION_HASH } =
 function checkpoint(): BenchmarkCheckpoint {
 	return {
 		version: 2,
+		failedLines: 0,
 		runId: "run-1",
 		datasetSha256: "a".repeat(64),
 		configurationHash: CONFIGURATION_HASH,
@@ -190,6 +191,97 @@ describe("benchmark scenario checkpoint", () => {
 					scenarioIds: ["scenario-1", "scenario-2"],
 				}),
 			).rejects.toThrow("configuration manifest is missing")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("checkpoint ingest integrity", () => {
+	it.each([
+		undefined,
+		null,
+		-1,
+		0.5,
+		"0",
+		Number.NaN,
+	])("refuses malformed resumed failure counts (%s)", async (bad) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-count-"))
+		const file = path.join(dir, "checkpoint.json")
+		try {
+			const cp = checkpoint()
+			Reflect.set(cp.completedScenarios[0]!.ingest, "failedTurns", bad)
+			await writeBenchmarkCheckpointAtomic(file, cp)
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: cp.datasetSha256,
+					configurationHash: cp.configurationHash,
+					executableDigest: cp.executableDigest,
+					scenarioIds: cp.scenarioIds,
+				}),
+			).rejects.toThrow("ingest")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+	it("binds the timestamp policy into the produced configuration", () => {
+		expect(CONFIGURATION.settings.timestampPolicyVersion).toBe(
+			"benchmark-timestamp-utc-fields-literal12h-v1",
+		)
+	})
+})
+
+describe("timestamp policy resume identity", () => {
+	it("refuses a self-consistent checkpoint from another timestamp policy", async () => {
+		const cp = checkpoint()
+		cp.configuration.settings.timestampPolicyVersion = "older-policy"
+		cp.configurationHash = hashOperationRunConfiguration(cp.configuration)
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-policy-"))
+		try {
+			const file = path.join(dir, "checkpoint.json")
+			await writeBenchmarkCheckpointAtomic(file, cp)
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: cp.datasetSha256,
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: cp.executableDigest,
+					scenarioIds: cp.scenarioIds,
+				}),
+			).rejects.toThrow("configuration hash does not match")
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: cp.datasetSha256,
+					configurationHash: cp.configurationHash,
+					executableDigest: cp.executableDigest,
+					scenarioIds: cp.scenarioIds,
+				}),
+			).rejects.toThrow("manifest")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("checkpoint line counter admission", () => {
+	it.each([
+		undefined,
+		null,
+		-1,
+		0.5,
+		"0",
+	])("rejects invalid failedLines %s", async (failedLines) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-lines-"))
+		try {
+			const file = path.join(dir, "checkpoint.json")
+			await writeFile(file, JSON.stringify({ ...checkpoint(), failedLines }))
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: "d".repeat(64),
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow("failedLines")
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}

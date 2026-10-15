@@ -1,3 +1,4 @@
+import { BENCHMARK_TIMESTAMP_POLICY_VERSION } from "./benchmark-timestamp.js"
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import {
@@ -958,7 +959,7 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 		sourceGraph: { files: [] },
 	})
 
-	async function setup() {
+	async function setup(weekdayMismatches = 0, literalMidnightLabels = 0) {
 		const workspaceDir = await mkdtemp(
 			path.join(os.tmpdir(), "memongo-resume-admission-"),
 		)
@@ -968,6 +969,11 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 		await mkdir(datasetDir, { recursive: true })
 		await writeFile(datasetPath, JSON.stringify({ name: "placeholder" }))
 		vi.mocked(loadBenchmarkDataset).mockResolvedValue({
+			timestampValidation: {
+				policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
+				weekdayMismatches,
+				literalMidnightLabels,
+			},
 			name: "LongMemEval sample",
 			datasetKind: "longmemeval",
 			conversations: [],
@@ -1054,6 +1060,7 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 		expect(fresh.resumeCheckpoint).toBeUndefined()
 		await writeBenchmarkCheckpointAtomic(checkpointPath, {
 			version: 2,
+			failedLines: 0,
 			runId: "run-to-resume",
 			datasetSha256: fresh.datasetSha256,
 			configurationHash: fresh.runContext.configurationHash,
@@ -1068,6 +1075,19 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 		runScenarioBenchmarkDataset.mockClear()
 		return { workspaceDir, run, runScenarioBenchmarkDataset }
 	}
+
+	it.each([
+		[2, 0, "2 weekday labels"],
+		[0, 17, "17 twelve-am labels"],
+	] as const)("reports timestamp interpretation counts %s/%s", async (weekdayMismatches, literalMidnightLabels, message) => {
+		const t = await setup(weekdayMismatches, literalMidnightLabels)
+		try {
+			const result = await t.run(false)
+			expect(result.benchmarkReport?.warnings.join(" ")).toContain(message)
+		} finally {
+			await rm(t.workspaceDir, { recursive: true, force: true })
+		}
+	})
 
 	it("reports the identity observed at admission, not an env claim", async () => {
 		const t = await setup()

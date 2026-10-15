@@ -118,6 +118,17 @@ scored against an incomplete corpus, so the run is not complete QA evidence.
 Ingest counts are checkpointed per scenario, so a resumed run keeps the
 failure.
 
+The same failure labels the QA evidence. The official and custom-judge
+summaries report `coverage: "partial"` and `accountingCompleteness:
+"incomplete"` even when every declared question was judged, because a judged
+question may lack its ingested evidence. Whole-workload accuracy is withheld
+and `unavailableReason` names the failed line and turn counts. Per-type
+accuracy, per-case verdicts and case counts are kept, and the export is a
+sample. The legacy custom-v1 envelope keeps its per-case results and withholds
+`accuracy` the same way. Whenever QA evidence is emitted, the
+`e2e-answer-quality` gate fails with the failure counts, including runs that
+declare no answer thresholds.
+
 ### Scenario cleanup
 
 After each scenario, the runner deletes that scenario agent's rows from the
@@ -277,7 +288,7 @@ QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage (`b02-keyed-v2`) includes the judge model, auth
+run cannot verify. Coverage (`b02-keyed-v3`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, and the configured MongoDB connection inputs described below.
 Checkpoints without a valid manifest, including every earlier run, every
@@ -457,3 +468,47 @@ For every benchmark-affecting PR or release candidate, record:
 
 Do not compare numbers from different corpora, embedding models, or MongoDB
 topologies without labeling the comparison as non-equivalent.
+
+
+## Benchmark timestamp treatment and resume
+
+The benchmark loader validates explicit timestamps before normalization can
+hide malformed values. Direct replay and fast ingest validate the selected
+conversations before the first write. Missing timestamps retain the existing
+write-time behavior; explicit null, empty strings, impossible calendar dates,
+and unsupported grammars fail with value-free rejection coordinates.
+
+`benchmark-timestamp-utc-fields-literal12h-v1` accepts the strict ISO/date-only
+forms documented in [conversation import](../conversation-import.md), plus
+these corpus forms:
+
+- LongMemEval: `YYYY/MM/DD (Mon) HH:MM`, with any English weekday abbreviation.
+  Numeric calendar fields determine the instant. The loader reports weekday
+  disagreements in `timestampValidation.weekdayMismatches`.
+- LoCoMo: `h:mm am on d Month, YYYY` or `pm`, using English month names.
+  Twelve am is midnight; twelve pm is noon. The loader reports twelve-am labels
+  in `timestampValidation.literalMidnightLabels`.
+
+Nonzero interpretation counts also appear in the benchmark report warnings.
+
+Both corpus grammars use UTC calendar fields. This is an explicit benchmark
+policy, not evidence of the source conversations' real timezone. The pinned
+[LoCoMo generator](https://github.com/snap-research/LoCoMo/blob/3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376/generative_agents/generate_conversations.py)
+labels noon as am; that does not establish the intended instant of each
+released record. The policy preserves the literal released labels. Original
+strings remain available to QA prompts; replay and session-evidence writers
+receive cloned ISO instants. Question-day cutoffs use the end of the same UTC
+day. This avoids the host-local interpretation of naive date-times described
+by [ECMA-262 Date.parse](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-date.parse).
+
+The policy version is bound into the run configuration and benchmark replay
+idempotency keys. Resume rejects older or different policies, executable
+identities, malformed ingest counters and a line-failure count that disagrees
+with the loaded dataset. Start a fresh benchmark scope after a policy change.
+The production conversation importer retains its own timestamp and key contract.
+
+Comparison inference also requires `failedLines: 0` and valid nonnegative
+integer scenario ingest counters with `failedTurns: 0`. Unknown or failed
+ingestion keeps a b2-join result descriptive and exits nonzero even when every
+question has a verdict. Historical checkpoints without these fields cannot
+establish complete ingestion.

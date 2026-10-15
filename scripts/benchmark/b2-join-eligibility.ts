@@ -13,7 +13,10 @@
 import { readFile } from "node:fs/promises"
 import type { OperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import type { RunQuestionMetrics } from "./b2-join.js"
-import { parseBoundRunConfiguration } from "./mongodb-benchmark-checkpoint.js"
+import {
+	hasValidBenchmarkIngestCounts,
+	parseBoundRunConfiguration,
+} from "./mongodb-benchmark-checkpoint.js"
 
 export const B2_TREATMENT_FIELDS = [
 	"answerModel",
@@ -200,6 +203,16 @@ export async function readB2RunIdentity(
 	const checkpointInvalid = [
 		...(checkpoint?.version === 2 ? [] : ["version"]),
 		...invalidFields(checkpoint, fields),
+		...(checkpoint?.failedLines === 0 &&
+		Array.isArray(checkpoint?.completedScenarios) &&
+		checkpoint.completedScenarios.every(
+			(scenario: { ingest?: unknown } | null) =>
+				scenario !== null &&
+				hasValidBenchmarkIngestCounts(scenario.ingest) &&
+				scenario.ingest.failedTurns === 0,
+		)
+			? []
+			: ["ingest completeness"]),
 	]
 	const boundCheckpoint =
 		checkpointInvalid.length === 0

@@ -423,19 +423,23 @@ export function describeLatencyBasis(
 	return ` (${latency.denominator}, n=${latency.samples ?? 0}${basis})`
 }
 
-// Cases from a partially ingested corpus were scored against missing
-// evidence, so a run with ingest failures is never complete.
-function buildExecutionCompletenessGate(
-	params: BenchmarkReportInput,
-): MemoryBenchmarkRunReport["releaseGates"][number] {
+function describeIngestFailures(params: BenchmarkReportInput): string[] {
 	const failedTurns = params.ingest?.failedTurns ?? 0
 	const failedLines = params.ingest?.failedLines ?? 0
-	const ingestFailures = [
+	return [
 		...(failedLines > 0
 			? [`${failedLines} dataset lines failed to parse`]
 			: []),
 		...(failedTurns > 0 ? [`${failedTurns} turns failed ingest`] : []),
 	]
+}
+
+// Cases from a partially ingested corpus were scored against missing
+// evidence, so a run with ingest failures is never complete.
+function buildExecutionCompletenessGate(
+	params: BenchmarkReportInput,
+): MemoryBenchmarkRunReport["releaseGates"][number] {
+	const ingestFailures = describeIngestFailures(params)
 	if (!params.execution)
 		return {
 			gate: "execution-completeness",
@@ -690,6 +694,16 @@ function buildQualityThresholdGate(
 function buildAnswerQualityGate(
 	params: BenchmarkReportInput,
 ): MemoryBenchmarkRunReport["releaseGates"][number] | null {
+	// B08:C06: emitted QA evidence over a partly ingested corpus fails this
+	// gate even when no answer thresholds are declared.
+	const ingestFailures = describeIngestFailures(params)
+	if (params.e2eQa && ingestFailures.length > 0) {
+		return {
+			gate: "e2e-answer-quality",
+			status: "failed",
+			evidence: `${ingestFailures.join("; ")}; QA evidence is incomplete`,
+		}
+	}
 	const thresholds = params.qualityThresholds
 	if (!thresholds) {
 		return null

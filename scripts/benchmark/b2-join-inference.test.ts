@@ -182,6 +182,7 @@ function fixture(
 	return {
 		checkpoint: {
 			version: 2,
+			failedLines: 0,
 			runId,
 			datasetSha256: IDENTITY.datasetSha256,
 			configurationHash: IDENTITY.configurationHash,
@@ -191,6 +192,12 @@ function fixture(
 			scenarioIds: ids,
 			completedScenarios: ids.map((id, i) => ({
 				scenarioId: id,
+				ingest: {
+					conversationsIngested: 1,
+					turnsIngested: 1,
+					skippedConversations: 0,
+					failedTurns: 0,
+				},
 				executionsByPass: [
 					[
 						{

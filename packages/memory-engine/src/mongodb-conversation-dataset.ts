@@ -203,7 +203,7 @@ function conversationsFromJson(
 	const conversations: ConversationDatasetConversation[] = []
 	for (const [conversationIndex, candidate] of candidates.entries()) {
 		const result = normalizeConversation(candidate, { line, conversationIndex })
-		rejections.push(...result.rejections)
+		for (const rejection of result.rejections) rejections.push(rejection)
 		if (result.value) conversations.push(result.value)
 	}
 	return conversations
@@ -291,7 +291,7 @@ export async function loadConversationDataset(
 			line: lineIndex + 1,
 			conversationIndex: conversationIndex++,
 		})
-		rejections.push(...result.rejections)
+		for (const rejection of result.rejections) rejections.push(rejection)
 		if (result.value) conversations.push(result.value)
 	}
 	if (conversations.length === 0)

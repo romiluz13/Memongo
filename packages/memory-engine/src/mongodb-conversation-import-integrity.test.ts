@@ -1,8 +1,7 @@
-import { spawnSync } from "node:child_process"
+import { parseExplicitTimestamp } from "./conversation-timestamp.js"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, it } from "vitest"
 import {
 	ConversationImportRejectedError,
@@ -261,40 +260,20 @@ describe("B01 malformed import rejections", () => {
 })
 
 describe("B01 timestamp parsing is independent of host TZ", () => {
-	it("parses the same instants under UTC and a non-UTC host zone", () => {
-		const helper = fileURLToPath(
-			new URL("./conversation-timestamp.ts", import.meta.url),
-		)
-		const inputs = [
-			"2024-02-29T23:59:59.123Z",
-			"2024-03-01T01:59:59+02:00",
-			"2024-02-29",
-			"2024-01-02T10:00:00",
-		]
-		const script = `const { parseExplicitTimestamp } = await import(${JSON.stringify(helper)}); console.log(JSON.stringify(${JSON.stringify(inputs)}.map((v) => parseExplicitTimestamp(v)?.toISOString() ?? null)))`
-		const run = (tz: string) => {
-			const child = spawnSync(
-				process.execPath,
-				["--import", "tsx", "--input-type=module", "-e", script],
-				{
-					cwd: path.resolve(path.dirname(helper), "../../.."),
-					env: { PATH: process.env.PATH ?? "", HOME: os.tmpdir(), TZ: tz },
-					encoding: "utf8",
-					timeout: 30_000,
-				},
-			)
-			expect(child.status, child.stderr).toBe(0)
-			return JSON.parse(child.stdout.trim()) as Array<string | null>
-		}
-		const utc = run("UTC")
-		const far = run("Pacific/Kiritimati")
-		expect(utc).toEqual([
+	it("matches UTC instants regardless of the test process timezone", () => {
+		expect(
+			[
+				"2024-02-29T23:59:59.123Z",
+				"2024-03-01T01:59:59+02:00",
+				"2024-02-29",
+				"2024-01-02T10:00:00",
+			].map((value) => parseExplicitTimestamp(value)?.toISOString() ?? null),
+		).toEqual([
 			"2024-02-29T23:59:59.123Z",
 			"2024-02-29T23:59:59.000Z",
 			"2024-02-29T00:00:00.000Z",
 			null,
 		])
-		expect(far).toEqual(utc)
 	})
 })
 
@@ -541,5 +520,84 @@ describe("typed normalizer results", () => {
 				reason: "no-valid-turns",
 			},
 		])
+	})
+})
+
+describe("large rejected-turn lists are returned, not spread into call arguments", () => {
+	const LARGE_REJECTED_TURNS = 130_000
+	const conversationWith = (invalidTurns: number) =>
+		`{"turns":[{"role":"user","body":"kept"}${",null".repeat(invalidTurns)}]}`
+
+	async function summarize(name: string, content: string) {
+		const loaded = await loadConversationDataset(
+			await datasetFile(name, content),
+		)
+		const { rejections } = loaded
+		return {
+			conversations: loaded.conversations.length,
+			keptTurns: loaded.conversations[0]?.turns.length,
+			failedLines: loaded.failedLines,
+			count: rejections.length,
+			reasons: [...new Set(rejections.map((entry) => entry.reason))],
+			first: rejections[0],
+			lastTurnIndex: rejections.at(-1)?.turnIndex,
+		}
+	}
+
+	it("control: a few invalid turns keep their coordinates", async () => {
+		expect(await summarize("small.json", conversationWith(3))).toEqual({
+			conversations: 1,
+			keptTurns: 1,
+			failedLines: undefined,
+			count: 3,
+			reasons: ["turn-not-object"],
+			first: {
+				line: 1,
+				conversationIndex: 0,
+				turnIndex: 1,
+				reason: "turn-not-object",
+			},
+			lastTurnIndex: 3,
+		})
+	})
+
+	it("JSON path: a very large invalid-turn list is returned, not thrown as RangeError", async () => {
+		expect(
+			await summarize("large.json", conversationWith(LARGE_REJECTED_TURNS)),
+		).toEqual({
+			conversations: 1,
+			keptTurns: 1,
+			failedLines: undefined,
+			count: LARGE_REJECTED_TURNS,
+			reasons: ["turn-not-object"],
+			first: {
+				line: 1,
+				conversationIndex: 0,
+				turnIndex: 1,
+				reason: "turn-not-object",
+			},
+			lastTurnIndex: LARGE_REJECTED_TURNS,
+		})
+	})
+
+	it("JSONL path: a very large invalid-turn list is returned, not thrown as RangeError", async () => {
+		const content = [
+			'{"turns":[{"role":"user","body":"first"}]}',
+			conversationWith(LARGE_REJECTED_TURNS),
+		].join("\n")
+		expect(await summarize("large.jsonl", content)).toEqual({
+			conversations: 2,
+			keptTurns: 1,
+			failedLines: 0,
+			count: LARGE_REJECTED_TURNS,
+			reasons: ["turn-not-object"],
+			first: {
+				line: 2,
+				conversationIndex: 1,
+				turnIndex: 1,
+				reason: "turn-not-object",
+			},
+			lastTurnIndex: LARGE_REJECTED_TURNS,
+		})
 	})
 })

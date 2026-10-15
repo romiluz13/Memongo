@@ -1,3 +1,7 @@
+import {
+	BENCHMARK_TIMESTAMP_POLICY_VERSION,
+	normalizeBenchmarkConversationTimestamps,
+} from "./benchmark-timestamp.js"
 /**
  * Benchmark scenario-lifecycle collaborator extracted from `mongodb-manager.ts`
  * (P4.3): run configuration snapshots, scenario manager settling, fast ingest,
@@ -191,6 +195,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			.digest("hex")
 		const settings: BenchmarkRunConfiguration["settings"] = {
 			configurationCoverage: BENCHMARK_CONFIGURATION_COVERAGE,
+			timestampPolicyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
 			qualityContractId: params.qualityContractId ?? null,
 			qualityContractVersion: params.qualityContractVersion ?? null,
 			deploymentIdentitySha256,
@@ -397,6 +402,10 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		scope?: MemoryScope
 		metadata?: Record<string, unknown>
 	}): Promise<MemoryBenchmarkIngestResult> {
+		const conversations = normalizeBenchmarkConversationTimestamps(
+			params.conversations,
+			params.datasetKind,
+		)
 		const startedAt = new Date()
 		const eventDocs: Document[] = []
 		const chunkDocs: Document[] = []
@@ -406,7 +415,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		let skippedConversations = 0
 		let failedTurns = 0
 
-		for (const [index, conversation] of params.conversations.entries()) {
+		for (const [index, conversation] of conversations.entries()) {
 			const turns = conversation.turns
 			if (turns.length === 0) {
 				skippedConversations++
@@ -429,7 +438,8 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				try {
 					const eventId = randomUUID()
 					const timestamp =
-						parseBenchmarkTurnTimestamp(turn.timestamp) ?? new Date()
+						parseBenchmarkTurnTimestamp(turn.timestamp, params.datasetKind) ??
+						new Date()
 					const metadata = buildBenchmarkReplayMetadata({
 						baseMetadata: params.metadata,
 						turnMetadata: turn.metadata,

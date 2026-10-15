@@ -37,6 +37,8 @@ export type BenchmarkCheckpointScenario = {
 
 export type BenchmarkCheckpoint = {
 	version: 2
+	/** Absent on historical checkpoints, which cannot establish complete ingest. */
+	failedLines?: number
 	runId: string
 	datasetSha256: string
 	configurationHash: string
@@ -96,6 +98,22 @@ export function parseBoundRunConfiguration(
 		: null
 }
 
+export function hasValidBenchmarkIngestCounts(
+	value: unknown,
+): value is BenchmarkCheckpointIngest {
+	return (
+		isRecord(value) &&
+		[
+			"conversationsIngested",
+			"turnsIngested",
+			"skippedConversations",
+			"failedTurns",
+		].every(
+			(key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0,
+		)
+	)
+}
+
 function assertCheckpointShape(
 	value: unknown,
 ): asserts value is BenchmarkCheckpoint {
@@ -117,6 +135,14 @@ function assertCheckpointShape(
 		if (typeof value[field] !== "string" || value[field].length === 0) {
 			throw new Error(`benchmark checkpoint field ${field} is invalid`)
 		}
+	}
+	if (
+		!Number.isSafeInteger(value.failedLines) ||
+		(value.failedLines as number) < 0
+	) {
+		throw new Error(
+			"benchmark checkpoint failedLines count is missing or invalid",
+		)
 	}
 	if (
 		!Number.isInteger(value.totalScenarios) ||
@@ -187,6 +213,8 @@ export async function readBenchmarkCheckpoint(
 		) {
 			throw new Error("benchmark checkpoint completed scenario is invalid")
 		}
+		if (!hasValidBenchmarkIngestCounts(scenario.ingest))
+			throw new Error("benchmark checkpoint ingest counts are invalid")
 		seen.add(scenario.index)
 	}
 	return parsed

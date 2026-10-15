@@ -20,7 +20,10 @@ import type {
 	MemoryResultRole,
 } from "../../packages/memory-engine/src/types.js"
 import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark-quality-contracts.js"
-import type { BenchmarkJudgedAnswerMaterial } from "./benchmark-answer-quality.js"
+import {
+	type BenchmarkJudgedAnswerMaterial,
+	describeIngestFailures,
+} from "./benchmark-answer-quality.js"
 import {
 	OFFICIAL_LONGMEMEVAL_QA_JUDGE_MODEL,
 	OFFICIAL_LONGMEMEVAL_QA_JUDGE_VERSION,
@@ -1363,6 +1366,12 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 	 * them, so recovery cannot silently clear the uncertainty.
 	 */
 	startupLostQuestionIds?: string[]
+	/**
+	 * B08:C06: run-level ingest failures, checkpoint-restored scenarios
+	 * included. Any failure means a judged question may lack its evidence, so
+	 * the block is never full coverage or complete accounting.
+	 */
+	ingest?: { failedTurns: number; failedLines: number }
 }): Promise<{
 	envelope: BenchmarkE2eQaEnvelope
 	metrics: OfficialLongMemEvalQaMetrics | null
@@ -1430,14 +1439,22 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 				.filter((id) => !params.coveredCaseIds.has(id)),
 		]),
 	]
+	const ingestFailures = describeIngestFailures(params.ingest)
 	const coverage: OfficialBenchmarkQaCoverage =
 		judgedRows.length === 0
 			? "unavailable"
-			: declaredIds.every(
+			: ingestFailures.length === 0 &&
+					declaredIds.every(
 						(id) => params.coveredCaseIds.has(id) && judgedIds.has(id),
 					)
 				? "full"
 				: "partial"
+	const accountingCompleteness =
+		lostPreCheckpointQuestionIds.length > 0 ||
+		params.resumedFromCheckpoint === true ||
+		ingestFailures.length > 0
+			? ("incomplete" as const)
+			: ("complete" as const)
 	const metrics =
 		judgedRows.length > 0
 			? computeOfficialLongMemEvalQaMetrics(
@@ -1479,14 +1496,16 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 	}
 	const protocolLabel =
 		params.context.protocol === "custom-judge" ? "custom-judge" : "official"
+	const missingSuffix =
+		missingQuestionIds.length > 0
+			? ` (${missingQuestionIds.length} missing, first: ${missingQuestionIds[0]})`
+			: ""
 	const unavailableReason =
 		coverage === "full"
 			? undefined
-			: `${protocolLabel} QA coverage is ${coverage}; accuracy is withheld until every declared question is judged${
-					missingQuestionIds.length > 0
-						? ` (${missingQuestionIds.length} missing, first: ${missingQuestionIds[0]})`
-						: ""
-				}`
+			: ingestFailures.length > 0
+				? `${protocolLabel} QA evidence is incomplete: ${ingestFailures.join("; ")}; accuracy is withheld because judged questions may lack ingested evidence${missingSuffix}`
+				: `${protocolLabel} QA coverage is ${coverage}; accuracy is withheld until every declared question is judged${missingSuffix}`
 	const envelope: BenchmarkE2eQaEnvelope = {
 		answerModel: params.context.answerModel,
 		judge: params.context.judgeModel,
@@ -1542,11 +1561,7 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 						missingQuestionIds,
 						unreliableQuestionIds,
 						lostPreCheckpointQuestionIds,
-						accountingCompleteness:
-							lostPreCheckpointQuestionIds.length > 0 ||
-							params.resumedFromCheckpoint === true
-								? ("incomplete" as const)
-								: ("complete" as const),
+						accountingCompleteness,
 						...(exportInfo ? { export: exportInfo } : {}),
 					},
 				}
@@ -1575,11 +1590,7 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 						// Slice B round 2: a resumed run is honestly incomplete even
 						// with zero surviving orphans — rows lost before any checkpoint
 						// may have no surviving evidence at all.
-						accountingCompleteness:
-							lostPreCheckpointQuestionIds.length > 0 ||
-							params.resumedFromCheckpoint === true
-								? ("incomplete" as const)
-								: ("complete" as const),
+						accountingCompleteness,
 						...(exportInfo ? { export: exportInfo } : {}),
 					},
 				}),

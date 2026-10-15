@@ -1,3 +1,9 @@
+import {
+	endOfBenchmarkUtcDay,
+	normalizeBenchmarkConversationTimestamps,
+	requireBenchmarkTimestamp,
+} from "./benchmark-timestamp.js"
+import { hasValidBenchmarkIngestCounts } from "./mongodb-benchmark-checkpoint.js"
 /**
  * Benchmark seam extracted from `mongodb-manager.ts` (P4.3): parity-envelope
  * helpers, convergence probes, and replay metadata used by the benchmark
@@ -208,31 +214,23 @@ export function benchmarkSearchProbeTerm(value: unknown): string | undefined {
 	return terms.find((term) => term.length >= 4) ?? terms[0]
 }
 
-export function parseBenchmarkTurnTimestamp(value?: string): Date | undefined {
-	if (!value) return undefined
-	const parsed = new Date(value)
-	return Number.isNaN(parsed.getTime()) ? undefined : parsed
+export function parseBenchmarkTurnTimestamp(
+	value?: string,
+	datasetKind: MemoryBenchmarkDatasetKind = "longmemeval",
+): Date | undefined {
+	return value === undefined
+		? undefined
+		: requireBenchmarkTimestamp(datasetKind, value, {
+				field: "turn.timestamp",
+				conversationIndex: 0,
+				sessionIndex: null,
+				turnIndex: null,
+			})
 }
 
-/**
- * LongMemEval quirk (backlog B3): `question_date` carries a wall-clock
- * timestamp in the nonstandard `YYYY/MM/DD (Ddd) HH:MM` format, which both
- * this driver and the engine parse leniently with `new Date()` — in the
- * machine's LOCAL timezone, not UTC. Answer sessions can sit at a later
- * time-of-day on the question's own day, so the engine's correct production
- * guard (`validAt <= questionDate`) would drop them. The benchmark driver
- * therefore widens the reference date it passes to search to the end of the
- * question's calendar day IN THE SAME LOCAL FRAME as that lenient parse, so
- * the boundary is machine-timezone-independent: any session later on the
- * question's wall-clock day stays eligible, and nothing from the next day
- * leaks in (a UTC end-of-day would overshoot by the machine's UTC offset).
- * Engine semantics are unchanged; production callers keep passing exact
- * timestamps.
- */
+/** Same-day sessions remain eligible; the cutoff uses the parser's UTC calendar. */
 export function endOfBenchmarkQuestionDay(date: Date): Date {
-	const endOfDay = new Date(date.getTime())
-	endOfDay.setHours(23, 59, 59, 999)
-	return endOfDay
+	return endOfBenchmarkUtcDay(date)
 }
 
 export function buildBenchmarkReplayMetadata(params: {
@@ -476,7 +474,7 @@ export class MongoDBManagerBenchmarkOps {
 		})
 		// Observed once at admission: resume binding and report identity share it.
 		const executable = await computeExecutableDigest(BENCHMARK_REPO_ROOT)
-		let dataset: MemoryBenchmarkDataset
+		let dataset: Awaited<ReturnType<typeof loadBenchmarkDataset>>
 		try {
 			dataset = await loadBenchmarkDataset(resolvedDatasetPath, {
 				baseDir: this.host.workspaceDir,
@@ -610,7 +608,7 @@ export class MongoDBManagerBenchmarkOps {
 			runContext,
 			tenantStorage: scenario.storage,
 		})
-		return attachBenchmarkOperationsReport(
+		const result = attachBenchmarkOperationsReport(
 			scenario.result,
 			parity,
 			qualityThresholds,
@@ -618,6 +616,18 @@ export class MongoDBManagerBenchmarkOps {
 			params?.conversationRecallRegression,
 			executable,
 		)
+		const validation = dataset.timestampValidation
+		if (result.benchmarkReport && validation) {
+			if (validation.weekdayMismatches > 0)
+				result.benchmarkReport.warnings.push(
+					`timestamp policy ${validation.policyVersion}: ${validation.weekdayMismatches} weekday labels disagree with numeric dates; numeric UTC fields used`,
+				)
+			if (validation.literalMidnightLabels > 0)
+				result.benchmarkReport.warnings.push(
+					`timestamp policy ${validation.policyVersion}: ${validation.literalMidnightLabels} twelve-am labels interpreted literally as midnight; historical noon intent is unresolved`,
+				)
+		}
+		return result
 	}
 
 	/**
@@ -850,6 +860,44 @@ export class MongoDBManagerBenchmarkOps {
 		storage: BenchmarkTenantStorageMeasurement
 	}> {
 		const scenarios = params.dataset.scenarios ?? []
+		const normalizedConversations = scenarios.map((scenario) =>
+			normalizeBenchmarkConversationTimestamps(
+				scenario.conversations,
+				params.dataset.datasetKind,
+			),
+		)
+		const questionDates = new WeakMap<object, Date>()
+		for (const [index, scenario] of scenarios.entries())
+			for (const evaluation of scenario.evaluations) {
+				if (evaluation.metadata?.questionDate !== undefined)
+					questionDates.set(
+						evaluation,
+						requireBenchmarkTimestamp(
+							params.dataset.datasetKind,
+							evaluation.metadata.questionDate,
+							{
+								field: "question_date",
+								conversationIndex: index,
+								sessionIndex: null,
+								turnIndex: null,
+							},
+						),
+					)
+			}
+		if (
+			params.resumeCheckpoint &&
+			params.resumeCheckpoint.failedLines !== (params.dataset.failedLines ?? 0)
+		)
+			throw new Error(
+				"benchmark checkpoint failedLines count does not match loaded dataset",
+			)
+		if (
+			params.resumeCheckpoint?.completedScenarios.some(
+				(scenario) => !hasValidBenchmarkIngestCounts(scenario.ingest),
+			)
+		)
+			throw new Error("benchmark checkpoint ingest counts are invalid")
+
 		const measurementPasses = resolveBenchmarkMeasurementPasses()
 		// #66: index 0 is the gate pass — the one the published result, the
 		// release gates, and the regression baseline are computed from.
@@ -1041,6 +1089,7 @@ export class MongoDBManagerBenchmarkOps {
 			if (!checkpointExists) {
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
 					version: 2,
+					failedLines: ingest.failedLines,
 					runId: params.runContext.runId,
 					datasetSha256: seedDatasetSha256,
 					configurationHash: params.runContext.configurationHash,
@@ -1230,6 +1279,7 @@ export class MongoDBManagerBenchmarkOps {
 							: await ingestBenchmarkConversations({
 									datasetPath: params.datasetPath,
 									datasetName: params.dataset.name,
+									datasetKind: params.dataset.datasetKind,
 									conversations: scenario.conversations,
 									scope: "agent",
 									metadata: {
@@ -1333,7 +1383,7 @@ export class MongoDBManagerBenchmarkOps {
 										this.host.db,
 										this.host.prefix,
 									),
-									conversations: scenario.conversations,
+									conversations: normalizedConversations[index],
 									agentId: scenarioManager.agentId,
 									scope: "agent",
 									scopeRef,
@@ -1346,7 +1396,7 @@ export class MongoDBManagerBenchmarkOps {
 										this.host.db,
 										this.host.prefix,
 									),
-									conversations: scenario.conversations,
+									conversations: normalizedConversations[index],
 									agentId: scenarioManager.agentId,
 									scope: "agent",
 									scopeRef,
@@ -1513,7 +1563,7 @@ export class MongoDBManagerBenchmarkOps {
 										this.host.db,
 										this.host.prefix,
 									),
-									conversations: scenario.conversations,
+									conversations: normalizedConversations[index],
 									agentId: scenarioManager.agentId,
 									scope: "agent",
 									scopeRef,
@@ -1623,15 +1673,7 @@ export class MongoDBManagerBenchmarkOps {
 					const passExecutions = executionsByPass[pass]!
 					for (const evaluation of scenario.evaluations) {
 						const startedAt = Date.now()
-						// Parse questionDate from evaluation metadata for temporal scoring
-						const evalQuestionDate =
-							typeof evaluation.metadata?.questionDate === "string"
-								? new Date(evaluation.metadata.questionDate)
-								: undefined
-						const validQuestionDate =
-							evalQuestionDate && !Number.isNaN(evalQuestionDate.getTime())
-								? evalQuestionDate
-								: undefined
+						const validQuestionDate = questionDates.get(evaluation)
 						// B3: search with the end of the question's calendar day (see
 						// endOfBenchmarkQuestionDay) so same-day answer sessions remain
 						// eligible under the engine's validAt guard.
@@ -2039,6 +2081,7 @@ export class MongoDBManagerBenchmarkOps {
 				)
 				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
 					version: 2,
+					failedLines: ingest.failedLines,
 					runId: params.runContext.runId,
 					datasetSha256,
 					configurationHash: params.runContext.configurationHash,
@@ -2136,6 +2179,9 @@ export class MongoDBManagerBenchmarkOps {
 				// startup orphans stay lost no matter what this run covered.
 				resumedFromCheckpoint: params.resumeCheckpoint !== undefined,
 				startupLostQuestionIds: officialStartupLostQuestionIds,
+				// B08:C06: run totals include checkpoint-restored scenarios, so a
+				// resumed run keeps the failures it restored.
+				ingest,
 			})
 			e2eQa = officialSummary.envelope
 		} else {
@@ -2143,6 +2189,7 @@ export class MongoDBManagerBenchmarkOps {
 				datasetKind: params.dataset.datasetKind,
 				materialByCaseId: e2eQaMaterialByCaseId,
 				resumedFromCheckpoint: restoredCheckpointScenarioCount > 0,
+				ingest,
 				accounting: params.runContext?.accounting,
 			})
 		}

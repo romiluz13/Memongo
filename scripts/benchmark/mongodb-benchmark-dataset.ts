@@ -1,3 +1,9 @@
+import {
+	BENCHMARK_TIMESTAMP_POLICY_VERSION,
+	BenchmarkTimestampRejectedError,
+	parseBenchmarkTimestamp,
+	type BenchmarkTimestampRejection,
+} from "./benchmark-timestamp.js"
 import path, { basename } from "node:path"
 import { readFile, realpath } from "node:fs/promises"
 import type { MemoryScope } from "@memongo/lib"
@@ -619,13 +625,127 @@ function normalizeGenericJsonDataset(
 	}
 }
 
+export type BenchmarkTimestampValidation = {
+	policyVersion: string
+	weekdayMismatches: number
+	literalMidnightLabels: number
+}
+
+// Validate raw fields before normalization can discard null, empty or malformed values.
+function validateRawTimestamps(
+	parsed: unknown,
+	conversationOffset = 0,
+): BenchmarkTimestampValidation {
+	const rejections: BenchmarkTimestampRejection[] = []
+	let weekdayMismatches = 0
+	let literalMidnightLabels = 0
+	const check = (
+		kind: MemoryBenchmarkDatasetKind,
+		raw: unknown,
+		at: Omit<BenchmarkTimestampRejection, "reason">,
+	) => {
+		const result = parseBenchmarkTimestamp(kind, raw)
+		if (!result.ok) rejections.push({ ...at, reason: result.reason })
+		else {
+			if (result.weekdayMismatch) weekdayMismatches++
+			if (result.literalMidnightLabel) literalMidnightLabels++
+		}
+	}
+	const object = (value: unknown): Record<string, unknown> | null =>
+		value !== null && typeof value === "object" && !Array.isArray(value)
+			? (value as Record<string, unknown>)
+			: null
+	const root = object(parsed)
+	const entries = Array.isArray(parsed)
+		? parsed
+		: Array.isArray(root?.conversations)
+			? root.conversations
+			: [parsed]
+	for (const [index, value] of entries.entries()) {
+		const record = object(value)
+		if (!record) continue
+		const at = {
+			conversationIndex: index + conversationOffset,
+			sessionIndex: null,
+			turnIndex: null,
+		}
+		if (isLongMemEvalEntry(value)) {
+			if (Object.hasOwn(record, "haystack_dates")) {
+				const dates = record.haystack_dates
+				if (
+					!Array.isArray(dates) ||
+					dates.length !== (record.haystack_sessions as unknown[]).length
+				) {
+					rejections.push({
+						...at,
+						field: "haystack_dates",
+						reason: "invalid-shape",
+					})
+				} else
+					for (const [sessionIndex, date] of dates.entries())
+						check("longmemeval", date, {
+							...at,
+							sessionIndex,
+							field: "haystack_dates",
+						})
+			}
+			if (Object.hasOwn(record, "question_date"))
+				check("longmemeval", record.question_date, {
+					...at,
+					field: "question_date",
+				})
+		} else if (object(record.conversation) && Array.isArray(record.qa)) {
+			const conversation = object(record.conversation)
+			if (!conversation) continue
+			for (const [key, date] of Object.entries(conversation)) {
+				const match = /^session_(\d+)_date_time$/.exec(key)
+				if (match)
+					check("locomo", date, {
+						...at,
+						sessionIndex: Number(match[1]) - 1,
+						field: "session_date_time",
+					})
+			}
+		} else if (Array.isArray(record.turns)) {
+			for (const [turnIndex, value] of record.turns.entries()) {
+				const turn = object(value)
+				if (turn && Object.hasOwn(turn, "timestamp"))
+					check("generic", turn.timestamp, {
+						...at,
+						turnIndex,
+						field: "turn.timestamp",
+					})
+			}
+		}
+	}
+	if (Array.isArray(root?.evaluations))
+		for (const [index, value] of root.evaluations.entries()) {
+			const metadata = object(object(value)?.metadata)
+			if (metadata && Object.hasOwn(metadata, "questionDate"))
+				check("generic", metadata.questionDate, {
+					field: "question_date",
+					conversationIndex: index,
+					sessionIndex: null,
+					turnIndex: null,
+				})
+		}
+	if (rejections.length) throw new BenchmarkTimestampRejectedError(rejections)
+	return {
+		policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
+		weekdayMismatches,
+		literalMidnightLabels,
+	}
+}
+
 export async function loadBenchmarkDataset(
 	datasetPath: string,
 	options?: {
 		baseDir?: string
 		allowedRoots?: string[]
 	},
-): Promise<MemoryBenchmarkDataset> {
+): Promise<
+	MemoryBenchmarkDataset & { timestampValidation: BenchmarkTimestampValidation }
+> {
 	const resolvedDatasetPath = await resolveBenchmarkDatasetPath({
 		datasetPath,
 		baseDir: options?.baseDir,
@@ -642,6 +762,7 @@ export async function loadBenchmarkDataset(
 	if (firstChar === "{" || firstChar === "[") {
 		try {
 			const parsed = JSON.parse(raw)
+			const timestampValidation = validateRawTimestamps(parsed)
 			const dataset = normalizeGenericJsonDataset(
 				parsed,
 				basename(resolvedDatasetPath),
@@ -649,7 +770,7 @@ export async function loadBenchmarkDataset(
 			if (!dataset) {
 				throw new Error("benchmark dataset contains no valid conversations")
 			}
-			return dataset
+			return { ...dataset, timestampValidation }
 		} catch (err) {
 			if (!(err instanceof SyntaxError)) {
 				throw err
@@ -662,6 +783,12 @@ export async function loadBenchmarkDataset(
 
 	const conversations: MemoryBenchmarkConversation[] = []
 	let failedLines = 0
+	const timestampValidation = {
+		policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
+		weekdayMismatches: 0,
+		literalMidnightLabels: 0,
+	}
+	let conversationIndex = 0
 	for (const rawLine of raw.split("\n")) {
 		const line = rawLine.trim()
 		if (line.length === 0 || line.startsWith("#")) {
@@ -674,6 +801,10 @@ export async function loadBenchmarkDataset(
 			failedLines++
 			continue
 		}
+		timestampValidation.weekdayMismatches += validateRawTimestamps(
+			parsed,
+			conversationIndex++,
+		).weekdayMismatches
 		const conversation = normalizeConversation(parsed)
 		if (conversation) {
 			conversations.push(conversation)
@@ -688,6 +819,7 @@ export async function loadBenchmarkDataset(
 
 	return {
 		name: basename(resolvedDatasetPath),
+		timestampValidation,
 		datasetKind: "generic",
 		conversations,
 		failedLines,

@@ -1,3 +1,4 @@
+import { BENCHMARK_TIMESTAMP_POLICY_VERSION } from "./benchmark-timestamp.js"
 /**
  * The covered settings of a benchmark run configuration (B02). The producer
  * (`snapshotBenchmarkRunConfiguration`) builds its settings from these lists
@@ -11,7 +12,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v2"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v3"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -140,6 +141,8 @@ const trimmedText: Contract = (value) =>
 /** Resolved settings; identity-bearing digests carry their own contract. */
 const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	configurationCoverage: (value) => value === BENCHMARK_CONFIGURATION_COVERAGE,
+	timestampPolicyVersion: (value) =>
+		value === BENCHMARK_TIMESTAMP_POLICY_VERSION,
 	qualityContractId: scalar,
 	qualityContractVersion: scalar,
 	deploymentIdentitySha256: sha256,
