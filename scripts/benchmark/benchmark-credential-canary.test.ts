@@ -201,6 +201,7 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 		const ids = ["q0", "q1"]
 		await writeBenchmarkCheckpointAtomic(checkpointPath, {
 			version: 2,
+			failedLines: 0,
 			runId: runContext.runId,
 			datasetSha256: "d".repeat(64),
 			configurationHash: runContext.configurationHash,
@@ -333,6 +334,8 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 				...expected,
 			}).catch((error: Error) => messages.push(error.message))
 		expect(messages).toHaveLength(2)
+		expect(messages[0]).toContain("configuration hash does not match")
+		expect(messages[1]).toContain("executable digest does not match")
 		expect(exposures(messages.join("\n"))).toEqual([])
 	})
 

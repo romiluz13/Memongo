@@ -4,6 +4,16 @@ All notable changes to Memongo will be documented in this file.
 
 ## 2.2.4 — 2026-10-15
 
+- Withhold remote URL, response-body and runtime payloads from HTTP provider
+  and reranker failure diagnostics.
+- Bind benchmark resume and comparison eligibility to executable source/build
+  bytes, complete configuration and keyed credential fingerprints; align MongoDB
+  preflight and parity with the selected run target.
+- Use exact paired McNemar inference only for eligible comparisons, report
+  latency denominators, and require complete ingestion and successful cleanup.
+- Derive proof verdicts from observed checks and require positive controls for
+  evaluation absence claims; bind reranker corpus v2 queries and relevant
+  answers to the same scenario.
 - Avoid argument-limit failures when importing conversations with large numbers
   of rejected turns, while retaining individual rejection diagnostics.
 - Withhold benchmark completion scores when ingestion failed, including resumed

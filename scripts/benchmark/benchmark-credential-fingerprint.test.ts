@@ -261,6 +261,7 @@ describe("keyed identity at checkpoint resume", () => {
 	): BenchmarkCheckpoint {
 		return {
 			version: 2,
+			failedLines: 0,
 			runId: "run-keyed",
 			datasetSha256: "a".repeat(64),
 			configurationHash: produced.configurationHash,

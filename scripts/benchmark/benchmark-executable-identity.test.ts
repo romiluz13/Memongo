@@ -621,6 +621,7 @@ describe("computeExecutableDigest", () => {
 		const checkpointPath = path.join(repo, "benchmarks/results/run.json")
 		await writeBenchmarkCheckpointAtomic(checkpointPath, {
 			version: 2,
+			failedLines: 0,
 			runId: "run-1",
 			datasetSha256: "a".repeat(64),
 			configurationHash,
@@ -711,6 +712,7 @@ describe("benchmark source graph inventory", () => {
 		const checkpointPath = path.join(repo, "benchmarks/results/run.json")
 		await writeBenchmarkCheckpointAtomic(checkpointPath, {
 			version: 2,
+			failedLines: 0,
 			runId: "run-1",
 			datasetSha256: "a".repeat(64),
 			configurationHash,

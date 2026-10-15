@@ -58,6 +58,7 @@ function produce(overrides: MongoOverrides = {}) {
 function checkpoint(produced: ReturnType<typeof produce>): BenchmarkCheckpoint {
 	return {
 		version: 2,
+		failedLines: 0,
 		runId: "run-mongodb-input",
 		datasetSha256: "a".repeat(64),
 		configurationHash: produced.configurationHash,
