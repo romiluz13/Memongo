@@ -728,6 +728,37 @@ export const searchPaths = {
 									skippedConversations: { type: "integer" },
 									failedLines: { type: "integer" },
 									failedTurns: { type: "integer" },
+									rejectedTurns: { type: "integer" },
+									rejectedConversations: { type: "integer" },
+									rejections: {
+										type: "array",
+										items: {
+											type: "object",
+											required: [
+												"line",
+												"conversationIndex",
+												"turnIndex",
+												"reason",
+											],
+											properties: {
+												line: { type: "integer", nullable: true },
+												conversationIndex: { type: "integer" },
+												turnIndex: { type: "integer", nullable: true },
+												reason: {
+													type: "string",
+													enum: [
+														"conversation-not-object",
+														"turns-not-array",
+														"no-valid-turns",
+														"turn-not-object",
+														"invalid-role",
+														"empty-body",
+														"invalid-timestamp",
+													],
+												},
+											},
+										},
+									},
 									startedAt: {
 										type: "string",
 										format: "date-time",

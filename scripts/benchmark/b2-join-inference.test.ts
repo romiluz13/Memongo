@@ -183,6 +183,8 @@ function fixture(
 		checkpoint: {
 			version: 2,
 			failedLines: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			runId,
 			datasetSha256: IDENTITY.datasetSha256,
 			configurationHash: IDENTITY.configurationHash,

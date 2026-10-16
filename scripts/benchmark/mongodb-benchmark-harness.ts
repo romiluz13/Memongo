@@ -9,9 +9,11 @@ import type {
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
+	MemoryConversationImportRejection,
 	MemoryBenchmarkTurn,
 } from "../../packages/memory-engine/src/types.js"
 import {
+	countBenchmarkRejections,
 	loadBenchmarkDataset,
 	resolveBenchmarkDatasetPath,
 } from "./mongodb-benchmark-dataset.js"
@@ -335,6 +337,7 @@ export async function ingestBenchmarkConversations(params: {
 	datasetKind?: MemoryBenchmarkDatasetKind
 	conversations: MemoryBenchmarkConversation[]
 	failedLines?: number
+	rejections?: MemoryConversationImportRejection[]
 	scope?: MemoryScope
 	limitConversations?: number
 	limitTurnsPerConversation?: number
@@ -366,6 +369,7 @@ export async function ingestBenchmarkConversations(params: {
 		skippedConversations: result.skippedConversations,
 		failedLines: result.failedLines,
 		failedTurns: result.failedTurns,
+		...countBenchmarkRejections(params.rejections),
 		startedAt: result.startedAt,
 		completedAt: result.completedAt,
 	}
@@ -394,6 +398,7 @@ export async function ingestBenchmarkDataset(params: {
 		datasetKind: dataset.datasetKind,
 		conversations: dataset.conversations,
 		failedLines: dataset.failedLines,
+		rejections: dataset.rejections,
 		scope: params.scope,
 		limitConversations: params.limitConversations,
 		limitTurnsPerConversation: params.limitTurnsPerConversation,
@@ -420,7 +425,7 @@ export async function importConversationDataset(params: {
 		baseDir: params.baseDir,
 		allowedRoots: params.allowedRoots,
 	})
-	return replayConversationDataset({
+	const result = await replayConversationDataset({
 		datasetPath: params.datasetPath,
 		datasetName: dataset.name,
 		datasetKind: dataset.datasetKind,
@@ -434,4 +439,6 @@ export async function importConversationDataset(params: {
 		writeTurn: params.writeTurn,
 		writeTurns: params.writeTurns,
 	})
+	const rejections = dataset.rejections ?? []
+	return { ...result, ...countBenchmarkRejections(rejections), rejections }
 }

@@ -14,6 +14,7 @@ import type {
 	MemoryBenchmarkEvaluationCase,
 	MemoryBenchmarkScenario,
 	MemoryBenchmarkTurn,
+	MemoryConversationImportRejection,
 } from "../../packages/memory-engine/src/types.js"
 
 const VALID_ROLES = new Set(["user", "assistant", "system", "tool"])
@@ -69,45 +70,83 @@ export async function resolveBenchmarkDatasetPath(params: {
 	return resolved
 }
 
-function normalizeTurn(value: unknown): MemoryBenchmarkTurn | null {
-	if (!value || typeof value !== "object") {
-		return null
+type BenchmarkRecordLocation = Pick<
+	MemoryConversationImportRejection,
+	"line" | "conversationIndex"
+>
+
+// B01:C07: same coordinates and reasons as the engine importer. Timestamps are
+// not a reason here: validateRawTimestamps applies the versioned benchmark
+// policy to the raw input before normalization.
+function normalizeTurn(
+	value: unknown,
+	turnIndex: number,
+	at: BenchmarkRecordLocation,
+):
+	| { ok: true; value: MemoryBenchmarkTurn }
+	| { ok: false; rejection: MemoryConversationImportRejection } {
+	const reject = (reason: MemoryConversationImportRejection["reason"]) => ({
+		ok: false as const,
+		rejection: { ...at, turnIndex, reason },
+	})
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return reject("turn-not-object")
 	}
 	const record = value as Record<string, unknown>
 	const role = typeof record.role === "string" ? record.role : ""
 	const body = typeof record.body === "string" ? record.body.trim() : ""
-	if (!VALID_ROLES.has(role) || body.length === 0) {
-		return null
+	if (!VALID_ROLES.has(role)) {
+		return reject("invalid-role")
+	}
+	if (body.length === 0) {
+		return reject("empty-body")
 	}
 	return {
-		role: role as MemoryBenchmarkTurn["role"],
-		body,
-		timestamp:
-			typeof record.timestamp === "string" && record.timestamp.trim().length > 0
-				? record.timestamp
-				: undefined,
-		metadata:
-			record.metadata && typeof record.metadata === "object"
-				? (record.metadata as Record<string, unknown>)
-				: undefined,
+		ok: true,
+		value: {
+			role: role as MemoryBenchmarkTurn["role"],
+			body,
+			timestamp:
+				typeof record.timestamp === "string" &&
+				record.timestamp.trim().length > 0
+					? record.timestamp
+					: undefined,
+			metadata:
+				record.metadata && typeof record.metadata === "object"
+					? (record.metadata as Record<string, unknown>)
+					: undefined,
+		},
 	}
 }
 
+/** conversation is null when the record itself is rejected; rejections also lists rejected turns of an accepted conversation. */
 function normalizeConversation(
 	value: unknown,
-): MemoryBenchmarkConversation | null {
-	if (!value || typeof value !== "object") {
-		return null
+	at: BenchmarkRecordLocation,
+): {
+	conversation: MemoryBenchmarkConversation | null
+	rejections: MemoryConversationImportRejection[]
+} {
+	const rejections: MemoryConversationImportRejection[] = []
+	const reject = (reason: MemoryConversationImportRejection["reason"]) => {
+		rejections.push({ ...at, turnIndex: null, reason })
+		return { conversation: null, rejections }
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return reject("conversation-not-object")
 	}
 	const record = value as Record<string, unknown>
 	if (!Array.isArray(record.turns)) {
-		return null
+		return reject("turns-not-array")
 	}
-	const turns = record.turns
-		.map((turn) => normalizeTurn(turn))
-		.filter((turn): turn is MemoryBenchmarkTurn => turn !== null)
+	const turns: MemoryBenchmarkTurn[] = []
+	for (const [turnIndex, turn] of record.turns.entries()) {
+		const result = normalizeTurn(turn, turnIndex, at)
+		if (result.ok) turns.push(result.value)
+		else rejections.push(result.rejection)
+	}
 	if (turns.length === 0) {
-		return null
+		return reject("no-valid-turns")
 	}
 	const scope =
 		record.scope === "session" ||
@@ -119,17 +158,68 @@ function normalizeConversation(
 			? (record.scope as MemoryScope)
 			: undefined
 	return {
-		conversationId:
-			typeof record.conversationId === "string" &&
-			record.conversationId.trim().length > 0
-				? record.conversationId
-				: undefined,
-		sessionId:
-			typeof record.sessionId === "string" && record.sessionId.trim().length > 0
-				? record.sessionId
-				: undefined,
-		scope,
-		turns,
+		conversation: {
+			conversationId:
+				typeof record.conversationId === "string" &&
+				record.conversationId.trim().length > 0
+					? record.conversationId
+					: undefined,
+			sessionId:
+				typeof record.sessionId === "string" &&
+				record.sessionId.trim().length > 0
+					? record.sessionId
+					: undefined,
+			scope,
+			turns,
+		},
+		rejections,
+	}
+}
+
+function normalizeConversations(
+	values: unknown[],
+	line: number | null,
+	rejections: MemoryConversationImportRejection[],
+): MemoryBenchmarkConversation[] {
+	const conversations: MemoryBenchmarkConversation[] = []
+	for (const [conversationIndex, value] of values.entries()) {
+		const result = normalizeConversation(value, { line, conversationIndex })
+		for (const rejection of result.rejections) rejections.push(rejection)
+		if (result.conversation) conversations.push(result.conversation)
+	}
+	return conversations
+}
+
+/** B01:C07 receipt counts, split by turnIndex exactly as the engine importer reports them. */
+export function countBenchmarkRejections(
+	rejections: readonly MemoryConversationImportRejection[] | undefined,
+): { rejectedTurns: number; rejectedConversations: number } {
+	let rejectedTurns = 0
+	for (const rejection of rejections ?? [])
+		if (rejection.turnIndex !== null) rejectedTurns++
+	return {
+		rejectedTurns,
+		rejectedConversations: (rejections?.length ?? 0) - rejectedTurns,
+	}
+}
+
+/** No conversation survived; carries the same value-free diagnostics a receipt would. */
+export class BenchmarkInputRejectedError extends Error {
+	readonly failedLines: number
+	readonly rejections: MemoryConversationImportRejection[]
+
+	constructor(
+		rejections: MemoryConversationImportRejection[],
+		failedLines = 0,
+	) {
+		const { rejectedTurns, rejectedConversations } =
+			countBenchmarkRejections(rejections)
+		super(
+			`benchmark dataset contains no valid conversations (failedLines=${failedLines}, rejectedConversations=${rejectedConversations}, rejectedTurns=${rejectedTurns})`,
+		)
+		this.name = "BenchmarkInputRejectedError"
+		this.failedLines = failedLines
+		this.rejections = rejections
 	}
 }
 
@@ -559,42 +649,53 @@ function normalizeGenericJsonDataset(
 		if (loCoMo) {
 			return loCoMo
 		}
-		const conversations = parsed
-			.map((entry) => normalizeConversation(entry))
-			.filter((entry): entry is MemoryBenchmarkConversation => entry !== null)
+		const rejections: MemoryConversationImportRejection[] = []
+		const conversations = normalizeConversations(parsed, null, rejections)
 		if (conversations.length === 0) {
-			return null
+			throw new BenchmarkInputRejectedError(rejections)
 		}
-		return buildDataset(name, "generic", [
-			{
-				scenarioId: "generic",
-				conversations,
-				evaluations: [],
-			},
-		])
+		return {
+			...buildDataset(name, "generic", [
+				{
+					scenarioId: "generic",
+					conversations,
+					evaluations: [],
+				},
+			]),
+			rejections,
+		}
 	}
 	if (!parsed || typeof parsed !== "object") {
 		return null
 	}
 	const record = parsed as Record<string, unknown>
 	if (!Array.isArray(record.conversations)) {
-		const conversation = normalizeConversation(record)
+		const { conversation, rejections } = normalizeConversation(record, {
+			line: null,
+			conversationIndex: 0,
+		})
 		if (!conversation) {
-			return null
+			throw new BenchmarkInputRejectedError(rejections)
 		}
-		return buildDataset(name, "generic", [
-			{
-				scenarioId: conversation.conversationId ?? "generic",
-				conversations: [conversation],
-				evaluations: [],
-			},
-		])
+		return {
+			...buildDataset(name, "generic", [
+				{
+					scenarioId: conversation.conversationId ?? "generic",
+					conversations: [conversation],
+					evaluations: [],
+				},
+			]),
+			rejections,
+		}
 	}
-	const conversations = record.conversations
-		.map((entry) => normalizeConversation(entry))
-		.filter((entry): entry is MemoryBenchmarkConversation => entry !== null)
+	const rejections: MemoryConversationImportRejection[] = []
+	const conversations = normalizeConversations(
+		record.conversations,
+		null,
+		rejections,
+	)
 	if (conversations.length === 0) {
-		return null
+		throw new BenchmarkInputRejectedError(rejections)
 	}
 	const evaluations = Array.isArray(record.evaluations)
 		? record.evaluations
@@ -615,6 +716,7 @@ function normalizeGenericJsonDataset(
 		datasetKind: "generic",
 		conversations,
 		evaluations,
+		rejections,
 		scenarios: [
 			{
 				scenarioId,
@@ -788,8 +890,9 @@ export async function loadBenchmarkDataset(
 		weekdayMismatches: 0,
 		literalMidnightLabels: 0,
 	}
+	const rejections: MemoryConversationImportRejection[] = []
 	let conversationIndex = 0
-	for (const rawLine of raw.split("\n")) {
+	for (const [lineIndex, rawLine] of raw.split("\n").entries()) {
 		const line = rawLine.trim()
 		if (line.length === 0 || line.startsWith("#")) {
 			continue
@@ -803,18 +906,19 @@ export async function loadBenchmarkDataset(
 		}
 		timestampValidation.weekdayMismatches += validateRawTimestamps(
 			parsed,
-			conversationIndex++,
+			conversationIndex,
 		).weekdayMismatches
-		const conversation = normalizeConversation(parsed)
-		if (conversation) {
-			conversations.push(conversation)
-		} else {
-			failedLines++
-		}
+		// Valid JSON with an invalid shape is a typed rejection, not a parse failure.
+		const result = normalizeConversation(parsed, {
+			line: lineIndex + 1,
+			conversationIndex: conversationIndex++,
+		})
+		for (const rejection of result.rejections) rejections.push(rejection)
+		if (result.conversation) conversations.push(result.conversation)
 	}
 
 	if (conversations.length === 0) {
-		throw new Error("benchmark dataset contains no valid conversations")
+		throw new BenchmarkInputRejectedError(rejections, failedLines)
 	}
 
 	return {
@@ -823,6 +927,7 @@ export async function loadBenchmarkDataset(
 		datasetKind: "generic",
 		conversations,
 		failedLines,
+		rejections,
 		scenarios: [
 			{
 				scenarioId: "generic",

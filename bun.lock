@@ -13,7 +13,7 @@
     },
     "apps/api": {
       "name": "@memongo/api",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "dependencies": {
         "@hono/node-server": "^1.19.17",
         "@memongo/lib": "workspace:*",
@@ -36,13 +36,13 @@
     },
     "apps/mcp": {
       "name": "@memongo/mcp",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "bin": {
         "memongo-mcp": "./dist/server.js",
       },
       "dependencies": {
-        "@memongo/client": "^2.2.4",
-        "@memongo/lib": "^2.2.4",
+        "@memongo/client": "^2.2.5",
+        "@memongo/lib": "^2.2.5",
         "@modelcontextprotocol/sdk": "^1.30.0",
       },
       "devDependencies": {
@@ -70,15 +70,15 @@
     },
     "packages/client": {
       "name": "@memongo/client",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "devDependencies": {
-        "@memongo/lib": "^2.2.4",
+        "@memongo/lib": "^2.2.5",
         "typescript": "^5.8.0",
       },
     },
     "packages/lib": {
       "name": "@memongo/lib",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "devDependencies": {
         "typescript": "^5.8.0",
         "vitest": "^4.1.10",
@@ -86,10 +86,10 @@
     },
     "packages/memongo-memory": {
       "name": "@memongo/memory",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "dependencies": {
-        "@memongo/memory-bridge": "^2.2.4",
-        "@memongo/memory-engine": "^2.2.4",
+        "@memongo/memory-bridge": "^2.2.5",
+        "@memongo/memory-engine": "^2.2.5",
       },
       "devDependencies": {
         "typescript": "^5.8.0",
@@ -97,10 +97,10 @@
     },
     "packages/memory-bridge": {
       "name": "@memongo/memory-bridge",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "dependencies": {
-        "@memongo/lib": "^2.2.4",
-        "@memongo/memory-engine": "^2.2.4",
+        "@memongo/lib": "^2.2.5",
+        "@memongo/memory-engine": "^2.2.5",
       },
       "devDependencies": {
         "@memongo/tools": "workspace:*",
@@ -110,9 +110,9 @@
     },
     "packages/memory-engine": {
       "name": "@memongo/memory-engine",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "dependencies": {
-        "@memongo/lib": "^2.2.4",
+        "@memongo/lib": "^2.2.5",
         "chokidar": "^4.0.3",
         "mongodb": "^7.7.0",
       },
@@ -124,10 +124,10 @@
     },
     "packages/pi-extension": {
       "name": "@memongo/pi-extension",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "dependencies": {
-        "@memongo/client": "^2.2.4",
-        "@memongo/tools": "^2.2.4",
+        "@memongo/client": "^2.2.5",
+        "@memongo/tools": "^2.2.5",
       },
       "devDependencies": {
         "@earendil-works/pi-ai": "0.83.0",
@@ -143,10 +143,10 @@
     },
     "packages/tools": {
       "name": "@memongo/tools",
-      "version": "2.2.4",
+      "version": "2.2.5",
       "dependencies": {
-        "@memongo/client": "^2.2.4",
-        "@memongo/lib": "^2.2.4",
+        "@memongo/client": "^2.2.5",
+        "@memongo/lib": "^2.2.5",
         "zod": "^3.25.0",
       },
       "devDependencies": {

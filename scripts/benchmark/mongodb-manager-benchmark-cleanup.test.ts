@@ -234,6 +234,8 @@ async function harness(params: {
 		skippedConversations: 0,
 		failedLines: 0,
 		failedTurns: params.failedTurns ?? 0,
+		rejectedTurns: 0,
+		rejectedConversations: 0,
 		startedAt: new Date("2026-10-14T12:00:00.000Z"),
 		completedAt: new Date("2026-10-14T12:00:01.000Z"),
 	})

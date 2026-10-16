@@ -39,6 +39,9 @@ export type BenchmarkCheckpoint = {
 	version: 2
 	/** Absent on historical checkpoints, which cannot establish complete ingest. */
 	failedLines?: number
+	/** B01:C07 loader rejections; absent on checkpoints written before them, read as unknown. */
+	rejectedTurns?: number
+	rejectedConversations?: number
 	runId: string
 	datasetSha256: string
 	configurationHash: string
@@ -143,6 +146,14 @@ function assertCheckpointShape(
 		throw new Error(
 			"benchmark checkpoint failedLines count is missing or invalid",
 		)
+	}
+	for (const field of ["rejectedTurns", "rejectedConversations"] as const) {
+		if (
+			value[field] !== undefined &&
+			(!Number.isSafeInteger(value[field]) || (value[field] as number) < 0)
+		) {
+			throw new Error(`benchmark checkpoint ${field} count is invalid`)
+		}
 	}
 	if (
 		!Number.isInteger(value.totalScenarios) ||

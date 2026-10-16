@@ -23,6 +23,7 @@ import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark-quality-contracts.js"
 import {
 	type BenchmarkJudgedAnswerMaterial,
 	describeIngestFailures,
+	type BenchmarkIngestFailureCounts,
 } from "./benchmark-answer-quality.js"
 import {
 	OFFICIAL_LONGMEMEVAL_QA_JUDGE_MODEL,
@@ -1371,7 +1372,7 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 	 * included. Any failure means a judged question may lack its evidence, so
 	 * the block is never full coverage or complete accounting.
 	 */
-	ingest?: { failedTurns: number; failedLines: number }
+	ingest?: BenchmarkIngestFailureCounts
 }): Promise<{
 	envelope: BenchmarkE2eQaEnvelope
 	metrics: OfficialLongMemEvalQaMetrics | null

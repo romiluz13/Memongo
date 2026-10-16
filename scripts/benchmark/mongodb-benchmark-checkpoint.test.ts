@@ -287,3 +287,28 @@ describe("checkpoint line counter admission", () => {
 		}
 	})
 })
+
+describe("checkpoint rejection counter admission", () => {
+	it.each([
+		["rejectedTurns", -1],
+		["rejectedTurns", null],
+		["rejectedConversations", 0.5],
+		["rejectedConversations", "0"],
+	])("rejects invalid %s %s", async (field, count) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-rejections-"))
+		try {
+			const file = path.join(dir, "checkpoint.json")
+			await writeFile(file, JSON.stringify({ ...checkpoint(), [field]: count }))
+			await expect(
+				readBenchmarkCheckpoint(file, {
+					datasetSha256: "a".repeat(64),
+					configurationHash: CONFIGURATION_HASH,
+					executableDigest: "d".repeat(64),
+					scenarioIds: ["scenario-1", "scenario-2"],
+				}),
+			).rejects.toThrow(field)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})

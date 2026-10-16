@@ -653,8 +653,29 @@ export type MemongoConversationImportResponse = {
 	skippedConversations: number
 	failedLines: number
 	failedTurns: number
+	/** Servers before 2.2.4 omit the three rejection diagnostics. */
+	rejectedTurns?: number
+	rejectedConversations?: number
+	rejections?: MemongoConversationImportRejection[]
 	startedAt: string
 	completedAt: string
+}
+
+/** Value-free pointer to a record the server's loader rejected; it was not written. */
+export type MemongoConversationImportRejection = {
+	/** 1-based physical line for JSONL input; null for a JSON document. */
+	line: number | null
+	conversationIndex: number
+	/** null for a conversation-level rejection. */
+	turnIndex: number | null
+	reason:
+		| "conversation-not-object"
+		| "turns-not-array"
+		| "no-valid-turns"
+		| "turn-not-object"
+		| "invalid-role"
+		| "empty-body"
+		| "invalid-timestamp"
 }
 
 export type MemongoEraseAgentResponse = {
