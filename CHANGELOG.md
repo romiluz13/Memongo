@@ -2,6 +2,20 @@
 
 All notable changes to Memongo will be documented in this file.
 
+## 2.2.5 — 2026-10-16
+
+- Report malformed generic benchmark JSON and JSONL records as typed rejections
+  with line, conversation, turn and reason coordinates. Valid JSON with an
+  invalid shape is a rejection, not a failed line.
+- Carry rejected turn and conversation counts through benchmark ingest results,
+  checkpoints and QA summaries. Publication runs refuse any rejection, resume
+  refuses mismatched counts and comparisons require explicit zero counts.
+- Describe conversation-import rejection diagnostics in OpenAPI and the
+  TypeScript client, and expose rejection counts on the relevance benchmark
+  result type.
+
+See [release details and validation limits](docs/platform/releases/2.2.5.md).
+
 ## 2.2.4 — 2026-10-15
 
 - Withhold remote URL, response-body and runtime payloads from HTTP provider
