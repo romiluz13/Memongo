@@ -34,12 +34,12 @@ export function evaluateSearch(
 		}
 	}
 	const inPartition = markerHits.find(
-		(hit) => hit.scopeRef === expected.scopeRef,
+		(hit) => hit.scope === "agent" && hit.scopeRef === expected.scopeRef,
 	)
 	if (!inPartition) {
 		return {
 			ok: false,
-			details: `planted marker returned only outside ${expected.scopeRef} (scopeRefs=${markerHits.map((hit) => hit.scopeRef ?? "none").join(",")})`,
+			details: `planted marker returned only outside ${expected.scopeRef} (partitions=${markerHits.map((hit) => `${hit.scope ?? "none"}/${hit.scopeRef ?? "none"}`).join(",")})`,
 		}
 	}
 	return {
