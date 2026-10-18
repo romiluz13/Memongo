@@ -24,7 +24,6 @@ const proofPackBaseline = {
 		"profile",
 		"status",
 		"stats",
-		"relevanceReport",
 	],
 } as const
 
