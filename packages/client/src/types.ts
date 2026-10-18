@@ -14,6 +14,24 @@ export type MemongoScope =
 	| "tenant"
 	| "global"
 
+/** #101: opt-in search visibility barrier on a write. */
+export type MemongoSearchBarrierRequest = {
+	/** Lower the 10000 ms default wait; the server clamps it to 1000-10000. */
+	timeoutMs?: number
+}
+
+/** #101: the barrier outcome of a committed barrier write. */
+export type MemongoSearchBarrierResult = {
+	committed: true
+	status: "searchable" | "not-yet-searchable" | "cancelled"
+	reason?: "timeout" | "projection-failed" | "probe-failed" | "cancelled"
+	targets: Array<{
+		index: string
+		status: "confirmed" | "pending" | "failed"
+		attempts: number
+	}>
+}
+
 export type MemongoAddInput = {
 	content: string
 	/** @deprecated Prefer `sessionId`. */
@@ -27,6 +45,7 @@ export type MemongoAddInput = {
 	scopeRef?: string
 	/** Absolute expiry instant (ISO 8601, must be future); P4.4.1 TTL. */
 	expiresAt?: string
+	searchBarrier?: MemongoSearchBarrierRequest
 }
 
 export type MemongoSearchInput = {

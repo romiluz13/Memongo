@@ -40,6 +40,8 @@ import type {
 	MemongoRecallTrace,
 	MemongoScanNoveltyInput,
 	MemongoScope,
+	MemongoSearchBarrierRequest,
+	MemongoSearchBarrierResult,
 	MemongoDegradation,
 	MemongoSearchInput,
 	MemongoSearchKBResponse,
@@ -733,9 +735,12 @@ export class MemongoClient {
 		}
 	}
 
-	async add(
-		input: MemongoAddInput,
-	): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
+	async add(input: MemongoAddInput): Promise<{
+		ok: true
+		eventId: string
+		chunkCreated: boolean
+		searchBarrier?: MemongoSearchBarrierResult
+	}> {
 		// One key per logical write, stable across this call's retries (P0.1).
 		const idempotencyKey = resolveIdempotencyKey(input.customId, true)
 		return apiPost(
@@ -752,6 +757,7 @@ export class MemongoClient {
 				scopeRef: input.scopeRef,
 				customId: idempotencyKey,
 				expiresAt: input.expiresAt,
+				searchBarrier: input.searchBarrier,
 			},
 			{ "Idempotency-Key": idempotencyKey },
 		)
@@ -997,7 +1003,13 @@ export class MemongoClient {
 		customId?: string
 		/** Absolute expiry instant (ISO 8601, must be future); P4.4.1 TTL. */
 		expiresAt?: string
-	}): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
+		searchBarrier?: MemongoSearchBarrierRequest
+	}): Promise<{
+		ok: true
+		eventId: string
+		chunkCreated: boolean
+		searchBarrier?: MemongoSearchBarrierResult
+	}> {
 		// One key per logical write, stable across this call's retries (P0.1).
 		const idempotencyKey = resolveIdempotencyKey(input.customId, true)
 		return apiPost(
@@ -1016,6 +1028,7 @@ export class MemongoClient {
 				scopeRef: input.scopeRef,
 				customId: idempotencyKey,
 				expiresAt: input.expiresAt,
+				searchBarrier: input.searchBarrier,
 			},
 			{ "Idempotency-Key": idempotencyKey },
 		)
@@ -1077,6 +1090,7 @@ export class MemongoClient {
 	async writeStructured(input: {
 		entry: Record<string, unknown>
 		agentId?: string
+		searchBarrier?: MemongoSearchBarrierRequest
 	}): Promise<{
 		upserted: boolean
 		id: string
@@ -1084,20 +1098,28 @@ export class MemongoClient {
 		quarantined?: boolean
 		/** C-008: matched injection-pattern ids, present iff quarantined. */
 		matchedPatterns?: string[]
+		searchBarrier?: MemongoSearchBarrierResult
 	}> {
 		return apiPost(this._opts, "/v1/write-structured", {
 			entry: input.entry,
 			agentId: input.agentId,
+			searchBarrier: input.searchBarrier,
 		})
 	}
 
 	async writeProcedure(input: {
 		entry: Record<string, unknown>
 		agentId?: string
-	}): Promise<{ upserted: boolean; id: string }> {
+		searchBarrier?: MemongoSearchBarrierRequest
+	}): Promise<{
+		upserted: boolean
+		id: string
+		searchBarrier?: MemongoSearchBarrierResult
+	}> {
 		return apiPost(this._opts, "/v1/write-procedure", {
 			entry: input.entry,
 			agentId: input.agentId,
+			searchBarrier: input.searchBarrier,
 		})
 	}
 

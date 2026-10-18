@@ -69,6 +69,14 @@ export {
 	getMemorySearchManager,
 	type MemorySearchManagerResult,
 } from "./search-manager.js"
+export type {
+	SearchBarrierReason,
+	SearchBarrierRequest,
+	SearchBarrierResult,
+	SearchBarrierStatus,
+	SearchBarrierTargetResult,
+	SearchBarrierUnsupportedReason,
+} from "./mongodb-search-barrier.js"
 
 // ---------------------------------------------------------------------------
 // State Family — unified view over profile + blocks + context bundle

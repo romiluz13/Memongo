@@ -649,6 +649,12 @@ export async function writeProcedure(params: {
 	mutationMeta?: MutationMeta
 	eventReceiptIds?: string[]
 	expectedRevision?: number
+	/**
+	 * #101: opt-in search barrier witness. Stamped in the same update as the
+	 * content; a write that changes no content re-stamps it with a
+	 * token-only $set.
+	 */
+	searchWriteToken?: string
 }): Promise<{
 	upserted: boolean
 	id: string
@@ -714,13 +720,28 @@ export async function writeProcedure(params: {
 	}> => {
 		persistedSetDoc = {}
 		const now = new Date()
-		const setDoc = buildProcedureSetDoc({
-			entry,
-			scope,
-			scopeRef,
-			searchText,
-			updatedAt: now,
-		})
+		const witness =
+			params.searchWriteToken !== undefined
+				? { searchWriteToken: params.searchWriteToken }
+				: {}
+		const setDoc = {
+			...buildProcedureSetDoc({
+				entry,
+				scope,
+				scopeRef,
+				searchText,
+				updatedAt: now,
+			}),
+			...witness,
+		}
+		const restampUnchanged = async () => {
+			if (params.searchWriteToken === undefined) return
+			await collection.updateOne(
+				identityFilter,
+				{ $set: witness },
+				session ? { session } : {},
+			)
+		}
 		const existing = await collection.findOne(
 			identityFilter,
 			session ? { session } : undefined,
@@ -774,6 +795,7 @@ export async function writeProcedure(params: {
 			}
 		}
 		if (hasProcessedSourceEvents(existing, params.eventReceiptIds)) {
+			await restampUnchanged()
 			return {
 				upserted: false,
 				id: entry.procedureId,
@@ -790,13 +812,16 @@ export async function writeProcedure(params: {
 				: {}),
 		})
 		const effectiveSearchText = buildSearchText(effectiveEntry)
-		persistedSetDoc = buildProcedureSetDoc({
-			entry: effectiveEntry,
-			scope,
-			scopeRef,
-			searchText: effectiveSearchText,
-			updatedAt: now,
-		})
+		persistedSetDoc = {
+			...buildProcedureSetDoc({
+				entry: effectiveEntry,
+				scope,
+				scopeRef,
+				searchText: effectiveSearchText,
+				updatedAt: now,
+			}),
+			...witness,
+		}
 
 		const currentRevision =
 			typeof existing.revision === "number" &&
@@ -814,6 +839,7 @@ export async function writeProcedure(params: {
 			})
 		}
 		if (!hasProcedureChanged(existing, effectiveEntry, effectiveSearchText)) {
+			await restampUnchanged()
 			return {
 				upserted: false,
 				id: entry.procedureId,
