@@ -50,7 +50,14 @@ const bridgeMocks = vi.hoisted(() => ({
 	buildMemongoConfig: vi.fn(),
 }))
 
-vi.mock("@memongo/memory-bridge", () => bridgeMocks)
+// #101: the boot capability table derives its classic $text lane from the
+// engine's own index rule, so the real rule rides along with the mocks.
+vi.mock("@memongo/memory-bridge", async (importOriginal) => ({
+	...bridgeMocks,
+	shouldEnsureTextFallbackIndexes: (
+		await importOriginal<typeof import("@memongo/memory-bridge")>()
+	).shouldEnsureTextFallbackIndexes,
+}))
 
 import { createApp, parseScopedApiKeyPolicies } from "./app.js"
 import { MEMONGO_API_VERSION } from "./version.js"
@@ -537,7 +544,7 @@ describe("createApp", () => {
 				hybrid: true,
 				vector: true,
 				keyword: true,
-				text: true,
+				text: false,
 			})
 		})
 
@@ -546,16 +553,16 @@ describe("createApp", () => {
 				hybrid: false,
 				vector: false,
 				keyword: true,
-				text: true,
+				text: false,
 			})
 		})
 
-		it("keeps only the $text fallback when capabilities are null", () => {
+		it("reports every lane unavailable when capabilities are null", () => {
 			expect(deriveSearchLanes(null)).toEqual({
 				hybrid: false,
 				vector: false,
 				keyword: false,
-				text: true,
+				text: false,
 			})
 		})
 
@@ -566,7 +573,7 @@ describe("createApp", () => {
 			expect(table).toContain("hybrid:  unavailable")
 			expect(table).toContain("vector:  unavailable")
 			expect(table).toContain("keyword: available")
-			expect(table).toContain("text:    available")
+			expect(table).toContain("text:    unavailable")
 			expect(table).toContain("DEGRADED")
 		})
 
@@ -625,7 +632,7 @@ describe("createApp", () => {
 				hybrid: false,
 				vector: false,
 				keyword: false,
-				text: true,
+				text: false,
 			})
 		})
 	})

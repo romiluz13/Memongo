@@ -19,6 +19,7 @@ import type {
 	MemoryStableHandle,
 	MongoDBMemoryManager,
 	RelevanceExplainResult,
+	SearchOutcomeSummary,
 	V2Status,
 } from "@memongo/memory-engine"
 // P4.1: deep engine symbols left the main barrel; during the deprecation
@@ -57,6 +58,9 @@ import {
 	getMemorySearchManager,
 } from "@memongo/memory-engine"
 import { materializeBlocks } from "@memongo/memory-engine/internal"
+// #101 section 3 step 7: the classic $text index rule, re-exported so the
+// API boot table derives its `text` lane from it instead of copying it.
+export { shouldEnsureTextFallbackIndexes } from "@memongo/memory-engine/internal"
 import { resolveBridgeConfig } from "./memory-config.js"
 
 /**
@@ -128,6 +132,30 @@ export async function memongoBridgeSearch(params: {
 }
 
 /**
+ * #101 / decision 16: the per-call search envelope. `outcomes` is the
+ * engine's value-free outcome summary for this call (complete, partial or
+ * failed); a throttled call carries `degradation` instead. A typed search
+ * failure is thrown, never folded into an empty envelope.
+ */
+export type MemongoBridgeSearchEnvelope = {
+	results: MemorySearchResult[]
+	degradation?: MemorySearchDegradation
+	outcomes?: SearchOutcomeSummary
+}
+
+function searchEnvelope(
+	results: MemorySearchResult[],
+	degradation: MemorySearchDegradation | undefined,
+	outcomes: SearchOutcomeSummary | undefined,
+): MemongoBridgeSearchEnvelope {
+	return {
+		results,
+		...(degradation ? { degradation } : {}),
+		...(outcomes ? { outcomes } : {}),
+	}
+}
+
+/**
  * WS-12 (C-019): search carrying the degradation marker out of the engine.
  * Same pipeline as memongoBridgeSearch; the response's `degradation` is set
  * exactly when admission control degraded the answer (denied query, denied
@@ -143,12 +171,10 @@ export async function memongoBridgeSearchWithDegradation(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	kbRestricted?: boolean
-}): Promise<{
-	results: MemorySearchResult[]
-	degradation?: MemorySearchDegradation
-}> {
+}): Promise<MemongoBridgeSearchEnvelope> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	let degradation: MemorySearchDegradation | undefined
+	let outcomes: SearchOutcomeSummary | undefined
 	const results = await m.search(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
@@ -159,8 +185,11 @@ export async function memongoBridgeSearchWithDegradation(params: {
 		onDegradation: (d) => {
 			degradation = d
 		},
+		onOutcomes: (o) => {
+			outcomes = o
+		},
 	})
-	return degradation ? { results, degradation } : { results }
+	return searchEnvelope(results, degradation, outcomes)
 }
 
 export async function memongoBridgeSearchKB(params: {
@@ -204,12 +233,10 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 	minScore?: number
 	filter?: { tags?: string[]; category?: string; source?: string }
 	fusionMethod?: MemoryMongoDBFusionMethod
-}): Promise<{
-	results: MemorySearchResult[]
-	degradation?: MemorySearchDegradation
-}> {
+}): Promise<MemongoBridgeSearchEnvelope> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	let degradation: MemorySearchDegradation | undefined
+	let outcomes: SearchOutcomeSummary | undefined
 	const results = await m.searchKB(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
@@ -223,8 +250,11 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 		onDegradation: (d) => {
 			degradation = d
 		},
+		onOutcomes: (o) => {
+			outcomes = o
+		},
 	})
-	return degradation ? { results, degradation } : { results }
+	return searchEnvelope(results, degradation, outcomes)
 }
 
 export async function memongoBridgeReadFile(params: {
@@ -1186,3 +1216,16 @@ export type {
 	ProcedureEntry,
 	StructuredMemoryEntry,
 } from "@memongo/memory-engine/internal"
+// #101 / decision 16: the value-free search outcome vocabulary the API
+// boundary maps to HTTP statuses (matrix sections 2 and 5).
+export type {
+	SearchBudgetReason,
+	SearchFailureReason,
+	SearchLane,
+	SearchLaneOutcome,
+	SearchLaneOutcomeStatus,
+	SearchOutcomeReason,
+	SearchOutcomeStatus,
+	SearchOutcomeSummary,
+	SearchStage,
+} from "@memongo/memory-engine"

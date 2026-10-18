@@ -69,7 +69,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"maxResults",
 			"q",
 		],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 500, 503],
 		tools: ["memongo_search"],
 	},
 	{
@@ -86,7 +86,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"filter",
 			"fusionMethod",
 		],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 500, 503],
 		tools: ["memongo_search_kb"],
 	},
 	{
@@ -115,7 +115,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"proceduralScope",
 			"searchConfig",
 		],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 500, 503],
 		tools: ["memongo_search_detailed"],
 	},
 	{
