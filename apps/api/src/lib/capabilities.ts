@@ -1,12 +1,16 @@
-import type { MemongoBridgeCapabilities } from "@memongo/memory-bridge"
+import {
+	type MemongoBridgeCapabilities,
+	shouldEnsureTextFallbackIndexes,
+} from "@memongo/memory-bridge"
 import { formatErrorMessage, redactSensitiveText } from "@memongo/lib"
 
 /**
  * P1.9 boot-time search-lane visibility. When Atlas Search/vector indexes
- * cannot be created, the engine warns and silently degrades every query to
- * the `$text` last resort. These helpers make the degradation visible at
- * boot: a capability table is logged once, and MEMONGO_REQUIRE_VECTOR=1
- * refuses to boot when the vector lane is unavailable.
+ * cannot be created, searches that need those lanes report them per call as
+ * not-applicable or lane-unavailable outcomes (#101). These helpers make the
+ * deployment's lanes visible at boot: a capability table is logged once, and
+ * MEMONGO_REQUIRE_VECTOR=1 refuses to boot when the vector lane is
+ * unavailable.
  *
  * Lane model (derived from the engine's DetectedCapabilities via the bridge):
  *   - vector:  $vectorSearch serving index exists and is queryable
@@ -14,7 +18,8 @@ import { formatErrorMessage, redactSensitiveText } from "@memongo/lib"
  *   - hybrid:  vector + keyword (the engine falls back to js-merge fusion
  *              when server-side score/rank fusion stages are absent, so the
  *              lane needs both retrieval legs, not the fusion stages)
- *   - text:    standard MongoDB $text index last resort — always available
+ *   - text:    classic MongoDB $text index (chunks and KB only), which the
+ *              engine creates only where Atlas Search is absent
  *
  * All functions are pure (or take an injected probe/logger) so the unit
  * suite can drive them without booting a server or a live Mongo.
@@ -35,9 +40,9 @@ export function deriveSearchLanes(
 		hybrid: vector && keyword,
 		vector,
 		keyword,
-		// Standard $text indexes are a core MongoDB feature, not Atlas Search —
-		// the last-resort lane exists on every deployment.
-		text: true,
+		// #101: the lane exists only where the engine creates its index, by the
+		// same rule; an unknown probe reports it unavailable.
+		text: caps != null && shouldEnsureTextFallbackIndexes(caps),
 	}
 }
 
@@ -51,13 +56,13 @@ export function formatCapabilityTable(
 		`  hybrid:  ${status(lanes.hybrid)}`,
 		`  vector:  ${status(lanes.vector)}`,
 		`  keyword: ${status(lanes.keyword)}`,
-		`  text:    ${status(lanes.text)} (standard $text fallback)`,
+		`  text:    ${status(lanes.text)} (classic $text, chunks/KB only)`,
 	]
-	if (lanes.hybrid && lanes.vector && lanes.keyword && lanes.text) {
+	if (lanes.hybrid && lanes.vector && lanes.keyword) {
 		lines.push("  all retrieval lanes available")
 	} else {
 		lines.push(
-			"  DEGRADED: queries on unavailable lanes silently fall back to $text",
+			"  DEGRADED: searches report unavailable lanes as typed outcomes; no lane falls back to $text",
 		)
 	}
 	if (probeError) {

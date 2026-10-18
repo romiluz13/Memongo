@@ -58,6 +58,9 @@ import {
 	getMemorySearchManager,
 } from "@memongo/memory-engine"
 import { materializeBlocks } from "@memongo/memory-engine/internal"
+// #101 section 3 step 7: the classic $text index rule, re-exported so the
+// API boot table derives its `text` lane from it instead of copying it.
+export { shouldEnsureTextFallbackIndexes } from "@memongo/memory-engine/internal"
 import { resolveBridgeConfig } from "./memory-config.js"
 
 /**
