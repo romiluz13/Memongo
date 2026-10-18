@@ -9,6 +9,7 @@ import {
 } from "./mongodb-benchmark-harness.js"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
+import type { Collection, Document } from "mongodb"
 import path from "node:path"
 import {
 	mocked,
@@ -204,8 +205,21 @@ const { eventsCollection, chunksCollection, sessionChunksCollection } =
 
 describe("benchmark scenario manager configuration (B12)", () => {
 	it("zeroes post-rerank recency/access boosts without mutating the host config", async () => {
+		const client = {}
+		const hostConfig = {
+			mongodb: {
+				reranking: {
+					enabled: true,
+					model: "rerank-2.5",
+					topN: 7,
+					minScore: 0.01,
+					recencyBoost: 0.3,
+					accessBoost: 0.25,
+				},
+			},
+		}
 		const manager = {
-			client: {},
+			client,
 			db: fakeDb,
 			prefix: fakePrefix,
 			agentId: "benchmark-parent",
@@ -213,24 +227,14 @@ describe("benchmark scenario manager configuration (B12)", () => {
 			extraMemoryPaths: [],
 			capabilities: { textSearch: true, vectorSearch: true },
 			nativeBitemporalVectorPrefilter: false,
-			config: {
-				mongodb: {
-					reranking: {
-						enabled: true,
-						model: "rerank-2.5",
-						topN: 7,
-						minScore: 0.01,
-						recencyBoost: 0.3,
-						accessBoost: 0.25,
-					},
-				},
-			},
+			config: hostConfig,
 		} as unknown as MongoDBMemoryManager
 
 		const create = vi
 			.spyOn(MongoDBMemoryManager, "create")
 			.mockImplementation(
-				async (input) => ({ config: input.resolved }) as MongoDBMemoryManager,
+				async (input) =>
+					({ config: input.resolved }) as unknown as MongoDBMemoryManager,
 			)
 		const ops = benchmarkOps(manager)
 		const invoke = ops as unknown as {
@@ -248,7 +252,7 @@ describe("benchmark scenario manager configuration (B12)", () => {
 			expect(create).toHaveBeenCalledWith(
 				expect.objectContaining({
 					agentId: "benchmark-scenario-agent",
-					client: manager.client,
+					client,
 					extraPaths: [],
 					cfg: expect.objectContaining({
 						agents: expect.objectContaining({
@@ -273,11 +277,8 @@ describe("benchmark scenario manager configuration (B12)", () => {
 		expect(scenarioMongo.reranking.topN).toBe(7)
 		expect(scenarioMongo.reranking.minScore).toBe(0.01)
 		// The host config object is never mutated.
-		const hostMongo = (
-			(manager as Record<string, unknown>).config as Record<string, unknown>
-		).mongodb as Record<string, Record<string, number>>
-		expect(hostMongo.reranking.recencyBoost).toBe(0.3)
-		expect(hostMongo.reranking.accessBoost).toBe(0.25)
+		expect(hostConfig.mongodb.reranking.recencyBoost).toBe(0.3)
+		expect(hostConfig.mongodb.reranking.accessBoost).toBe(0.25)
 	})
 })
 
@@ -295,6 +296,8 @@ describe("benchmarkIngest", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T00:00:00.000Z"),
 			completedAt: new Date("2026-04-09T00:00:01.000Z"),
 		})
@@ -346,6 +349,8 @@ describe("benchmarkIngest", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T00:00:00.000Z"),
 			completedAt: new Date("2026-04-09T00:00:01.000Z"),
 		})
@@ -455,6 +460,8 @@ describe("benchmarkIngest", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T00:00:00.000Z"),
 			completedAt: new Date("2026-04-09T00:00:01.000Z"),
 		})
@@ -522,6 +529,8 @@ describe("scenario benchmark ingestion", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T00:00:00.000Z"),
 			completedAt: new Date("2026-04-09T00:00:01.000Z"),
 		})
@@ -600,6 +609,8 @@ describe("scenario benchmark ingestion", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 1,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T00:00:00.000Z"),
 			completedAt: new Date("2026-04-09T00:00:01.000Z"),
 		})
@@ -665,6 +676,8 @@ describe("scenario benchmark ingestion", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T00:00:00.000Z"),
 			completedAt: new Date("2026-04-09T00:00:01.000Z"),
 		})
@@ -674,6 +687,11 @@ describe("scenario benchmark ingestion", () => {
 			close: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
 		const cleanupBenchmarkScenarioData = vi.fn(async () => {})
+		const settleBenchmarkScenarioManager = vi.fn(async () => {
+			throw new Error(
+				"benchmark events search convergence timed out: indexed=0/2 agentId=benchmark-scenario-agent",
+			)
+		})
 		const manager = {
 			agentId: "benchmark-root-agent",
 			db: {
@@ -685,11 +703,7 @@ describe("scenario benchmark ingestion", () => {
 			},
 			prefix: "test_",
 			createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
-			settleBenchmarkScenarioManager: vi.fn(async () => {
-				throw new Error(
-					"benchmark events search convergence timed out: indexed=0/2 agentId=benchmark-scenario-agent",
-				)
-			}),
+			settleBenchmarkScenarioManager,
 			cleanupBenchmarkScenarioData,
 		} as unknown as MongoDBMemoryManager
 
@@ -725,7 +739,7 @@ describe("scenario benchmark ingestion", () => {
 		).rejects.toThrow(
 			"benchmark events search convergence timed out: indexed=0/2 agentId=benchmark-scenario-agent",
 		)
-		expect(manager.settleBenchmarkScenarioManager).toHaveBeenCalled()
+		expect(settleBenchmarkScenarioManager).toHaveBeenCalled()
 		expect(cleanupBenchmarkScenarioData).toHaveBeenCalledWith(
 			"benchmark-scenario-agent",
 		)
@@ -740,6 +754,8 @@ describe("scenario benchmark ingestion", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T00:00:00.000Z"),
 			completedAt: new Date("2026-04-09T00:00:01.000Z"),
 		})
@@ -974,7 +990,7 @@ describe("benchmark event search convergence", () => {
 				scopeRef: "user:bench-17",
 				sessionId: "bench-17",
 				label: "events",
-				collection: { find, aggregate },
+				collection: { find, aggregate } as unknown as Collection<Document>,
 				collectionName: "test_events",
 				indexName: "test_events_text",
 				textPath: "body",
@@ -2005,7 +2021,7 @@ describe("benchmark event search convergence", () => {
 				await ops.waitForBenchmarkSearchCollectionConvergence({
 					agentId: "agent-b4-empty-optional",
 					label: "session_chunks",
-					collection: { find },
+					collection: { find } as unknown as Collection<Document>,
 					collectionName: "test_session_chunks",
 					indexName: "test_session_chunks_text",
 					textPath: "text",

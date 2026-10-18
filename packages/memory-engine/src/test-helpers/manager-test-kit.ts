@@ -18,14 +18,7 @@ export function captureManagerPrototype(
 	managerPrototype = managerClass.prototype
 }
 
-export const mocked = <T>(value: T): T => {
-	const maybeMocked = (
-		vi as typeof vi & {
-			mocked?: <U>(item: U) => U
-		}
-	).mocked
-	return maybeMocked?.(value) ?? value
-}
+export const mocked = <T>(value: T) => vi.mocked(value)
 
 export function testOperationRunContext(runId: string) {
 	return createOperationRunContext({

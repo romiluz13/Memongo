@@ -404,12 +404,7 @@ describe("officialModelDifferenceDisclosure (C3)", () => {
 
 describe("customJudgeDifferenceDisclosure (custom-judge integration)", () => {
 	it("returns null when the run has no customJudge QA summary", () => {
-		expect(
-			customJudgeDifferenceDisclosure({
-				answerModel: "answer-model-x",
-				official: { protocol: "official-anscheck" },
-			}),
-		).toBeNull()
+		expect(customJudgeDifferenceDisclosure(officialAnswerQuality)).toBeNull()
 	})
 
 	it("names both models and never claims official provenance", () => {
