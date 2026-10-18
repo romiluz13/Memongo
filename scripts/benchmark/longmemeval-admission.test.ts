@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { BenchmarkAdapterRejectedError } from "./benchmark-adapter-diagnostics.js"
+import { describeIngestFailures } from "./benchmark-answer-quality.js"
 import {
 	type Question,
 	question,
 	useLongMemEvalLoader,
 	ZERO_TOTALS,
 } from "./longmemeval-admission.fixture.js"
+import { countBenchmarkRejections } from "./mongodb-benchmark-dataset.js"
 
 const { load, loadText, failure } = useLongMemEvalLoader()
 
@@ -313,6 +315,72 @@ describe("LongMemEval question-level admission (OPEN-5, 6, 8, 9; decision 2)", (
 			],
 			totals: { ...ZERO_TOTALS, rejectedSessions: 2, rejectedQuestions: 1 },
 		})
+	})
+
+	it("rejects a question whose sessions are all emptied only by informational skips, keeping the skips (OPEN-5, 1206 Q4)", async () => {
+		const dataset = await load([
+			question("a"),
+			question("b", {
+				haystack_session_ids: ["b-s1", "b-s2"],
+				haystack_sessions: [
+					[{ role: "user", content: " " }],
+					[{ role: "assistant", content: "" }],
+				],
+				answer_session_ids: [],
+			}),
+		])
+		expect(dataset.scenarios?.map((scenario) => scenario.scenarioId)).toEqual([
+			"a",
+		])
+		expect(dataset.adapterDiagnostics).toEqual({
+			entries: [
+				{
+					format: "longmemeval",
+					questionIndex: 1,
+					reason: "question-no-sessions",
+				},
+				{
+					format: "longmemeval",
+					questionIndex: 1,
+					sessionIndex: 0,
+					reason: "session-emptied",
+				},
+				{
+					format: "longmemeval",
+					questionIndex: 1,
+					sessionIndex: 0,
+					turnIndex: 0,
+					reason: "skipped-empty-turn",
+				},
+				{
+					format: "longmemeval",
+					questionIndex: 1,
+					sessionIndex: 1,
+					reason: "session-emptied",
+				},
+				{
+					format: "longmemeval",
+					questionIndex: 1,
+					sessionIndex: 1,
+					turnIndex: 0,
+					reason: "skipped-empty-turn",
+				},
+			],
+			totals: {
+				...ZERO_TOTALS,
+				emptiedSessions: 2,
+				rejectedQuestions: 1,
+				informationalSkips: 2,
+			},
+		})
+		const counts = countBenchmarkRejections(
+			dataset.rejections,
+			dataset.adapterDiagnostics,
+		)
+		expect(counts).toEqual({ rejectedTurns: 0, rejectedConversations: 1 })
+		expect(describeIngestFailures({ ...counts, failedLines: 0 })).toEqual([
+			"1 dataset conversations were rejected",
+		])
 	})
 
 	it("keeps a question with missing evidence and an abstention with an empty list (OPEN-8 keep, decision 2)", async () => {

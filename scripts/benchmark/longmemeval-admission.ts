@@ -232,7 +232,9 @@ function admitQuestion(
 			: lostEvidenceTurn ||
 					evidence.some((source) => !admittedBySource.has(source))
 				? "question-evidence-unresolved"
-				: null
+				: conversations.length === 0
+					? "question-no-sessions"
+					: null
 	if (derived)
 		return {
 			entries: [
