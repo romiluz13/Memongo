@@ -61,6 +61,7 @@ jobs:
   e2e:
     name: E2E against real MongoDB (tier A)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       mongodb:
         image: mongodb/mongodb-atlas-local:preview
@@ -82,6 +83,13 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+
+      # Node 22 matches the API image (apps/api/Dockerfile), which runs the
+      # built apps/api/dist/server.js that the proof-pack step starts.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -113,3 +121,23 @@ jobs:
           --require-suite mongodb-projection-repair.e2e.test.ts
           --require-suite mongodb-temporal-validity.e2e.test.ts
           --require-suite mongodb-memory-jobs.e2e.test.ts
+
+      # The api-contract lane: the unweakened 15-check proof-pack against this
+      # PR's built API on loopback, with its own database, agent and API key
+      # and no provider key. A startup failure, a missing check or a failed
+      # check fails the job.
+      - name: API contract proof-pack (15 checks)
+        id: proof_pack
+        timeout-minutes: 10
+        env:
+          MEMONGO_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          PROOF_PACK_OUT_DIR: ${{ runner.temp }}/proof-pack
+        run: bash scripts/ci/run-proof-pack.sh
+
+      - name: Upload proof-pack evidence (API log, PID, verdict)
+        if: failure() && steps.proof_pack.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-pack-evidence
+          path: ${{ runner.temp }}/proof-pack
+          if-no-files-found: error
