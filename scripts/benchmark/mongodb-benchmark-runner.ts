@@ -1423,7 +1423,7 @@ export function evaluateRankingCase(params: {
 		eligible: boolean
 		expectedSessionIds: string[]
 		expectedTurnIds: string[]
-		ineligibleReason?: "abstention" | "no-user-answer-target"
+		ineligibleReason?: "abstention" | "no-user-answer-target" | "no-evidence"
 	}
 	questionType?: string
 	abstention?: boolean

@@ -378,9 +378,9 @@ describe("LongMemEval question-level admission (OPEN-5, 6, 8, 9; decision 2)", (
 			dataset.adapterDiagnostics,
 		)
 		expect(counts).toEqual({ rejectedTurns: 0, rejectedConversations: 1 })
-		expect(describeIngestFailures({ ...counts, failedLines: 0 })).toEqual([
-			"1 dataset conversations were rejected",
-		])
+		expect(
+			describeIngestFailures({ ...counts, failedLines: 0, failedTurns: 0 }),
+		).toEqual(["1 dataset conversations were rejected"])
 	})
 
 	it("keeps a question with missing evidence and an abstention with an empty list (OPEN-8 keep, decision 2)", async () => {
@@ -400,6 +400,29 @@ describe("LongMemEval question-level admission (OPEN-5, 6, 8, 9; decision 2)", (
 			expectedTurnIds: [],
 			ineligibleReason: "abstention",
 		})
+	})
+
+	it.each([
+		["an empty list", []],
+		["the field missing", undefined],
+	])("labels a non-abstention question with %s as no-evidence, keeping its gold (OPEN-8, 1206 Q4)", async (_label, evidence) => {
+		const dataset = await load([
+			question("a", { answer_session_ids: evidence }),
+			question("b_abs", { answer_session_ids: [] }),
+		])
+		expect(dataset.adapterDiagnostics?.entries).toEqual([])
+		const [noEvidence, abstention] =
+			dataset.scenarios?.map((scenario) => scenario.evaluations[0]) ?? []
+		expect(noEvidence?.answer).toBe("answer a")
+		expect(noEvidence?.abstention).toBe(false)
+		expect(noEvidence?.officialRetrieval).toEqual({
+			evaluator: "longmemeval-main-run",
+			eligible: false,
+			expectedSessionIds: [],
+			expectedTurnIds: [],
+			ineligibleReason: "no-evidence",
+		})
+		expect(abstention?.officialRetrieval?.ineligibleReason).toBe("abstention")
 	})
 
 	it("keeps release question_type handling (OPEN-7 A)", async () => {

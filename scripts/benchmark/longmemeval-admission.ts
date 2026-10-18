@@ -254,7 +254,9 @@ function admitQuestion(
 				? "abstention"
 				: undefined
 	const abstention = questionId.endsWith("_abs")
-	const officialEligible = !abstention && officialExpectedTurnIds.length > 0
+	const noEvidence = !abstention && evidence.length === 0
+	const officialEligible =
+		!abstention && !noEvidence && officialExpectedTurnIds.length > 0
 	const evaluation: BenchmarkEvaluationCase = {
 		caseId: questionId,
 		query: question,
@@ -269,7 +271,9 @@ function admitQuestion(
 				? {
 						ineligibleReason: abstention
 							? ("abstention" as const)
-							: ("no-user-answer-target" as const),
+							: noEvidence
+								? ("no-evidence" as const)
+								: ("no-user-answer-target" as const),
 					}
 				: {}),
 		},

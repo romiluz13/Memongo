@@ -1130,7 +1130,7 @@ export type MemoryBenchmarkEvaluationCase = {
 		eligible: boolean
 		expectedSessionIds: string[]
 		expectedTurnIds: string[]
-		ineligibleReason?: "abstention" | "no-user-answer-target"
+		ineligibleReason?: "abstention" | "no-user-answer-target" | "no-evidence"
 	}
 	expectedDialogIds?: string[]
 	answer?: string
