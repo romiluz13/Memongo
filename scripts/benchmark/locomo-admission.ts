@@ -22,6 +22,7 @@ function trimmedString(value: unknown): string {
 	return typeof value === "string" ? value.trim() : ""
 }
 
+/** Decision 1, as in the LongMemEval adapter. */
 function readGold(value: unknown): { answer: string; numeric: boolean } | null {
 	if (typeof value === "string" && value.trim().length > 0)
 		return { answer: value, numeric: false }
@@ -298,8 +299,8 @@ function admitSample(value: unknown, sampleIndex: number): SampleAdmission {
 			query,
 			expectedSessionIds: Array.from(
 				new Set(
-					expectedDialogIds.map(
-						(dialogId) => dialogSessions.get(dialogId) as string,
+					expectedDialogIds.flatMap(
+						(dialogId) => dialogSessions.get(dialogId) ?? [],
 					),
 				),
 			),
