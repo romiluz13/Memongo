@@ -1,6 +1,11 @@
 import { MemongoClient } from "@memongo/client"
 import proofPackBaseline from "./proof-pack-baseline.js"
 import { writeProofArtifact } from "./proof-artifacts.js"
+import {
+	evaluateBarrierWrite,
+	evaluateSearch,
+	evaluateSearchDetailed,
+} from "./proof-pack-checks.js"
 import { exitCodeForVerdict, requiredChecksPassed } from "./proof-verdict.js"
 
 type CheckResult = {
@@ -52,6 +57,13 @@ function fail(name: string, details: string): CheckResult {
 	return { name, ok: false, details }
 }
 
+function named(
+	name: string,
+	verdict: { ok: boolean; details: string },
+): CheckResult {
+	return { name, ...verdict }
+}
+
 function summarizeResults(results: CheckResult[]) {
 	const passed = results.filter((result) => result.ok).length
 	const failed = results.length - passed
@@ -94,25 +106,39 @@ async function main() {
 			sessionId: sessionScope,
 			role: "user",
 			body: `${marker} user prefers concise updates and deploys on Fridays`,
+			searchBarrier: {},
 		})
 		checks.push(
-			writeEvent.ok
-				? pass("writeEvent", `eventId=${writeEvent.eventId}`)
-				: fail("writeEvent", "write-event did not return ok"),
+			named(
+				"writeEvent",
+				evaluateBarrierWrite(
+					writeEvent.ok
+						? { ok: true, details: `eventId=${writeEvent.eventId}` }
+						: { ok: false, details: "write-event did not return ok" },
+					writeEvent.searchBarrier,
+				),
+			),
 		)
 
 		const add = await client.add({
 			agentId,
 			sessionId: sessionScope,
 			content: `${marker} knowledge-base sync runs nightly at 02:00 UTC`,
+			searchBarrier: {},
 		})
 		checks.push(
-			add.ok
-				? pass("add", `eventId=${add.eventId}`)
-				: fail("add", "add did not return ok"),
+			named(
+				"add",
+				evaluateBarrierWrite(
+					add.ok
+						? { ok: true, details: `eventId=${add.eventId}` }
+						: { ok: false, details: "add did not return ok" },
+					add.searchBarrier,
+				),
+			),
 		)
 
-		const structured = (await client.writeStructured({
+		const structured = await client.writeStructured({
 			agentId,
 			entry: {
 				type: "preference",
@@ -122,17 +148,24 @@ async function main() {
 				sessionId: sessionScope,
 				scope: "agent",
 			},
-		})) as { upserted?: boolean; id?: string }
+			searchBarrier: {},
+		})
 		checks.push(
-			structured.id
-				? pass("writeStructured", `id=${structured.id}`)
-				: fail(
-						"writeStructured",
-						`unexpected payload: ${JSON.stringify(structured)}`,
-					),
+			named(
+				"writeStructured",
+				evaluateBarrierWrite(
+					structured.id
+						? { ok: true, details: `id=${structured.id}` }
+						: {
+								ok: false,
+								details: `unexpected payload: ${JSON.stringify(structured)}`,
+							},
+					structured.searchBarrier,
+				),
+			),
 		)
 
-		const procedure = (await client.writeProcedure({
+		const procedure = await client.writeProcedure({
 			agentId,
 			entry: {
 				procedureId: `${marker}:deploy`,
@@ -147,39 +180,40 @@ async function main() {
 				sessionId: sessionScope,
 				scope: "agent",
 			},
-		})) as { upserted?: boolean; id?: string }
+			searchBarrier: {},
+		})
 		checks.push(
-			procedure.id
-				? pass("writeProcedure", `id=${procedure.id}`)
-				: fail(
-						"writeProcedure",
-						`unexpected payload: ${JSON.stringify(procedure)}`,
-					),
+			named(
+				"writeProcedure",
+				evaluateBarrierWrite(
+					procedure.id
+						? { ok: true, details: `id=${procedure.id}` }
+						: {
+								ok: false,
+								details: `unexpected payload: ${JSON.stringify(procedure)}`,
+							},
+					procedure.searchBarrier,
+				),
+			),
 		)
 
-		const search = (await client.search({
+		// Decision 15: the agent partition the structured and procedure
+		// writes went to, with no sessionKey and no hierarchical widening.
+		const search = await client.search({
 			agentId,
 			query: "concise deploy status reports",
 			limit: 5,
-			sessionKey: sessionScope,
-		})) as {
-			results?: Array<{ path?: string; snippet?: string; score?: number }>
-		}
-		const topResult = search.results?.[0]
-		// Any result is not proof: the run's planted marker must come back.
-		const markerFound = (search.results ?? []).some((result) =>
-			`${result.path ?? ""}\n${result.snippet ?? ""}`.includes(marker),
-		)
+			scope: "agent",
+			scopeRef: agentScopeRef,
+		})
 		checks.push(
-			markerFound
-				? pass(
-						"search",
-						`results=${search.results?.length ?? 0}, top=${topResult?.path ?? "unknown"}`,
-					)
-				: fail(
-						"search",
-						`planted marker not returned (results=${search.results?.length ?? 0})`,
-					),
+			named(
+				"search",
+				evaluateSearch(search.results ?? [], {
+					marker,
+					scopeRef: agentScopeRef,
+				}),
+			),
 		)
 
 		const detailed = await client.searchDetailed({
@@ -190,15 +224,17 @@ async function main() {
 			sourcePreference: ["structured", "procedural"],
 			needExactEvidence: true,
 			returnPlan: true,
+			// Decision 15: exact evidence is asked of the planted session turns.
+			conversationScope: { sessionKey: sessionScope },
 		})
 		checks.push(
-			detailed.results.length > 0 &&
-				Array.isArray(detailed.metadata.pathsExecuted)
-				? pass(
-						"searchDetailed",
-						`paths=${detailed.metadata.pathsExecuted.join(",") || "none"}, evidence=${detailed.metadata.evidenceCoverage}`,
-					)
-				: fail("searchDetailed", "advanced search returned no evidence"),
+			named(
+				"searchDetailed",
+				evaluateSearchDetailed(detailed, {
+					marker,
+					plantedEventIds: [writeEvent.eventId, add.eventId],
+				}),
+			),
 		)
 
 		const activeSlate = await client.hydrateActiveSlate({
