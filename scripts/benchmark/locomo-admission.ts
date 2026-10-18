@@ -108,7 +108,9 @@ function admitTurn(
 /**
  * Decision 2 session walk: every `session_<digits>` key is inspected. Canonical
  * keys 1..M are admitted, rejected or reported as a gap; non-canonical keys are
- * `session-invalid-key` (OPEN-15 A). Entries come in session order.
+ * `session-invalid-key` (OPEN-15 A). Canonical entries come in session order;
+ * invalid-key entries follow them and carry no sessionIndex, because such a key
+ * has no position in the 1..M walk (lead ruling on 1210 decision 3).
  */
 function walkSessions(params: {
 	conversation: SourceRecord
@@ -124,17 +126,14 @@ function walkSessions(params: {
 } {
 	const { conversation, sampleId, sampleIndex } = params
 	const canonical = new Set<number>()
-	const invalidKeyIndices: number[] = []
+	let invalidKeys = 0
 	for (const key of Object.keys(conversation)) {
 		const digits = SESSION_KEY.exec(key)?.[1]
 		if (digits === undefined) continue
-		if (digits.startsWith("0")) invalidKeyIndices.push(Number(digits) - 1)
+		if (digits.startsWith("0")) invalidKeys++
 		else canonical.add(Number(digits))
 	}
-	const sessions: Array<{
-		sessionIndex: number
-		entries: BenchmarkAdapterDiagnostic[]
-	}> = []
+	const entries: BenchmarkAdapterDiagnostic[] = []
 	const conversations: MemoryBenchmarkConversation[] = []
 	const dialogSessions = new Map<string, string>()
 	const at = (sessionIndex: number) => ({
@@ -147,14 +146,9 @@ function walkSessions(params: {
 		const sessionIndex = index - 1
 		const session = conversation[sessionKey]
 		if (!canonical.has(index) || !Array.isArray(session)) {
-			sessions.push({
-				sessionIndex,
-				entries: [
-					{
-						...at(sessionIndex),
-						reason: canonical.has(index) ? "session-not-array" : "session-gap",
-					},
-				],
+			entries.push({
+				...at(sessionIndex),
+				reason: canonical.has(index) ? "session-not-array" : "session-gap",
 			})
 			continue
 		}
@@ -193,25 +187,20 @@ function walkSessions(params: {
 				},
 			})
 		}
-		sessions.push({
-			sessionIndex,
-			entries:
-				turns.length === 0
-					? [{ ...at(sessionIndex), reason: "session-emptied" }, ...turnEntries]
-					: turnEntries,
-		})
+		if (turns.length === 0)
+			entries.push({ ...at(sessionIndex), reason: "session-emptied" })
+		entries.push(...turnEntries)
 		if (turns.length > 0)
 			conversations.push({ conversationId: sampleId, sessionId, turns })
 	}
-	for (const sessionIndex of invalidKeyIndices)
-		sessions.push({
-			sessionIndex,
-			entries: [{ ...at(sessionIndex), reason: "session-invalid-key" }],
+	for (let count = 0; count < invalidKeys; count++)
+		entries.push({
+			format: "locomo",
+			sampleIndex,
+			reason: "session-invalid-key",
 		})
 	return {
-		entries: sessions
-			.sort((left, right) => left.sessionIndex - right.sessionIndex)
-			.flatMap((session) => session.entries),
+		entries,
 		conversations,
 		dialogSessions,
 	}

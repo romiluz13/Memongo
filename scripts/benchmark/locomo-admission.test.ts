@@ -195,23 +195,34 @@ describe("LoCoMo session walk (table 3.2, decision 2, OPEN-15)", () => {
 		])
 	})
 
-	it("rejects non-canonical session keys and ignores a date with no session", async () => {
+	it("rejects non-canonical session keys without a session coordinate and ignores a date with no session", async () => {
 		const dataset = await load([
 			sample("s", {
 				conversation: {
 					session_0: [turn("Bob", "D0:1", "zero")],
 					session_01: [turn("Bob", "D01:1", "leading zero")],
+					session_2: { not: "an array" },
 					session_9_date_time: "9:00 am on 9 May, 2023",
 				},
 			}),
 		])
+		const invalidKey = {
+			format: "locomo",
+			sampleIndex: 0,
+			reason: "session-invalid-key",
+		}
 		expect(dataset.adapterDiagnostics?.entries).toEqual([
-			at(-1, "session-invalid-key"),
-			at(0, "session-invalid-key"),
+			at(1, "session-not-array"),
+			invalidKey,
+			invalidKey,
 		])
+		for (const entry of dataset.adapterDiagnostics?.entries ?? []) {
+			if (entry.reason === "session-invalid-key")
+				expect(Object.hasOwn(entry, "sessionIndex")).toBe(false)
+		}
 		expect(dataset.adapterDiagnostics?.totals).toEqual({
 			...ZERO_TOTALS,
-			rejectedSessions: 2,
+			rejectedSessions: 3,
 		})
 		expect(dataset.conversations.map((c) => c.sessionId)).toEqual([
 			"s::session_1",
