@@ -10,6 +10,10 @@ import type {
 	BenchmarkScenarioCleanupOutcome,
 	BenchmarkTenantStorageMeasurement,
 } from "../../packages/memory-engine/src/types.js"
+import {
+	ADAPTER_DIAGNOSTIC_TOTAL_KEYS,
+	type BenchmarkAdapterDiagnosticTotals,
+} from "./benchmark-adapter-diagnostics.js"
 import { hasCompleteConfigurationCoverage } from "./benchmark-run-configuration-schema.js"
 import type { BenchmarkCaseExecution } from "./mongodb-benchmark-runner.js"
 
@@ -42,6 +46,11 @@ export type BenchmarkCheckpoint = {
 	/** B01:C07 loader rejections; absent on checkpoints written before them, read as unknown. */
 	rejectedTurns?: number
 	rejectedConversations?: number
+	/**
+	 * #94: official-adapter totals, present only when the dataset has adapter
+	 * diagnostics; absent reads as zero only for a dataset without them.
+	 */
+	adapterDiagnosticsTotals?: BenchmarkAdapterDiagnosticTotals
 	runId: string
 	datasetSha256: string
 	configurationHash: string
@@ -154,6 +163,19 @@ function assertCheckpointShape(
 		) {
 			throw new Error(`benchmark checkpoint ${field} count is invalid`)
 		}
+	}
+	const totals = value.adapterDiagnosticsTotals
+	if (
+		totals !== undefined &&
+		(!isRecord(totals) ||
+			Object.keys(totals).sort().join() !==
+				[...ADAPTER_DIAGNOSTIC_TOTAL_KEYS].sort().join() ||
+			!ADAPTER_DIAGNOSTIC_TOTAL_KEYS.every(
+				(key) =>
+					Number.isSafeInteger(totals[key]) && (totals[key] as number) >= 0,
+			))
+	) {
+		throw new Error("benchmark checkpoint adapterDiagnosticsTotals are invalid")
 	}
 	if (
 		!Number.isInteger(value.totalScenarios) ||

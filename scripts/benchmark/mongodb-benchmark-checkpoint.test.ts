@@ -312,3 +312,46 @@ describe("checkpoint rejection counter admission", () => {
 		}
 	})
 })
+
+describe("checkpoint adapter diagnostics totals admission (#94)", () => {
+	const totals = {
+		rejectedTurns: 1,
+		rejectedSessions: 0,
+		emptiedSessions: 0,
+		rejectedQuestions: 2,
+		rejectedQaItems: 0,
+		informationalSkips: 12,
+	}
+	const read = async (adapterDiagnosticsTotals: unknown) => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-adapter-"))
+		try {
+			const file = path.join(dir, "checkpoint.json")
+			await writeFile(
+				file,
+				JSON.stringify({ ...checkpoint(), adapterDiagnosticsTotals }),
+			)
+			return await readBenchmarkCheckpoint(file, {
+				datasetSha256: "a".repeat(64),
+				configurationHash: CONFIGURATION_HASH,
+				executableDigest: "d".repeat(64),
+				scenarioIds: ["scenario-1", "scenario-2"],
+			})
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	}
+
+	it("restores exactly the six totals", async () => {
+		expect((await read(totals)).adapterDiagnosticsTotals).toEqual(totals)
+	})
+
+	it.each([
+		["not an object", 3],
+		["missing a key", { ...totals, informationalSkips: undefined }],
+		["carrying an extra key", { ...totals, rejectedDialogs: 0 }],
+		["negative", { ...totals, rejectedTurns: -1 }],
+		["fractional", { ...totals, rejectedQuestions: 0.5 }],
+	])("rejects totals that are %s", async (_label, value) => {
+		await expect(read(value)).rejects.toThrow("adapterDiagnosticsTotals")
+	})
+})

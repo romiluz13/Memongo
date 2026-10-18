@@ -5,9 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-manager.js"
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import { testOperationRunContext } from "../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
-import type { MemoryBenchmarkDataset } from "../../packages/memory-engine/src/types.js"
-import { runBenchmarkJudgedAnswers } from "./benchmark-answer-quality.js"
+import type { BenchmarkAdapterDiagnostics } from "./benchmark-adapter-diagnostics.js"
+import { readB2RunIdentity } from "./b2-join-eligibility.js"
+import {
+	describeIngestFailures,
+	runBenchmarkJudgedAnswers,
+} from "./benchmark-answer-quality.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
+import {
+	type BenchmarkAdmittedDataset,
+	loadBenchmarkDataset,
+} from "./mongodb-benchmark-dataset.js"
 import {
 	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
 	MongoDBManagerBenchmarkOps,
@@ -222,6 +230,7 @@ async function harness(params: {
 	scenarioIds?: string[]
 	cleanupThrows?: boolean
 	failedTurns?: number
+	adapterDiagnostics?: BenchmarkAdapterDiagnostics
 }) {
 	const { ingestBenchmarkConversations } = await import(
 		"./mongodb-benchmark-harness.js"
@@ -286,11 +295,14 @@ async function harness(params: {
 	const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-cleanup-"))
 	dirs.push(dir)
 	const checkpointPath = path.join(dir, "checkpoint.json")
-	const dataset: MemoryBenchmarkDataset = {
+	const dataset: BenchmarkAdmittedDataset = {
 		name: "cleanup",
 		datasetKind: "generic",
 		conversations: [],
 		scenarios: (params.scenarioIds ?? ["scenario-1"]).map(scenario),
+		...(params.adapterDiagnostics
+			? { adapterDiagnostics: params.adapterDiagnostics }
+			: {}),
 	}
 	const run = (resumeCheckpoint?: BenchmarkCheckpoint) =>
 		ops.runScenarioBenchmarkDataset({
@@ -309,7 +321,7 @@ async function harness(params: {
 		})
 	const checkpoint = async () =>
 		JSON.parse(await readFile(checkpointPath, "utf8")) as BenchmarkCheckpoint
-	return { run, deletes, primary, checkpoint }
+	return { run, deletes, primary, checkpoint, checkpointPath }
 }
 
 describe("scenario cleanup evidence reaches the run result and checkpoint", () => {
@@ -555,6 +567,181 @@ describe("B08 measurement evidence through the real scenario loop", () => {
 		const clean = await harness({})
 		await clean.run()
 		expect(qaIngest()).toMatchObject({ failedTurns: 0, failedLines: 0 })
+	})
+})
+
+describe("#94 adapter rejections keep a run incomplete through checkpoints and resume", () => {
+	const completeness = (
+		result: Awaited<ReturnType<Harness["run"]>>["result"],
+	) =>
+		attachBenchmarkOperationsReport(result).benchmarkReport?.releaseGates.find(
+			(gate) => gate.gate === "execution-completeness",
+		)
+	const qaIngest = () =>
+		vi.mocked(runBenchmarkJudgedAnswers).mock.calls.at(-1)?.[0].ingest
+
+	/** Real loader diagnostics for one valid question beside one broken sibling. */
+	async function diagnosticsFor(broken: Record<string, unknown>) {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-adapter-"))
+		dirs.push(dir)
+		const question = (id: string) => ({
+			question_id: id,
+			question: "what?",
+			answer: "gold",
+			haystack_session_ids: [`${id}-s`],
+			haystack_sessions: [
+				[{ role: "user", content: "fact", has_answer: true }],
+			],
+			answer_session_ids: [`${id}-s`],
+		})
+		const datasetPath = path.join(dir, "longmemeval.json")
+		await writeFile(
+			datasetPath,
+			JSON.stringify([question("kept"), { ...question("broken"), ...broken }]),
+		)
+		const { adapterDiagnostics } = await loadBenchmarkDataset(datasetPath)
+		if (!adapterDiagnostics) throw new Error("expected adapter diagnostics")
+		return adapterDiagnostics
+	}
+
+	it.each([
+		[
+			"a dropped QA item",
+			{ answer: null },
+			"1 dataset conversations were rejected",
+		],
+		[
+			"a malformed nested turn",
+			{
+				haystack_sessions: [
+					[{ role: "user", content: "fact", has_answer: true }, "bad turn"],
+				],
+			},
+			"1 dataset turns were rejected",
+		],
+	])("reports %s as incomplete evidence, also after resume", async (_label, broken, evidence) => {
+		const adapterDiagnostics = await diagnosticsFor(broken)
+		const h = await harness({ adapterDiagnostics })
+		const { result } = await h.run()
+		expect(completeness(result)).toMatchObject({
+			status: "failed",
+			evidence: expect.stringContaining(evidence),
+		})
+		expect(describeIngestFailures(qaIngest())).toContain(evidence)
+		const stored = await h.checkpoint()
+		expect(stored.adapterDiagnosticsTotals).toEqual(adapterDiagnostics.totals)
+		expect(
+			(stored.rejectedTurns ?? 0) + (stored.rejectedConversations ?? 0),
+		).toBe(1)
+		expect(
+			(await readB2RunIdentity(h.checkpointPath)).checkpointInvalid,
+		).toContain("ingest completeness")
+
+		const resumed = await harness({ adapterDiagnostics })
+		const replay = await resumed.run(stored)
+		expect(completeness(replay.result)).toMatchObject({
+			status: "failed",
+			evidence: expect.stringContaining(evidence),
+		})
+		expect(describeIngestFailures(qaIngest())).toContain(evidence)
+	})
+
+	it("keeps informational skips complete and records their totals", async () => {
+		const adapterDiagnostics: BenchmarkAdapterDiagnostics = {
+			entries: [
+				{
+					format: "longmemeval",
+					questionIndex: 0,
+					sessionIndex: 0,
+					turnIndex: 1,
+					reason: "skipped-empty-turn",
+				},
+			],
+			totals: {
+				rejectedTurns: 0,
+				rejectedSessions: 0,
+				emptiedSessions: 0,
+				rejectedQuestions: 0,
+				rejectedQaItems: 0,
+				informationalSkips: 1,
+			},
+		}
+		const h = await harness({ adapterDiagnostics })
+		const { result } = await h.run()
+		expect(completeness(result)?.status).toBe("passed")
+		const stored = await h.checkpoint()
+		expect(stored).toMatchObject({
+			rejectedTurns: 0,
+			rejectedConversations: 0,
+			adapterDiagnosticsTotals: adapterDiagnostics.totals,
+		})
+		const resumed = await harness({ adapterDiagnostics })
+		expect(completeness((await resumed.run(stored)).result)?.status).toBe(
+			"passed",
+		)
+	})
+
+	it("writes no adapter totals for a dataset without adapter diagnostics", async () => {
+		const h = await harness({})
+		await h.run()
+		expect(
+			Object.hasOwn(await h.checkpoint(), "adapterDiagnosticsTotals"),
+		).toBe(false)
+	})
+
+	describe("contradictory counts fail resume", () => {
+		async function storedWith(
+			adapterDiagnostics?: BenchmarkAdapterDiagnostics,
+		) {
+			const h = await harness(adapterDiagnostics ? { adapterDiagnostics } : {})
+			await h.run()
+			return h.checkpoint()
+		}
+		const resumeFails = async (
+			stored: BenchmarkCheckpoint,
+			adapterDiagnostics?: BenchmarkAdapterDiagnostics,
+		) => {
+			const h = await harness(adapterDiagnostics ? { adapterDiagnostics } : {})
+			await expect(h.run(stored)).rejects.toThrow(
+				"benchmark checkpoint rejection counts do not match loaded dataset",
+			)
+		}
+
+		it("when the adapter totals differ", async () => {
+			const adapterDiagnostics = await diagnosticsFor({ answer: null })
+			const stored = await storedWith(adapterDiagnostics)
+			if (!stored.adapterDiagnosticsTotals) throw new Error("expected totals")
+			stored.adapterDiagnosticsTotals.rejectedQuestions = 0
+			stored.adapterDiagnosticsTotals.rejectedSessions = 1
+			await resumeFails(stored, adapterDiagnostics)
+		})
+
+		it("when the checkpoint lacks adapter totals but the dataset has diagnostics", async () => {
+			const adapterDiagnostics = await diagnosticsFor({ answer: null })
+			const stored = await storedWith(adapterDiagnostics)
+			delete stored.adapterDiagnosticsTotals
+			await resumeFails(stored, adapterDiagnostics)
+		})
+
+		it("when the checkpoint has adapter totals but the dataset has none", async () => {
+			const stored = await storedWith(await diagnosticsFor({ answer: null }))
+			await resumeFails(stored)
+		})
+
+		it("when the completeness counters differ", async () => {
+			const adapterDiagnostics = await diagnosticsFor({ answer: null })
+			const stored = await storedWith(adapterDiagnostics)
+			stored.rejectedConversations = 0
+			await resumeFails(stored, adapterDiagnostics)
+		})
+
+		it("but reads a missing field as zero when no adapter diagnostics exist", async () => {
+			const stored = await storedWith()
+			delete stored.adapterDiagnosticsTotals
+			const h = await harness({})
+			const { result } = await h.run(stored)
+			expect(completeness(result)?.status).toBe("passed")
+		})
 	})
 })
 

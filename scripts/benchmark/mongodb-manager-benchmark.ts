@@ -1,7 +1,9 @@
 import {
 	BenchmarkInputRejectedError,
+	type BenchmarkAdmittedDataset,
 	countBenchmarkRejections,
 } from "./mongodb-benchmark-dataset.js"
+import { sameAdapterDiagnosticTotals } from "./benchmark-adapter-diagnostics.js"
 import {
 	endOfBenchmarkUtcDay,
 	normalizeBenchmarkConversationTimestamps,
@@ -143,7 +145,6 @@ import type {
 	BenchmarkScenarioCleanupOutcome,
 	BenchmarkScenarioCleanupReport,
 	BenchmarkTenantStorageMeasurement,
-	MemoryBenchmarkDataset,
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkIngestResult,
@@ -846,7 +847,7 @@ export class MongoDBManagerBenchmarkOps {
 
 	async runScenarioBenchmarkDataset(params: {
 		datasetPath: string
-		dataset: MemoryBenchmarkDataset
+		dataset: BenchmarkAdmittedDataset
 		datasetVersion: string
 		maxResults: number
 		minScore: number
@@ -899,7 +900,11 @@ export class MongoDBManagerBenchmarkOps {
 			)
 		// Absent counts predate B01:C07; such checkpoints also carry an older
 		// executable digest, so they never pass resume identity.
-		const loadedRejections = countBenchmarkRejections(params.dataset.rejections)
+		const loadedRejections = countBenchmarkRejections(
+			params.dataset.rejections,
+			params.dataset.adapterDiagnostics,
+		)
+		const loadedAdapterTotals = params.dataset.adapterDiagnostics?.totals
 		if (
 			params.resumeCheckpoint &&
 			((params.resumeCheckpoint.rejectedTurns !== undefined &&
@@ -907,7 +912,14 @@ export class MongoDBManagerBenchmarkOps {
 					loadedRejections.rejectedTurns) ||
 				(params.resumeCheckpoint.rejectedConversations !== undefined &&
 					params.resumeCheckpoint.rejectedConversations !==
-						loadedRejections.rejectedConversations))
+						loadedRejections.rejectedConversations) ||
+				// #94: a missing adapter field reads as zero only when the dataset has no adapter diagnostics.
+				(params.resumeCheckpoint.adapterDiagnosticsTotals === undefined
+					? loadedAdapterTotals !== undefined
+					: !sameAdapterDiagnosticTotals(
+							params.resumeCheckpoint.adapterDiagnosticsTotals,
+							loadedAdapterTotals,
+						)))
 		)
 			throw new Error(
 				"benchmark checkpoint rejection counts do not match loaded dataset",
@@ -954,7 +966,7 @@ export class MongoDBManagerBenchmarkOps {
 			skippedConversations: 0,
 			failedLines: params.dataset.failedLines ?? 0,
 			failedTurns: 0,
-			...countBenchmarkRejections(params.dataset.rejections),
+			...loadedRejections,
 		}
 		if (
 			params.publicationRun &&
@@ -1118,6 +1130,9 @@ export class MongoDBManagerBenchmarkOps {
 					failedLines: ingest.failedLines,
 					rejectedTurns: ingest.rejectedTurns,
 					rejectedConversations: ingest.rejectedConversations,
+					...(loadedAdapterTotals
+						? { adapterDiagnosticsTotals: loadedAdapterTotals }
+						: {}),
 					runId: params.runContext.runId,
 					datasetSha256: seedDatasetSha256,
 					configurationHash: params.runContext.configurationHash,
@@ -2112,6 +2127,9 @@ export class MongoDBManagerBenchmarkOps {
 					failedLines: ingest.failedLines,
 					rejectedTurns: ingest.rejectedTurns,
 					rejectedConversations: ingest.rejectedConversations,
+					...(loadedAdapterTotals
+						? { adapterDiagnosticsTotals: loadedAdapterTotals }
+						: {}),
 					runId: params.runContext.runId,
 					datasetSha256,
 					configurationHash: params.runContext.configurationHash,

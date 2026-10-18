@@ -14,6 +14,25 @@ export type BenchmarkAdapterDiagnosticTotals = {
 	informationalSkips: number
 }
 
+export const ADAPTER_DIAGNOSTIC_TOTAL_KEYS = [
+	"rejectedTurns",
+	"rejectedSessions",
+	"emptiedSessions",
+	"rejectedQuestions",
+	"rejectedQaItems",
+	"informationalSkips",
+] as const satisfies readonly (keyof BenchmarkAdapterDiagnosticTotals)[]
+
+/** Decision 7 resume rule: an absent side reads as zero totals. */
+export function sameAdapterDiagnosticTotals(
+	left: BenchmarkAdapterDiagnosticTotals | undefined,
+	right: BenchmarkAdapterDiagnosticTotals | undefined,
+): boolean {
+	return ADAPTER_DIAGNOSTIC_TOTAL_KEYS.every(
+		(key) => (left?.[key] ?? 0) === (right?.[key] ?? 0),
+	)
+}
+
 const REASON_TOTAL = {
 	"skipped-empty-turn": "informationalSkips",
 	"turn-not-object": "rejectedTurns",
