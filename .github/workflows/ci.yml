@@ -135,7 +135,8 @@ jobs:
           # Auto-embeddings are served by mongot inside the container, so the
           # Atlas Model key must be on the container for the proof-pack's
           # vector and hybrid lanes and its barrier probes.
-          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          # NEGATIVE CONTROL (d): an unset secret stands in for an empty key.
+          VOYAGE_API_KEY: ${{ secrets.NEGATIVE_CONTROL_UNSET_VOYAGE_KEY }}
         options: >-
           --health-cmd "/usr/local/bin/runner healthcheck"
           --health-interval 10s
@@ -148,7 +149,8 @@ jobs:
       # instead of skipping or going green on the fallback.
       - name: Assert Voyage key is armed for the proof-pack (no fallback)
         env:
-          VOYAGE_KEY_PRESENT: ${{ secrets.VOYAGE_API_KEY != '' }}
+          # NEGATIVE CONTROL (d): the guard reads the same unset secret.
+          VOYAGE_KEY_PRESENT: ${{ secrets.NEGATIVE_CONTROL_UNSET_VOYAGE_KEY != '' }}
         run: |
           if [[ "${VOYAGE_KEY_PRESENT}" != "true" ]]; then
             echo "::error::VOYAGE_API_KEY secret is empty: the MongoDB service cannot embed, so the proof-pack would run on the \$text fallback"
