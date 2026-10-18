@@ -9,6 +9,7 @@ import {
 	BenchmarkAdapterRejectedError,
 	countAdapterRejections,
 } from "./benchmark-adapter-diagnostics.js"
+import { admitLoCoMoDocument } from "./locomo-admission.js"
 import { admitLongMemEvalDocument } from "./longmemeval-admission.js"
 import path, { basename } from "node:path"
 import { readFile, realpath } from "node:fs/promises"
@@ -369,158 +370,6 @@ function recognizeOfficialFormat(
 	return longMemEval ? "longmemeval" : loCoMo ? "locomo" : null
 }
 
-function normalizeLoCoMoDataset(
-	entries: unknown[],
-	name: string,
-): MemoryBenchmarkDataset | null {
-	const scenarios: MemoryBenchmarkScenario[] = []
-	for (const entry of entries) {
-		if (!entry || typeof entry !== "object") {
-			return null
-		}
-		const record = entry as Record<string, unknown>
-		const sampleId =
-			typeof record.sample_id === "string" ? record.sample_id.trim() : ""
-		const conversation =
-			record.conversation && typeof record.conversation === "object"
-				? (record.conversation as Record<string, unknown>)
-				: null
-		const qa = Array.isArray(record.qa) ? record.qa : null
-		if (!sampleId || !conversation || !qa) {
-			return null
-		}
-		const speakerA =
-			typeof conversation.speaker_a === "string"
-				? conversation.speaker_a.trim()
-				: ""
-		const speakerB =
-			typeof conversation.speaker_b === "string"
-				? conversation.speaker_b.trim()
-				: ""
-		const dialogIdToSessionId = new Map<string, string>()
-		const conversations: MemoryBenchmarkConversation[] = []
-		for (let index = 1; ; index++) {
-			const sessionKey = `session_${index}`
-			const sessionValue = conversation[sessionKey]
-			if (!Array.isArray(sessionValue)) {
-				break
-			}
-			const sessionId = `${sampleId}::${sessionKey}`
-			const timestampKey = `${sessionKey}_date_time`
-			const timestamp =
-				typeof conversation[timestampKey] === "string" &&
-				String(conversation[timestampKey]).trim().length > 0
-					? String(conversation[timestampKey]).trim()
-					: undefined
-			const turns: MemoryBenchmarkTurn[] = []
-			for (const turn of sessionValue) {
-				if (!turn || typeof turn !== "object") {
-					continue
-				}
-				const dialog = turn as Record<string, unknown>
-				const speaker =
-					typeof dialog.speaker === "string" ? dialog.speaker.trim() : ""
-				const role =
-					speaker && speaker === speakerA
-						? "user"
-						: speaker && speaker === speakerB
-							? "assistant"
-							: "user"
-				const body = typeof dialog.text === "string" ? dialog.text.trim() : ""
-				if (!body) {
-					continue
-				}
-				const dialogId =
-					typeof dialog.dia_id === "string" ? dialog.dia_id.trim() : ""
-				if (dialogId) {
-					dialogIdToSessionId.set(dialogId, sessionId)
-				}
-				turns.push({
-					role,
-					body,
-					timestamp,
-					metadata: {
-						benchmarkDatasetKind: "locomo",
-						locomoDialogId: dialogId || undefined,
-						locomoSpeaker: speaker || undefined,
-					},
-				})
-			}
-			if (turns.length > 0) {
-				conversations.push({
-					conversationId: sampleId,
-					sessionId,
-					turns,
-				})
-			}
-		}
-
-		const evaluations: MemoryBenchmarkEvaluationCase[] = []
-		for (const [index, value] of qa.entries()) {
-			if (!value || typeof value !== "object") {
-				continue
-			}
-			const item = value as Record<string, unknown>
-			const query =
-				typeof item.question === "string" ? item.question.trim() : ""
-			if (!query) {
-				continue
-			}
-			const evidence = Array.isArray(item.evidence) ? item.evidence : []
-			const expectedDialogIds = Array.from(
-				new Set(
-					evidence
-						.map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-						.filter(Boolean),
-				),
-			)
-			const expectedSessionIds = Array.from(
-				new Set(
-					expectedDialogIds
-						.map((dialogRef) => {
-							const directMatch = dialogIdToSessionId.get(dialogRef)
-							if (directMatch) {
-								return directMatch
-							}
-							const dialogPrefix = dialogRef.split(":")[0] ?? dialogRef
-							return dialogIdToSessionId.get(dialogPrefix)
-						})
-						.filter((sessionId): sessionId is string => Boolean(sessionId)),
-				),
-			)
-			const questionType =
-				typeof item.category === "string" || typeof item.category === "number"
-					? `category-${String(item.category)}`
-					: undefined
-			const abstention = String(item.category) === "5"
-			evaluations.push({
-				caseId: `${sampleId}::qa_${index + 1}`,
-				query,
-				expectedSessionIds,
-				expectedDialogIds,
-				answer:
-					typeof item.answer === "string" && item.answer.trim().length > 0
-						? item.answer
-						: undefined,
-				questionType,
-				abstention,
-				metadata: {
-					benchmarkDatasetKind: "locomo",
-					locomoCategory: item.category,
-					evidence,
-				},
-			})
-		}
-
-		scenarios.push({
-			scenarioId: sampleId,
-			conversations,
-			evaluations,
-		})
-	}
-	return scenarios.length > 0 ? buildDataset(name, "locomo", scenarios) : null
-}
-
 function normalizeGenericJsonDataset(
 	parsed: unknown,
 	name: string,
@@ -534,10 +383,12 @@ function normalizeGenericJsonDataset(
 				adapterDiagnostics,
 			}
 		}
-		const loCoMo =
-			format === "locomo" ? normalizeLoCoMoDataset(parsed, name) : null
-		if (loCoMo) {
-			return loCoMo
+		if (format === "locomo") {
+			const { scenarios, adapterDiagnostics } = admitLoCoMoDocument(parsed)
+			return {
+				...buildDataset(name, "locomo", scenarios),
+				adapterDiagnostics,
+			}
 		}
 		const rejections: MemoryConversationImportRejection[] = []
 		const conversations = normalizeConversations(parsed, null, rejections)

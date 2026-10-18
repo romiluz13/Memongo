@@ -1126,7 +1126,7 @@ export type MemoryBenchmarkEvaluationCase = {
 	expectedSessionIds: string[]
 	expectedTurnIds?: string[]
 	officialRetrieval?: {
-		evaluator: "longmemeval-main-run"
+		evaluator: "longmemeval-main-run" | "locomo-evidence"
 		eligible: boolean
 		expectedSessionIds: string[]
 		expectedTurnIds: string[]
