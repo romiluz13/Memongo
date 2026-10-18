@@ -2,7 +2,8 @@
 # Runs the api-contract proof-pack against this checkout's built API
 # (apps/api/dist, the same entry the API image runs) on loopback, backed by
 # the job's MongoDB service. The run gets its own database, agent, session and
-# API key, and needs no provider key. Only the PID recorded here is stopped.
+# API key. The API process gets no provider key: embeddings come from the
+# MongoDB service. Only the PID recorded here is stopped.
 #
 # Inputs: MEMONGO_MONGODB_URI, PROOF_PACK_OUT_DIR. The API log, the recorded
 # PID and the proof-pack verdict JSON land in PROOF_PACK_OUT_DIR.
@@ -74,6 +75,15 @@ done
 
 kill -0 "${api_pid}" 2>/dev/null || fail "API pid ${api_pid} not alive before the proof-pack"
 echo "API pid ${api_pid} alive and serving /health before the proof-pack"
+
+# Zero fallbacks: the engine silently degrades search to $text when the
+# vector lane is missing, so a green run must come from the vector and
+# hybrid lanes the boot capability table reports.
+for lane in hybrid vector; do
+	grep -Eq "^  ${lane}: +available$" "${api_log}" ||
+		fail "API capability table does not report the ${lane} lane available; refusing a \$text-fallback run"
+done
+echo "API capability table reports the hybrid and vector lanes available"
 
 proof_status=0
 bun run proof-pack || proof_status=$?
