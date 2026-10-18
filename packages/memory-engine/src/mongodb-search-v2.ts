@@ -63,14 +63,30 @@ import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { mongoSearch, vectorSearch } from "./mongodb-search.js"
 import {
 	DEFAULT_USER_SEARCH_MAX_TIME_MS,
+	findCompletedSearchRetrieval,
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
+	isSearchBudgetAdmitted,
+	markSearchBudgetAdmitted,
+	recordCompletedSearchRetrieval,
 	resolveSearchBudgetLimits,
 	runWithSearchBudget,
+	runWithSearchReservation,
 	type SearchBudgetLimits,
+	type SearchBudgetReservation,
 	type SearchBudgetSnapshot,
+	type SearchWorkCost,
 	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
+import {
+	conversationEvidenceLaneCost,
+	kbLaneCost,
+	mongoSearchTierCost,
+	NO_SEARCH_COST,
+	structuredLaneCost,
+	vectorLeafCost,
+} from "./search-lane-cost.js"
+import { searchRetrievalKey } from "./search-equivalence.js"
 import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
 import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
 import type { AdmissionToken } from "./mongodb-write-fence.js"
@@ -93,6 +109,7 @@ import type {
 } from "./types.js"
 import {
 	isSearchFailureOutcome,
+	SearchBudgetDeniedError,
 	type SearchLane,
 	type SearchLaneOutcome,
 	SearchLaneUnavailableError,
@@ -342,7 +359,7 @@ export async function searchV2(
 			context.admission,
 		)
 	}
-	if (hasActiveSearchBudget()) {
+	const runInRequestLedger = async () => {
 		const value = await searchV2WithBudget(
 			db,
 			prefix,
@@ -359,6 +376,9 @@ export async function searchV2(
 					: {}),
 			},
 		}
+	}
+	if (hasActiveSearchBudget() && isSearchBudgetAdmitted()) {
+		return runInRequestLedger()
 	}
 	// WS-11 change 1+2 (09-report R5/U1): process-level admission control.
 	// Top-level entries only — the recursive backstop above shares the
@@ -403,6 +423,12 @@ export async function searchV2(
 				throttled: { retryAfterMs: admission.retryAfterMs },
 			},
 		}
+	}
+	// #101 decision 18: search() opens the request ledger before admission so
+	// its opt-in legacy re-run shares it; this search is admitted on it.
+	if (hasActiveSearchBudget()) {
+		markSearchBudgetAdmitted()
+		return runInRequestLedger()
 	}
 	const limits = resolveSearchBudgetLimits(context.searchOptions?.budget)
 	const { value, budget } = await runWithSearchBudget(limits, () =>
@@ -1793,39 +1819,264 @@ async function searchV2WithBudget(
 				? runHybridPath()
 				: runLane(path, (onTierOutcome) => runSearchPath(path, onTierOutcome))
 
+		// #101 decision 18: the request ledger. Required lanes (R6: the
+		// planned paths, plus conversation evidence iff exact evidence was
+		// asked for) reserve their cost-table estimate before anything
+		// optional starts, and run inside that reservation; optional work
+		// spends only the unreserved remainder.
+		const vectorOrText = capabilities.vectorSearch || capabilities.textSearch
+		const hybridSubLaneCount =
+			(fuseChunkLaneFilters(conversationChunkFilter, bridgeChunkFilter)
+				? 1
+				: 2) +
+			(sessionMode === "B" && vectorOrText ? 1 : 0) +
+			(isEvidenceMirrorEnabled() && vectorOrText ? 1 : 0)
+		const laneCost = (lane: SearchLane): SearchWorkCost => {
+			switch (lane) {
+				case "active-critical":
+				case "structured":
+					return structuredLaneCost({
+						capabilities,
+						embeddingMode,
+						textIndexName: `${prefix}structured_mem_text`,
+					})
+				case "procedural":
+					return structuredLaneCost({
+						capabilities,
+						embeddingMode,
+						textIndexName: `${prefix}procedures_text`,
+					})
+				case "kb":
+					return kbLaneCost({ capabilities, embeddingMode, fusionMethod })
+				case "hybrid": {
+					const subLane =
+						hybridMode === "vector-only"
+							? vectorLeafCost({ embeddingMode })
+							: mongoSearchTierCost({
+									capabilities,
+									embeddingMode,
+									fusionMethod,
+								})
+					return {
+						aggregations: subLane.aggregations * hybridSubLaneCount,
+						embeds: subLane.embeds * hybridSubLaneCount,
+					}
+				}
+				case "conversation-evidence":
+					return conversationEvidenceLaneCost({ capabilities, embeddingMode })
+				default:
+					return NO_SEARCH_COST
+			}
+		}
+		const isCharged = (cost: SearchWorkCost): boolean =>
+			cost.aggregations > 0 || cost.embeds > 0
+		// Equivalence: same lane, query, identity, source, time, hard
+		// constraints, limits and modes (search-equivalence.ts).
+		const retrievalKey = (lane: SearchLane): string =>
+			searchRetrievalKey({
+				exact: {
+					lane,
+					query,
+					searchQuery,
+					identity: {
+						agentId,
+						scope,
+						scopeRef: agentScopeRef,
+						sessionKey: context.searchOptions?.sessionKey,
+					},
+					time: {
+						explicit: explicitTimeRange,
+						questionDate: context.searchOptions?.questionDate,
+					},
+					constraints: {
+						plan: plan.constraints,
+						structuredScope: context.searchOptions?.structuredScope,
+						proceduralScope: context.searchOptions?.proceduralScope,
+						referenceScope: context.searchOptions?.referenceScope,
+						conversationScope: context.searchOptions?.conversationScope,
+						sourcePreference: context.searchOptions?.sourcePreference,
+						needExactEvidence: context.searchOptions?.needExactEvidence,
+					},
+					limits: {
+						maxResults,
+						minScore,
+						numCandidates,
+						bridgeMaxResults,
+					},
+					modes: {
+						capabilities,
+						embeddingMode,
+						queryEmbeddingModel,
+						fusionMethod,
+						hybridMode,
+						chunkSources,
+						sessionMode,
+						evidenceMirror: isEvidenceMirrorEnabled(),
+					},
+				},
+				clockRelative: {
+					structuredFilter,
+					activeCriticalFilter,
+					proceduralFilter,
+					kbFilter,
+					conversationChunkFilter,
+					bridgeChunkFilter,
+				},
+			})
+		const copyResults = (
+			results: readonly MemorySearchResult[],
+		): MemorySearchResult[] => results.map((result) => ({ ...result }))
+		const reuseCompleted = (
+			lane: SearchLane,
+			completed: readonly MemorySearchResult[],
+		): MemorySearchResult[] => {
+			laneOutcomes.push({
+				lane,
+				stage: "lane",
+				outcome: completed.length > 0 ? "ok" : "ok-empty",
+				...(completed.length > 0 ? {} : { reason: "zero-hits" as const }),
+				resultCount: completed.length,
+			})
+			return copyResults(completed)
+		}
+		/** Runs a charged retrieval and remembers it when it completed cleanly. */
+		const runRecorded = async (
+			lane: SearchLane,
+			key: string,
+			run: () => Promise<MemorySearchResult[]>,
+		): Promise<MemorySearchResult[]> => {
+			const firstRow = laneOutcomes.length
+			const hits = await run()
+			const own = laneOutcomes
+				.slice(firstRow)
+				.filter(
+					(row) =>
+						row.stage !== "explain" &&
+						(row.lane === lane || row.lane.startsWith(`${lane}:`)),
+				)
+			const ran = own.some(
+				(row) =>
+					row.lane === lane &&
+					row.stage === "lane" &&
+					(row.outcome === "ok" || row.outcome === "ok-empty"),
+			)
+			if (ran && !own.some(isSearchFailureOutcome)) {
+				recordCompletedSearchRetrieval(key, copyResults(hits))
+			}
+			return hits
+		}
+		const reservationDenied = (lane: SearchLane): void => {
+			laneOutcomes.push({
+				lane,
+				stage: "reservation",
+				outcome: "budget-denied",
+				reason: "budget-reservation",
+			})
+		}
+		type RequiredPathSchedule =
+			| { kind: "reuse"; completed: readonly MemorySearchResult[] }
+			| { kind: "denied" }
+			| {
+					kind: "run"
+					key?: string
+					reservation?: SearchBudgetReservation
+			  }
+		const pathSchedule = new Map<RetrievalPath, RequiredPathSchedule>()
+		for (const path of pathsToExecute) {
+			if (!isCharged(laneCost(path))) {
+				pathSchedule.set(path, { kind: "run" })
+				continue
+			}
+			const key = retrievalKey(path)
+			const completed = findCompletedSearchRetrieval<MemorySearchResult>(key)
+			pathSchedule.set(
+				path,
+				completed ? { kind: "reuse", completed } : { kind: "run", key },
+			)
+		}
+		for (const path of pathsToExecute) {
+			const entry = pathSchedule.get(path)
+			if (entry?.kind !== "run" || entry.key === undefined) continue
+			const reservation = tryReserveSearchBudget(laneCost(path))
+			if (reservation) {
+				entry.reservation = reservation
+			} else {
+				pathSchedule.set(path, { kind: "denied" })
+			}
+		}
+		const executeRequiredPath = async (
+			path: RetrievalPath,
+		): Promise<MemorySearchResult[]> => {
+			const entry = pathSchedule.get(path) ?? { kind: "run" as const }
+			if (entry.kind === "reuse") {
+				return reuseCompleted(path, entry.completed)
+			}
+			if (entry.kind === "denied") {
+				const denial = new SearchBudgetDeniedError({
+					lane: path,
+					stage: "reservation",
+					reason: "budget-reservation",
+				})
+				if (isBenchmarkStrictMode()) {
+					throw denial
+				}
+				reservationDenied(path)
+				return []
+			}
+			const { key, reservation } = entry
+			const run = () =>
+				key === undefined
+					? executeSearchPath(path)
+					: runRecorded(path, key, () => executeSearchPath(path))
+			return reservation ? runWithSearchReservation(reservation, run) : run()
+		}
+
+		const conversationEvidenceKey = retrievalKey("conversation-evidence")
 		const runConversationEvidence = async (
-			reservation?: ReturnType<typeof tryReserveSearchBudget>,
+			reservation?: SearchBudgetReservation,
+			completed?: readonly MemorySearchResult[],
 		): Promise<MemorySearchResult[]> =>
 			timeLane("phase:conversation-evidence", async () => {
+				if (completed) {
+					return reuseCompleted("conversation-evidence", completed)
+				}
 				try {
-					return await runLane("conversation-evidence", (onTierOutcome) =>
-						searchConversationEvidenceEvents({
-							onTierOutcome,
-							db,
-							prefix,
-							query: searchQuery,
-							questionDate: context.searchOptions?.questionDate,
-							agentId,
-							scope,
-							scopeRef: agentScopeRef,
-							maxResults: Math.min(maxResults, 20),
-							numCandidates,
-							capabilities,
-							embeddingMode,
-							queryEmbeddingModel,
-							budgetReservation: reservation,
-							// RET-02 (wave 3b): explicit bounds reach the evidence
-							// lane; it composes them with the questionDate upper
-							// bound (no future leakage past what the user had
-							// seen). Inferred presets keep the questionDate-only
-							// bound.
-							...(explicitTimeRange ? { timeRange: explicitTimeRange } : {}),
-						}),
+					return await runRecorded(
+						"conversation-evidence",
+						conversationEvidenceKey,
+						() => runConversationEvidenceLane(reservation),
 					)
 				} finally {
 					reservation?.release()
 				}
 			})
+		const runConversationEvidenceLane = (
+			reservation?: SearchBudgetReservation,
+		): Promise<MemorySearchResult[]> =>
+			runLane("conversation-evidence", (onTierOutcome) =>
+				searchConversationEvidenceEvents({
+					onTierOutcome,
+					db,
+					prefix,
+					query: searchQuery,
+					questionDate: context.searchOptions?.questionDate,
+					agentId,
+					scope,
+					scopeRef: agentScopeRef,
+					maxResults: Math.min(maxResults, 20),
+					numCandidates,
+					capabilities,
+					embeddingMode,
+					queryEmbeddingModel,
+					budgetReservation: reservation,
+					// RET-02 (wave 3b): explicit bounds reach the evidence
+					// lane; it composes them with the questionDate upper
+					// bound (no future leakage past what the user had
+					// seen). Inferred presets keep the questionDate-only
+					// bound.
+					...(explicitTimeRange ? { timeRange: explicitTimeRange } : {}),
+				}),
+			)
 
 		type ConversationEvidenceOutcome =
 			| { results: MemorySearchResult[] }
@@ -1844,40 +2095,51 @@ async function searchV2WithBudget(
 		const conversationRetrievalAvailable = (
 			["raw-window", "hybrid", "graph", "episodic"] as const
 		).some((path) => context.availablePaths.has(path))
+		// Decision 18 / R6: conversation evidence is required iff exact
+		// evidence was asked for. Required, it is reserved right after the
+		// paths in either mode; optional, it reserves (parallel mode) only
+		// after every required reservation is held, from the remainder.
+		const evidenceRuns =
+			conversationRetrievalAvailable &&
+			(conversationEvidenceMode === "parallel" ||
+				conversationEvidenceMode === "serial") &&
+			isConversationEvidenceQuery(
+				searchQuery,
+				context.searchOptions?.questionDate,
+			)
+		const evidenceRequired = context.searchOptions?.needExactEvidence === true
+		const evidenceCompleted = evidenceRuns
+			? findCompletedSearchRetrieval<MemorySearchResult>(
+					conversationEvidenceKey,
+				)
+			: undefined
+		let evidenceReservation: SearchBudgetReservation | undefined
+		let evidenceDenied = false
+		if (
+			evidenceRuns &&
+			!evidenceCompleted &&
+			(evidenceRequired || conversationEvidenceMode === "parallel")
+		) {
+			evidenceReservation = tryReserveSearchBudget(
+				laneCost("conversation-evidence"),
+			)
+			evidenceDenied = evidenceReservation === undefined
+		}
+		const conversationEvidenceDenied = (): MemorySearchResult[] => {
+			// V14: budget refused the conversation-evidence reservation — a
+			// typed denial row, never a silent drop.
+			reservationDenied("conversation-evidence")
+			return []
+		}
 		if (
 			conversationEvidenceMode === "parallel" &&
 			conversationRetrievalAvailable
 		) {
-			const isEvidenceQuery = isConversationEvidenceQuery(
-				searchQuery,
-				context.searchOptions?.questionDate,
-			)
-			const reservation = isEvidenceQuery
-				? tryReserveSearchBudget({
-						aggregations:
-							(capabilities.vectorSearch && embeddingMode === "automated"
-								? 1
-								: 0) + (capabilities.textSearch ? 1 : 0),
-						embeds:
-							capabilities.vectorSearch && embeddingMode === "automated"
-								? 1
-								: 0,
-					})
-				: undefined
-			parallelConversationEvidence =
-				isEvidenceQuery && !reservation
-					? (async () => {
-							// V14: budget refused the conversation-evidence reservation
-							// — a typed denial row, never a silent drop.
-							laneOutcomes.push({
-								lane: "conversation-evidence",
-								stage: "reservation",
-								outcome: "budget-denied",
-								reason: "budget-reservation",
-							})
-							return { results: [] as MemorySearchResult[] }
-						})()
-					: captureConversationEvidence(runConversationEvidence(reservation))
+			parallelConversationEvidence = evidenceDenied
+				? Promise.resolve({ results: conversationEvidenceDenied() })
+				: captureConversationEvidence(
+						runConversationEvidence(evidenceReservation, evidenceCompleted),
+					)
 		} else if (conversationEvidenceMode === "parallel") {
 			// V15: no conversation-capable lane on this deployment.
 			notApplicable("conversation-evidence", "plan", "capability-absent")
@@ -1890,7 +2152,7 @@ async function searchV2WithBudget(
 		const lanesStartedAt = Date.now()
 		const pathOutcomes = await Promise.all(
 			pathsToExecute.map((path) =>
-				timeLane(path, () => executeSearchPath(path)),
+				timeLane(path, () => executeRequiredPath(path)),
 			),
 		)
 		for (const [pathIndex, path] of pathsToExecute.entries()) {
@@ -1943,8 +2205,10 @@ async function searchV2WithBudget(
 			deduped.length < Math.max(2, Math.ceil(maxResults / 3)) &&
 			laneHasData("procedural") &&
 			!retrievalFailed()
-		if (needsProceduralBackstop) {
-			const procedureFallback = await timeLane("backstop:procedural", () =>
+		const runProceduralBackstop = (
+			proceduralKey: string,
+		): Promise<MemorySearchResult[]> =>
+			runRecorded("backstop:procedural", proceduralKey, () =>
 				runLane("backstop:procedural", (onTierOutcome) =>
 					searchProcedures(
 						proceduresCollection(db, prefix),
@@ -1964,6 +2228,19 @@ async function searchV2WithBudget(
 						},
 					),
 				),
+			)
+		if (needsProceduralBackstop) {
+			// Decision 18: the backstop is the planned procedural retrieval; an
+			// equivalent one that already completed in this request is reused.
+			const proceduralKey = retrievalKey("procedural")
+			const completedProcedural =
+				findCompletedSearchRetrieval<MemorySearchResult>(proceduralKey)
+			const procedureFallback = await timeLane("backstop:procedural", () =>
+				completedProcedural
+					? Promise.resolve(
+							reuseCompleted("backstop:procedural", completedProcedural),
+						)
+					: runProceduralBackstop(proceduralKey),
 			)
 			if (procedureFallback.length > 0) {
 				// RET-13: the main loop already registers an attempted
@@ -2067,7 +2344,9 @@ async function searchV2WithBudget(
 			conversationEvidenceMode === "serial" &&
 			conversationRetrievalAvailable
 		) {
-			conversationEvidenceResults = await runConversationEvidence()
+			conversationEvidenceResults = evidenceDenied
+				? conversationEvidenceDenied()
+				: await runConversationEvidence(evidenceReservation, evidenceCompleted)
 		} else if (conversationEvidenceMode === "serial") {
 			// V15: serial mode asked for conversation evidence but no
 			// conversation-capable lane is available — record, don't imply it ran.

@@ -13,9 +13,12 @@ import { normalizeSearchResults } from "./mongodb-hybrid.js"
 import type { SearchMethod } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import {
+	openSearchBudget,
 	resolveSearchBudgetLimits,
-	runWithSearchBudget,
+	runWithSearchReservation,
+	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
+import { kbLaneCost } from "./search-lane-cost.js"
 import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
 import { recordRecallTrace } from "./mongodb-recall-traces.js"
 import type { RelevanceArtifact } from "./mongodb-relevance.js"
@@ -55,6 +58,7 @@ import type {
 } from "./types.js"
 import {
 	isSearchFailureOutcome,
+	SearchBudgetDeniedError,
 	type SearchOutcomeSummary,
 	searchFailureLogFields,
 	searchFailureRow,
@@ -832,13 +836,15 @@ export class MongoDBManagerSearchOps {
 		// throttled request carries the degradation marker instead (R3).
 		let outcomes: SearchOutcomeSummary | undefined
 		let v2Returned = false
+		// #101 decision 18: one request ledger spans the v2 search and its
+		// opt-in legacy re-run; searchV2 takes its admission token on it.
+		const requestLedger = openSearchBudget(
+			resolveSearchBudgetLimits(mongoCfg.searchBudget),
+			{ admitted: false },
+		)
 		try {
-			const v2 = await searchV2(
-				this.host.db,
-				this.host.prefix,
-				cleaned,
-				this.host.agentId,
-				{
+			const v2 = await requestLedger.run(() =>
+				searchV2(this.host.db, this.host.prefix, cleaned, this.host.agentId, {
 					admission: readAdmission,
 					availablePaths,
 					hasEpisodes: mongoCfg.episodes.enabled,
@@ -878,7 +884,7 @@ export class MongoDBManagerSearchOps {
 						budget: mongoCfg.searchBudget,
 						...(operationRunContext ? { operationRunContext } : {}),
 					},
-				},
+				}),
 			)
 			v2Returned = true
 			if (!v2.metadata.throttled) {
@@ -1081,11 +1087,10 @@ export class MongoDBManagerSearchOps {
 			const legacyRows: SearchLaneOutcome[] = []
 			let fallbackResults: MemorySearchResult[]
 			try {
-				fallbackResults = await this.host.legacySearch(
-					cleaned,
-					opts,
-					readAdmission,
-					(row) => legacyRows.push(row),
+				fallbackResults = await requestLedger.run(() =>
+					this.host.legacySearch(cleaned, opts, readAdmission, (row) =>
+						legacyRows.push(row),
+					),
 				)
 				legacyRows.push({
 					lane: "legacy",
@@ -1378,21 +1383,20 @@ export class MongoDBManagerSearchOps {
 					scopeRef: searchScopeRef,
 				},
 			})
-		// RET-16: ONE budget spans every pass — each per-pass searchV2
-		// detects the active budget (share branch in mongodb-search-v2.ts)
-		// and consumes from this request ledger instead of opening a fresh
-		// one, so the configured caps bound the REQUEST, not each pass. A
-		// opt-in legacy re-run stays outside it and pays its own admission
-		// token below.
-		const { value: response, budget: requestBudget } =
-			await runWithSearchBudget(
-				resolveSearchBudgetLimits(mongoCfg.searchBudget),
-				executeRequest,
-			)
+		// RET-16 / #101 decision 18: ONE ledger spans every pass — each
+		// per-pass searchV2 detects the active, admitted ledger (share branch
+		// in mongodb-search-v2.ts) and consumes from it instead of opening a
+		// fresh one, so the configured caps bound the REQUEST, not each pass.
+		// The opt-in legacy re-run below draws on the same ledger (it still
+		// pays its own admission token).
+		const requestLedger = openSearchBudget(
+			resolveSearchBudgetLimits(mongoCfg.searchBudget),
+		)
+		const response = await requestLedger.run(executeRequest)
 		response.metadata.resolvedSearchConfig = resolvedSearchConfig
 		// RET-16: the request-level snapshot (limits + consumed totals
 		// across ALL passes) rides on the response metadata.
-		response.metadata.budget = requestBudget
+		response.metadata.budget = requestLedger.snapshot()
 
 		// WS-11: a throttled detailed search is not a retrieval verdict. The
 		// denied pass already emitted its own throttle telemetry, the recall
@@ -1540,18 +1544,20 @@ export class MongoDBManagerSearchOps {
 		const legacyRows: SearchLaneOutcome[] = []
 		let fallbackResults: MemorySearchResult[]
 		try {
-			fallbackResults = await this.host.legacySearch(
-				normalized.query,
-				{
-					maxResults: normalized.maxResults,
-					minScore: normalized.minScore,
-					sessionKey: normalized.conversationScope?.sessionKey,
-					scope: searchScope,
-					scopeRef: searchScopeRef,
-					kbRestricted: normalized.kbRestricted,
-				},
-				readAdmission,
-				(row) => legacyRows.push(row),
+			fallbackResults = await requestLedger.run(() =>
+				this.host.legacySearch(
+					normalized.query,
+					{
+						maxResults: normalized.maxResults,
+						minScore: normalized.minScore,
+						sessionKey: normalized.conversationScope?.sessionKey,
+						scope: searchScope,
+						scopeRef: searchScopeRef,
+						kbRestricted: normalized.kbRestricted,
+					},
+					readAdmission,
+					(row) => legacyRows.push(row),
+				),
 			)
 			legacyRows.push({
 				lane: "legacy",
@@ -1573,6 +1579,7 @@ export class MongoDBManagerSearchOps {
 			results: fallbackResults,
 			metadata: {
 				...response.metadata,
+				budget: requestLedger.snapshot(),
 				pathsExecuted: response.metadata.pathsExecuted.length
 					? response.metadata.pathsExecuted
 					: ["legacy"],
@@ -1694,32 +1701,60 @@ export class MongoDBManagerSearchOps {
 		// K12: the direct KB route collects its own tier rows; a failure is
 		// a typed throw with its row, never a log-only empty.
 		const lanes: SearchLaneOutcome[] = []
-		try {
-			const results = await searchKB(
-				kbChunksCollection(this.host.db, this.host.prefix),
-				cleaned,
-				queryVector,
-				{
-					maxResults,
-					minScore,
-					scopeRef,
-					filter: opts?.filter,
-					numCandidates: mongoCfg.numCandidates,
-					vectorIndexName: `${this.host.prefix}kb_chunks_vector`,
-					textIndexName: `${this.host.prefix}kb_chunks_text`,
-					capabilities: this.host.capabilities,
+		const skipVectorLane = kbAdmission !== null && !kbAdmission.ok
+		const fusionMethod = opts?.fusionMethod ?? mongoCfg.fusionMethod
+		// #101 decision 18: the direct KB route is a request of its own — it
+		// runs on a ledger with the configured caps, its lane reserved first.
+		const requestLedger = openSearchBudget(
+			resolveSearchBudgetLimits(mongoCfg.searchBudget),
+		)
+		const runKBLane = () => {
+			const reservation = tryReserveSearchBudget(
+				kbLaneCost({
+					capabilities: skipVectorLane
+						? { ...this.host.capabilities, vectorSearch: false }
+						: this.host.capabilities,
 					embeddingMode: mongoCfg.embeddingMode,
-					queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-					// P0.10: KB fusion is a first-class option — per-call override,
-					// else the resolved config value (env/config, default rankFusion).
-					fusionMethod: opts?.fusionMethod ?? mongoCfg.fusionMethod,
-					kbDocs: kbCollection(this.host.db, this.host.prefix),
-					...(kbAdmission && !kbAdmission.ok ? { skipVectorLane: true } : {}),
-					onTierOutcome: (row) => {
-						lanes.push({ lane: "kb", ...row })
-					},
-				},
+					fusionMethod,
+				}),
 			)
+			if (!reservation) {
+				throw new SearchBudgetDeniedError({
+					lane: "kb",
+					stage: "reservation",
+					reason: "budget-reservation",
+				})
+			}
+			return runWithSearchReservation(reservation, () =>
+				searchKB(
+					kbChunksCollection(this.host.db, this.host.prefix),
+					cleaned,
+					queryVector,
+					{
+						maxResults,
+						minScore,
+						scopeRef,
+						filter: opts?.filter,
+						numCandidates: mongoCfg.numCandidates,
+						vectorIndexName: `${this.host.prefix}kb_chunks_vector`,
+						textIndexName: `${this.host.prefix}kb_chunks_text`,
+						capabilities: this.host.capabilities,
+						embeddingMode: mongoCfg.embeddingMode,
+						queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+						// P0.10: KB fusion is a first-class option — per-call override,
+						// else the resolved config value (env/config, default rankFusion).
+						fusionMethod,
+						kbDocs: kbCollection(this.host.db, this.host.prefix),
+						...(skipVectorLane ? { skipVectorLane: true } : {}),
+						onTierOutcome: (row) => {
+							lanes.push({ lane: "kb", ...row })
+						},
+					},
+				),
+			)
+		}
+		try {
+			const results = await requestLedger.run(runKBLane)
 			lanes.push({
 				lane: "kb",
 				stage: "lane",
