@@ -1114,7 +1114,7 @@ describe("MemongoClient silent option (P1.5)", () => {
 		})
 		await expect(client.search({ query: "anything" })).resolves.toEqual({
 			results: [],
-			degradation: { kind: "auth", status: 401 },
+			degradation: { kind: "auth", status: 401, code: "AUTH_NOT_CONFIGURED" },
 		})
 	})
 

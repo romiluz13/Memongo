@@ -45,6 +45,8 @@ import type {
 	MemongoDegradation,
 	MemongoSearchInput,
 	MemongoSearchKBResponse,
+	MemongoSearchLaneOutcome,
+	MemongoSearchOutcomes,
 	MemongoSearchResponse,
 	SearchConfig,
 	MemongoStatsResponse,
@@ -83,22 +85,57 @@ export type MemongoClientOptions = {
 function parseErrorEnvelope(body: string): {
 	code?: string
 	message?: string
+	outcomes?: MemongoSearchOutcomes
 } {
 	try {
 		const parsed = JSON.parse(body) as {
 			error?: { code?: unknown; message?: unknown }
+			outcomes?: unknown
 		}
 		const err = parsed?.error
 		if (err && typeof err === "object") {
+			const outcomes = parseSearchOutcomes(parsed.outcomes)
 			return {
 				code: typeof err.code === "string" ? err.code : undefined,
 				message: typeof err.message === "string" ? err.message : undefined,
+				...(outcomes ? { outcomes } : {}),
 			}
 		}
 	} catch {
 		// Not a JSON envelope — fall through with empty fields.
 	}
 	return {}
+}
+
+const SEARCH_OUTCOME_STATUSES = new Set(["complete", "partial", "failed"])
+
+/** #101: accept a search failure body's `outcomes` only in its documented shape. */
+function parseSearchOutcomes(
+	value: unknown,
+): MemongoSearchOutcomes | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined
+	}
+	const { status, lanes } = value as { status?: unknown; lanes?: unknown }
+	if (
+		typeof status !== "string" ||
+		!SEARCH_OUTCOME_STATUSES.has(status) ||
+		!Array.isArray(lanes) ||
+		!lanes.every(
+			(row) =>
+				row !== null &&
+				typeof row === "object" &&
+				typeof (row as { lane?: unknown }).lane === "string" &&
+				typeof (row as { stage?: unknown }).stage === "string" &&
+				typeof (row as { outcome?: unknown }).outcome === "string",
+		)
+	) {
+		return undefined
+	}
+	return {
+		status: status as MemongoSearchOutcomes["status"],
+		lanes: lanes as MemongoSearchLaneOutcome[],
+	}
 }
 
 /** Thrown when the Memongo HTTP API returns a non-OK status. */
@@ -109,6 +146,8 @@ export class MemongoClientError extends Error {
 	readonly code?: string
 	/** Human-readable message from the API envelope. */
 	readonly apiMessage?: string
+	/** #101: outcome summary of a failed search (503/500 search failure bodies). */
+	readonly outcomes?: MemongoSearchOutcomes
 
 	constructor(status: number, body: string, message?: string) {
 		const envelope = parseErrorEnvelope(body)
@@ -129,6 +168,7 @@ export class MemongoClientError extends Error {
 		this.body = body
 		this.code = envelope.code
 		this.apiMessage = envelope.message
+		this.outcomes = envelope.outcomes
 	}
 }
 
@@ -457,6 +497,10 @@ export type MemongoSearchDetailedMetadata = {
 	mmrLambda?: number
 	/** Set when admission control denied a pass — empty results are throttling, not a retrieval verdict. */
 	throttled?: { retryAfterMs: number }
+	/** #101: value-free outcome rows across every pass (`pass` names the pass). */
+	laneOutcomes?: MemongoSearchLaneOutcome[]
+	/** #101: complete or partial on a 200; a failed search is a non-2xx. */
+	outcomeStatus?: MemongoSearchOutcomes["status"]
 	trustSummary?: {
 		topScore: number | null
 		topConfidence: "high" | "medium" | "low" | null
@@ -696,13 +740,19 @@ function emptyContextBundle(
  */
 function classifySilentFailure(err: unknown): MemongoDegradation {
 	if (err instanceof MemongoClientError) {
+		// #101: the API's code and a failed search's outcome summary survive
+		// the swallow, so a silent empty still says why it is empty.
+		const detail = {
+			...(err.code ? { code: err.code } : {}),
+			...(err.outcomes ? { outcomes: err.outcomes } : {}),
+		}
 		if (err.status === 401 || err.status === 403) {
-			return { kind: "auth", status: err.status }
+			return { kind: "auth", status: err.status, ...detail }
 		}
 		if (err.status === 429) {
-			return { kind: "throttled", status: 429 }
+			return { kind: "throttled", status: 429, ...detail }
 		}
-		return { kind: "unavailable", status: err.status }
+		return { kind: "unavailable", status: err.status, ...detail }
 	}
 	// Network/timeout/abort: no HTTP status to report.
 	return { kind: "unavailable" }
