@@ -425,6 +425,17 @@ export async function awaitSearchBarrier(params: {
 	return result
 }
 
+/** Bounded fields only: a probe error's message can carry provider or query text. */
+function logProbeFailure(index: SearchBarrierIndex, err: unknown): void {
+	const code = (err as { code?: unknown } | null)?.code
+	log.warn("search barrier probe failed", {
+		index,
+		errorClass:
+			err instanceof Error ? err.constructor.name || err.name : typeof err,
+		...(typeof code === "number" ? { code } : {}),
+	})
+}
+
 type TargetState = {
 	target: SearchBarrierTarget
 	status: SearchBarrierTargetResult["status"]
@@ -488,7 +499,8 @@ export async function runSearchBarrier(params: {
 				try {
 					const returned = await params.probe(state.target, params.token)
 					if (!settled && returned === 1) state.status = "confirmed"
-				} catch {
+				} catch (err) {
+					logProbeFailure(state.target.index, err)
 					if (!settled) state.status = "failed"
 				}
 			}),
