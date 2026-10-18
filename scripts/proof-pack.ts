@@ -326,25 +326,9 @@ async function main() {
 					)
 				: fail("stats", `unexpected payload: ${JSON.stringify(stats)}`),
 		)
-
-		const relevanceReport = (await client.relevanceReport(
-			agentId,
-			86_400_000,
-		)) as {
-			runs?: number
-			health?: string
-		}
-		checks.push(
-			typeof relevanceReport.runs === "number"
-				? pass(
-						"relevanceReport",
-						`runs=${relevanceReport.runs}, health=${relevanceReport.health ?? "unknown"}`,
-					)
-				: fail(
-						"relevanceReport",
-						`unexpected payload: ${JSON.stringify(relevanceReport)}`,
-					),
-		)
+		// NEGATIVE CONTROL (b): the relevanceReport check is removed here and
+		// from the baseline, so the proof-pack emits 14 results and passes its
+		// own baseline; only the CI's independent 15-check pin can catch it.
 	} catch (error) {
 		checks.push(
 			fail(
