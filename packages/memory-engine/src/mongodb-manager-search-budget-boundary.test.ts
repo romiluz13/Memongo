@@ -244,8 +244,11 @@ describe("searchDetailed request budget boundary (RET-16)", () => {
 		expect(response.metadata.budget).toEqual({
 			maxAggregations: 5,
 			maxEmbeds: 5,
+			accounting: "engine-query-work",
 			aggregations: capture.calls.length,
 			embeds: 0,
+			retries: { aggregations: 0, embeds: 0 },
+			equivalentSkips: 0,
 			exhausted: false,
 		})
 		// RET-13 / #101 E1 merge seam: every pass's lane outcome survives

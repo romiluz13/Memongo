@@ -16,8 +16,9 @@ import {
 	resolveUserSearchMaxTimeMs,
 	type SearchBudgetReservation,
 	searchBudgetDenialReason,
+	searchWorkDenialReason,
 	tryConsumeSearchAggregation,
-	tryConsumeSearchEmbed,
+	tryConsumeSearchWork,
 } from "./mongodb-search-budget.js"
 import type { MemorySearchResult } from "./types.js"
 import {
@@ -127,6 +128,9 @@ function settleBranchDenials(
 		throw denials[0]
 	}
 }
+
+/** An inline autoEmbed $vectorSearch branch: one aggregation and its embed. */
+const VECTOR_BRANCH_COST = { aggregations: 1, embeds: 1 } as const
 
 function branchDenial(
 	stage: EventSearchBranch,
@@ -527,16 +531,13 @@ export async function searchTurnEventsWithinSessions(params: {
 			outcome: "not-applicable",
 			reason: "capability-absent",
 		})
-	} else if (!tryConsumeSearchAggregation()) {
+	} else if (!tryConsumeSearchWork(VECTOR_BRANCH_COST)) {
 		// P3.2: these inline $vectorSearch pipelines bypass
 		// buildVectorSearchStage, so they consume the per-request aggregation +
-		// server-side embed budget here.
+		// server-side embed budget here — decision 18: as one pair, so a
+		// refused embed never strands a spent aggregation.
 		denials.push(
-			branchDenial("turn-vector", searchBudgetDenialReason("aggregations")),
-		)
-	} else if (!tryConsumeSearchEmbed()) {
-		denials.push(
-			branchDenial("turn-vector", searchBudgetDenialReason("embeds")),
+			branchDenial("turn-vector", searchWorkDenialReason(VECTOR_BRANCH_COST)),
 		)
 	} else {
 		const vectorPipeline: Document[] = [
@@ -780,15 +781,22 @@ export async function searchConversationEvidenceEvents(params: {
 			outcome: "not-applicable",
 			reason: "capability-absent",
 		})
-	} else if (!consumeAggregation()) {
+	} else if (
+		!(reservation
+			? reservation.tryConsumeWork(VECTOR_BRANCH_COST)
+			: tryConsumeSearchWork(VECTOR_BRANCH_COST))
+	) {
 		// P3.2: these inline $vectorSearch pipelines bypass
 		// buildVectorSearchStage, so they consume the per-request aggregation +
-		// server-side embed budget here.
-		denials.push(branchDenial("turn-vector", denialReason("aggregations")))
-	} else if (
-		!(reservation ? reservation.tryConsumeEmbed() : tryConsumeSearchEmbed())
-	) {
-		denials.push(branchDenial("turn-vector", denialReason("embeds")))
+		// server-side embed budget here — decision 18: as one pair.
+		denials.push(
+			branchDenial(
+				"turn-vector",
+				reservation
+					? "budget-reservation"
+					: searchWorkDenialReason(VECTOR_BRANCH_COST),
+			),
+		)
 	} else {
 		const vectorPipeline: Document[] = [
 			{

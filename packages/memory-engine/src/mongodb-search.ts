@@ -10,7 +10,8 @@ import { mergeHybridResultsMongoDB, rrfScore } from "./mongodb-hybrid.js"
 import { resolveChunkProvenance } from "./memory-derivation.js"
 import {
 	consumeSearchAggregationOrThrow,
-	consumeSearchEmbedOrThrow,
+	consumeSearchWorkOrThrow,
+	refundSearchAggregations,
 	resolveUserSearchMaxTimeMs,
 } from "./mongodb-search-budget.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
@@ -144,6 +145,38 @@ function countAutomatedVectorStages(value: unknown): number {
 	)
 }
 
+/**
+ * #101 decision 18: vector stages whose build charged the embed together with
+ * the aggregation that will execute it. The first attempt of the pipeline
+ * carrying the stage claims that prepaid aggregation instead of charging
+ * again, so the pair is never split.
+ */
+const prepaidVectorStages = new WeakSet<object>()
+
+function claimPrepaidVectorStages(value: unknown): number {
+	if (!value || typeof value !== "object") return 0
+	if (Array.isArray(value)) {
+		return value.reduce<number>(
+			(count, entry) => count + claimPrepaidVectorStages(entry),
+			0,
+		)
+	}
+	const object = value as Record<string, unknown>
+	const vector = object.$vectorSearch
+	let claimed = 0
+	if (vector && typeof vector === "object" && prepaidVectorStages.has(vector)) {
+		prepaidVectorStages.delete(vector)
+		claimed = 1
+	}
+	return (
+		claimed +
+		Object.values(object).reduce<number>(
+			(count, entry) => count + claimPrepaidVectorStages(entry),
+			0,
+		)
+	)
+}
+
 export async function runSearchAggregateWithRetry(
 	collection: Collection,
 	pipeline: Document[],
@@ -170,17 +203,26 @@ export async function runSearchAggregateWithRetry(
 	let attempt = 0
 	let delayMs = initialDelayMs
 	const retryEmbeds = countAutomatedVectorStages(pipeline)
+	const prepaid = claimPrepaidVectorStages(pipeline)
 	while (true) {
 		// P3.2 + RET-16: every ATTEMPT consumes the per-request budget — a
 		// warmup retry re-executes the aggregate server-side, so it is a
 		// real aggregation, not a replay of the original charge. #101: a
 		// refusal is a typed budget denial, never an empty result, so it can
-		// never read as zero hits.
-		consumeSearchAggregationOrThrow(stage)
+		// never read as zero hits. Decision 18: a retry charges its
+		// aggregation and its re-embeds together or not at all, and the first
+		// attempt of a pipeline whose vector stage prepaid its aggregation
+		// charges nothing more.
 		if (attempt > 0) {
-			for (let embed = 0; embed < retryEmbeds; embed++) {
-				consumeSearchEmbedOrThrow(stage)
-			}
+			consumeSearchWorkOrThrow(
+				stage,
+				{ aggregations: 1, embeds: retryEmbeds },
+				{ retry: true },
+			)
+		} else if (prepaid === 0) {
+			consumeSearchAggregationOrThrow(stage)
+		} else if (prepaid > 1) {
+			refundSearchAggregations(prepaid - 1)
 		}
 		try {
 			return await collection.aggregate(pipeline, options).toArray()
@@ -707,8 +749,14 @@ export function buildVectorSearchStage(input: {
 		// P3.1/P3.2: an autoEmbed stage embeds the query text server-side — a
 		// paid embedding per pipeline. Charge the per-request budget; #101:
 		// exhaustion throws a typed denial (a null stage now means only "no
-		// query text").
-		consumeSearchEmbedOrThrow(input.stage ?? "vector")
+		// query text"). Decision 18: the embed and the aggregation that runs
+		// it are charged together, so a refused aggregation never strands a
+		// spent embed; the pipeline's first attempt claims the prepaid half.
+		consumeSearchWorkOrThrow(input.stage ?? "vector", {
+			aggregations: 1,
+			embeds: 1,
+		})
+		prepaidVectorStages.add(base)
 		base.query = { text: input.queryText }
 		base.model = input.model ?? INDEX_AUTOEMBED_MODEL
 		base.path = input.textFieldPath ?? "text"
