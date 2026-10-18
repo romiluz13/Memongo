@@ -61,6 +61,7 @@ jobs:
   e2e:
     name: E2E against real MongoDB (tier A)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       mongodb:
         image: mongodb/mongodb-atlas-local:preview
@@ -68,6 +69,10 @@ jobs:
           - 27017:27017
         env:
           MONGODB_ATLAS_TELEMETRY_ENABLE: "false"
+          # Auto-embeddings are served by mongot inside the container, so the
+          # Atlas Model key must be on the container for the proof-pack's
+          # vector and hybrid lanes.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
         options: >-
           --health-cmd "/usr/local/bin/runner healthcheck"
           --health-interval 10s
@@ -82,6 +87,13 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+
+      # Node 22 matches the API image (apps/api/Dockerfile), which runs the
+      # built apps/api/dist/server.js that the proof-pack step starts.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -113,3 +125,37 @@ jobs:
           --require-suite mongodb-projection-repair.e2e.test.ts
           --require-suite mongodb-temporal-validity.e2e.test.ts
           --require-suite mongodb-memory-jobs.e2e.test.ts
+
+      # Zero fallbacks: without the key (a fork PR, or the secret unset) the
+      # API would silently serve search from $text, so the job fails here
+      # instead of skipping or going green on the fallback.
+      - name: Assert Voyage key is armed for the proof-pack (no fallback)
+        env:
+          VOYAGE_KEY_PRESENT: ${{ secrets.VOYAGE_API_KEY != '' }}
+        run: |
+          if [[ "${VOYAGE_KEY_PRESENT}" != "true" ]]; then
+            echo "::error::VOYAGE_API_KEY secret is empty: the MongoDB service cannot embed, so the proof-pack would run on the \$text fallback"
+            exit 1
+          fi
+          echo "VOYAGE_API_KEY secret present on the MongoDB service container"
+
+      # The api-contract lane: the unweakened 15-check proof-pack against this
+      # PR's built API on loopback, with its own database, agent and API key.
+      # The API process gets no provider key; embeddings come from the
+      # MongoDB service. A startup failure, a missing check, a failed check or
+      # a degraded search lane fails the job.
+      - name: API contract proof-pack (15 checks)
+        id: proof_pack
+        timeout-minutes: 10
+        env:
+          MEMONGO_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          PROOF_PACK_OUT_DIR: ${{ runner.temp }}/proof-pack
+        run: bash scripts/ci/run-proof-pack.sh
+
+      - name: Upload proof-pack evidence (API log, PID, verdict)
+        if: failure() && steps.proof_pack.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-pack-evidence
+          path: ${{ runner.temp }}/proof-pack
+          if-no-files-found: error
