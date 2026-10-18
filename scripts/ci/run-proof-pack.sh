@@ -44,7 +44,9 @@ if curl --silent --max-time 2 "${MEMONGO_API_URL}/health" >/dev/null; then
 	fail "something already answers on ${MEMONGO_API_URL} before the API started"
 fi
 
-node apps/api/dist/server.js >"${api_log}" 2>&1 &
+# NEGATIVE CONTROL (a): a preload that does not exist makes the API process
+# exit at startup, before it ever serves /health.
+node --require ./negative-control-missing-preload.cjs apps/api/dist/server.js >"${api_log}" 2>&1 &
 api_pid=$!
 echo "${api_pid}" >"${PROOF_PACK_OUT_DIR}/api.pid"
 echo "API started: pid=${api_pid} database=${MEMONGO_MONGODB_DATABASE} agent=${MEMONGO_AGENT_ID}"
