@@ -236,8 +236,15 @@ export async function detectCapabilities(
 				) {
 					queryable.push(name)
 				}
-			} catch {
+			} catch (err) {
 				// Unknown availability: the index stays unlisted, so its tier does not run.
+				log.warn("text tier index availability unknown", {
+					index: name,
+					errorClass:
+						err instanceof Error
+							? err.constructor.name || err.name
+							: typeof err,
+				})
 			}
 		}
 		result.queryableSearchIndexes = queryable
