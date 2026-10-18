@@ -117,6 +117,10 @@ import {
 	searchProcedures,
 } from "./mongodb-procedures.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
+import type {
+	SearchBarrierRequest,
+	SearchBarrierResult,
+} from "./mongodb-search-barrier.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { buildContextBundle as composeContextBundle } from "./mongodb-context-bundle.js"
 import { synthesizeProfile, type ProfileSynthesis } from "./mongodb-profile.js"
@@ -291,7 +295,9 @@ import type {
 	MemoryActorRole,
 	ClaimedMemoryJob,
 	ResolvedSearchConfig,
+	SearchLaneOutcome,
 } from "./types.js"
+import type { SearchOutcomeSummary } from "./search-outcomes.js"
 
 // v2 validation constants
 import {
@@ -646,10 +652,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 			// Detect concrete serving readiness. Fusion capability is server-version
 			// based, while Search capabilities require named queryable indexes.
+			// #101 R2: the structured and procedure $search tiers run only when
+			// their own text index is queryable, not merely when chunks_text is.
+			const textTierCollections = searchIndexManagementAvailable
+				? [`${prefix}structured_mem`, `${prefix}procedures`]
+				: []
 			let capabilities = await detectCapabilities(
 				db,
 				chunksCollectionName,
 				capabilityDeployment,
+				textTierCollections,
 			)
 			log.info(`capabilities: ${JSON.stringify(capabilities)}`)
 			let nativeBitemporalVectorPrefilter = false
@@ -777,6 +789,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						db,
 						chunksCollectionName,
 						capabilityDeployment,
+						textTierCollections,
 					)
 				}
 			} else {
@@ -1088,8 +1101,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			kbRestricted?: boolean
 		},
 		admission?: AdmissionToken,
+		onOutcome?: (row: SearchLaneOutcome) => void,
 	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).legacySearch(query, opts, admission)
+		return searchOpsOf(this).legacySearch(query, opts, admission, onOutcome)
 	}
 
 	async search(
@@ -1114,6 +1128,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			 * absence means the answer is authoritative.
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
+			/**
+			 * #101: receives this call's outcome summary ({status, lanes})
+			 * exactly once. Sink-not-state; rows are value-free enums.
+			 */
+			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]> {
@@ -1260,6 +1279,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			 * control dropped the KB vector lane. Sink-not-state.
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
+			/**
+			 * #101: receives this call's outcome summary ({status, lanes})
+			 * exactly once. Sink-not-state; rows are value-free enums.
+			 */
+			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 	): Promise<MemorySearchResult[]> {
 		return searchOpsOf(this).searchKB(query, opts)
@@ -1451,21 +1475,34 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// Structured memory write (exposed for memory_write tool to avoid per-call MongoClient)
 	// ---------------------------------------------------------------------------
 
-	async writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
+	async writeStructuredMemory(
+		entry: StructuredMemoryEntry,
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
 		upserted: boolean
 		id: string
 		/** C-008: true when the entry was quarantined instead of written. */
 		quarantined?: boolean
 		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
 		matchedPatterns?: string[]
+		searchBarrier?: SearchBarrierResult
 	}> {
-		return lifecycleOpsOf(this).writeStructuredMemory(entry)
+		return options
+			? lifecycleOpsOf(this).writeStructuredMemory(entry, options)
+			: lifecycleOpsOf(this).writeStructuredMemory(entry)
 	}
 
 	async writeProcedure(
 		entry: ProcedureEntry,
-	): Promise<{ upserted: boolean; id: string }> {
-		return lifecycleOpsOf(this).writeProcedure(entry)
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		upserted: boolean
+		id: string
+		searchBarrier?: SearchBarrierResult
+	}> {
+		return options
+			? lifecycleOpsOf(this).writeProcedure(entry, options)
+			: lifecycleOpsOf(this).writeProcedure(entry)
 	}
 
 	async getLifecycleItem(
@@ -1830,8 +1867,19 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async writeConversationEvent(
 		event: WriteConversationEventInput,
 		operationRunContext?: OperationRunContext,
-	): Promise<{ eventId: string; chunkCreated: boolean }> {
-		return writeOpsOf(this).writeConversationEvent(event, operationRunContext)
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		eventId: string
+		chunkCreated: boolean
+		searchBarrier?: SearchBarrierResult
+	}> {
+		return options
+			? writeOpsOf(this).writeConversationEvent(
+					event,
+					operationRunContext,
+					options,
+				)
+			: writeOpsOf(this).writeConversationEvent(event, operationRunContext)
 	}
 
 	/**

@@ -606,10 +606,10 @@ describe("mongodb benchmark runner", () => {
 
 		expect(evaluation.topCandidates).toBeDefined()
 		const first = evaluation.topCandidates?.[0]
-		expect(first.scoreDetails).toBeDefined()
-		expect(first.scoreDetails?.description).toContain("rank-fusion")
-		expect(first.scoreDetails?.details).toHaveLength(2)
-		expect(first.scoreDetails?.details?.[0]).toMatchObject({
+		expect(first?.scoreDetails).toBeDefined()
+		expect(first?.scoreDetails?.description).toContain("rank-fusion")
+		expect(first?.scoreDetails?.details).toHaveLength(2)
+		expect(first?.scoreDetails?.details?.[0]).toMatchObject({
 			inputPipelineName: "vector",
 			rank: 1,
 			weight: 0.5,
@@ -640,13 +640,13 @@ describe("mongodb benchmark runner", () => {
 		expect(evaluation.topCandidates).toBeDefined()
 		expect(evaluation.topCandidates).toHaveLength(2)
 		const first = evaluation.topCandidates?.[0]
-		expect(first.rank).toBe(1)
-		expect(first.score).toBe(0.9)
-		expect(first.canonicalId).toBe("event:evt-1")
-		expect(first.sessionId).toBe("s1")
-		expect(first.resolvedSessionIds).toEqual(["s1"])
-		expect(first.sourceEventIds).toEqual(["evt-1"])
-		expect(first.source).toBe("conversation")
+		expect(first?.rank).toBe(1)
+		expect(first?.score).toBe(0.9)
+		expect(first?.canonicalId).toBe("event:evt-1")
+		expect(first?.sessionId).toBe("s1")
+		expect(first?.resolvedSessionIds).toEqual(["s1"])
+		expect(first?.sourceEventIds).toEqual(["evt-1"])
+		expect(first?.source).toBe("conversation")
 	})
 
 	it("computes LongMemEval official binary recall_all and ndcg_any metrics", () => {
@@ -909,6 +909,9 @@ describe("mongodb benchmark runner", () => {
 				{
 					datasetKind: "longmemeval",
 					questionType: "single-session",
+					executionStatus: "succeeded",
+					scoreEligibility: "retrieval",
+					retrievalOutcome: "hit",
 					empty: false,
 					topScore: 0.9,
 					latencyMs: 10,
@@ -943,6 +946,9 @@ describe("mongodb benchmark runner", () => {
 				{
 					datasetKind: "longmemeval",
 					questionType: "single-session",
+					executionStatus: "succeeded",
+					scoreEligibility: "retrieval",
+					retrievalOutcome: "miss",
 					empty: true,
 					topScore: 0,
 					latencyMs: 20,
@@ -978,6 +984,9 @@ describe("mongodb benchmark runner", () => {
 					datasetKind: "longmemeval",
 					questionType: "abstention",
 					abstention: true,
+					executionStatus: "succeeded",
+					scoreEligibility: "abstention",
+					retrievalOutcome: "not-applicable",
 					empty: false,
 					topScore: 0.5,
 					latencyMs: 30,
@@ -1251,11 +1260,13 @@ describe("mongodb benchmark runner", () => {
 	})
 
 	it("rejects adapted native metrics as an official LongMemEval result", () => {
+		const canonicalLongMemEval = officialMetrics.longMemEval
+		if (!canonicalLongMemEval) throw new Error("fixture lacks LongMemEval")
 		const adaptedOfficialMetrics: MemoryBenchmarkOfficialMetrics = {
 			longMemEval: {
-				...officialMetrics.longMemEval!,
+				...canonicalLongMemEval,
 				evaluator: {
-					...officialMetrics.longMemEval?.evaluator,
+					...canonicalLongMemEval.evaluator,
 					candidateProjection: "native-memory-source-session-adapter",
 					comparability: "adapted",
 				},

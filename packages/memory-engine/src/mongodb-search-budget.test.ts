@@ -8,7 +8,10 @@ import {
 	tryConsumeSearchAggregation,
 	tryConsumeSearchEmbed,
 	tryReserveSearchBudget,
+	consumeSearchAggregationOrThrow,
+	consumeSearchEmbedOrThrow,
 } from "./mongodb-search-budget.js"
+import { SearchBudgetDeniedError } from "./search-outcomes.js"
 
 describe("mongodb-search-budget", () => {
 	it("resolves defaults when no overrides are given", () => {
@@ -237,5 +240,50 @@ describe("mongodb-search-budget", () => {
 		)
 		expect(budget.exhausted).toBe(true)
 		expect(budget.maxWallMs).toBe(5)
+	})
+
+	it("#101: a refused consume throws a typed denial naming the exhausted resource", async () => {
+		await runWithSearchBudget(
+			{ maxAggregations: 1, maxEmbeds: 1 },
+			async () => {
+				consumeSearchAggregationOrThrow("keyword")
+				consumeSearchEmbedOrThrow("vector")
+				const aggregation = (() => {
+					try {
+						consumeSearchAggregationOrThrow("keyword")
+					} catch (err) {
+						return err
+					}
+				})()
+				expect(aggregation).toBeInstanceOf(SearchBudgetDeniedError)
+				expect(aggregation).toMatchObject({
+					stage: "keyword",
+					reason: "budget-aggregations",
+				})
+				expect(() => consumeSearchEmbedOrThrow("vector")).toThrow(
+					expect.objectContaining({ reason: "budget-embeds" }),
+				)
+			},
+		)
+	})
+
+	it("#101: a refusal past the wall-clock deadline is budget-deadline", async () => {
+		await runWithSearchBudget(
+			{ maxAggregations: 10, maxEmbeds: 10, maxWallMs: 5 },
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 15))
+				expect(() => consumeSearchAggregationOrThrow("turn-text")).toThrow(
+					expect.objectContaining({ reason: "budget-deadline" }),
+				)
+				expect(() => consumeSearchEmbedOrThrow("turn-vector")).toThrow(
+					expect.objectContaining({ reason: "budget-deadline" }),
+				)
+			},
+		)
+	})
+
+	it("#101: unbudgeted callers are never denied", () => {
+		expect(() => consumeSearchAggregationOrThrow("keyword")).not.toThrow()
+		expect(() => consumeSearchEmbedOrThrow("vector")).not.toThrow()
 	})
 })

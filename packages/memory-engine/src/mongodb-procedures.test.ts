@@ -262,15 +262,23 @@ describe("mongodb-procedures", () => {
 				currentOnly: true,
 				asOf,
 			},
-			capabilities: { ...baseCapabilities, vectorSearch: false },
+			capabilities: {
+				...baseCapabilities,
+				vectorSearch: false,
+				queryableSearchIndexes: ["test_procedures_text"],
+			},
 			vectorIndexName: "test_procedures_vector",
+			textIndexName: "test_procedures_text",
 			embeddingMode: "automated",
 		})
 
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
-		expect(pipeline[0].$match).toEqual({
-			$text: { $search: "rotate auth" },
+		// #101: the procedures_text $search tier replaces classic $text.
+		expect(pipeline[0].$search.compound.must).toEqual([
+			{ text: { query: "rotate auth", path: "searchText" } },
+		])
+		expect(pipeline[1].$match).toEqual({
 			$and: expect.arrayContaining([
 				expect.objectContaining({
 					agentId: "main",

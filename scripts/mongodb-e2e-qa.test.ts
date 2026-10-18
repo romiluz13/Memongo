@@ -16,11 +16,13 @@ function scriptedProvider(
 ): EnrichmentProvider {
 	return {
 		name: "mock",
-		chatCompletion: vi.fn(async ({ messages }) => {
-			const sys = messages.find((m) => m.role === "system")?.content ?? ""
-			const user = messages.find((m) => m.role === "user")?.content ?? ""
-			return { content: route(sys, user), ...(usage ? { usage } : {}) }
-		}),
+		chatCompletion: vi.fn<EnrichmentProvider["chatCompletion"]>(
+			async ({ messages }) => {
+				const sys = messages.find((m) => m.role === "system")?.content ?? ""
+				const user = messages.find((m) => m.role === "user")?.content ?? ""
+				return { content: route(sys, user), ...(usage ? { usage } : {}) }
+			},
+		),
 	}
 }
 

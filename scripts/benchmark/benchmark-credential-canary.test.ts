@@ -376,7 +376,7 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 		process.env.MEMONGO_BENCHMARK_ANSWER_BASE_URL = `http://127.0.0.1:9/${encodeURIComponent(C.answerPath)}/v1?api_key=${encodeURIComponent(C.answerToken)}`
 		vi.stubGlobal(
 			"fetch",
-			async (input: RequestInfo | URL, init?: RequestInit) => {
+			async (input: string | URL | Request, init?: RequestInit) => {
 				fetchCalls += 1
 				new Request(input, init)
 				return new Response(

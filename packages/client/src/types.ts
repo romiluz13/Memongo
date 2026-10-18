@@ -14,6 +14,29 @@ export type MemongoScope =
 	| "tenant"
 	| "global"
 
+/** #101: opt-in search visibility barrier on a write. */
+export type MemongoSearchBarrierRequest = {
+	/** Lower the 10000 ms default wait; the server clamps it to 1000-10000. */
+	timeoutMs?: number
+}
+
+/** #101: the barrier outcome of a committed barrier write. */
+export type MemongoSearchBarrierResult = {
+	committed: true
+	status: "searchable" | "not-yet-searchable" | "cancelled"
+	reason?:
+		| "timeout"
+		| "projection-failed"
+		| "probe-failed"
+		| "cancelled"
+		| "quarantined"
+	targets: Array<{
+		index: string
+		status: "confirmed" | "pending" | "failed"
+		attempts: number
+	}>
+}
+
 export type MemongoAddInput = {
 	content: string
 	/** @deprecated Prefer `sessionId`. */
@@ -27,6 +50,7 @@ export type MemongoAddInput = {
 	scopeRef?: string
 	/** Absolute expiry instant (ISO 8601, must be future); P4.4.1 TTL. */
 	expiresAt?: string
+	searchBarrier?: MemongoSearchBarrierRequest
 }
 
 export type MemongoSearchInput = {
@@ -910,10 +934,64 @@ export type MemongoDegradation = {
 	kind: "auth" | "throttled" | "unavailable"
 	/** HTTP status when the client classified a failed call; absent on server-sent markers. */
 	status?: number
+	/** API error code of a swallowed failure (e.g. "SEARCH_LANES_UNAVAILABLE"), silent mode only. */
+	code?: string
+	/** Outcome summary of a swallowed failed search (#101), silent mode only. */
+	outcomes?: MemongoSearchOutcomes
 	/** Engine lane or pass that was skipped, for server-sent throttling markers. */
 	scope?: string
 	/** Milliseconds to wait before retrying, for server-sent throttling markers. */
 	retryAfterMs?: number
+}
+
+/** #101: per-row search outcome; `failed` and `budget-denied` rows name a bounded reason. */
+export type MemongoSearchLaneOutcomeStatus =
+	| "ok"
+	| "ok-empty"
+	| "not-applicable"
+	| "failed"
+	| "budget-denied"
+
+/** #101: the bounded reason vocabulary. Values never carry query, body or provider text. */
+export type MemongoSearchOutcomeReason =
+	| "zero-hits"
+	| "not-planned"
+	| "capability-absent"
+	| "query-shape"
+	| "no-candidates"
+	| "mode-disabled"
+	| "source-disabled"
+	| "empty-query"
+	| "lane-unavailable"
+	| "index-missing"
+	| "index-not-ready"
+	| "query-timeout"
+	| "dependency-unavailable"
+	| "query-error"
+	| "internal-error"
+	| "budget-aggregations"
+	| "budget-embeds"
+	| "budget-deadline"
+	| "budget-reservation"
+
+/** #101: one value-free row per search lane, tier or phase. */
+export type MemongoSearchLaneOutcome = {
+	lane: string
+	stage: string
+	outcome: MemongoSearchLaneOutcomeStatus
+	reason?: MemongoSearchOutcomeReason
+	resultCount?: number
+	/** Retrieval pass index, on searchDetailed rows. */
+	pass?: number
+}
+
+/** #101: complete (no failure), partial (some lanes failed) or failed (non-2xx). */
+export type MemongoSearchOutcomeStatus = "complete" | "partial" | "failed"
+
+/** #101: a search call's outcome summary. */
+export type MemongoSearchOutcomes = {
+	status: MemongoSearchOutcomeStatus
+	lanes: MemongoSearchLaneOutcome[]
 }
 
 export type MemongoSearchKBResponse = {
@@ -931,6 +1009,8 @@ export type MemongoSearchKBResponse = {
 	}>
 	/** Present when the vector lane was skipped (throttling), not when results are genuinely empty. */
 	degradation?: MemongoDegradation
+	/** #101: this call's outcome summary (complete or partial on a 200). */
+	outcomes?: MemongoSearchOutcomes
 }
 
 export type MemongoSearchResponse = {
@@ -953,6 +1033,8 @@ export type MemongoSearchResponse = {
 	 * genuine empty results.
 	 */
 	degradation?: MemongoDegradation
+	/** #101: this call's outcome summary (complete or partial on a 200). */
+	outcomes?: MemongoSearchOutcomes
 }
 
 export type MemongoContextBundleInput = {

@@ -12,6 +12,7 @@ import {
 } from "./mongodb-manager.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
+import { SearchLaneError } from "./search-outcomes.js"
 import {
 	mocked,
 	testOperationRunContext,
@@ -618,14 +619,21 @@ describe("searchV2", () => {
 		expect(result.metadata.pathsExecuted).toContain("raw-window")
 		expect(result.metadata.pathsExecuted).toContain("episodic")
 		expect(result.metadata.resultsByPath?.episodic).toBeUndefined()
-		const episodicOutcome = result.metadata.laneOutcomes?.find(
+		const episodicOutcomes = result.metadata.laneOutcomes?.filter(
 			(outcome) => outcome.lane === "episodic",
 		)
-		expect(episodicOutcome).toMatchObject({
-			lane: "episodic",
-			status: "failed",
-			error: "episodic broke",
-		})
+		expect(episodicOutcomes).toEqual([
+			{
+				lane: "episodic",
+				stage: "lane",
+				outcome: "failed",
+				reason: "internal-error",
+			},
+		])
+		expect(result.metadata.outcomeStatus).toBe("partial")
+		expect(JSON.stringify(result.metadata.laneOutcomes)).not.toContain(
+			"episodic broke",
+		)
 	})
 
 	it("surfaces a whole-path failure at the actual seam: onPathFailure + laneOutcomes (RET-13)", async () => {
@@ -653,12 +661,25 @@ describe("searchV2", () => {
 		expect(result.results).toHaveLength(0)
 		expect(result.metadata.pathsExecuted).toContain("episodic")
 		expect(result.metadata.resultsByPath.episodic).toBeUndefined()
-		expect(laneFailures).toEqual([
-			{ lane: "episodic", error: new Error("episodic broke") },
+		expect(laneFailures).toHaveLength(1)
+		expect(laneFailures[0].lane).toBe("episodic")
+		expect(laneFailures[0].error).toBeInstanceOf(SearchLaneError)
+		expect((laneFailures[0].error as Error).cause).toEqual(
+			new Error("episodic broke"),
+		)
+		expect(
+			result.metadata.laneOutcomes?.filter((row) => row.lane === "episodic"),
+		).toEqual([
+			{
+				lane: "episodic",
+				stage: "lane",
+				outcome: "failed",
+				reason: "internal-error",
+			},
 		])
-		expect(result.metadata.laneOutcomes).toEqual([
-			{ lane: "episodic", status: "failed", error: "episodic broke" },
-		])
+		// V3: the only required lane failed, so the request failed — not a
+		// silent empty.
+		expect(result.metadata.outcomeStatus).toBe("failed")
 	})
 
 	it("fails loudly in benchmark strict mode when a whole path fails (RET-13)", async () => {
@@ -672,12 +693,19 @@ describe("searchV2", () => {
 			})
 			mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
 
-			await expect(
-				searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
+			const failure = await searchV2(
+				fakeDb,
+				fakePrefix,
+				"summarize today",
+				"agent-1",
+				{
 					availablePaths: new Set(["episodic"]),
 					searchOptions: { allowHybridBackstop: false },
-				}),
-			).rejects.toThrow("episodic broke")
+				},
+			).catch((err: unknown) => err)
+			expect(failure).toBeInstanceOf(SearchLaneError)
+			expect(failure).toMatchObject({ lane: "episodic" })
+			expect(((failure as Error).cause as Error).message).toBe("episodic broke")
 		} finally {
 			if (previous === undefined) {
 				delete process.env.MEMONGO_BENCHMARK_STRICT
@@ -731,34 +759,26 @@ describe("searchV2", () => {
 			},
 		)
 
-		// Every KB waterfall stage failed and was reported at its seam; the
-		// path itself still executed (ok, zero results) and the sibling
-		// episodic path kept its results.
-		expect(laneFailures).toEqual([
-			"kb:$rankFusion",
-			"kb:vector",
-			"kb:keyword",
-			"kb:$text",
-		])
+		// K4/V4: the first KB tier error stops the lane — no weaker tier runs
+		// after it — and is reported once at its tier; the sibling episodic
+		// path keeps its results and the request is partial.
+		expect(laneFailures).toEqual(["kb"])
 		expect(result.metadata.pathsExecuted).toEqual(
 			expect.arrayContaining(["kb", "episodic"]),
 		)
 		expect(result.metadata.resultsByPath.episodic).toBeGreaterThan(0)
 		expect(result.metadata.resultsByPath.kb).toBeUndefined()
-		const kbOutcome = result.metadata.laneOutcomes?.find(
-			(outcome) => outcome.lane === "kb",
-		)
-		expect(kbOutcome).toEqual({ lane: "kb", status: "ok", resultCount: 0 })
-		const kbStageOutcomes = result.metadata.laneOutcomes?.filter((outcome) =>
-			outcome.lane.startsWith("kb:"),
-		)
-		expect(kbStageOutcomes).toHaveLength(4)
-		for (const outcome of kbStageOutcomes ?? []) {
-			expect(outcome).toMatchObject({
-				status: "failed",
-				error: "kb lane broke",
-			})
-		}
+		expect(
+			result.metadata.laneOutcomes?.filter((outcome) => outcome.lane === "kb"),
+		).toEqual([
+			{
+				lane: "kb",
+				stage: "rank-fusion",
+				outcome: "failed",
+				reason: "internal-error",
+			},
+		])
+		expect(result.metadata.outcomeStatus).toBe("partial")
 	})
 
 	it("fails loudly in benchmark strict mode when a KB waterfall stage fails (RET-13)", async () => {
@@ -779,12 +799,18 @@ describe("searchV2", () => {
 			} as never)
 			mocked(searchEpisodes).mockResolvedValue([])
 
-			await expect(
-				searchV2(fakeDb, fakePrefix, "sprint goals architecture", "agent-1", {
+			const failure = await searchV2(
+				fakeDb,
+				fakePrefix,
+				"sprint goals architecture",
+				"agent-1",
+				{
 					availablePaths: new Set(["kb", "episodic"]),
 					searchOptions: { allowHybridBackstop: false },
-				}),
-			).rejects.toThrow("kb lane broke")
+				},
+			).catch((err: unknown) => err)
+			expect(failure).toBeInstanceOf(SearchLaneError)
+			expect(((failure as Error).cause as Error).message).toBe("kb lane broke")
 		} finally {
 			if (previous === undefined) {
 				delete process.env.MEMONGO_BENCHMARK_STRICT

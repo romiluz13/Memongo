@@ -563,8 +563,9 @@ describe("ensureStandardIndexes", () => {
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// Total = 101
-		expect(count).toBe(101)
+		// #101 R7: −2 structured/procedure $text indexes
+		// Total = 99
+		expect(count).toBe(99)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(5)
 		// C-005: per-document chunk TTL, mirroring idx_events_ttl_expires_at.
 		expect(chunks.createIndex).toHaveBeenCalledWith(
@@ -577,7 +578,7 @@ describe("ensureStandardIndexes", () => {
 		)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
 		expect(kbChunks.createIndex).toHaveBeenCalledTimes(4)
-		expect(structured.createIndex).toHaveBeenCalledTimes(11)
+		expect(structured.createIndex).toHaveBeenCalledTimes(10)
 		expect(structuredRevisions.createIndex).toHaveBeenCalledTimes(1)
 		expect(relevanceRuns.createIndex).toHaveBeenCalledTimes(3)
 		expect(relevanceArtifacts.createIndex).toHaveBeenCalledTimes(2)
@@ -648,7 +649,7 @@ describe("ensureStandardIndexes", () => {
 		) as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(procedures.createIndex).toHaveBeenCalledTimes(6)
+		expect(procedures.createIndex).toHaveBeenCalledTimes(5)
 		expect(procedureRevisions.createIndex).toHaveBeenCalledTimes(1)
 
 		// Legacy query-cache retention and telemetry
@@ -713,9 +714,9 @@ describe("ensureStandardIndexes", () => {
 			// 2 P4.4.1 partial TTL indexes, the 2 C-005 chunks/session_chunks
 			// TTL indexes, the 3 C-004 memory_quarantine indexes, the
 			// 2 C-017 cost-ledger indexes, and the W11 access_events batchId
-			// read-reconcile index)
+			// read-reconcile index), less the 2 #101 R7 $text indexes
 			// + 4 evidence mirror indexes
-			expect(count).toBe(105)
+			expect(count).toBe(103)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -832,8 +833,9 @@ describe("ensureStandardIndexes", () => {
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// Total = 101
-		expect(count).toBe(101)
+		// #101 R7: −2 structured/procedure $text indexes
+		// Total = 99
+		expect(count).toBe(99)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -1540,16 +1542,14 @@ describe("P3.8 index hygiene", () => {
 		)
 	})
 
-	it("creates all six $text fallback indexes by default", async () => {
+	it("creates the four remaining $text fallback indexes by default", async () => {
 		const db = mockDb()
 		await ensureStandardIndexes(db, "test_")
 		const textIndexNames = [
 			["test_chunks", "idx_chunks_text"],
 			["test_kb_chunks", "idx_kbchunks_text"],
-			["test_structured_mem", "idx_structured_text"],
 			["test_entities", "idx_entities_text"],
 			["test_episodes", "idx_episodes_text"],
-			["test_procedures", "idx_procedures_text"],
 		] as const
 		for (const [collectionName, indexName] of textIndexNames) {
 			const col = db.collection(collectionName) as unknown as {
@@ -1562,16 +1562,31 @@ describe("P3.8 index hygiene", () => {
 		}
 	})
 
-	it("skips all six $text fallback indexes when textFallbackIndexes is false", async () => {
+	it("#101 R7: never creates the structured or procedure $text index", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_", { textFallbackIndexes: true })
+		for (const [collectionName, indexName] of [
+			["test_structured_mem", "idx_structured_text"],
+			["test_procedures", "idx_procedures_text"],
+		] as const) {
+			const col = db.collection(collectionName) as unknown as {
+				createIndex: ReturnType<typeof vi.fn>
+			}
+			const found = col.createIndex.mock.calls.some(
+				(c: unknown[]) => (c[1] as { name?: string })?.name === indexName,
+			)
+			expect(found, `${indexName} on ${collectionName}`).toBe(false)
+		}
+	})
+
+	it("skips the $text fallback indexes when textFallbackIndexes is false", async () => {
 		const db = mockDb()
 		await ensureStandardIndexes(db, "test_", { textFallbackIndexes: false })
 		const textIndexNames = [
 			["test_chunks", "idx_chunks_text"],
 			["test_kb_chunks", "idx_kbchunks_text"],
-			["test_structured_mem", "idx_structured_text"],
 			["test_entities", "idx_entities_text"],
 			["test_episodes", "idx_episodes_text"],
-			["test_procedures", "idx_procedures_text"],
 		] as const
 		for (const [collectionName, indexName] of textIndexNames) {
 			const col = db.collection(collectionName) as unknown as {

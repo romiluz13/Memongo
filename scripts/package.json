@@ -5,6 +5,7 @@
 	"description": "QA corpus and operational scripts: publishability policy, memory-eval core, proof pack, e2e QA, benchmarks",
 	"type": "module",
 	"scripts": {
+		"check-types": "node ../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run",
 		"test:e2e": "vitest run --no-file-parallelism --config vitest.e2e.config.ts mongodb-e2e-qa.e2e.test.ts"
 	},

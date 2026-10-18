@@ -131,10 +131,14 @@ it("explicit vector-only retains no-query behavior", async () => {
 	expect(aggregate).not.toHaveBeenCalled()
 	expect(result.results).toEqual([])
 })
-it("strict mode rejects required ordinary text fallback before querying", async () => {
+it("R5: strict mode runs classic $text as the planned lexical tier, not a fallback", async () => {
 	vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "true")
-	await expect(search()).rejects.toThrow("search fallback disabled")
-	expect(aggregate).not.toHaveBeenCalled()
+	const result = await search()
+	expect(aggregate).toHaveBeenCalledOnce()
+	expect(aggregate.mock.calls[0][0][0].$match.$and[0]).toEqual({
+		$text: { $search: "graphite choice" },
+	})
+	expect(result.results).toHaveLength(1)
 })
 it("exhausted aggregation budget sends no query", async () => {
 	const { value } = await runWithSearchBudget(

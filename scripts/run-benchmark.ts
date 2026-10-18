@@ -48,6 +48,7 @@ import {
 } from "./benchmark/benchmark-answer-provider.js"
 import { describeLatencyBasis } from "./benchmark/mongodb-benchmark-runner.js"
 import { MongoDBManagerBenchmarkOps } from "./benchmark/mongodb-manager-benchmark.js"
+import type { MongoDBManagerHost } from "../packages/memory-engine/src/mongodb-manager-host.js"
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -620,11 +621,14 @@ export async function main(
 	const manager = await memongoBridgeGetManager(undefined, {
 		ownership: "owned",
 	})
+	// The manager instance is the runtime MongoDBManagerHost: the host members
+	// are its private fields, which the engine bridges with this same cast.
+	const host = manager as unknown as MongoDBManagerHost
 	let result: Awaited<
 		ReturnType<MongoDBManagerBenchmarkOps["relevanceBenchmark"]>
 	>
 	try {
-		result = await new MongoDBManagerBenchmarkOps(manager).relevanceBenchmark({
+		result = await new MongoDBManagerBenchmarkOps(host).relevanceBenchmark({
 			datasetPath,
 			// The contract binds thresholds to the dataset digest, so it can only be
 			// applied to the full artifact it pins.

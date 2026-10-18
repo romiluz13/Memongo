@@ -29,6 +29,12 @@ export type DetectedCapabilities = {
 	 * callers and tests keep compiling.
 	 */
 	capabilityGates?: Record<string, boolean>
+	/**
+	 * #101 R2: Search indexes known to be queryable for this deployment
+	 * profile. A Search-backed text tier runs only when its index is listed;
+	 * undefined means availability is unknown, so the tier does not run.
+	 */
+	queryableSearchIndexes?: readonly string[]
 }
 
 export type MongoIndexBudgetCheck = {

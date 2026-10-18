@@ -35,6 +35,10 @@ import { searchKB } from "./mongodb-kb-search.js"
 import type { V2Status } from "./mongodb-manager-admin.js"
 import type { ManagerReadResult } from "./mongodb-manager-read.js"
 import type {
+	SearchBarrierRequest,
+	SearchBarrierResult,
+} from "./mongodb-search-barrier.js"
+import type {
 	WriteConversationEventInput,
 	WriteConversationEventReceipt,
 } from "./mongodb-manager-write.js"
@@ -102,7 +106,9 @@ import type {
 	ClaimedMemoryJob,
 	MemoryJobType,
 	MemoryJobStatus,
+	SearchLaneOutcome,
 } from "./types.js"
+import type { SearchOutcomeSummary } from "./search-outcomes.js"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
 import type { FSWatcher } from "chokidar"
 import type { ClientSession, Db, Document, MongoClient } from "mongodb"
@@ -190,6 +196,7 @@ export interface MongoDBManagerHost {
 			kbRestricted?: boolean
 		},
 		admission?: AdmissionToken,
+		onOutcome?: (row: SearchLaneOutcome) => void,
 	): Promise<MemorySearchResult[]>
 	search(
 		query: string,
@@ -212,6 +219,11 @@ export interface MongoDBManagerHost {
 			 * control degraded this answer. Sink-not-state (see onLaneLatency).
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
+			/**
+			 * #101: receives this call's outcome summary ({status, lanes})
+			 * exactly once. Sink-not-state; rows are value-free enums.
+			 */
+			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]>
@@ -248,6 +260,11 @@ export interface MongoDBManagerHost {
 			 * control dropped the KB vector lane. Sink-not-state.
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
+			/**
+			 * #101: receives this call's outcome summary ({status, lanes})
+			 * exactly once. Sink-not-state; rows are value-free enums.
+			 */
+			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 	): Promise<MemorySearchResult[]>
 	detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod
@@ -388,7 +405,12 @@ export interface MongoDBManagerHost {
 	writeConversationEvent(
 		event: WriteConversationEventInput,
 		operationRunContext?: OperationRunContext,
-	): Promise<{ eventId: string; chunkCreated: boolean }>
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		eventId: string
+		chunkCreated: boolean
+		searchBarrier?: SearchBarrierResult
+	}>
 	writeConversationEventsBatch(
 		events: WriteConversationEventInput[],
 		operationRunContext?: OperationRunContext,
@@ -445,17 +467,26 @@ export interface MongoDBManagerHost {
 		expandEvents: boolean
 		session?: ClientSession
 	}): Promise<ManagerReadResult>
-	writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
+	writeStructuredMemory(
+		entry: StructuredMemoryEntry,
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
 		upserted: boolean
 		id: string
 		/** C-008: true when the entry was quarantined instead of written. */
 		quarantined?: boolean
 		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
 		matchedPatterns?: string[]
+		searchBarrier?: SearchBarrierResult
 	}>
 	writeProcedure(
 		entry: ProcedureEntry,
-	): Promise<{ upserted: boolean; id: string }>
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		upserted: boolean
+		id: string
+		searchBarrier?: SearchBarrierResult
+	}>
 	getLifecycleItem(
 		handle: MemoryStableHandle,
 	): Promise<MemoryLifecycleItem | null>

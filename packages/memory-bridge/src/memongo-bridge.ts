@@ -9,6 +9,7 @@ import type {
 import type {
 	MemoryContextBundle,
 	MemoryProviderStatus,
+	SearchBarrierRequest,
 	MemorySearchDegradation,
 	MemorySearchResult,
 	MemorySearchTimeRange,
@@ -18,6 +19,7 @@ import type {
 	MemoryStableHandle,
 	MongoDBMemoryManager,
 	RelevanceExplainResult,
+	SearchOutcomeSummary,
 	V2Status,
 } from "@memongo/memory-engine"
 // P4.1: deep engine symbols left the main barrel; during the deprecation
@@ -56,6 +58,9 @@ import {
 	getMemorySearchManager,
 } from "@memongo/memory-engine"
 import { materializeBlocks } from "@memongo/memory-engine/internal"
+// #101 section 3 step 7: the classic $text index rule, re-exported so the
+// API boot table derives its `text` lane from it instead of copying it.
+export { shouldEnsureTextFallbackIndexes } from "@memongo/memory-engine/internal"
 import { resolveBridgeConfig } from "./memory-config.js"
 
 /**
@@ -127,6 +132,30 @@ export async function memongoBridgeSearch(params: {
 }
 
 /**
+ * #101 / decision 16: the per-call search envelope. `outcomes` is the
+ * engine's value-free outcome summary for this call (complete, partial or
+ * failed); a throttled call carries `degradation` instead. A typed search
+ * failure is thrown, never folded into an empty envelope.
+ */
+export type MemongoBridgeSearchEnvelope = {
+	results: MemorySearchResult[]
+	degradation?: MemorySearchDegradation
+	outcomes?: SearchOutcomeSummary
+}
+
+function searchEnvelope(
+	results: MemorySearchResult[],
+	degradation: MemorySearchDegradation | undefined,
+	outcomes: SearchOutcomeSummary | undefined,
+): MemongoBridgeSearchEnvelope {
+	return {
+		results,
+		...(degradation ? { degradation } : {}),
+		...(outcomes ? { outcomes } : {}),
+	}
+}
+
+/**
  * WS-12 (C-019): search carrying the degradation marker out of the engine.
  * Same pipeline as memongoBridgeSearch; the response's `degradation` is set
  * exactly when admission control degraded the answer (denied query, denied
@@ -142,12 +171,10 @@ export async function memongoBridgeSearchWithDegradation(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	kbRestricted?: boolean
-}): Promise<{
-	results: MemorySearchResult[]
-	degradation?: MemorySearchDegradation
-}> {
+}): Promise<MemongoBridgeSearchEnvelope> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	let degradation: MemorySearchDegradation | undefined
+	let outcomes: SearchOutcomeSummary | undefined
 	const results = await m.search(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
@@ -158,8 +185,11 @@ export async function memongoBridgeSearchWithDegradation(params: {
 		onDegradation: (d) => {
 			degradation = d
 		},
+		onOutcomes: (o) => {
+			outcomes = o
+		},
 	})
-	return degradation ? { results, degradation } : { results }
+	return searchEnvelope(results, degradation, outcomes)
 }
 
 export async function memongoBridgeSearchKB(params: {
@@ -203,12 +233,10 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 	minScore?: number
 	filter?: { tags?: string[]; category?: string; source?: string }
 	fusionMethod?: MemoryMongoDBFusionMethod
-}): Promise<{
-	results: MemorySearchResult[]
-	degradation?: MemorySearchDegradation
-}> {
+}): Promise<MemongoBridgeSearchEnvelope> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	let degradation: MemorySearchDegradation | undefined
+	let outcomes: SearchOutcomeSummary | undefined
 	const results = await m.searchKB(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
@@ -222,8 +250,11 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 		onDegradation: (d) => {
 			degradation = d
 		},
+		onOutcomes: (o) => {
+			outcomes = o
+		},
 	})
-	return degradation ? { results, degradation } : { results }
+	return searchEnvelope(results, degradation, outcomes)
 }
 
 export async function memongoBridgeReadFile(params: {
@@ -250,6 +281,8 @@ export async function memongoBridgeAdd(params: {
 	scopeRef?: string
 	idempotencyKey?: string
 	expiresAt?: string
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	return memongoBridgeWriteConversationEvent({
 		agentId: params.agentId,
@@ -261,6 +294,7 @@ export async function memongoBridgeAdd(params: {
 		scopeRef: params.scopeRef,
 		idempotencyKey: params.idempotencyKey,
 		expiresAt: params.expiresAt,
+		...(params.searchBarrier ? { searchBarrier: params.searchBarrier } : {}),
 	})
 }
 
@@ -277,13 +311,15 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	scopeRef?: string
 	idempotencyKey?: string
 	expiresAt?: string
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const timestamp = params.timestamp ? new Date(params.timestamp) : undefined
 	const validAt = params.validAt ? new Date(params.validAt) : undefined
 	const invalidAt = params.invalidAt ? new Date(params.invalidAt) : undefined
 	const expiresAt = params.expiresAt ? new Date(params.expiresAt) : undefined
-	return m.writeConversationEvent({
+	const event = {
 		role: params.role,
 		body: params.body,
 		sessionId: params.sessionId,
@@ -295,7 +331,12 @@ export async function memongoBridgeWriteConversationEvent(params: {
 		scopeRef: params.scopeRef,
 		idempotencyKey: params.idempotencyKey,
 		expiresAt,
-	})
+	}
+	return params.searchBarrier
+		? m.writeConversationEvent(event, undefined, {
+				searchBarrier: params.searchBarrier,
+			})
+		: m.writeConversationEvent(event)
 }
 
 /**
@@ -359,10 +400,12 @@ export async function memongoBridgeWriteStructuredMemory(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	entry: StructuredMemoryEntry
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const id = resolveAgentId(params.agentId)
-	return m.writeStructuredMemory({
+	const entry: StructuredMemoryEntry = {
 		...params.entry,
 		// Issue #42: the manager/collection prefix is selected from the
 		// authorized identity, so the stored agentId MUST be that identity.
@@ -374,7 +417,10 @@ export async function memongoBridgeWriteStructuredMemory(params: {
 		// keep the entry's own value.
 		...(params.scope !== undefined ? { scope: params.scope } : {}),
 		...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
-	})
+	}
+	return params.searchBarrier
+		? m.writeStructuredMemory(entry, { searchBarrier: params.searchBarrier })
+		: m.writeStructuredMemory(entry)
 }
 
 export async function memongoBridgeWriteProcedure(params: {
@@ -382,10 +428,12 @@ export async function memongoBridgeWriteProcedure(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	entry: ProcedureEntry
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const id = resolveAgentId(params.agentId)
-	return m.writeProcedure({
+	const entry: ProcedureEntry = {
 		...params.entry,
 		// Issue #42: force the authorized identity; never trust entry.agentId.
 		agentId: id,
@@ -393,7 +441,10 @@ export async function memongoBridgeWriteProcedure(params: {
 		// entry smuggle (see memongoBridgeWriteStructuredMemory).
 		...(params.scope !== undefined ? { scope: params.scope } : {}),
 		...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
-	})
+	}
+	return params.searchBarrier
+		? m.writeProcedure(entry, { searchBarrier: params.searchBarrier })
+		: m.writeProcedure(entry)
 }
 
 export async function memongoBridgeProfile(params: {
@@ -1165,3 +1216,16 @@ export type {
 	ProcedureEntry,
 	StructuredMemoryEntry,
 } from "@memongo/memory-engine/internal"
+// #101 / decision 16: the value-free search outcome vocabulary the API
+// boundary maps to HTTP statuses (matrix sections 2 and 5).
+export type {
+	SearchBudgetReason,
+	SearchFailureReason,
+	SearchLane,
+	SearchLaneOutcome,
+	SearchLaneOutcomeStatus,
+	SearchOutcomeReason,
+	SearchOutcomeStatus,
+	SearchOutcomeSummary,
+	SearchStage,
+} from "@memongo/memory-engine"

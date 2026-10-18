@@ -8,7 +8,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { MongoServerError } from "mongodb"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
+import { chunksCollection } from "./mongodb-schema.js"
 import type { MemorySearchResult } from "./types.js"
+import { SearchLaneError } from "./search-outcomes.js"
 import {
 	mocked,
 	buildMockManager,
@@ -335,12 +337,17 @@ describe("manager search feeds the V2 verdict into the relevance runtime (RET-15
 		expect(relevance.persistRun).not.toHaveBeenCalled()
 	})
 
-	it("records the error-empty answer with the error outcome and no plan", async () => {
+	it("M5: records the error verdict, then rethrows the searchV2 failure typed", async () => {
 		searchV2State.responses.push(new Error("planner exploded"))
 		const relevance = buildRelevanceStub()
 		const manager = buildMockManager({ relevance })
 
-		await manager.search("exploding topic")
+		const failure = await manager
+			.search("exploding topic")
+			.catch((err: unknown) => err)
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect(failure).toMatchObject({ lane: "search", stage: "request" })
+		expect((failure as Error).message).not.toContain("planner exploded")
 
 		expect(relevance.recordSignal).toHaveBeenCalledWith([])
 		const run = relevance.persistRun.mock.calls[0]?.[0] as Record<
@@ -487,7 +494,6 @@ describe("recall-trace failure privacy through manager search paths", () => {
 		"success",
 		"empty",
 		"empty-fallback",
-		"error-fallback",
 		"detailed",
 	])("preserves %s results without logging private trace errors", async (branch) => {
 		const privateText = "violet confidential trace CANARY90"
@@ -495,24 +501,15 @@ describe("recall-trace failure privacy through manager search paths", () => {
 			errmsg: privateText,
 			code: 11000,
 		})
-		const outerError = new MongoServerError({
-			errmsg: "public planner fixture",
-			code: 2,
-		})
 		const lines: string[] = []
 		vi.spyOn(console, "warn").mockImplementation((...args) =>
 			lines.push(args.join(" ")),
 		)
 		vi.mocked(recordRecallTrace).mockRejectedValue(traceError)
-		searchV2State.responses.push(
-			branch === "error-fallback"
-				? outerError
-				: {
-						results:
-							branch === "success" || branch === "detailed" ? [v2Hit] : [],
-						metadata: v2Metadata,
-					},
-		)
+		searchV2State.responses.push({
+			results: branch === "success" || branch === "detailed" ? [v2Hit] : [],
+			metadata: v2Metadata,
+		})
 		const manager = buildMockManager({
 			relevance: buildRelevanceStub(),
 			recordSearchAccess: vi.fn(),
@@ -595,6 +592,11 @@ describe("remaining original relevance admission connections", () => {
 		)
 	})
 	it("threads supplied original admission through the actual legacy method", async () => {
+		// #101: the legacy $text tier no longer swallows a missing collection
+		// into an empty answer, so the stub supplies a queryable one.
+		vi.mocked(chunksCollection).mockReturnValue({
+			aggregate: () => ({ toArray: async () => [] }),
+		} as never)
 		const relevance = buildRelevanceStub(),
 			manager = buildMockManager({ relevance })
 		const admission = {

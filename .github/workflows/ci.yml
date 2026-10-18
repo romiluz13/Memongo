@@ -61,7 +61,10 @@ jobs:
   e2e:
     name: E2E against real MongoDB (tier A)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
+      # Keyless on purpose: tier A never embeds, and the search-barrier suite
+      # expects a service without a provider key.
       mongodb:
         image: mongodb/mongodb-atlas-local:preview
         ports:
@@ -113,3 +116,105 @@ jobs:
           --require-suite mongodb-projection-repair.e2e.test.ts
           --require-suite mongodb-temporal-validity.e2e.test.ts
           --require-suite mongodb-memory-jobs.e2e.test.ts
+          --require-suite mongodb-search-barrier.e2e.test.ts
+
+  # The api-contract lane runs in its own job so paid embeddings happen only
+  # here: Rom's grant is this PR job, at most 60 barrier probe embeddings per
+  # run, on the existing VOYAGE_API_KEY secret.
+  proof-pack:
+    name: API contract proof-pack (keyed MongoDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mongodb:
+        image: mongodb/mongodb-atlas-local:preview
+        ports:
+          - 27017:27017
+        env:
+          MONGODB_ATLAS_TELEMETRY_ENABLE: "false"
+          # Auto-embeddings are served by mongot inside the container, so the
+          # Atlas Model key must be on the container for the proof-pack's
+          # vector and hybrid lanes and its barrier probes.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 40s
+    steps:
+      # Zero fallbacks: without the key (a fork PR, or the secret unset) the
+      # API would silently serve search from $text, so the job fails here
+      # instead of skipping or going green on the fallback.
+      - name: Assert Voyage key is armed for the proof-pack (no fallback)
+        env:
+          VOYAGE_KEY_PRESENT: ${{ secrets.VOYAGE_API_KEY != '' }}
+        run: |
+          if [[ "${VOYAGE_KEY_PRESENT}" != "true" ]]; then
+            echo "::error::VOYAGE_API_KEY secret is empty: the MongoDB service cannot embed, so the proof-pack would run on the \$text fallback"
+            exit 1
+          fi
+          echo "VOYAGE_API_KEY secret present on the MongoDB service container"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      # Node 22 matches the API image (apps/api/Dockerfile), which runs the
+      # built apps/api/dist/server.js that the proof-pack step starts.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      # The unweakened 15-check proof-pack against this PR's built API on
+      # loopback, with its own database, agent and API key. The API process
+      # gets no provider key; embeddings come from the MongoDB service. A
+      # startup failure, a missing check, a failed check or a degraded search
+      # lane fails the job.
+      - name: API contract proof-pack (15 checks)
+        id: proof_pack
+        timeout-minutes: 10
+        env:
+          MEMONGO_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          PROOF_PACK_OUT_DIR: ${{ runner.temp }}/proof-pack
+        run: bash scripts/ci/run-proof-pack.sh
+
+      # Failure-only and diagnostic only: the service container's log (mongod
+      # and mongot) and the proof database's search-index status, each bounded
+      # and scrubbed of URIs, keys and document text before upload. Index status
+      # is never a visibility signal. The raw log never enters the artifact.
+      - name: Collect proof-pack diagnostics (service log, search-index status)
+        if: failure() && steps.proof_pack.outcome == 'failure'
+        timeout-minutes: 3
+        env:
+          MEMONGO_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          PROOF_PACK_OUT_DIR: ${{ runner.temp }}/proof-pack
+          SERVICE_CONTAINER_ID: ${{ job.services.mongodb.id }}
+          # Read only so the scrubber can remove the key verbatim.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: |
+          raw_log="$(mktemp)"
+          status=0
+          docker logs --tail 20000 "${SERVICE_CONTAINER_ID}" >"${raw_log}" 2>&1 || status=$?
+          bun scripts/ci/collect-proof-pack-diagnostics.ts "${raw_log}" "${PROOF_PACK_OUT_DIR}/diagnostics" "${PROOF_PACK_OUT_DIR}/database.txt" || status=$?
+          rm -f "${raw_log}"
+          exit "${status}"
+
+      - name: Upload proof-pack evidence (API log, PID, verdict, diagnostics)
+        if: failure() && steps.proof_pack.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-pack-evidence
+          path: ${{ runner.temp }}/proof-pack
+          if-no-files-found: error

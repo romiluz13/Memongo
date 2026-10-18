@@ -135,6 +135,9 @@ describe("buildMissLedger", () => {
 			{
 				caseId: "case-1",
 				questionType: "multi-session",
+				executionStatus: "succeeded",
+				scoreEligibility: "retrieval",
+				retrievalOutcome: "hit",
 				empty: false,
 				topScore: 0.9,
 				latencyMs: 100,
@@ -158,6 +161,9 @@ describe("buildMissLedger", () => {
 			{
 				caseId: "case-miss",
 				questionType: "single-session-preference",
+				executionStatus: "succeeded",
+				scoreEligibility: "retrieval",
+				retrievalOutcome: "miss",
 				empty: false,
 				topScore: 0.7,
 				latencyMs: 200,
@@ -170,17 +176,23 @@ describe("buildMissLedger", () => {
 					{
 						rank: 1,
 						score: 0.7,
+						finalScore: 0.7,
 						source: "conversation",
+						lane: "conversation",
 						sessionId: "wrong-s1",
 						path: "p1",
+						whySurvived: "session-id",
 					},
 					{
 						rank: 2,
 						score: 0.6,
+						finalScore: 0.6,
 						source: "session-evidence",
+						lane: "session-evidence",
 						sessionId: "wrong-s2",
 						canonicalId: "session-chunk/wrong-s2",
 						path: "p2",
+						whySurvived: "session-id,canonical-id",
 					},
 				],
 			},
@@ -205,6 +217,9 @@ describe("buildMissLedger", () => {
 			{
 				caseId: "case-partial",
 				questionType: "knowledge-update",
+				executionStatus: "succeeded",
+				scoreEligibility: "retrieval",
+				retrievalOutcome: "hit",
 				empty: false,
 				topScore: 0.8,
 				latencyMs: 150,
@@ -217,16 +232,22 @@ describe("buildMissLedger", () => {
 					{
 						rank: 1,
 						score: 0.8,
+						finalScore: 0.8,
 						source: "conversation",
+						lane: "conversation",
 						sessionId: "s1",
 						path: "p1",
+						whySurvived: "session-id",
 					},
 					{
 						rank: 2,
 						score: 0.7,
+						finalScore: 0.7,
 						source: "conversation",
+						lane: "conversation",
 						sessionId: "s3",
 						path: "p2",
+						whySurvived: "session-id",
 					},
 				],
 			},
@@ -247,6 +268,9 @@ describe("buildMissLedger", () => {
 			{
 				caseId: "case-turn",
 				questionType: "temporal-reasoning",
+				executionStatus: "succeeded",
+				scoreEligibility: "retrieval",
+				retrievalOutcome: "hit",
 				empty: false,
 				topScore: 0.9,
 				latencyMs: 120,
@@ -259,10 +283,13 @@ describe("buildMissLedger", () => {
 					{
 						rank: 1,
 						score: 0.9,
+						finalScore: 0.9,
 						source: "session-evidence",
+						lane: "conversation",
 						sessionId: "s1",
 						sourceEventIds: ["t1", "t2", "t3"],
 						path: "p1",
+						whySurvived: "session-id,source-event-ids",
 					},
 				],
 			},
@@ -322,6 +349,9 @@ describe("buildMissLedger", () => {
 			{
 				caseId: "better",
 				questionType: "knowledge-update",
+				executionStatus: "succeeded",
+				scoreEligibility: "retrieval",
+				retrievalOutcome: "hit",
 				empty: false,
 				topScore: 0.8,
 				latencyMs: 100,
@@ -334,6 +364,9 @@ describe("buildMissLedger", () => {
 			{
 				caseId: "worse",
 				questionType: "single-session-preference",
+				executionStatus: "succeeded",
+				scoreEligibility: "retrieval",
+				retrievalOutcome: "miss",
 				empty: false,
 				topScore: 0.5,
 				latencyMs: 200,
@@ -388,7 +421,7 @@ describe("buildCaseDiagnostics", () => {
 		})
 
 		expect(evaluation.rAt5).toBe(1)
-		expect(evaluation.longMemEval?.session.recallAllAt1).toBe(0)
+		expect(evaluation.longMemEval?.session?.recallAllAt1).toBe(0)
 
 		const diagnostics = buildCaseDiagnostics({
 			executions: [evaluation],
@@ -466,9 +499,9 @@ describe("buildCaseDiagnostics", () => {
 			traceOptions: { maxCandidates: 10 },
 		})
 
-		expect(evaluation.longMemEval?.session.recallAnyAt1).toBe(1)
-		expect(evaluation.longMemEval?.session.recallAllAt1).toBe(0)
-		expect(evaluation.longMemEval?.session.recallAllAt3).toBe(1)
+		expect(evaluation.longMemEval?.session?.recallAnyAt1).toBe(1)
+		expect(evaluation.longMemEval?.session?.recallAllAt1).toBe(0)
+		expect(evaluation.longMemEval?.session?.recallAllAt3).toBe(1)
 
 		const diagnostics = buildCaseDiagnostics({
 			executions: [evaluation],

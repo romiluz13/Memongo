@@ -16,6 +16,11 @@ import {
 } from "./mongodb-write-fence.js"
 import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
+import {
+	type SearchTierOutcomeSink,
+	searchFailureLogFields,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 const log = createSubsystemLogger("memory:mongodb:episodes")
 
@@ -702,16 +707,34 @@ export async function searchEpisodes(params: {
 	/**
 	 * P3.8: detected textSearch capability. When true, lookup routes through
 	 * the episode_autocomplete $search index; when false/omitted (no mongot),
-	 * the escaped $regex fallback runs directly instead of paying a failed
-	 * $search round trip per lookup.
+	 * the escaped $regex tier runs as the planned lookup instead of paying a
+	 * failed $search round trip per lookup.
 	 */
 	textSearchAvailable?: boolean
+	/** #101: per-call sink for this lane's tier outcome rows. */
+	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<Episode[]> {
 	const { db, prefix, query, agentId, scope, scopeRef, timeRange, limit } =
 		params
+	const report = (
+		stage: "atlas-search" | "episode-search",
+		count: number,
+	): void => {
+		params.onTierOutcome?.({
+			stage,
+			outcome: count > 0 ? "ok" : "ok-empty",
+			...(count > 0 ? {} : { reason: "zero-hits" as const }),
+			resultCount: count,
+		})
+	}
 
 	// Guard: empty/whitespace-only query would produce a match-all regex
 	if (!query.trim()) {
+		params.onTierOutcome?.({
+			stage: "episode-search",
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
 		return []
 	}
 
@@ -719,7 +742,8 @@ export async function searchEpisodes(params: {
 
 	// P3.8: serve episode lookup from the purpose-built episode_autocomplete
 	// search index when mongot is present; the unanchored case-insensitive
-	// $regex below remains the no-textSearch fallback.
+	// $regex below is the planned tier only where textSearch is absent.
+	// #101 G1/R8: a $search error is a typed failure, never a regex fallback.
 	if (params.textSearchAvailable === true) {
 		try {
 			const searchFilters: Document[] = [
@@ -756,11 +780,12 @@ export async function searchEpisodes(params: {
 				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
 				.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
+			report("atlas-search", docs.length)
 			return docs as unknown as Episode[]
 		} catch (err) {
-			log.warn(
-				`searchEpisodes $search failed, falling back to regex: ${err instanceof Error ? err.message : String(err)}`,
-			)
+			const typed = toTypedSearchError(err, "atlas-search")
+			log.warn("searchEpisodes $search failed", searchFailureLogFields(typed))
+			throw typed
 		}
 	}
 
@@ -792,12 +817,12 @@ export async function searchEpisodes(params: {
 			.limit(limit ?? 50)
 			.toArray()
 
+		report("episode-search", docs.length)
 		return docs as unknown as Episode[]
 	} catch (err) {
-		log.error(
-			`searchEpisodes failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-		throw err
+		const typed = toTypedSearchError(err, "episode-search")
+		log.error("searchEpisodes failed", searchFailureLogFields(typed))
+		throw typed
 	}
 }
 

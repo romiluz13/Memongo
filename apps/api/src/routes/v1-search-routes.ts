@@ -9,6 +9,13 @@ import {
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
 import {
+	boundSearchOutcomeRows,
+	boundSearchOutcomes,
+	mapSearchOutcomes,
+	searchErrorResponse,
+	searchFailureResponse,
+} from "../lib/search-outcomes.js"
+import {
 	conversationScopeSchema,
 	kbFilterSchema,
 	proceduralScopeSchema,
@@ -51,8 +58,8 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
-			const { results, degradation } = await memongoBridgeSearchWithDegradation(
-				{
+			const { results, degradation, outcomes } =
+				await memongoBridgeSearchWithDegradation({
 					query,
 					agentId: await readAgentId(c),
 					maxResults: readLimit(body),
@@ -62,14 +69,22 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 					scope: await readScope(c),
 					scopeRef: await readScopeRef(c),
 					kbRestricted: c.get("kbRestricted"),
-				},
-			)
+				})
+			// #101 R3: a failed call is a non-2xx, never an empty answer.
+			const mapping = mapSearchOutcomes(outcomes)
+			if (outcomes && mapping.status !== 200) {
+				return searchFailureResponse(c, mapping, outcomes)
+			}
 			// WS-12 (C-019): throttling is served as throttling — the
 			// degradation marker rides the 200 so a degraded answer never
 			// reads as "no memories found" at the agent boundary.
-			return c.json(degradation ? { results, degradation } : { results })
+			return c.json({
+				results,
+				...(degradation ? { degradation } : {}),
+				...(outcomes ? { outcomes: boundSearchOutcomes(outcomes) } : {}),
+			})
 		} catch (err) {
-			return internalError(c, err, "SEARCH_FAILED")
+			return searchErrorResponse(c, err, "SEARCH_FAILED")
 		}
 	})
 
@@ -100,7 +115,7 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			filter = parsedFilter.value
 		}
 		try {
-			const { results, degradation } =
+			const { results, degradation, outcomes } =
 				await memongoBridgeSearchKBWithDegradation({
 					query,
 					agentId: await readAgentId(c),
@@ -118,12 +133,20 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 							? body.fusionMethod
 							: undefined,
 				})
+			const mapping = mapSearchOutcomes(outcomes)
+			if (outcomes && mapping.status !== 200) {
+				return searchFailureResponse(c, mapping, outcomes)
+			}
 			// WS-12 (C-019): a dropped vector lane means the text-lane results
 			// stand with degraded ranking — the marker says which, so degraded
 			// ranking never reads as authoritative.
-			return c.json(degradation ? { results, degradation } : { results })
+			return c.json({
+				results,
+				...(degradation ? { degradation } : {}),
+				...(outcomes ? { outcomes: boundSearchOutcomes(outcomes) } : {}),
+			})
 		} catch (err) {
-			return internalError(c, err, "SEARCH_KB_FAILED")
+			return searchErrorResponse(c, err, "SEARCH_KB_FAILED")
 		}
 	})
 
@@ -342,9 +365,27 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 				searchConfig: searchConfig.value,
 				kbRestricted: c.get("kbRestricted"),
 			})
-			return c.json(result)
+			const { laneOutcomes, outcomeStatus } = result.metadata
+			const outcomes = outcomeStatus
+				? { status: outcomeStatus, lanes: laneOutcomes ?? [] }
+				: undefined
+			const mapping = mapSearchOutcomes(outcomes)
+			if (outcomes && mapping.status !== 200) {
+				return searchFailureResponse(c, mapping, outcomes)
+			}
+			return c.json(
+				laneOutcomes
+					? {
+							...result,
+							metadata: {
+								...result.metadata,
+								laneOutcomes: boundSearchOutcomeRows(laneOutcomes),
+							},
+						}
+					: result,
+			)
 		} catch (err) {
-			return internalError(c, err, "SEARCH_DETAILED_FAILED")
+			return searchErrorResponse(c, err, "SEARCH_DETAILED_FAILED")
 		}
 	})
 }

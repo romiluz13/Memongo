@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { createSubsystemLogger } from "@memongo/lib"
+import {
+	SearchBudgetDeniedError,
+	type SearchBudgetReason,
+	type SearchStage,
+} from "./search-outcomes.js"
 
 const log = createSubsystemLogger("memory:mongodb:search-budget")
 
@@ -11,18 +16,24 @@ const log = createSubsystemLogger("memory:mongodb:search-budget")
 // backstops, a recursive hybrid backstop, then a legacySearch re-run). Cost
 // was inverse to data presence — cold tenants burned the most.
 //
-// This module is the per-request ledger that caps that storm: searchV2 opens
-// one budget per request and every $vectorSearch stage build (an autoEmbed
+// This module is the per-request ledger that caps that storm: the request
+// boundary opens one budget and every $vectorSearch stage build (an autoEmbed
 // embedding) and every aggregation in the search path consumes from it.
-// Exhaustion degrades a lane to an EMPTY result — never an error — per the
-// Appendix C principle "empty ≠ error": an empty answer is valid, and it is
-// what stops the escalation machinery from re-firing.
+// #101: exhaustion is a typed budget denial (SearchBudgetDeniedError), never
+// an empty result, so a denied lane can never read as zero hits or trigger a
+// weaker tier.
 //
 // The budget travels via AsyncLocalStorage so the lanes (which run
 // concurrently inside searchV2) share one ledger without threading a param
 // through every search helper signature. The recursive hybrid backstop
 // re-enters searchV2 inside the same context and therefore consumes the
 // SAME budget instead of opening a fresh one.
+//
+// #101 decision 18: required lanes reserve their estimated cost before any
+// optional work starts, and run inside their reservation; optional work can
+// only spend the unreserved remainder. Every charge is atomic over its
+// aggregation/embed pair. The ledger also remembers completed retrievals so
+// an equivalent one later in the same request is reused instead of re-spent.
 // ---------------------------------------------------------------------------
 
 export type SearchBudgetLimits = {
@@ -43,18 +54,41 @@ export type SearchBudgetLimits = {
 }
 
 export type SearchBudgetSnapshot = SearchBudgetLimits & {
+	/**
+	 * #101 decision 18: these counts are the engine's charged query work
+	 * (attempts, warmup retries included), not provider billing.
+	 */
+	accounting: "engine-query-work"
 	/** Aggregations consumed by the search so far. */
 	aggregations: number
 	/** Server-side embeddings consumed by the search so far. */
 	embeds: number
+	/** The share of the counts above spent on warmup retries. */
+	retries: { aggregations: number; embeds: number }
+	/** Retrievals skipped because an equivalent one already completed. */
+	equivalentSkips: number
 	/** True when consumption hit either limit during the search. */
 	exhausted: boolean
+}
+
+/** #101 decision 18: one attempt's charges, consumed together or not at all. */
+export type SearchWorkCost = {
+	aggregations: number
+	embeds: number
 }
 
 export type SearchBudgetReservation = {
 	tryConsumeAggregation(): boolean
 	tryConsumeEmbed(): boolean
+	/** #101 decision 18: consume a paired charge from the reservation, all or nothing. */
+	tryConsumeWork(cost: SearchWorkCost): boolean
 	release(): void
+}
+
+/** One request's ledger, opened at the request boundary and run in repeatedly. */
+export type SearchBudgetLedger = {
+	run<T>(fn: () => Promise<T>): Promise<T>
+	snapshot(): SearchBudgetSnapshot
 }
 
 /**
@@ -99,12 +133,35 @@ type ActiveSearchBudget = {
 	embeds: number
 	reservedAggregations: number
 	reservedEmbeds: number
+	retryAggregations: number
+	retryEmbeds: number
+	equivalentSkips: number
 	exhausted: boolean
 	/** RET-16: absolute deadline (Date.now() + maxWallMs) when the limit is set. */
 	deadlineAt?: number
+	/**
+	 * Whether the request already holds its admission token. searchDetailed
+	 * admits at its boundary; search() opens the ledger before searchV2
+	 * admits on it.
+	 */
+	admitted: boolean
+	/** Decision 18: completed retrievals of this request, by equivalence key. */
+	completed: Map<string, readonly unknown[]>
+}
+
+type ReservationState = {
+	budget?: ActiveSearchBudget
+	remainingAggregations: number
+	remainingEmbeds: number
+	released: boolean
 }
 
 const budgetStorage = new AsyncLocalStorage<ActiveSearchBudget>()
+const reservationStorage = new AsyncLocalStorage<ReservationState>()
+const reservationStates = new WeakMap<
+	SearchBudgetReservation,
+	ReservationState
+>()
 
 function toSnapshot(budget: ActiveSearchBudget): SearchBudgetSnapshot {
 	return {
@@ -113,8 +170,14 @@ function toSnapshot(budget: ActiveSearchBudget): SearchBudgetSnapshot {
 		...(budget.limits.maxWallMs != null
 			? { maxWallMs: budget.limits.maxWallMs }
 			: {}),
+		accounting: "engine-query-work",
 		aggregations: budget.aggregations,
 		embeds: budget.embeds,
+		retries: {
+			aggregations: budget.retryAggregations,
+			embeds: budget.retryEmbeds,
+		},
+		equivalentSkips: budget.equivalentSkips,
 		exhausted: budget.exhausted,
 	}
 }
@@ -130,7 +193,7 @@ function markExhausted(
 	}
 	budget.exhausted = true
 	log.warn(
-		`per-search budget exhausted (${reason}); degrading remaining lanes to empty results`,
+		`per-search budget exhausted (${reason}); remaining lanes are budget-denied`,
 		{ ...toSnapshot(budget), ...extra },
 	)
 }
@@ -166,10 +229,56 @@ export function hasActiveSearchBudget(): boolean {
 	return budgetStorage.getStore() !== undefined
 }
 
+/** True when the active budget's request already holds its admission token. */
+export function isSearchBudgetAdmitted(): boolean {
+	return budgetStorage.getStore()?.admitted === true
+}
+
+/** Record that the active budget's request now holds its admission token. */
+export function markSearchBudgetAdmitted(): void {
+	const budget = budgetStorage.getStore()
+	if (budget) {
+		budget.admitted = true
+	}
+}
+
 /** Snapshot of the active budget, or undefined outside a budget context. */
 export function getSearchBudgetSnapshot(): SearchBudgetSnapshot | undefined {
 	const budget = budgetStorage.getStore()
 	return budget ? toSnapshot(budget) : undefined
+}
+
+/**
+ * #101 decision 18: open one request ledger. Every `run` executes inside the
+ * same ledger, so a request boundary can run its passes and its opt-in
+ * legacy re-run against one set of counts.
+ */
+export function openSearchBudget(
+	limits: SearchBudgetLimits,
+	options: { admitted?: boolean } = {},
+): SearchBudgetLedger {
+	const budget: ActiveSearchBudget = {
+		limits,
+		aggregations: 0,
+		embeds: 0,
+		reservedAggregations: 0,
+		reservedEmbeds: 0,
+		retryAggregations: 0,
+		retryEmbeds: 0,
+		equivalentSkips: 0,
+		exhausted: false,
+		admitted: options.admitted ?? true,
+		completed: new Map(),
+		// RET-16: the request wall starts when the budget opens; nested
+		// re-entries keep the PARENT's deadline.
+		...(limits.maxWallMs != null
+			? { deadlineAt: Date.now() + limits.maxWallMs }
+			: {}),
+	}
+	return {
+		run: (fn) => budgetStorage.run(budget, fn),
+		snapshot: () => toSnapshot(budget),
+	}
 }
 
 /**
@@ -186,60 +295,156 @@ export async function runWithSearchBudget<T>(
 		const value = await fn()
 		return { value, budget: toSnapshot(existing) }
 	}
-	const budget: ActiveSearchBudget = {
-		limits,
-		aggregations: 0,
-		embeds: 0,
-		reservedAggregations: 0,
-		reservedEmbeds: 0,
-		exhausted: false,
-		// RET-16: the request wall starts when the budget opens; the share
-		// branch above keeps the PARENT's deadline for nested re-entries.
-		...(limits.maxWallMs != null
-			? { deadlineAt: Date.now() + limits.maxWallMs }
-			: {}),
-	}
-	const value = await budgetStorage.run(budget, fn)
-	return { value, budget: toSnapshot(budget) }
+	const ledger = openSearchBudget(limits)
+	const value = await ledger.run(fn)
+	return { value, budget: ledger.snapshot() }
 }
 
-function tryConsume(
-	kind: "aggregations" | "embeds",
-	limit: (limits: SearchBudgetLimits) => number,
-	onCapacityExhausted?: () => void,
+function isPastDeadline(budget: ActiveSearchBudget | undefined): boolean {
+	return (
+		budget?.deadlineAt !== undefined && Date.now() > (budget.deadlineAt ?? 0)
+	)
+}
+
+function normalizeReservationCount(value: number): number {
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
+function normalizeCost(cost: SearchWorkCost): SearchWorkCost {
+	return {
+		aggregations: normalizeReservationCount(cost.aggregations),
+		embeds: normalizeReservationCount(cost.embeds),
+	}
+}
+
+/** The share of `cost` the reservation in scope can cover. */
+function heldShare(
+	held: ReservationState | undefined,
+	budget: ActiveSearchBudget,
+	cost: SearchWorkCost,
+): SearchWorkCost {
+	if (!held || held.released || held.budget !== budget) {
+		return { aggregations: 0, embeds: 0 }
+	}
+	return {
+		aggregations: Math.min(cost.aggregations, held.remainingAggregations),
+		embeds: Math.min(cost.embeds, held.remainingEmbeds),
+	}
+}
+
+/** Whether the part of `cost` the reservation does not cover fits the pool. */
+function poolFits(
+	budget: ActiveSearchBudget,
+	cost: SearchWorkCost,
+	held: SearchWorkCost,
+): { aggregations: boolean; embeds: boolean } {
+	const restAggregations = cost.aggregations - held.aggregations
+	const restEmbeds = cost.embeds - held.embeds
+	return {
+		aggregations:
+			restAggregations === 0 ||
+			budget.aggregations + budget.reservedAggregations + restAggregations <=
+				budget.limits.maxAggregations,
+		embeds:
+			restEmbeds === 0 ||
+			budget.embeds + budget.reservedEmbeds + restEmbeds <=
+				budget.limits.maxEmbeds,
+	}
+}
+
+/**
+ * #101 decision 18: consume a paired charge atomically. Inside a required
+ * lane's reservation the charge draws on that reservation first and on the
+ * unreserved pool only for the rest; everywhere else it draws on the
+ * unreserved pool. Both halves fit, or nothing is charged — a refused embed
+ * never leaves its aggregation spent, or the reverse.
+ */
+export function tryConsumeSearchWork(
+	cost: SearchWorkCost,
+	options: { retry?: boolean } = {},
 ): boolean {
 	const budget = budgetStorage.getStore()
-	// Unbudgeted callers (diagnostics and legacy paths outside searchV2) are
-	// never throttled.
+	// Unbudgeted callers (diagnostics outside any request ledger) are never
+	// throttled.
 	if (!budget) {
 		return true
 	}
 	// RET-16: the request wall spans retries and passes — once the deadline
-	// passes, every further consume is refused (empty ≠ error).
-	if (budget.deadlineAt !== undefined && Date.now() > budget.deadlineAt) {
+	// passes, every further consume is refused.
+	if (isPastDeadline(budget)) {
 		markExhausted(budget, "wall-clock deadline passed")
 		return false
 	}
-	const reserved =
-		kind === "aggregations"
-			? budget.reservedAggregations
-			: budget.reservedEmbeds
-	if (budget[kind] + reserved >= limit(budget.limits)) {
-		markExhausted(budget, `${kind} hit the limit`)
-		onCapacityExhausted?.()
+	const normalized = normalizeCost(cost)
+	const held = reservationStorage.getStore()
+	const share = heldShare(held, budget, normalized)
+	const fits = poolFits(budget, normalized, share)
+	if (!fits.aggregations || !fits.embeds) {
+		markExhausted(
+			budget,
+			`${fits.embeds ? "aggregations" : "embeds"} hit the limit`,
+		)
 		return false
 	}
-	budget[kind] += 1
+	if (held && (share.aggregations > 0 || share.embeds > 0)) {
+		held.remainingAggregations -= share.aggregations
+		held.remainingEmbeds -= share.embeds
+		budget.reservedAggregations -= share.aggregations
+		budget.reservedEmbeds -= share.embeds
+	}
+	budget.aggregations += normalized.aggregations
+	budget.embeds += normalized.embeds
+	if (options.retry) {
+		budget.retryAggregations += normalized.aggregations
+		budget.retryEmbeds += normalized.embeds
+	}
 	return true
 }
 
 /**
+ * #101: why the active budget refused a paired charge — the deadline when it
+ * has passed, else embeds when they do not fit, else aggregations.
+ */
+export function searchWorkDenialReason(
+	cost: SearchWorkCost,
+): SearchBudgetReason {
+	const budget = budgetStorage.getStore()
+	if (!budget) {
+		return cost.embeds > 0 ? "budget-embeds" : "budget-aggregations"
+	}
+	if (isPastDeadline(budget)) {
+		return "budget-deadline"
+	}
+	const normalized = normalizeCost(cost)
+	const fits = poolFits(
+		budget,
+		normalized,
+		heldShare(reservationStorage.getStore(), budget, normalized),
+	)
+	return fits.embeds ? "budget-aggregations" : "budget-embeds"
+}
+
+/** #101: consume a paired charge or throw a typed denial; a denial spends nothing. */
+export function consumeSearchWorkOrThrow(
+	stage: SearchStage,
+	cost: SearchWorkCost,
+	options: { retry?: boolean } = {},
+): void {
+	if (!tryConsumeSearchWork(cost, options)) {
+		throw new SearchBudgetDeniedError({
+			stage,
+			reason: searchWorkDenialReason(cost),
+		})
+	}
+}
+
+/**
  * Consume one aggregation from the active budget. Returns false when the
- * budget is exhausted — callers must degrade to an empty result (empty ≠
- * error) rather than throw.
+ * budget is exhausted; search callers report that as a typed budget denial
+ * (consumeSearchAggregationOrThrow), never as an empty result.
  */
 export function tryConsumeSearchAggregation(): boolean {
-	return tryConsume("aggregations", (limits) => limits.maxAggregations)
+	return tryConsumeSearchWork({ aggregations: 1, embeds: 0 })
 }
 
 /**
@@ -247,14 +452,43 @@ export function tryConsumeSearchAggregation(): boolean {
  * autoEmbed $vectorSearch stage embeds the query text server-side, so stage
  * construction is where the cost lands. Returns false when exhausted.
  */
-export function tryConsumeSearchEmbed(
-	onCapacityExhausted?: () => void,
-): boolean {
-	return tryConsume("embeds", (limits) => limits.maxEmbeds, onCapacityExhausted)
+export function tryConsumeSearchEmbed(): boolean {
+	return tryConsumeSearchWork({ aggregations: 0, embeds: 1 })
 }
 
-function normalizeReservationCount(value: number): number {
-	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+/**
+ * Give back aggregations charged for work that turned out to share one
+ * execution (several prepaid stages inside one pipeline).
+ */
+export function refundSearchAggregations(count: number): void {
+	const budget = budgetStorage.getStore()
+	const refund = normalizeReservationCount(count)
+	if (budget && refund > 0) {
+		budget.aggregations = Math.max(0, budget.aggregations - refund)
+	}
+}
+
+/**
+ * #101: why the active budget refused a consume — the wall-clock deadline
+ * when it has passed, otherwise the exhausted resource.
+ */
+export function searchBudgetDenialReason(
+	kind: "aggregations" | "embeds",
+): SearchBudgetReason {
+	if (isPastDeadline(budgetStorage.getStore())) {
+		return "budget-deadline"
+	}
+	return kind === "aggregations" ? "budget-aggregations" : "budget-embeds"
+}
+
+/** #101: consume one aggregation or throw a typed denial (never an empty result). */
+export function consumeSearchAggregationOrThrow(stage: SearchStage): void {
+	consumeSearchWorkOrThrow(stage, { aggregations: 1, embeds: 0 })
+}
+
+/** #101: consume one server-side embed or throw a typed denial. */
+export function consumeSearchEmbedOrThrow(stage: SearchStage): void {
+	consumeSearchWorkOrThrow(stage, { aggregations: 0, embeds: 1 })
 }
 
 /**
@@ -263,20 +497,15 @@ function normalizeReservationCount(value: number): number {
  * converts reserved units to consumed units exactly once and releases unused
  * capacity when the owner finishes.
  */
-export function tryReserveSearchBudget(request: {
-	aggregations: number
-	embeds: number
-}): SearchBudgetReservation | undefined {
+export function tryReserveSearchBudget(
+	request: SearchWorkCost,
+): SearchBudgetReservation | undefined {
 	const requestedAggregations = normalizeReservationCount(request.aggregations)
 	const requestedEmbeds = normalizeReservationCount(request.embeds)
 	const budget = budgetStorage.getStore()
 
 	// RET-16: reservations past the request wall can never be satisfied.
-	if (
-		budget &&
-		budget.deadlineAt !== undefined &&
-		Date.now() > budget.deadlineAt
-	) {
+	if (budget && isPastDeadline(budget)) {
 		markExhausted(budget, "wall-clock deadline passed")
 		return undefined
 	}
@@ -291,7 +520,7 @@ export function tryReserveSearchBudget(request: {
 		if (!budget.exhausted) {
 			budget.exhausted = true
 			log.warn(
-				"per-search budget cannot satisfy reservation; degrading reserved lane to empty results",
+				"per-search budget cannot satisfy reservation; the reserved lane is budget-denied",
 				{
 					...toSnapshot(budget),
 					requestedAggregations,
@@ -307,46 +536,89 @@ export function tryReserveSearchBudget(request: {
 		budget.reservedEmbeds += requestedEmbeds
 	}
 
-	let remainingAggregations = requestedAggregations
-	let remainingEmbeds = requestedEmbeds
-	let released = false
+	const state: ReservationState = {
+		...(budget ? { budget } : {}),
+		remainingAggregations: requestedAggregations,
+		remainingEmbeds: requestedEmbeds,
+		released: false,
+	}
 
-	const consume = (kind: "aggregations" | "embeds"): boolean => {
-		if (released) return false
-		if (budget?.deadlineAt !== undefined && Date.now() > budget.deadlineAt) {
-			markExhausted(budget, "wall-clock deadline passed")
+	const consume = (cost: SearchWorkCost): boolean => {
+		if (state.released) return false
+		if (isPastDeadline(budget)) {
+			if (budget) markExhausted(budget, "wall-clock deadline passed")
 			return false
 		}
-		if (kind === "aggregations") {
-			if (remainingAggregations <= 0) return false
-			remainingAggregations -= 1
-			if (budget) {
-				budget.reservedAggregations -= 1
-				budget.aggregations += 1
-			}
-			return true
+		const normalized = normalizeCost(cost)
+		if (
+			normalized.aggregations > state.remainingAggregations ||
+			normalized.embeds > state.remainingEmbeds
+		) {
+			return false
 		}
-		if (remainingEmbeds <= 0) return false
-		remainingEmbeds -= 1
+		state.remainingAggregations -= normalized.aggregations
+		state.remainingEmbeds -= normalized.embeds
 		if (budget) {
-			budget.reservedEmbeds -= 1
-			budget.embeds += 1
+			budget.reservedAggregations -= normalized.aggregations
+			budget.reservedEmbeds -= normalized.embeds
+			budget.aggregations += normalized.aggregations
+			budget.embeds += normalized.embeds
 		}
 		return true
 	}
 
-	return {
-		tryConsumeAggregation: () => consume("aggregations"),
-		tryConsumeEmbed: () => consume("embeds"),
+	const reservation: SearchBudgetReservation = {
+		tryConsumeAggregation: () => consume({ aggregations: 1, embeds: 0 }),
+		tryConsumeEmbed: () => consume({ aggregations: 0, embeds: 1 }),
+		tryConsumeWork: consume,
 		release: () => {
-			if (released) return
-			released = true
+			if (state.released) return
+			state.released = true
 			if (budget) {
-				budget.reservedAggregations -= remainingAggregations
-				budget.reservedEmbeds -= remainingEmbeds
+				budget.reservedAggregations -= state.remainingAggregations
+				budget.reservedEmbeds -= state.remainingEmbeds
 			}
-			remainingAggregations = 0
-			remainingEmbeds = 0
+			state.remainingAggregations = 0
+			state.remainingEmbeds = 0
 		},
 	}
+	reservationStates.set(reservation, state)
+	return reservation
+}
+
+/**
+ * #101 decision 18: run a required lane inside its reservation. Every charge
+ * the lane makes draws on the reservation first; the unused rest is released
+ * when the lane settles.
+ */
+export async function runWithSearchReservation<T>(
+	reservation: SearchBudgetReservation,
+	fn: () => Promise<T>,
+): Promise<T> {
+	const state = reservationStates.get(reservation)
+	try {
+		return state ? await reservationStorage.run(state, fn) : await fn()
+	} finally {
+		reservation.release()
+	}
+}
+
+/** Copies of an equivalent completed retrieval of this request, if any. */
+export function findCompletedSearchRetrieval<T>(
+	key: string,
+): readonly T[] | undefined {
+	const budget = budgetStorage.getStore()
+	const results = budget?.completed.get(key) as readonly T[] | undefined
+	if (budget && results) {
+		budget.equivalentSkips += 1
+	}
+	return results
+}
+
+/** Remember a successful retrieval so an equivalent one is not re-spent. */
+export function recordCompletedSearchRetrieval<T>(
+	key: string,
+	results: readonly T[],
+): void {
+	budgetStorage.getStore()?.completed.set(key, results)
 }

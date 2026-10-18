@@ -33,6 +33,7 @@ import { searchV2 } from "./mongodb-search-v2.js"
 import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import { findExactProcedureMatches } from "./mongodb-procedures.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
+import { SearchLaneError } from "./search-outcomes.js"
 const privateText = "CANARY164 confidential project and medical details"
 beforeEach(() => {
 	vi.clearAllMocks()
@@ -88,31 +89,32 @@ for (const seam of ["lane", "exact-backstop"] as const) {
 			},
 		)
 		expect(result.results).toEqual([])
-		const relevant = warnings.filter(
-			(x) =>
-				x.includes(
-					seam === "lane"
-						? "searchV2 lane failed"
-						: "searchV2 exact procedural backstop failed",
-				) ||
-				(seam === "lane" && x.includes("searchV2 structured failed")),
-		)
+		const lane = seam === "lane" ? "structured" : "backstop:procedural-exact"
+		const relevant = warnings.filter((x) => x.includes("searchV2 lane failed"))
 		expect(relevant).toHaveLength(1)
+		expect(relevant[0]).toContain(`"lane":"${lane}"`)
 		expect(relevant[0]).not.toContain(privateText)
 		expect(relevant[0].length).toBeLessThan(250)
 		expect(relevant[0]).not.toContain("queryDigest")
 		if (kind === "driver") expect(relevant[0]).toContain('"code":2')
 		expect(poison).not.toHaveBeenCalled()
-		if (seam === "lane") {
-			expect(onPathFailure).toHaveBeenCalledWith("structured", err)
-			expect(result.metadata.laneOutcomes).toContainEqual({
-				lane: "structured",
-				status: "failed",
-				error: err.message,
-			})
-		} else expect(onPathFailure).not.toHaveBeenCalled()
+		expect(onPathFailure).toHaveBeenCalledOnce()
+		const [hookLane, hookErr] = onPathFailure.mock.calls[0] as [string, Error]
+		expect(hookLane).toBe(lane)
+		expect(hookErr).toBeInstanceOf(SearchLaneError)
+		expect(hookErr.cause).toBe(err)
+		expect(hookErr.message).not.toContain(privateText)
+		expect(result.metadata.laneOutcomes).toContainEqual({
+			lane,
+			stage: "lane",
+			outcome: "failed",
+			reason: kind === "driver" ? "query-error" : "internal-error",
+		})
+		expect(JSON.stringify(result.metadata.laneOutcomes)).not.toContain(
+			privateText,
+		)
 	})
-	it(`${seam} strict mode preserves original error`, async () => {
+	it(`${seam} strict mode throws typed with the original as cause`, async () => {
 		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "true")
 		const err = new Error(privateText)
 		if (seam === "lane")
@@ -120,12 +122,19 @@ for (const seam of ["lane", "exact-backstop"] as const) {
 		else vi.mocked(findExactProcedureMatches).mockRejectedValue(err)
 		vi.spyOn(console, "warn").mockImplementation(() => {})
 		vi.spyOn(console, "error").mockImplementation(() => {})
-		await expect(
-			searchV2({} as Db, "test_", "ordinary question", "agent-1", {
+		const failure = await searchV2(
+			{} as Db,
+			"test_",
+			"ordinary question",
+			"agent-1",
+			{
 				availablePaths: new Set(
 					seam === "lane" ? ["structured"] : ["structured", "procedural"],
 				),
-			}),
-		).rejects.toBe(err)
+			},
+		).catch((caught: unknown) => caught)
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect((failure as Error).cause).toBe(err)
+		expect((failure as Error).message).not.toContain(privateText)
 	})
 }

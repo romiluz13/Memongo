@@ -6,17 +6,19 @@
 
 import type { Db, Document } from "mongodb"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
-import { settledFailureMeta } from "./query-diagnostics.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { Entity, RelationType } from "./mongodb-graph.js"
 import type { MemorySearchExecutorTimeRange } from "./mongodb-search-executor.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { eventsCollection } from "./mongodb-schema.js"
 import {
+	consumeSearchAggregationOrThrow,
 	resolveUserSearchMaxTimeMs,
 	type SearchBudgetReservation,
+	searchBudgetDenialReason,
+	searchWorkDenialReason,
 	tryConsumeSearchAggregation,
-	tryConsumeSearchEmbed,
+	tryConsumeSearchWork,
 } from "./mongodb-search-budget.js"
 import type { MemorySearchResult } from "./types.js"
 import {
@@ -42,54 +44,99 @@ import {
 	buildEventLifecycleClause,
 	mergeQueryClauses,
 } from "./mongodb-temporal.js"
+import {
+	type SearchBudgetReason,
+	SearchBudgetDeniedError,
+	type SearchTierOutcomeSink,
+	searchFailureLogFields,
+	searchFailureTierRow,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 type EventSearchBranch = "turn-vector" | "turn-text"
-type EventSearchFailureHook = (
-	branch: EventSearchBranch,
-	error: unknown,
-) => void
 type EventBranchSearch = {
 	branch: EventSearchBranch
 	results: Promise<MemorySearchResult[]>
 }
 const branchLog = createSubsystemLogger("memory:mongodb:search")
 
+/**
+ * #101 L1: each branch reports its own row; a failed branch never discards
+ * a sibling's evidence (the lane is partial), unless every branch failed or
+ * strict mode is on — then the first failure is the lane's typed throw.
+ */
 async function settleEventBranches(
 	searches: EventBranchSearch[],
-	onBranchFailure?: EventSearchFailureHook,
+	onTierOutcome?: SearchTierOutcomeSink,
 ): Promise<MemorySearchResult[][]> {
 	const outcomes = await Promise.allSettled(
 		searches.map((search) => search.results),
 	)
-	const failure = outcomes.find((outcome) => outcome.status === "rejected")
+	const failures = outcomes.flatMap((outcome, index) =>
+		outcome.status === "rejected"
+			? [toTypedSearchError(outcome.reason, searches[index].branch)]
+			: [],
+	)
 	if (
-		failure?.status === "rejected" &&
-		(isBenchmarkStrictMode() ||
-			outcomes.every((outcome) => outcome.status === "rejected"))
+		failures.length > 0 &&
+		(isBenchmarkStrictMode() || failures.length === outcomes.length)
 	) {
-		throw failure.reason
+		for (const failure of failures.slice(1)) {
+			onTierOutcome?.(searchFailureTierRow(failure.stage, failure))
+		}
+		throw failures[0]
 	}
 	const results: MemorySearchResult[][] = []
 	for (const [index, outcome] of outcomes.entries()) {
+		const branch = searches[index].branch
 		if (outcome.status === "fulfilled") {
+			const count = outcome.value.length
+			onTierOutcome?.({
+				stage: branch,
+				outcome: count > 0 ? "ok" : "ok-empty",
+				...(count > 0 ? {} : { reason: "zero-hits" as const }),
+				resultCount: count,
+			})
 			results.push(outcome.value)
 			continue
 		}
-		const branch = searches[index].branch
-		if (onBranchFailure) {
-			try {
-				onBranchFailure(branch, outcome.reason)
-				continue
-			} catch {
-				// A diagnostic callback must not discard usable sibling evidence.
-			}
-		}
+		const typed = toTypedSearchError(outcome.reason, branch)
 		branchLog.warn("event search branch failed", {
 			branch,
-			...settledFailureMeta(outcome.reason),
+			...searchFailureLogFields(typed),
 		})
+		onTierOutcome?.(searchFailureTierRow(branch, typed))
 	}
 	return results
+}
+
+/**
+ * #101 L8-L10/L13-L15: a refused branch is a budget-denied row, never a
+ * silent skip. When no branch could run at all, the first denial is the
+ * lane's typed throw; otherwise every denial is reported as its own row.
+ */
+function settleBranchDenials(
+	denials: SearchBudgetDeniedError[],
+	branchesStarted: number,
+	onTierOutcome?: SearchTierOutcomeSink,
+): void {
+	const throwFirst = branchesStarted === 0 && denials.length > 0
+	for (const denial of throwFirst ? denials.slice(1) : denials) {
+		onTierOutcome?.(searchFailureTierRow(denial.stage, denial))
+	}
+	if (throwFirst) {
+		throw denials[0]
+	}
+}
+
+/** An inline autoEmbed $vectorSearch branch: one aggregation and its embed. */
+const VECTOR_BRANCH_COST = { aggregations: 1, embeds: 1 } as const
+
+function branchDenial(
+	stage: EventSearchBranch,
+	reason: SearchBudgetReason,
+): SearchBudgetDeniedError {
+	return new SearchBudgetDeniedError({ stage, reason })
 }
 
 async function expandTemporalCoverageSessionEvents(params: {
@@ -103,9 +150,17 @@ async function expandTemporalCoverageSessionEvents(params: {
 	questionDate: Date
 	maxPerSession: number
 	maxEvents: number
+	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<MemorySearchResult[]> {
 	const sessionIds = [...new Set(params.sessionIds)].filter(Boolean)
-	if (sessionIds.length === 0) return []
+	if (sessionIds.length === 0) {
+		params.onTierOutcome?.({
+			stage: "plan",
+			outcome: "not-applicable",
+			reason: "no-candidates",
+		})
+		return []
+	}
 	const docs = await eventsCollection(params.db, params.prefix)
 		.find(
 			mergeQueryClauses(
@@ -220,25 +275,31 @@ export async function searchTemporalCoverageEvents(params: {
 	scopeRef: string
 	maxResults: number
 	capabilities: DetectedCapabilities
+	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<MemorySearchResult[]> {
+	const notApplicable = (
+		stage: "plan" | "turn-text",
+		reason: "query-shape" | "capability-absent",
+	): MemorySearchResult[] => {
+		params.onTierOutcome?.({ stage, outcome: "not-applicable", reason })
+		return []
+	}
 	const temporalQuery = isTemporalCoverageQuery(
 		params.query,
 		params.questionDate,
 	)
 	if (!temporalQuery) {
-		return []
+		return notApplicable("plan", "query-shape")
 	}
+	// R1: an optional phase this deployment cannot serve is capability-absent.
 	if (!params.capabilities.textSearch) {
-		if (isBenchmarkStrictMode()) {
-			throw new Error(
-				"temporal coverage search requires MongoDB Search text capability in strict mode",
-			)
-		}
-		return []
+		return notApplicable("turn-text", "capability-absent")
 	}
 
 	const terms = extractTemporalCoverageTerms(params.query)
-	if (terms.length === 0 || !params.questionDate) return []
+	if (terms.length === 0 || !params.questionDate) {
+		return notApplicable("plan", "query-shape")
+	}
 	const anchorTerms = extractTemporalCoverageAnchorTerms(terms)
 
 	const filters = [
@@ -319,14 +380,23 @@ export async function searchTemporalCoverageEvents(params: {
 	]
 
 	// P3.2: this direct aggregate bypasses runSearchAggregateWithRetry, so it
-	// consumes the per-request budget here.
-	if (!tryConsumeSearchAggregation()) {
-		return []
+	// consumes the per-request budget here; a refusal is a typed denial (L5).
+	consumeSearchAggregationOrThrow("turn-text")
+	let docs: Document[]
+	try {
+		docs = await eventsCollection(params.db, params.prefix)
+			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
+			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
+			.toArray()
+	} catch (err) {
+		throw toTypedSearchError(err, "turn-text")
 	}
-	const docs = await eventsCollection(params.db, params.prefix)
-		// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-		.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-		.toArray()
+	params.onTierOutcome?.({
+		stage: "turn-text",
+		outcome: docs.length > 0 ? "ok" : "ok-empty",
+		...(docs.length > 0 ? {} : { reason: "zero-hits" as const }),
+		resultCount: docs.length,
+	})
 	const mapped = docs
 		.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
 		.filter((result): result is MemorySearchResult => Boolean(result))
@@ -361,6 +431,7 @@ export async function searchTemporalCoverageEvents(params: {
 		questionDate: params.questionDate,
 		maxPerSession: 3,
 		maxEvents: Math.max(params.maxResults, 30),
+		onTierOutcome: params.onTierOutcome,
 	})
 	const timelineEvidence = orderTemporalCoverageByTimeBucket(
 		orderTemporalCoverageBySession(
@@ -392,12 +463,19 @@ export async function searchTurnEventsWithinSessions(params: {
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
 	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
-	onBranchFailure?: EventSearchFailureHook
+	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<MemorySearchResult[]> {
 	const sessionIds = Array.from(new Set(params.sessionIds)).filter(
 		(value) => value.trim().length > 0,
 	)
-	if (sessionIds.length === 0) return []
+	if (sessionIds.length === 0) {
+		params.onTierOutcome?.({
+			stage: "plan",
+			outcome: "not-applicable",
+			reason: "no-candidates",
+		})
+		return []
+	}
 
 	const events = eventsCollection(params.db, params.prefix)
 	// The Search stages run against the indexed copy, which can lag a
@@ -444,15 +522,24 @@ export async function searchTurnEventsWithinSessions(params: {
 	].filter((value): value is Document => Boolean(value))
 
 	const searches: EventBranchSearch[] = []
-	if (
-		params.capabilities.vectorSearch &&
-		params.embeddingMode === "automated" &&
+	const denials: SearchBudgetDeniedError[] = []
+	const canVectorBranch =
+		params.capabilities.vectorSearch && params.embeddingMode === "automated"
+	if (!canVectorBranch) {
+		params.onTierOutcome?.({
+			stage: "turn-vector",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+	} else if (!tryConsumeSearchWork(VECTOR_BRANCH_COST)) {
 		// P3.2: these inline $vectorSearch pipelines bypass
 		// buildVectorSearchStage, so they consume the per-request aggregation +
-		// server-side embed budget here.
-		tryConsumeSearchAggregation() &&
-		tryConsumeSearchEmbed()
-	) {
+		// server-side embed budget here — decision 18: as one pair, so a
+		// refused embed never strands a spent aggregation.
+		denials.push(
+			branchDenial("turn-vector", searchWorkDenialReason(VECTOR_BRANCH_COST)),
+		)
+	} else {
 		const vectorPipeline: Document[] = [
 			{
 				$vectorSearch: {
@@ -497,7 +584,17 @@ export async function searchTurnEventsWithinSessions(params: {
 		})
 	}
 	// P3.2: direct aggregates consume the per-request budget here.
-	if (params.capabilities.textSearch && tryConsumeSearchAggregation()) {
+	if (!params.capabilities.textSearch) {
+		params.onTierOutcome?.({
+			stage: "turn-text",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+	} else if (!tryConsumeSearchAggregation()) {
+		denials.push(
+			branchDenial("turn-text", searchBudgetDenialReason("aggregations")),
+		)
+	} else {
 		const textPipeline: Document[] = [
 			{
 				$search: {
@@ -540,8 +637,9 @@ export async function searchTurnEventsWithinSessions(params: {
 		})
 	}
 
+	settleBranchDenials(denials, searches.length, params.onTierOutcome)
 	if (searches.length === 0) return []
-	const results = await settleEventBranches(searches, params.onBranchFailure)
+	const results = await settleEventBranches(searches, params.onTierOutcome)
 	return mergeTurnPrecisionResults(results)
 		.map((result, index) => ({
 			...result,
@@ -566,20 +664,26 @@ export async function searchConversationEvidenceEvents(params: {
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
 	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
-	onBranchFailure?: EventSearchFailureHook
+	onTierOutcome?: SearchTierOutcomeSink
 	budgetReservation?: SearchBudgetReservation
 	/** RET-02: explicit caller-resolved occurrence-time bounds. */
 	timeRange?: MemorySearchExecutorTimeRange
 }): Promise<MemorySearchResult[]> {
 	if (!isConversationEvidenceQuery(params.query, params.questionDate)) {
+		params.onTierOutcome?.({
+			stage: "plan",
+			outcome: "not-applicable",
+			reason: "query-shape",
+		})
 		return []
 	}
+	// R1: an optional phase this deployment cannot serve is capability-absent.
 	if (!params.capabilities.textSearch && !params.capabilities.vectorSearch) {
-		if (isBenchmarkStrictMode()) {
-			throw new Error(
-				"conversation evidence search requires MongoDB Search or Vector Search capability in strict mode",
-			)
-		}
+		params.onTierOutcome?.({
+			stage: "lane",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
 		return []
 	}
 
@@ -661,19 +765,39 @@ export async function searchConversationEvidenceEvents(params: {
 	].filter((value): value is Document => Boolean(value))
 
 	const searches: EventBranchSearch[] = []
-	if (
-		params.capabilities.vectorSearch &&
-		params.embeddingMode === "automated" &&
+	const denials: SearchBudgetDeniedError[] = []
+	const reservation = params.budgetReservation
+	const denialReason = (kind: "aggregations" | "embeds"): SearchBudgetReason =>
+		reservation ? "budget-reservation" : searchBudgetDenialReason(kind)
+	const consumeAggregation = (): boolean =>
+		reservation
+			? reservation.tryConsumeAggregation()
+			: tryConsumeSearchAggregation()
+	const canVectorBranch =
+		params.capabilities.vectorSearch && params.embeddingMode === "automated"
+	if (!canVectorBranch) {
+		params.onTierOutcome?.({
+			stage: "turn-vector",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+	} else if (
+		!(reservation
+			? reservation.tryConsumeWork(VECTOR_BRANCH_COST)
+			: tryConsumeSearchWork(VECTOR_BRANCH_COST))
+	) {
 		// P3.2: these inline $vectorSearch pipelines bypass
 		// buildVectorSearchStage, so they consume the per-request aggregation +
-		// server-side embed budget here.
-		(params.budgetReservation
-			? params.budgetReservation.tryConsumeAggregation()
-			: tryConsumeSearchAggregation()) &&
-		(params.budgetReservation
-			? params.budgetReservation.tryConsumeEmbed()
-			: tryConsumeSearchEmbed())
-	) {
+		// server-side embed budget here — decision 18: as one pair.
+		denials.push(
+			branchDenial(
+				"turn-vector",
+				reservation
+					? "budget-reservation"
+					: searchWorkDenialReason(VECTOR_BRANCH_COST),
+			),
+		)
+	} else {
 		const vectorPipeline: Document[] = [
 			{
 				$vectorSearch: {
@@ -719,12 +843,15 @@ export async function searchConversationEvidenceEvents(params: {
 	}
 
 	// P3.2: direct aggregates consume the per-request budget here.
-	if (
-		params.capabilities.textSearch &&
-		(params.budgetReservation
-			? params.budgetReservation.tryConsumeAggregation()
-			: tryConsumeSearchAggregation())
-	) {
+	if (!params.capabilities.textSearch) {
+		params.onTierOutcome?.({
+			stage: "turn-text",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+	} else if (!consumeAggregation()) {
+		denials.push(branchDenial("turn-text", denialReason("aggregations")))
+	} else {
 		const should: Document[] = []
 		if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
 			should.push({
@@ -786,8 +913,9 @@ export async function searchConversationEvidenceEvents(params: {
 		})
 	}
 
+	settleBranchDenials(denials, searches.length, params.onTierOutcome)
 	if (searches.length === 0) return []
-	const results = await settleEventBranches(searches, params.onBranchFailure)
+	const results = await settleEventBranches(searches, params.onTierOutcome)
 	return mergeTurnPrecisionResults(results)
 		.map((result, index) => ({
 			...result,

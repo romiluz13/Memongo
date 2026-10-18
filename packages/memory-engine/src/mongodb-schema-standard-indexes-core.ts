@@ -236,14 +236,8 @@ export async function ensureCoreStandardIndexes(
 		{ name: "idx_structured_scope_state_salience_updated" },
 	)
 	applied++
-	// $text index on structured_mem for text search fallback
-	if (textFallbackIndexes) {
-		await structured.createIndex(
-			{ value: "text", context: "text" },
-			{ name: "idx_structured_text" },
-		)
-		applied++
-	}
+	// #101 R7: no structured query uses $text, so idx_structured_text is no
+	// longer created. Existing deployments may drop it manually.
 	// P4.4.1: optional per-document TTL (memory.mongodb.ttl). Official TTL
 	// pattern: expireAfterSeconds: 0 keyed on an absolute expiresAt date,
 	// partial so documents without an expiresAt stay out of the index. The

@@ -27,6 +27,7 @@ import type {
 	RejectedResultSummary,
 	SearchConfig,
 	SearchLaneOutcome,
+	SearchOutcomeStatus,
 	SearchRecallProfile,
 	SearchRecipe,
 } from "./types.js"
@@ -928,6 +929,7 @@ export function mergeMetadata(params: {
 				| "plan"
 				| "throttled"
 				| "laneOutcomes"
+				| "outcomeStatus"
 			>
 		}
 	>
@@ -961,8 +963,17 @@ export function mergeMetadata(params: {
 	// metadata answers "why did lane X produce nothing" across the whole
 	// request — pathsExecuted shows ATTEMPTED paths, resultsByPath only
 	// CONTRIBUTING lanes, and laneOutcomes carries the per-lane why.
-	const laneOutcomes = params.passes.flatMap(
-		(pass) => pass.metadata.laneOutcomes ?? [],
+	// #101 E1: each row keeps its pass index; rows carry no raw text.
+	const laneOutcomes = params.passes.flatMap((pass, passIndex) =>
+		(pass.metadata.laneOutcomes ?? []).map((row) => ({
+			...row,
+			pass: passIndex,
+		})),
+	)
+	const outcomeStatus = mergePassOutcomeStatus(
+		params.passes.flatMap((pass) =>
+			pass.metadata.outcomeStatus ? [pass.metadata.outcomeStatus] : [],
+		),
 	)
 	return {
 		mode: params.request.searchMode,
@@ -997,7 +1008,24 @@ export function mergeMetadata(params: {
 			: {}),
 		...(throttled ? { throttled } : {}),
 		...(laneOutcomes.length ? { laneOutcomes } : {}),
+		...(outcomeStatus ? { outcomeStatus } : {}),
 	}
+}
+
+/**
+ * #101: the request status over its passes — complete when every pass was
+ * complete, failed when every pass failed, partial otherwise.
+ */
+function mergePassOutcomeStatus(
+	statuses: SearchOutcomeStatus[],
+): SearchOutcomeStatus | undefined {
+	if (statuses.length === 0) {
+		return undefined
+	}
+	if (statuses.every((status) => status === "complete")) {
+		return "complete"
+	}
+	return statuses.every((status) => status === "failed") ? "failed" : "partial"
 }
 
 export function buildNoDirectEvidenceResponse(params: {
@@ -1014,6 +1042,7 @@ export function buildNoDirectEvidenceResponse(params: {
 				| "plan"
 				| "throttled"
 				| "laneOutcomes"
+				| "outcomeStatus"
 			>
 		}
 	>
@@ -1751,6 +1780,8 @@ export async function executeMongoSearchPlan(params: {
 			throttled?: { retryAfterMs: number }
 			/** RET-13: per-lane outcome ledger recorded by this pass. */
 			laneOutcomes?: SearchLaneOutcome[]
+			/** #101: this pass's outcome status. */
+			outcomeStatus?: SearchOutcomeStatus
 		}
 	}>
 	trustContext?: {
@@ -1774,12 +1805,14 @@ export async function executeMongoSearchPlan(params: {
 				| "plan"
 				| "throttled"
 				| "laneOutcomes"
+				| "outcomeStatus"
 			>
 		}
 	> = []
 	const allRejected: RejectedResultSummary[] = []
 	const acceptedById = new Map<string, MemorySearchResult>()
 	const seenFollowUpKinds = new Set<string>()
+	let lanesIncomplete = false
 
 	for (let passIndex = 0; passIndex < passPlans.length; passIndex++) {
 		const passPlan = passPlans[passIndex]
@@ -1835,6 +1868,9 @@ export async function executeMongoSearchPlan(params: {
 				...(executed.metadata.laneOutcomes?.length
 					? { laneOutcomes: executed.metadata.laneOutcomes }
 					: {}),
+				...(executed.metadata.outcomeStatus
+					? { outcomeStatus: executed.metadata.outcomeStatus }
+					: {}),
 			},
 		})
 
@@ -1843,6 +1879,15 @@ export async function executeMongoSearchPlan(params: {
 		// more denied attempts on the same dry bucket and blur the outcome
 		// with extra throttled telemetry.
 		if (executed.metadata.throttled) {
+			break
+		}
+		// #101 E3: a partial or failed pass is not a zero-hit verdict — no
+		// follow-up or corrective pass may key on its missing results.
+		if (
+			executed.metadata.outcomeStatus &&
+			executed.metadata.outcomeStatus !== "complete"
+		) {
+			lanesIncomplete = true
 			break
 		}
 
@@ -1923,7 +1968,12 @@ export async function executeMongoSearchPlan(params: {
 		normalized.allowConstraintRelaxation === true &&
 		passes.length < normalized.maxPasses &&
 		identifyRelaxableConstraint(allRejected) !== null
-	if (correction.needed && correction.correction && !relaxationArmed) {
+	if (
+		correction.needed &&
+		correction.correction &&
+		!relaxationArmed &&
+		!lanesIncomplete
+	) {
 		let correctiveTimeRange = timeRange
 		if (correction.correction === "time-range-widened-3x" && timeRange) {
 			const duration = timeRange.end.getTime() - timeRange.start.getTime()
@@ -1979,6 +2029,9 @@ export async function executeMongoSearchPlan(params: {
 					: {}),
 				...(corrExec.metadata.laneOutcomes?.length
 					? { laneOutcomes: corrExec.metadata.laneOutcomes }
+					: {}),
+				...(corrExec.metadata.outcomeStatus
+					? { outcomeStatus: corrExec.metadata.outcomeStatus }
 					: {}),
 			},
 		})
@@ -2057,6 +2110,9 @@ export async function executeMongoSearchPlan(params: {
 						: {}),
 					...(relaxExec.metadata.laneOutcomes?.length
 						? { laneOutcomes: relaxExec.metadata.laneOutcomes }
+						: {}),
+					...(relaxExec.metadata.outcomeStatus
+						? { outcomeStatus: relaxExec.metadata.outcomeStatus }
 						: {}),
 				},
 			})

@@ -13,7 +13,10 @@ const mongoUri = (password: string) =>
 	["mongodb://probe-user:", password, "@mongo.internal:27017/memongo"].join("")
 
 describe("deriveSearchLanes", () => {
-	it("maps bridge capabilities onto lanes", () => {
+	// #101 section 3 step 7: `text` is the classic $text lane, which exists
+	// only where the engine creates its index — deployments without Atlas
+	// Search (the shouldEnsureTextFallbackIndexes rule).
+	it("reports no classic $text lane on an Atlas Search deployment", () => {
 		expect(
 			deriveSearchLanes({
 				vectorSearch: true,
@@ -23,12 +26,28 @@ describe("deriveSearchLanes", () => {
 				storedSource: false,
 				vectorIndexMethod: false,
 			}),
-		).toEqual({ hybrid: true, vector: true, keyword: true, text: true })
+		).toEqual({ hybrid: true, vector: true, keyword: true, text: false })
+	})
+
+	it("reports the classic $text lane on a deployment without Atlas Search", () => {
+		expect(
+			deriveSearchLanes({
+				vectorSearch: false,
+				textSearch: false,
+				scoreFusion: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+			}),
+		).toEqual({ hybrid: false, vector: false, keyword: false, text: true })
+	})
+
+	it("reports every lane unavailable when the probe is unknown", () => {
 		expect(deriveSearchLanes(null)).toEqual({
 			hybrid: false,
 			vector: false,
 			keyword: false,
-			text: true,
+			text: false,
 		})
 	})
 
@@ -56,6 +75,33 @@ describe("formatCapabilityTable", () => {
 		})
 		expect(table).toContain("all retrieval lanes available")
 		expect(table).not.toContain("probe failed")
+	})
+
+	it("treats a healthy Search deployment without classic $text as fully available", () => {
+		const table = formatCapabilityTable({
+			hybrid: true,
+			vector: true,
+			keyword: true,
+			text: false,
+		})
+		expect(table).toContain("hybrid:  available")
+		expect(table).toContain("vector:  available")
+		expect(table).toContain(
+			"text:    unavailable (classic $text, chunks/KB only)",
+		)
+		expect(table).toContain("all retrieval lanes available")
+		expect(table).not.toContain("DEGRADED")
+	})
+
+	it("never claims a silent $text fallback when degraded", () => {
+		const table = formatCapabilityTable({
+			hybrid: false,
+			vector: false,
+			keyword: false,
+			text: true,
+		})
+		expect(table).toContain("DEGRADED")
+		expect(table).not.toContain("silently fall back")
 	})
 
 	it("includes the probe failure detail when present", () => {
@@ -150,7 +196,7 @@ describe("probeBootCapabilities (C-002: probe diagnostics never carry credential
 			hybrid: true,
 			vector: true,
 			keyword: true,
-			text: true,
+			text: false,
 		})
 		expect(report.probeError).toBeUndefined()
 	})

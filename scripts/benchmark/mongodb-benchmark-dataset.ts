@@ -4,6 +4,13 @@ import {
 	parseBenchmarkTimestamp,
 	type BenchmarkTimestampRejection,
 } from "./benchmark-timestamp.js"
+import {
+	type BenchmarkAdapterDiagnostics,
+	BenchmarkAdapterRejectedError,
+	countAdapterRejections,
+} from "./benchmark-adapter-diagnostics.js"
+import { admitLoCoMoDocument } from "./locomo-admission.js"
+import { admitLongMemEvalDocument } from "./longmemeval-admission.js"
 import path, { basename } from "node:path"
 import { readFile, realpath } from "node:fs/promises"
 import type { MemoryScope } from "@memongo/lib"
@@ -18,6 +25,11 @@ import type {
 } from "../../packages/memory-engine/src/types.js"
 
 const VALID_ROLES = new Set(["user", "assistant", "system", "tool"])
+
+/** The loader result; adapterDiagnostics is present only for official formats. */
+export type BenchmarkAdmittedDataset = MemoryBenchmarkDataset & {
+	adapterDiagnostics?: BenchmarkAdapterDiagnostics
+}
 
 function isPathWithinRoot(candidate: string, root: string): boolean {
 	const relative = path.relative(root, candidate)
@@ -190,16 +202,22 @@ function normalizeConversations(
 	return conversations
 }
 
-/** B01:C07 receipt counts, split by turnIndex exactly as the engine importer reports them. */
+/**
+ * B01:C07 receipt counts, split by turnIndex exactly as the engine importer
+ * reports them, plus the official adapters' rejections (decision 7).
+ */
 export function countBenchmarkRejections(
 	rejections: readonly MemoryConversationImportRejection[] | undefined,
+	adapterDiagnostics?: BenchmarkAdapterDiagnostics,
 ): { rejectedTurns: number; rejectedConversations: number } {
 	let rejectedTurns = 0
 	for (const rejection of rejections ?? [])
 		if (rejection.turnIndex !== null) rejectedTurns++
+	const adapter = countAdapterRejections(adapterDiagnostics)
 	return {
-		rejectedTurns,
-		rejectedConversations: (rejections?.length ?? 0) - rejectedTurns,
+		rejectedTurns: rejectedTurns + adapter.rejectedTurns,
+		rejectedConversations:
+			(rejections?.length ?? 0) - rejectedTurns + adapter.rejectedConversations,
 	}
 }
 
@@ -330,324 +348,47 @@ function isLongMemEvalEntry(value: unknown): value is Record<string, unknown> {
 	)
 }
 
-function normalizeLongMemEvalDataset(
-	entries: unknown[],
-	name: string,
-): MemoryBenchmarkDataset | null {
-	if (!entries.every(isLongMemEvalEntry)) {
-		return null
-	}
-	const scenarios: MemoryBenchmarkScenario[] = []
-	for (const entry of entries) {
-		const questionId = String(entry.question_id).trim()
-		const question =
-			typeof entry.question === "string" ? entry.question.trim() : ""
-		if (!questionId || !question) {
-			continue
-		}
-		const rawSessionIds = Array.isArray(entry.haystack_session_ids)
-			? entry.haystack_session_ids
-			: []
-		const rawDates = Array.isArray(entry.haystack_dates)
-			? entry.haystack_dates
-			: []
-		const rawSessions = Array.isArray(entry.haystack_sessions)
-			? entry.haystack_sessions
-			: []
-		const expectedTurnIds: string[] = []
-		const officialExpectedSessionIds: string[] = []
-		const officialExpectedTurnIds: string[] = []
-		const conversations: MemoryBenchmarkConversation[] = []
-		for (const [index, session] of rawSessions.entries()) {
-			if (!Array.isArray(session)) {
-				continue
-			}
-			const originalSessionId =
-				typeof rawSessionIds[index] === "string" &&
-				rawSessionIds[index].trim().length > 0
-					? rawSessionIds[index].trim()
-					: `session_${index + 1}`
-			const sessionId = `${questionId}::${originalSessionId}`
-			const timestamp =
-				typeof rawDates[index] === "string" && rawDates[index].trim().length > 0
-					? rawDates[index]
-					: undefined
-			const turns: MemoryBenchmarkTurn[] = []
-			let hasUserAnswerTarget = false
-			for (const [turnIndex, turn] of session.entries()) {
-				if (!turn || typeof turn !== "object") {
-					continue
-				}
-				const record = turn as Record<string, unknown>
-				const role =
-					record.role === "user" || record.role === "assistant"
-						? record.role
-						: ""
-				const body =
-					typeof record.content === "string" ? record.content.trim() : ""
-				if (!role || !body) {
-					continue
-				}
-				const benchmarkTurnId = `${sessionId}::turn_${turnIndex + 1}`
-				if (record.has_answer === true) {
-					expectedTurnIds.push(benchmarkTurnId)
-					if (role === "user") {
-						hasUserAnswerTarget = true
-						officialExpectedTurnIds.push(benchmarkTurnId)
-					}
-				}
-				turns.push({
-					role,
-					body,
-					timestamp,
-					metadata: {
-						benchmarkDatasetKind: "longmemeval",
-						benchmarkQuestionId: questionId,
-						benchmarkOriginalSessionId: originalSessionId,
-						benchmarkTurnId,
-						...(record.has_answer === true ? { benchmarkHasAnswer: true } : {}),
-					},
-				})
-			}
-			if (turns.length === 0) {
-				continue
-			}
-			if (hasUserAnswerTarget) {
-				officialExpectedSessionIds.push(sessionId)
-			}
-			conversations.push({
-				conversationId: questionId,
-				sessionId,
-				turns,
-			})
-		}
-		const expectedSessionIds = Array.isArray(entry.answer_session_ids)
-			? entry.answer_session_ids
-					.filter(
-						(value): value is string =>
-							typeof value === "string" && value.trim().length > 0,
-					)
-					.map((value) => `${questionId}::${value.trim()}`)
-			: []
-		const questionType =
-			typeof entry.question_type === "string" &&
-			entry.question_type.trim().length > 0
-				? entry.question_type.trim()
-				: questionId.endsWith("_abs")
-					? "abstention"
-					: undefined
-		const abstention = questionId.endsWith("_abs")
-		const officialEligible = !abstention && officialExpectedTurnIds.length > 0
-		scenarios.push({
-			scenarioId: questionId,
-			conversations,
-			evaluations: [
-				{
-					caseId: questionId,
-					query: question,
-					expectedSessionIds,
-					expectedTurnIds,
-					officialRetrieval: {
-						evaluator: "longmemeval-main-run",
-						eligible: officialEligible,
-						expectedSessionIds: officialEligible
-							? officialExpectedSessionIds
-							: [],
-						expectedTurnIds: officialEligible ? officialExpectedTurnIds : [],
-						...(!officialEligible
-							? {
-									ineligibleReason: abstention
-										? ("abstention" as const)
-										: ("no-user-answer-target" as const),
-								}
-							: {}),
-					},
-					answer:
-						typeof entry.answer === "string" && entry.answer.trim().length > 0
-							? entry.answer
-							: undefined,
-					questionType,
-					abstention,
-					metadata: {
-						benchmarkDatasetKind: "longmemeval",
-						questionDate:
-							typeof entry.question_date === "string"
-								? entry.question_date
-								: undefined,
-					},
-				},
-			],
-		})
-	}
-	return scenarios.length > 0
-		? buildDataset(name, "longmemeval", scenarios)
-		: null
+function hasLoCoMoSignature(value: unknown): boolean {
+	if (!value || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		typeof record.sample_id === "string" &&
+		Boolean(record.conversation) &&
+		typeof record.conversation === "object" &&
+		Array.isArray(record.qa)
+	)
 }
 
-function normalizeLoCoMoDataset(
+/** OPEN-1 A: one signature anywhere decides the format; both signatures fail closed. */
+function recognizeOfficialFormat(
 	entries: unknown[],
-	name: string,
-): MemoryBenchmarkDataset | null {
-	const scenarios: MemoryBenchmarkScenario[] = []
-	for (const entry of entries) {
-		if (!entry || typeof entry !== "object") {
-			return null
-		}
-		const record = entry as Record<string, unknown>
-		const sampleId =
-			typeof record.sample_id === "string" ? record.sample_id.trim() : ""
-		const conversation =
-			record.conversation && typeof record.conversation === "object"
-				? (record.conversation as Record<string, unknown>)
-				: null
-		const qa = Array.isArray(record.qa) ? record.qa : null
-		if (!sampleId || !conversation || !qa) {
-			return null
-		}
-		const speakerA =
-			typeof conversation.speaker_a === "string"
-				? conversation.speaker_a.trim()
-				: ""
-		const speakerB =
-			typeof conversation.speaker_b === "string"
-				? conversation.speaker_b.trim()
-				: ""
-		const dialogIdToSessionId = new Map<string, string>()
-		const conversations: MemoryBenchmarkConversation[] = []
-		for (let index = 1; ; index++) {
-			const sessionKey = `session_${index}`
-			const sessionValue = conversation[sessionKey]
-			if (!Array.isArray(sessionValue)) {
-				break
-			}
-			const sessionId = `${sampleId}::${sessionKey}`
-			const timestampKey = `${sessionKey}_date_time`
-			const timestamp =
-				typeof conversation[timestampKey] === "string" &&
-				String(conversation[timestampKey]).trim().length > 0
-					? String(conversation[timestampKey]).trim()
-					: undefined
-			const turns: MemoryBenchmarkTurn[] = []
-			for (const turn of sessionValue) {
-				if (!turn || typeof turn !== "object") {
-					continue
-				}
-				const dialog = turn as Record<string, unknown>
-				const speaker =
-					typeof dialog.speaker === "string" ? dialog.speaker.trim() : ""
-				const role =
-					speaker && speaker === speakerA
-						? "user"
-						: speaker && speaker === speakerB
-							? "assistant"
-							: "user"
-				const body = typeof dialog.text === "string" ? dialog.text.trim() : ""
-				if (!body) {
-					continue
-				}
-				const dialogId =
-					typeof dialog.dia_id === "string" ? dialog.dia_id.trim() : ""
-				if (dialogId) {
-					dialogIdToSessionId.set(dialogId, sessionId)
-				}
-				turns.push({
-					role,
-					body,
-					timestamp,
-					metadata: {
-						benchmarkDatasetKind: "locomo",
-						locomoDialogId: dialogId || undefined,
-						locomoSpeaker: speaker || undefined,
-					},
-				})
-			}
-			if (turns.length > 0) {
-				conversations.push({
-					conversationId: sampleId,
-					sessionId,
-					turns,
-				})
-			}
-		}
-
-		const evaluations: MemoryBenchmarkEvaluationCase[] = []
-		for (const [index, value] of qa.entries()) {
-			if (!value || typeof value !== "object") {
-				continue
-			}
-			const item = value as Record<string, unknown>
-			const query =
-				typeof item.question === "string" ? item.question.trim() : ""
-			if (!query) {
-				continue
-			}
-			const evidence = Array.isArray(item.evidence) ? item.evidence : []
-			const expectedDialogIds = Array.from(
-				new Set(
-					evidence
-						.map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-						.filter(Boolean),
-				),
-			)
-			const expectedSessionIds = Array.from(
-				new Set(
-					expectedDialogIds
-						.map((dialogRef) => {
-							const directMatch = dialogIdToSessionId.get(dialogRef)
-							if (directMatch) {
-								return directMatch
-							}
-							const dialogPrefix = dialogRef.split(":")[0] ?? dialogRef
-							return dialogIdToSessionId.get(dialogPrefix)
-						})
-						.filter((sessionId): sessionId is string => Boolean(sessionId)),
-				),
-			)
-			const questionType =
-				typeof item.category === "string" || typeof item.category === "number"
-					? `category-${String(item.category)}`
-					: undefined
-			const abstention = String(item.category) === "5"
-			evaluations.push({
-				caseId: `${sampleId}::qa_${index + 1}`,
-				query,
-				expectedSessionIds,
-				expectedDialogIds,
-				answer:
-					typeof item.answer === "string" && item.answer.trim().length > 0
-						? item.answer
-						: undefined,
-				questionType,
-				abstention,
-				metadata: {
-					benchmarkDatasetKind: "locomo",
-					locomoCategory: item.category,
-					evidence,
-				},
-			})
-		}
-
-		scenarios.push({
-			scenarioId: sampleId,
-			conversations,
-			evaluations,
-		})
-	}
-	return scenarios.length > 0 ? buildDataset(name, "locomo", scenarios) : null
+): "longmemeval" | "locomo" | null {
+	const longMemEval = entries.some(isLongMemEvalEntry)
+	const loCoMo = entries.some(hasLoCoMoSignature)
+	if (longMemEval && loCoMo)
+		throw new BenchmarkAdapterRejectedError("format-ambiguous")
+	return longMemEval ? "longmemeval" : loCoMo ? "locomo" : null
 }
 
 function normalizeGenericJsonDataset(
 	parsed: unknown,
 	name: string,
-): MemoryBenchmarkDataset | null {
+): BenchmarkAdmittedDataset | null {
 	if (Array.isArray(parsed)) {
-		const longMemEval = normalizeLongMemEvalDataset(parsed, name)
-		if (longMemEval) {
-			return longMemEval
+		const format = recognizeOfficialFormat(parsed)
+		if (format === "longmemeval") {
+			const { scenarios, adapterDiagnostics } = admitLongMemEvalDocument(parsed)
+			return {
+				...buildDataset(name, "longmemeval", scenarios),
+				adapterDiagnostics,
+			}
 		}
-		const loCoMo = normalizeLoCoMoDataset(parsed, name)
-		if (loCoMo) {
-			return loCoMo
+		if (format === "locomo") {
+			const { scenarios, adapterDiagnostics } = admitLoCoMoDocument(parsed)
+			return {
+				...buildDataset(name, "locomo", scenarios),
+				adapterDiagnostics,
+			}
 		}
 		const rejections: MemoryConversationImportRejection[] = []
 		const conversations = normalizeConversations(parsed, null, rejections)
@@ -846,7 +587,9 @@ export async function loadBenchmarkDataset(
 		allowedRoots?: string[]
 	},
 ): Promise<
-	MemoryBenchmarkDataset & { timestampValidation: BenchmarkTimestampValidation }
+	BenchmarkAdmittedDataset & {
+		timestampValidation: BenchmarkTimestampValidation
+	}
 > {
 	const resolvedDatasetPath = await resolveBenchmarkDatasetPath({
 		datasetPath,

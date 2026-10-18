@@ -232,10 +232,12 @@ describe("benchmark scenario queue settling", () => {
 				agentId: "benchmark-agent-1",
 				writeQueue: new Promise<void>(() => {}),
 				derivationQueue: Promise.resolve(),
-			} as unknown as MongoDBMemoryManager
+			} as MongoDBManagerHost
 
 			await expect(
-				benchmarkOps(manager).settleBenchmarkScenarioManager(manager),
+				new MongoDBManagerBenchmarkOps(manager).settleBenchmarkScenarioManager(
+					manager,
+				),
 			).rejects.toThrow(
 				"benchmark scenario manager writeQueue settle timed out after 1ms",
 			)
@@ -249,8 +251,10 @@ describe("benchmark scenario queue settling", () => {
 	})
 
 	// Task 1.3 — complete queue-settle timeout coverage (plan Harness Checklist #3).
-	const callSettle = async (manager: MongoDBMemoryManager) =>
-		benchmarkOps(manager).settleBenchmarkScenarioManager(manager)
+	const callSettle = async (manager: MongoDBManagerHost) =>
+		new MongoDBManagerBenchmarkOps(manager).settleBenchmarkScenarioManager(
+			manager,
+		)
 
 	it("names writeQueue when writeQueue hangs (Task 1.3)", async () => {
 		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
@@ -262,7 +266,7 @@ describe("benchmark scenario queue settling", () => {
 				agentId: "benchmark-agent-write",
 				writeQueue: new Promise<void>(() => {}),
 				derivationQueue: Promise.resolve(),
-			} as unknown as MongoDBMemoryManager
+			} as MongoDBManagerHost
 			await expect(callSettle(manager)).rejects.toThrow(
 				/writeQueue settle timed out after 200ms/,
 			)
@@ -285,7 +289,7 @@ describe("benchmark scenario queue settling", () => {
 				agentId: "benchmark-agent-derivation",
 				writeQueue: Promise.resolve(),
 				derivationQueue: new Promise<void>(() => {}),
-			} as unknown as MongoDBMemoryManager
+			} as MongoDBManagerHost
 			await expect(callSettle(manager)).rejects.toThrow(
 				/derivationQueue settle timed out after 200ms/,
 			)
@@ -309,7 +313,7 @@ describe("benchmark scenario queue settling", () => {
 				writeQueue: Promise.resolve(),
 				derivationSchedulingQueue: new Promise<void>(() => {}),
 				derivationQueue: Promise.resolve(),
-			} as unknown as MongoDBMemoryManager
+			} as MongoDBManagerHost
 			await expect(callSettle(manager)).rejects.toThrow(
 				/derivationSchedulingQueue settle timed out after 200ms/,
 			)
@@ -334,7 +338,7 @@ describe("benchmark scenario queue settling", () => {
 				derivationSchedulingQueue: Promise.resolve(),
 				derivationQueue: Promise.resolve(),
 				memoryJobWorkerPromise: new Promise<void>(() => {}),
-			} as unknown as MongoDBMemoryManager
+			} as MongoDBManagerHost
 			await expect(callSettle(manager)).rejects.toThrow(
 				/memoryJobWorkerPromise settle timed out after 200ms/,
 			)
@@ -357,10 +361,7 @@ describe("benchmark scenario queue settling", () => {
 				agentId: "benchmark-agent-scheduling-flush",
 				writeQueue: Promise.resolve(),
 				derivationQueue: Promise.resolve(),
-			} as MongoDBMemoryManager & {
-				derivationSchedulingQueue: Promise<void>
-				derivationQueue: Promise<void>
-			}
+			} as MongoDBManagerHost
 			manager.derivationSchedulingQueue = new Promise<void>((resolve) => {
 				setTimeout(() => {
 					manager.derivationQueue = new Promise<void>((resolveDerived) => {
@@ -390,7 +391,7 @@ describe("benchmark scenario queue settling", () => {
 				agentId: "benchmark-agent-slow",
 				writeQueue: new Promise<void>((resolve) => setTimeout(resolve, 50)),
 				derivationQueue: Promise.resolve(),
-			} as unknown as MongoDBMemoryManager
+			} as MongoDBManagerHost
 			await expect(callSettle(manager)).resolves.toBeUndefined()
 		} finally {
 			if (prev === undefined)
@@ -408,7 +409,7 @@ describe("benchmark scenario queue settling", () => {
 				return Promise.resolve()
 			},
 			derivationQueue: Promise.resolve(),
-		} as unknown as MongoDBMemoryManager
+		} as MongoDBManagerHost
 
 		await expect(callSettle(manager)).rejects.toThrow(
 			"benchmark scenario manager did not fully settle after 8 attempts",
@@ -439,6 +440,8 @@ describe("benchmark scenario queue settling", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T12:00:00.000Z"),
 			completedAt: new Date("2026-04-09T12:00:01.000Z"),
 		})
@@ -565,6 +568,8 @@ describe("benchmark scenario queue settling", () => {
 				skippedConversations: 0,
 				failedLines: 0,
 				failedTurns: 0,
+				rejectedTurns: 0,
+				rejectedConversations: 0,
 				startedAt: new Date("2026-04-09T12:00:00.000Z"),
 				completedAt: new Date("2026-04-09T12:00:01.000Z"),
 			}
@@ -684,6 +689,8 @@ describe("benchmark scenario queue settling", () => {
 			skippedConversations: 0,
 			failedLines: 0,
 			failedTurns: 0,
+			rejectedTurns: 0,
+			rejectedConversations: 0,
 			startedAt: new Date("2026-04-09T12:00:00.000Z"),
 			completedAt: new Date("2026-04-09T12:00:01.000Z"),
 		})

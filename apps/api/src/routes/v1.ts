@@ -5,7 +5,12 @@ import {
 	UnsupportedMediaTypeError,
 } from "../lib/validation.js"
 
-import { parseJsonRequestBody, type V1RouterEnv } from "./v1-helpers.js"
+import {
+	parseJsonRequestBody,
+	SEARCH_BARRIER_ROUTE_PATHS,
+	searchBarrierUnsupported,
+	type V1RouterEnv,
+} from "./v1-helpers.js"
 
 import { registerSearchRoutes } from "./v1-search-routes.js"
 import { registerLifecycleRoutes } from "./v1-lifecycle-routes.js"
@@ -42,6 +47,14 @@ export function createV1Router(): Hono<V1RouterEnv> {
 			throw error
 		}
 		c.set("jsonBody", body)
+		// #101: a barrier request on any other route is rejected before the
+		// handler runs, so nothing is written.
+		if (
+			Object.hasOwn(body, "searchBarrier") &&
+			!SEARCH_BARRIER_ROUTE_PATHS.has(c.req.path)
+		) {
+			return searchBarrierUnsupported(c, "write-family-unsupported")
+		}
 		await next()
 	})
 

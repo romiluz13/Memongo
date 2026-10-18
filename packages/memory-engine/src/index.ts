@@ -65,10 +65,34 @@ export {
 	type WriteConversationEventReceipt,
 } from "./mongodb-manager.js"
 export {
+	classifySearchError,
+	SearchBudgetDeniedError,
+	SearchLaneError,
+	SearchLaneUnavailableError,
+	type SearchBudgetReason,
+	type SearchFailureReason,
+	type SearchLane,
+	type SearchLaneOutcome,
+	type SearchLaneOutcomeStatus,
+	type SearchNotApplicableReason,
+	type SearchOutcomeReason,
+	type SearchOutcomeStatus,
+	type SearchOutcomeSummary,
+	type SearchStage,
+} from "./search-outcomes.js"
+export {
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
 	type MemorySearchManagerResult,
 } from "./search-manager.js"
+export type {
+	SearchBarrierReason,
+	SearchBarrierRequest,
+	SearchBarrierResult,
+	SearchBarrierStatus,
+	SearchBarrierTargetResult,
+	SearchBarrierUnsupportedReason,
+} from "./mongodb-search-barrier.js"
 
 // ---------------------------------------------------------------------------
 // State Family — unified view over profile + blocks + context bundle

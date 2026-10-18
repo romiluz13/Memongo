@@ -228,6 +228,7 @@ export async function ensureSearchIndexes(
 					sessionId: { type: "token" },
 					status: { type: "token" },
 					updatedAt: { type: "date" },
+					searchWriteToken: { type: "token" },
 				},
 			},
 		}
@@ -276,6 +277,7 @@ export async function ensureSearchIndexes(
 			"validAt",
 			"invalidAt",
 			"timestamp",
+			"searchWriteToken",
 		]
 		const vectorDef: Document = withVectorStoredSource(
 			buildAutoEmbedVectorDefinition("text", chunksFilterPaths, quantization),
@@ -414,7 +416,9 @@ export async function ensureSearchIndexes(
 					scopeRef: { type: "token" },
 					state: { type: "token" },
 					salience: { type: "token" },
+					temporalScope: { type: "token" },
 					updatedAt: { type: "date" },
+					searchWriteToken: { type: "token" },
 				},
 			},
 		}
@@ -449,6 +453,7 @@ export async function ensureSearchIndexes(
 			{ type: "filter", path: "temporalScope" },
 			{ type: "filter", path: "validFrom" },
 			{ type: "filter", path: "validTo" },
+			{ type: "filter", path: "searchWriteToken" },
 		]
 
 		const structVectorDef: Document = withVectorStoredSource(
@@ -497,6 +502,7 @@ export async function ensureSearchIndexes(
 					scopeRef: { type: "token" },
 					state: { type: "token" },
 					updatedAt: { type: "date" },
+					searchWriteToken: { type: "token" },
 				},
 			},
 		}
@@ -531,6 +537,7 @@ export async function ensureSearchIndexes(
 					{ type: "filter", path: "state" },
 					{ type: "filter", path: "validFrom" },
 					{ type: "filter", path: "validTo" },
+					{ type: "filter", path: "searchWriteToken" },
 				],
 			},
 			"procedures",
@@ -573,6 +580,7 @@ export async function ensureSearchIndexes(
 					role: { type: "token" },
 					channel: { type: "token" },
 					timestamp: { type: "date" },
+					searchWriteToken: { type: "token" },
 				},
 			},
 		}
@@ -606,6 +614,7 @@ export async function ensureSearchIndexes(
 			{ type: "filter", path: "timestamp" },
 			{ type: "filter", path: "validAt" },
 			{ type: "filter", path: "invalidAt" },
+			{ type: "filter", path: "searchWriteToken" },
 		]
 		const eventsVectorDef: Document = {
 			fields: [

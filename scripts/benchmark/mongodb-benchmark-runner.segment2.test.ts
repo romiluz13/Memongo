@@ -233,8 +233,15 @@ describe("mongodb benchmark runner", () => {
 			avgTopScore: 0.9,
 			p95LatencyMs: 30,
 			runIdentity: {
+				runId: "run-storage",
 				datasetSha256: "b".repeat(64),
 				retrievalUnit: "turn",
+				configurationHash: "d".repeat(64),
+				executionProfile: "diagnostic",
+				retrievalLane: "native",
+				maxResults: 50,
+				minScore: 0.01,
+				settings: {},
 			},
 			storage: {
 				basis: "benchmark-agent-logical-plus-shared-physical",
@@ -277,15 +284,26 @@ describe("mongodb benchmark runner", () => {
 			avgTopScore: 0.9,
 			p95LatencyMs: 30,
 			runIdentity: {
+				runId: "run-e2e-qa",
 				datasetSha256: "c".repeat(64),
 				retrievalUnit: "turn",
+				configurationHash: "d".repeat(64),
+				executionProfile: "diagnostic",
+				retrievalLane: "native",
+				maxResults: 50,
+				minScore: 0.01,
+				settings: {},
 			},
 			e2eQa: {
+				answerModel: null,
 				judge: null,
 				judgeVersion: null,
 				accuracy: null,
 				latencyMs: null,
 				judgeFalsePositiveRate: null,
+				cases: { eligible: 0, attempted: 0, completed: 0, failed: 0 },
+				attempts: { answerGeneration: 0, answerJudge: 0, decoyJudge: 0 },
+				caseResults: [],
 			},
 		})
 

@@ -19,6 +19,8 @@ import {
 	IDEMPOTENCY_KEY_FIELD_DESCRIPTION,
 	IDEMPOTENCY_KEY_HEADER_PARAMETER,
 	EXPIRES_AT_FIELD_DESCRIPTION,
+	searchBarrierRequestSchema,
+	searchBarrierResultSchema,
 } from "./openapi-schemas.js"
 
 export const writePaths = {
@@ -68,13 +70,25 @@ export const writePaths = {
 									format: "date-time",
 									description: EXPIRES_AT_FIELD_DESCRIPTION,
 								},
+								searchBarrier: searchBarrierRequestSchema,
 							},
 						},
 					},
 				},
 			},
 			responses: {
-				"200": { description: "Event id" },
+				"200": {
+					description:
+						"Event id; a barrier write also carries its searchBarrier outcome",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: { searchBarrier: searchBarrierResultSchema },
+							},
+						},
+					},
+				},
 				"429": {
 					description:
 						"Per-agent write queue full; nothing written; retry later",
@@ -129,13 +143,25 @@ export const writePaths = {
 									format: "date-time",
 									description: EXPIRES_AT_FIELD_DESCRIPTION,
 								},
+								searchBarrier: searchBarrierRequestSchema,
 							},
 						},
 					},
 				},
 			},
 			responses: {
-				"200": { description: "Event id" },
+				"200": {
+					description:
+						"Event id; a barrier write also carries its searchBarrier outcome",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: { searchBarrier: searchBarrierResultSchema },
+							},
+						},
+					},
+				},
 				"429": {
 					description:
 						"Per-agent write queue full; nothing written; retry later",
@@ -306,6 +332,7 @@ export const writePaths = {
 									type: "string",
 									description: SCOPE_REF_FIELD_DESCRIPTION,
 								},
+								searchBarrier: searchBarrierRequestSchema,
 							},
 						},
 					},
@@ -316,7 +343,18 @@ export const writePaths = {
 					description:
 						"STRUCTURED_MEMORY_REVISION_CONFLICT: concurrent structured revision conflict; fetch current state before retrying",
 				},
-				"200": { description: "Upsert result" },
+				"200": {
+					description:
+						"Upsert result; a barrier write also carries its searchBarrier outcome",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: { searchBarrier: searchBarrierResultSchema },
+							},
+						},
+					},
+				},
 				"202": {
 					description:
 						"Accepted but quarantined (C-008): injection-likely entry is held in memory_quarantine pending human review; body carries quarantined=true, id (quarantine id) and matchedPatterns",
@@ -352,12 +390,26 @@ export const writePaths = {
 									type: "string",
 									description: SCOPE_REF_FIELD_DESCRIPTION,
 								},
+								searchBarrier: searchBarrierRequestSchema,
 							},
 						},
 					},
 				},
 			},
-			responses: { "200": { description: "Upsert result" } },
+			responses: {
+				"200": {
+					description:
+						"Upsert result; a barrier write also carries its searchBarrier outcome",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: { searchBarrier: searchBarrierResultSchema },
+							},
+						},
+					},
+				},
+			},
 		},
 	},
 } as const
