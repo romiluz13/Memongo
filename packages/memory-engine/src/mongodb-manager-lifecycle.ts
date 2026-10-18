@@ -138,6 +138,8 @@ export class MongoDBManagerLifecycleOps {
 				family,
 				token: searchWriteToken,
 				request,
+				quarantined:
+					(written as { quarantined?: unknown }).quarantined === true,
 			}),
 		}
 	}

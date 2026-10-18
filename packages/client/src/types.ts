@@ -24,7 +24,12 @@ export type MemongoSearchBarrierRequest = {
 export type MemongoSearchBarrierResult = {
 	committed: true
 	status: "searchable" | "not-yet-searchable" | "cancelled"
-	reason?: "timeout" | "projection-failed" | "probe-failed" | "cancelled"
+	reason?:
+		| "timeout"
+		| "projection-failed"
+		| "probe-failed"
+		| "cancelled"
+		| "quarantined"
 	targets: Array<{
 		index: string
 		status: "confirmed" | "pending" | "failed"

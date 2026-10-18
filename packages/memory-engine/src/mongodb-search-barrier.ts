@@ -64,6 +64,7 @@ export type SearchBarrierReason =
 	| "projection-failed"
 	| "probe-failed"
 	| "cancelled"
+	| "quarantined"
 
 export type SearchBarrierTargetResult = {
 	index: SearchBarrierIndex
@@ -371,8 +372,9 @@ export function createSearchBarrierProbe(
 
 /**
  * The post-commit half of a barrier write. A failed chunk projection is
- * committed `projection-failed` without probing; otherwise the bounded probe
- * loop runs. Logs carry bounded reasons only: no token, query text, document
+ * committed `projection-failed`, and a quarantined entry (never stored in the
+ * searchable collection) is committed `quarantined`, both without probing;
+ * otherwise the bounded probe loop runs. Logs carry bounded reasons only: no token, query text, document
  * body or provider error text.
  */
 export async function awaitSearchBarrier(params: {
@@ -382,15 +384,21 @@ export async function awaitSearchBarrier(params: {
 	token: string
 	request: SearchBarrierRequest
 	projectionFailed?: boolean
+	quarantined?: boolean
 	probe?: SearchBarrierProbe
 	clock?: SearchBarrierClock
 }): Promise<SearchBarrierResult> {
 	const targets = searchBarrierTargets(params.family)
-	const result: SearchBarrierResult = params.projectionFailed
+	const unprobedReason = params.projectionFailed
+		? "projection-failed"
+		: params.quarantined
+			? "quarantined"
+			: undefined
+	const result: SearchBarrierResult = unprobedReason
 		? {
 				committed: true,
 				status: "not-yet-searchable",
-				reason: "projection-failed",
+				reason: unprobedReason,
 				targets: targets.map((target) => ({
 					index: target.index,
 					status: "pending",

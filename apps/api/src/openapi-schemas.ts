@@ -70,7 +70,13 @@ export const searchBarrierResultSchema = {
 		},
 		reason: {
 			type: "string",
-			enum: ["timeout", "projection-failed", "probe-failed", "cancelled"],
+			enum: [
+				"timeout",
+				"projection-failed",
+				"probe-failed",
+				"cancelled",
+				"quarantined",
+			],
 		},
 		targets: {
 			type: "array",

@@ -469,6 +469,42 @@ describe("structured and procedure writes with a search barrier", () => {
 		)
 	})
 
+	it("reports a quarantined structured write as quarantined, without probing", async () => {
+		const { barrier } = await barrierMocks()
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		mocked(writeStructuredMemory).mockResolvedValue({
+			upserted: false,
+			id: "deploy.day",
+			quarantined: true,
+			matchedPatterns: ["ignore-previous"],
+		})
+		await makeManager().writeStructuredMemory(STRUCTURED, {
+			searchBarrier: {},
+		})
+		expect(barrier.awaitSearchBarrier).toHaveBeenCalledWith(
+			expect.objectContaining({ family: "structured", quarantined: true }),
+		)
+	})
+
+	it("probes a stored structured write as not quarantined", async () => {
+		const { barrier } = await barrierMocks()
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		mocked(writeStructuredMemory).mockResolvedValue({
+			upserted: true,
+			id: "deploy.day",
+		})
+		await makeManager().writeStructuredMemory(STRUCTURED, {
+			searchBarrier: {},
+		})
+		expect(barrier.awaitSearchBarrier).toHaveBeenCalledWith(
+			expect.objectContaining({ family: "structured", quarantined: false }),
+		)
+	})
+
 	it("stamps a procedure write and waits on the procedure targets", async () => {
 		const { barrier } = await barrierMocks()
 		const { writeProcedure } = await import("./mongodb-procedures.js")

@@ -473,6 +473,33 @@ describe("search barrier after a write", () => {
 		expect(probe).not.toHaveBeenCalled()
 	})
 
+	it("returns committed quarantined without probing when the entry was quarantined", async () => {
+		const probe = probeFrom(() => 1)
+		const clock = fakeClock()
+		const sleep = vi.spyOn(clock, "sleep")
+		const result = await awaitSearchBarrier({
+			db,
+			prefix: "test_",
+			family: "structured",
+			token: TOKEN,
+			request: {},
+			quarantined: true,
+			probe,
+			clock,
+		})
+		expect(result).toEqual({
+			committed: true,
+			status: "not-yet-searchable",
+			reason: "quarantined",
+			targets: [
+				{ index: "structured_mem_text", status: "pending", attempts: 0 },
+				{ index: "structured_mem_vector", status: "pending", attempts: 0 },
+			],
+		})
+		expect(probe).toHaveBeenCalledTimes(0)
+		expect(sleep).not.toHaveBeenCalled()
+	})
+
 	it("passes the caller's timeout and abort signal to the bounded probe loop", async () => {
 		const controller = new AbortController()
 		controller.abort()
