@@ -108,12 +108,28 @@ it("counts each automated fusion input while leaving manual vectors uncharged", 
 it.each([
 	"scoreFusion",
 	"rankFusion",
-	"js-merge",
-] as const)("retry denial keeps lexical fallback for %s", async (fusionMethod) => {
+] as const)("#101: %s retry denial is a typed budget denial, never a lexical fallback", async (fusionMethod) => {
+	const { col, aggregate } = fixture(99)
+	await expect(
+		settle(
+			runWithSearchBudget({ maxEmbeds: 1, maxAggregations: 10 }, () =>
+				mongoSearch(col, "graphite", null, { ...opts, fusionMethod }),
+			),
+		),
+	).rejects.toMatchObject({
+		name: "SearchBudgetDeniedError",
+		reason: "budget-embeds",
+	})
+	expect(aggregate).toHaveBeenCalledTimes(1)
+	expect(
+		aggregate.mock.calls.filter(([p]) => p[0].$search !== undefined),
+	).toHaveLength(0)
+})
+it("js-merge retry denial keeps the keyword branch's own results (S11)", async () => {
 	const { col, aggregate } = fixture(99)
 	const { value, budget } = await settle(
 		runWithSearchBudget({ maxEmbeds: 1, maxAggregations: 10 }, () =>
-			mongoSearch(col, "graphite", null, { ...opts, fusionMethod }),
+			mongoSearch(col, "graphite", null, { ...opts, fusionMethod: "js-merge" }),
 		),
 	)
 	expect(value).toHaveLength(1)
@@ -135,38 +151,38 @@ it("strict retry denial rejects instead of executing another embedding", async (
 				}),
 			),
 		),
-	).rejects.toThrow("embedding budget exhausted")
+	).rejects.toMatchObject({ reason: "budget-embeds" })
 	expect(aggregate).toHaveBeenCalledTimes(1)
 })
-it("direct retry denial preserves empty degradation without a hook", async () => {
+it("#101: direct retry denial is a typed budget denial", async () => {
 	const { col, aggregate } = fixture(99)
-	const { value, budget } = await settle(
-		runWithSearchBudget({ maxEmbeds: 1, maxAggregations: 10 }, () =>
-			vectorSearch(col, null, {
-				...opts,
-				indexName: "vector",
-				queryText: "graphite",
-			}),
+	await expect(
+		settle(
+			runWithSearchBudget({ maxEmbeds: 1, maxAggregations: 10 }, () =>
+				vectorSearch(col, null, {
+					...opts,
+					indexName: "vector",
+					queryText: "graphite",
+				}),
+			),
 		),
-	)
-	expect(value).toEqual([])
+	).rejects.toMatchObject({ stage: "vector", reason: "budget-embeds" })
 	expect(aggregate).toHaveBeenCalledTimes(1)
-	expect(budget.embeds).toBe(1)
 })
-it("aggregation refusal prevents any retry embed charge", async () => {
+it("#101: aggregation refusal prevents any retry embed charge and is typed", async () => {
 	const { col, aggregate } = fixture(99)
-	const { value, budget } = await settle(
-		runWithSearchBudget({ maxEmbeds: 5, maxAggregations: 1 }, () =>
-			vectorSearch(col, null, {
-				...opts,
-				indexName: "vector",
-				queryText: "graphite",
-			}),
+	await expect(
+		settle(
+			runWithSearchBudget({ maxEmbeds: 5, maxAggregations: 1 }, () =>
+				vectorSearch(col, null, {
+					...opts,
+					indexName: "vector",
+					queryText: "graphite",
+				}),
+			),
 		),
-	)
-	expect(value).toEqual([])
+	).rejects.toMatchObject({ stage: "vector", reason: "budget-aggregations" })
 	expect(aggregate).toHaveBeenCalledTimes(1)
-	expect(budget.embeds).toBe(1)
 })
 it.each([
 	0, 1,

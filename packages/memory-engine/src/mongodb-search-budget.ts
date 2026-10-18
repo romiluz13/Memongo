@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { createSubsystemLogger } from "@memongo/lib"
+import {
+	SearchBudgetDeniedError,
+	type SearchBudgetReason,
+	type SearchStage,
+} from "./search-outcomes.js"
 
 const log = createSubsystemLogger("memory:mongodb:search-budget")
 
@@ -14,9 +19,9 @@ const log = createSubsystemLogger("memory:mongodb:search-budget")
 // This module is the per-request ledger that caps that storm: searchV2 opens
 // one budget per request and every $vectorSearch stage build (an autoEmbed
 // embedding) and every aggregation in the search path consumes from it.
-// Exhaustion degrades a lane to an EMPTY result — never an error — per the
-// Appendix C principle "empty ≠ error": an empty answer is valid, and it is
-// what stops the escalation machinery from re-firing.
+// #101: exhaustion is a typed budget denial (SearchBudgetDeniedError), never
+// an empty result, so a denied lane can never read as zero hits or trigger a
+// weaker tier.
 //
 // The budget travels via AsyncLocalStorage so the lanes (which run
 // concurrently inside searchV2) share one ledger without threading a param
@@ -130,7 +135,7 @@ function markExhausted(
 	}
 	budget.exhausted = true
 	log.warn(
-		`per-search budget exhausted (${reason}); degrading remaining lanes to empty results`,
+		`per-search budget exhausted (${reason}); remaining lanes are budget-denied`,
 		{ ...toSnapshot(budget), ...extra },
 	)
 }
@@ -215,7 +220,7 @@ function tryConsume(
 		return true
 	}
 	// RET-16: the request wall spans retries and passes — once the deadline
-	// passes, every further consume is refused (empty ≠ error).
+	// passes, every further consume is refused.
 	if (budget.deadlineAt !== undefined && Date.now() > budget.deadlineAt) {
 		markExhausted(budget, "wall-clock deadline passed")
 		return false
@@ -235,8 +240,8 @@ function tryConsume(
 
 /**
  * Consume one aggregation from the active budget. Returns false when the
- * budget is exhausted — callers must degrade to an empty result (empty ≠
- * error) rather than throw.
+ * budget is exhausted; search callers report that as a typed budget denial
+ * (consumeSearchAggregationOrThrow), never as an empty result.
  */
 export function tryConsumeSearchAggregation(): boolean {
 	return tryConsume("aggregations", (limits) => limits.maxAggregations)
@@ -251,6 +256,40 @@ export function tryConsumeSearchEmbed(
 	onCapacityExhausted?: () => void,
 ): boolean {
 	return tryConsume("embeds", (limits) => limits.maxEmbeds, onCapacityExhausted)
+}
+
+/**
+ * #101: why the active budget refused a consume — the wall-clock deadline
+ * when it has passed, otherwise the exhausted resource.
+ */
+export function searchBudgetDenialReason(
+	kind: "aggregations" | "embeds",
+): SearchBudgetReason {
+	const budget = budgetStorage.getStore()
+	if (budget?.deadlineAt !== undefined && Date.now() > budget.deadlineAt) {
+		return "budget-deadline"
+	}
+	return kind === "aggregations" ? "budget-aggregations" : "budget-embeds"
+}
+
+/** #101: consume one aggregation or throw a typed denial (never an empty result). */
+export function consumeSearchAggregationOrThrow(stage: SearchStage): void {
+	if (!tryConsumeSearchAggregation()) {
+		throw new SearchBudgetDeniedError({
+			stage,
+			reason: searchBudgetDenialReason("aggregations"),
+		})
+	}
+}
+
+/** #101: consume one server-side embed or throw a typed denial. */
+export function consumeSearchEmbedOrThrow(stage: SearchStage): void {
+	if (!tryConsumeSearchEmbed()) {
+		throw new SearchBudgetDeniedError({
+			stage,
+			reason: searchBudgetDenialReason("embeds"),
+		})
+	}
 }
 
 function normalizeReservationCount(value: number): number {
@@ -291,7 +330,7 @@ export function tryReserveSearchBudget(request: {
 		if (!budget.exhausted) {
 			budget.exhausted = true
 			log.warn(
-				"per-search budget cannot satisfy reservation; degrading reserved lane to empty results",
+				"per-search budget cannot satisfy reservation; the reserved lane is budget-denied",
 				{
 					...toSnapshot(budget),
 					requestedAggregations,

@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { MongoServerError } from "mongodb"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
+import { chunksCollection } from "./mongodb-schema.js"
 import type { MemorySearchResult } from "./types.js"
 import {
 	mocked,
@@ -595,6 +596,11 @@ describe("remaining original relevance admission connections", () => {
 		)
 	})
 	it("threads supplied original admission through the actual legacy method", async () => {
+		// #101: the legacy $text tier no longer swallows a missing collection
+		// into an empty answer, so the stub supplies a queryable one.
+		vi.mocked(chunksCollection).mockReturnValue({
+			aggregate: () => ({ toArray: async () => [] }),
+		} as never)
 		const relevance = buildRelevanceStub(),
 			manager = buildMockManager({ relevance })
 		const admission = {
