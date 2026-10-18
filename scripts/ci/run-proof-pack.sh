@@ -6,7 +6,8 @@
 # MongoDB service. Only the PID recorded here is stopped.
 #
 # Inputs: MEMONGO_MONGODB_URI, PROOF_PACK_OUT_DIR. The API log, the recorded
-# PID and the proof-pack verdict JSON land in PROOF_PACK_OUT_DIR.
+# PID, the database name (read by the failure diagnostics) and the proof-pack
+# verdict JSON land in PROOF_PACK_OUT_DIR.
 set -euo pipefail
 
 : "${MEMONGO_MONGODB_URI:?MEMONGO_MONGODB_URI must point at the job MongoDB}"
@@ -31,6 +32,7 @@ fail() {
 }
 
 mkdir -p "${PROOF_PACK_OUT_DIR}"
+echo "${MEMONGO_MONGODB_DATABASE}" >"${PROOF_PACK_OUT_DIR}/database.txt"
 api_log="${PROOF_PACK_OUT_DIR}/api.log"
 
 # A process already answering on the port would satisfy the readiness wait
