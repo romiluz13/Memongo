@@ -79,7 +79,8 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			// degradation marker rides the 200 so a degraded answer never
 			// reads as "no memories found" at the agent boundary.
 			return c.json({
-				results,
+				// NEGATIVE CONTROL (c): an injected regression drops every result.
+				results: results.slice(0, 0),
 				...(degradation ? { degradation } : {}),
 				...(outcomes ? { outcomes: boundSearchOutcomes(outcomes) } : {}),
 			})
