@@ -147,7 +147,7 @@ beforeEach(() => {
 	vi.stubEnv("MEMONGO_BENCHMARK_TURN_PRECISION_MODE", "disabled")
 	vi.stubEnv("MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE", "disabled")
 	vi.stubEnv("MEMONGO_TEMPORAL_COVERAGE_MODE", "disabled")
-	vi.stubEnv("MEMONGO_EVIDENCE_MIRROR", "disabled")
+	vi.stubEnv("MEMONGO_EVIDENCE_MIRROR_MODE", "disabled")
 	resetSearchAdmissionForTests(Date.now())
 	vi.spyOn(console, "warn").mockImplementation(() => {})
 	vi.spyOn(console, "error").mockImplementation(() => {})
@@ -305,6 +305,29 @@ describe("searchV2 request ledger (#101 decision 18)", () => {
 			embeds: 1,
 			equivalentSkips: 1,
 		})
+	})
+
+	it("keys the resolved result limit, so an omitted limit equals its default", async () => {
+		plan(["structured"])
+		const { budget } = await runWithSearchBudget(
+			DEFAULT_SEARCH_BUDGET,
+			async () => {
+				await run("what did we decide", ["structured"])
+				await searchV2(db, "test_", "what did we decide", "agent-1", {
+					availablePaths: new Set(["structured"]),
+					maxResults: 20,
+					searchOptions: {
+						allowHybridBackstop: false,
+						capabilities,
+						fusionMethod: "scoreFusion",
+						embeddingMode: "automated",
+						conversationEvidenceMode: "disabled",
+					},
+				})
+			},
+		)
+		expect(searchStructuredMemory).toHaveBeenCalledOnce()
+		expect(budget).toMatchObject({ equivalentSkips: 1 })
 	})
 
 	it.each([

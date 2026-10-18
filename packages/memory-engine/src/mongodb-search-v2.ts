@@ -1898,7 +1898,6 @@ async function searchV2WithBudget(
 						needExactEvidence: context.searchOptions?.needExactEvidence,
 					},
 					limits: {
-						requested: context.maxResults,
 						maxResults,
 						minScore,
 						numCandidates,
