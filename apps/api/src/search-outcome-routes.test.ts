@@ -567,3 +567,69 @@ describe("exact-evidence rejection stays 200 (R3)", () => {
 		expect(json.error.code).toBe("SEARCH_LANES_UNAVAILABLE")
 	})
 })
+
+describe("OpenAPI documents the outcome fields and statuses (#101)", () => {
+	type Schema = { properties?: Record<string, Schema>; enum?: string[] }
+	type Operation = {
+		responses: Record<
+			string,
+			{
+				description?: string
+				content?: { "application/json"?: { schema?: Schema } }
+			}
+		>
+	}
+
+	async function operation(path: string): Promise<Operation> {
+		const res = await createApp().request("/openapi.json")
+		const json = (await res.json()) as {
+			paths: Record<string, { post: Operation }>
+		}
+		return json.paths[path].post
+	}
+
+	it.each([
+		"/v1/search",
+		"/v1/search-kb",
+	])("%s documents outcomes on its 200 body", async (path) => {
+		const op = await operation(path)
+		const outcomes =
+			op.responses["200"].content?.["application/json"]?.schema?.properties
+				?.outcomes
+		expect(outcomes?.properties?.status?.enum).toEqual([
+			"complete",
+			"partial",
+			"failed",
+		])
+		expect(outcomes?.properties).toHaveProperty("lanes")
+	})
+
+	it("/v1/search-detailed documents laneOutcomes and outcomeStatus", async () => {
+		const op = await operation("/v1/search-detailed")
+		const metadata =
+			op.responses["200"].content?.["application/json"]?.schema?.properties
+				?.metadata
+		expect(metadata?.properties).toHaveProperty("laneOutcomes")
+		expect(metadata?.properties?.outcomeStatus?.enum).toEqual([
+			"complete",
+			"partial",
+			"failed",
+		])
+	})
+
+	it.each([
+		"/v1/search",
+		"/v1/search-kb",
+		"/v1/search-detailed",
+	])("%s documents the 503 and 500 search failure codes", async (path) => {
+		const op = await operation(path)
+		expect(op.responses["503"]?.description).toContain(
+			"SEARCH_LANES_UNAVAILABLE",
+		)
+		expect(op.responses["503"]?.description).toContain(
+			"SEARCH_BUDGET_EXHAUSTED",
+		)
+		expect(op.responses["500"]?.description).toContain("SEARCH_LANES_FAILED")
+		expect(op.responses["503"]?.description).toContain("outcomes")
+	})
+})

@@ -42,6 +42,93 @@ const searchDegradationSchema = {
 		"WS-12: set only when admission control degraded this answer; absent means the results are an authoritative retrieval verdict.",
 }
 
+/**
+ * #101 / decision 16: the value-free outcome vocabulary of a search call
+ * (enum values only; no query, body or provider text).
+ */
+const searchOutcomeStatusSchema = {
+	type: "string",
+	enum: ["complete", "partial", "failed"],
+	description:
+		"complete: no lane failed or was budget-denied. partial: some lanes failed or were denied and the rest answered (200, even with zero results). failed: no required lane answered (served as a non-2xx).",
+}
+
+const searchLaneOutcomeSchema = {
+	type: "object",
+	required: ["lane", "stage", "outcome"],
+	properties: {
+		lane: {
+			type: "string",
+			description:
+				"Retrieval lane, tier owner or phase (e.g. structured, procedural, hybrid:chunks, kb, conversation-evidence, backstop:hybrid, search).",
+		},
+		stage: {
+			type: "string",
+			description:
+				"Stage inside the lane (e.g. lane, vector, atlas-search, classic-text, score-fusion, reservation, explain). Explain rows are diagnostics and never change the status.",
+		},
+		outcome: {
+			type: "string",
+			enum: ["ok", "ok-empty", "not-applicable", "failed", "budget-denied"],
+		},
+		reason: {
+			type: "string",
+			enum: [
+				"zero-hits",
+				"not-planned",
+				"capability-absent",
+				"query-shape",
+				"no-candidates",
+				"mode-disabled",
+				"source-disabled",
+				"empty-query",
+				"lane-unavailable",
+				"index-missing",
+				"index-not-ready",
+				"query-timeout",
+				"dependency-unavailable",
+				"query-error",
+				"internal-error",
+				"budget-aggregations",
+				"budget-embeds",
+				"budget-deadline",
+				"budget-reservation",
+			],
+		},
+		resultCount: { type: "integer" },
+		pass: {
+			type: "integer",
+			description: "Retrieval pass index (search-detailed only).",
+		},
+	},
+}
+
+const searchOutcomesSchema = {
+	type: "object",
+	required: ["status", "lanes"],
+	properties: {
+		status: searchOutcomeStatusSchema,
+		lanes: { type: "array", items: searchLaneOutcomeSchema },
+	},
+	description:
+		"#101: this call's outcome summary. Absent on a throttled call, which carries `degradation` instead.",
+}
+
+/**
+ * #101 / resolution R3: the non-2xx search failures. The body is the ApiError
+ * envelope plus `outcomes` (status "failed" and every row).
+ */
+const searchFailureResponses = {
+	"500": {
+		description:
+			"SEARCH_LANES_FAILED: every required lane failed and at least one failure is a defect (query-error or internal-error); this wins over the 503 codes. The body adds `outcomes` (status failed, every row). Other unexpected failures keep their route's internal error code.",
+	},
+	"503": {
+		description:
+			"SEARCH_LANES_UNAVAILABLE: every required lane failed with a retryable reason (lane-unavailable, index-missing, index-not-ready, query-timeout, dependency-unavailable); it wins over budget. SEARCH_BUDGET_EXHAUSTED: every failure is a search budget denial. The body adds `outcomes` (status failed, every row). SERVICE_UNAVAILABLE: the database is unreachable.",
+	},
+}
+
 export const searchPaths = {
 	"/health": {
 		get: {
@@ -107,7 +194,7 @@ export const searchPaths = {
 			responses: {
 				"200": {
 					description:
-						"Search results (with degradation marker when throttled)",
+						"Search results (with degradation marker when throttled). A partial answer is a 200 with outcomes.status partial, even with zero results.",
 					content: {
 						"application/json": {
 							schema: {
@@ -118,11 +205,13 @@ export const searchPaths = {
 										items: { type: "object" },
 									},
 									degradation: searchDegradationSchema,
+									outcomes: searchOutcomesSchema,
 								},
 							},
 						},
 					},
 				},
+				...searchFailureResponses,
 			},
 		},
 	},
@@ -496,6 +585,13 @@ export const searchPaths = {
 												description:
 													"WS-11: set when admission control denied a pass — the empty results are throttling, not a retrieval verdict.",
 											},
+											laneOutcomes: {
+												type: "array",
+												items: searchLaneOutcomeSchema,
+												description:
+													"#101: value-free outcome rows across every pass.",
+											},
+											outcomeStatus: searchOutcomeStatusSchema,
 											trustSummary: {
 												type: "object",
 												properties: {
@@ -520,6 +616,7 @@ export const searchPaths = {
 						},
 					},
 				},
+				...searchFailureResponses,
 			},
 		},
 	},
@@ -823,7 +920,7 @@ export const searchPaths = {
 			responses: {
 				"200": {
 					description:
-						"KB results (with degradation marker when the vector lane was skipped)",
+						"KB results (with degradation marker when the vector lane was skipped). A partial answer is a 200 with outcomes.status partial, even with zero results.",
 					content: {
 						"application/json": {
 							schema: {
@@ -834,11 +931,13 @@ export const searchPaths = {
 										items: { type: "object" },
 									},
 									degradation: searchDegradationSchema,
+									outcomes: searchOutcomesSchema,
 								},
 							},
 						},
 					},
 				},
+				...searchFailureResponses,
 			},
 		},
 	},
