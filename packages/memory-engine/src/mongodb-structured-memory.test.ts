@@ -60,6 +60,15 @@ const noSearchCapabilities: DetectedCapabilities = {
 	vectorIndexMethod: false,
 }
 
+const TEXT_INDEX = "test_structured_mem_text"
+
+// #101 R2: the structured $search tier runs only when its index is queryable.
+const textOnlyCapabilities: DetectedCapabilities = {
+	...baseCapabilities,
+	vectorSearch: false,
+	queryableSearchIndexes: [TEXT_INDEX],
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -654,8 +663,9 @@ describe("searchStructuredMemory", () => {
 
 		const results = await searchStructuredMemory(col, "sony camera", null, {
 			maxResults: 5,
-			capabilities: { ...baseCapabilities, vectorSearch: false },
+			capabilities: textOnlyCapabilities,
 			vectorIndexName: "test_structured_vector",
+			textIndexName: TEXT_INDEX,
 			embeddingMode: "automated",
 		})
 
@@ -739,12 +749,27 @@ describe("searchStructuredMemory", () => {
 
 		const results = await searchStructuredMemory(col, "nothing", null, {
 			maxResults: 5,
-			capabilities: noSearchCapabilities,
+			capabilities: textOnlyCapabilities,
 			vectorIndexName: "test_structured_mem_vector",
+			textIndexName: TEXT_INDEX,
 			embeddingMode: "automated",
 		})
 
 		expect(results).toHaveLength(0)
+	})
+
+	it("#101: with no search capability the lane is unavailable, not empty", async () => {
+		const col = createMockStructuredCol()
+
+		await expect(
+			searchStructuredMemory(col, "nothing", null, {
+				maxResults: 5,
+				capabilities: noSearchCapabilities,
+				vectorIndexName: "test_structured_mem_vector",
+				embeddingMode: "automated",
+			}),
+		).rejects.toMatchObject({ reason: "lane-unavailable" })
+		expect(col.aggregate).not.toHaveBeenCalled()
 	})
 
 	it("caps numCandidates at 10000 in structured memory search (F1)", async () => {
@@ -925,14 +950,22 @@ describe("searchStructuredMemory", () => {
 				salience: ["critical", "high"],
 				agentId: "main",
 			},
-			capabilities: noSearchCapabilities,
+			capabilities: textOnlyCapabilities,
 			vectorIndexName: "unused",
+			textIndexName: TEXT_INDEX,
 			embeddingMode: "automated",
 		})
 
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
-		expect(pipeline[0].$match).toEqual({
+		expect(pipeline[0].$search.compound.filter).toEqual(
+			expect.arrayContaining([
+				{ equals: { path: "agentId", value: "main" } },
+				{ in: { path: "salience", value: ["critical", "high"] } },
+				{ equals: { path: "state", value: "active" } },
+			]),
+		)
+		expect(pipeline[1].$match).toEqual({
 			$and: expect.arrayContaining([
 				expect.objectContaining({
 					agentId: "main",
@@ -1151,7 +1184,7 @@ describe("structured memory TTL expiration (P4.4.1)", () => {
 		expect(JSON.stringify(vsStage.filter ?? {})).not.toContain("expiresAt")
 	})
 
-	it("excludes expired docs from the $text fallback match", async () => {
+	it("excludes expired docs from the $search text tier via a post-stage $match", async () => {
 		const col = createMockStructuredCol()
 		vi.mocked(col.aggregate).mockReturnValueOnce({
 			toArray: vi.fn(async () => []),
@@ -1160,16 +1193,22 @@ describe("structured memory TTL expiration (P4.4.1)", () => {
 		await searchStructuredMemory(col, "anything", null, {
 			maxResults: 5,
 			filter: { agentId: "main" },
-			capabilities: noSearchCapabilities,
+			capabilities: textOnlyCapabilities,
 			vectorIndexName: "test_vec",
+			textIndexName: TEXT_INDEX,
 			embeddingMode: "automated",
 		})
 
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0] as Array<Record<string, unknown>>
-		const match = pipeline[0].$match as Record<string, unknown>
-		expect(JSON.stringify(match)).toContain("expiresAt")
-		expect(JSON.stringify(match)).toContain("$exists")
+		expect(pipeline[0].$search).toBeDefined()
+		expect(JSON.stringify(pipeline[0])).not.toContain("expiresAt")
+		expect(pipeline[2].$match).toEqual({
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
 	})
 
 	it("getStructuredMemoryByHandle treats an expired record as gone (lifecycle read)", async () => {

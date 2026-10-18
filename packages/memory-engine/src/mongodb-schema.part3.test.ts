@@ -1351,7 +1351,8 @@ describe("ensureStandardIndexes total count with legacy query_cache TTL", () => 
 		// C-005: +1 partial TTL index (chunks expiresAt) + 1 session_chunks TTL (idx_session_chunks_ttl_expires_at)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// = 101
-		expect(count).toBe(101)
+		// #101 R7: −2 structured/procedure $text indexes
+		// = 99
+		expect(count).toBe(99)
 	})
 })

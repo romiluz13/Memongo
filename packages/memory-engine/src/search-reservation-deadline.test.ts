@@ -5,6 +5,7 @@ import {
 	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
 import { searchConversationEvidenceEvents } from "./mongodb-search-lanes.js"
+import { SearchBudgetDeniedError } from "./search-outcomes.js"
 
 afterEach(() => vi.restoreAllMocks())
 const limits = { maxAggregations: 3, maxEmbeds: 2, maxWallMs: 10 }
@@ -42,7 +43,7 @@ it("keeps prior consumption and the shared parent deadline in nested work", asyn
 	expect(budget).toMatchObject({ aggregations: 1, embeds: 0, exhausted: true })
 })
 
-it("does not dispatch the direct conversation-evidence consumer with expired reservation", async () => {
+it("L13: an expired reservation is a typed budget denial and dispatches nothing", async () => {
 	let now = 1000
 	vi.spyOn(Date, "now").mockImplementation(() => now)
 	const aggregate = vi.fn(() => ({ toArray: async () => [] }))
@@ -73,11 +74,17 @@ it("does not dispatch the direct conversation-evidence consumer with expired res
 				queryEmbeddingModel: "voyage-4-large",
 				budgetReservation: reservation,
 			})
+		} catch (err) {
+			return err
 		} finally {
 			reservation.release()
 		}
 	})
-	expect(value).toEqual([])
+	expect(value).toBeInstanceOf(SearchBudgetDeniedError)
+	expect(value).toMatchObject({
+		stage: "turn-vector",
+		reason: "budget-reservation",
+	})
 	expect(aggregate).not.toHaveBeenCalled()
 	expect(budget).toMatchObject({ aggregations: 0, embeds: 0, exhausted: true })
 })

@@ -106,7 +106,9 @@ import type {
 	ClaimedMemoryJob,
 	MemoryJobType,
 	MemoryJobStatus,
+	SearchLaneOutcome,
 } from "./types.js"
+import type { SearchOutcomeSummary } from "./search-outcomes.js"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
 import type { FSWatcher } from "chokidar"
 import type { ClientSession, Db, Document, MongoClient } from "mongodb"
@@ -194,6 +196,7 @@ export interface MongoDBManagerHost {
 			kbRestricted?: boolean
 		},
 		admission?: AdmissionToken,
+		onOutcome?: (row: SearchLaneOutcome) => void,
 	): Promise<MemorySearchResult[]>
 	search(
 		query: string,
@@ -216,6 +219,11 @@ export interface MongoDBManagerHost {
 			 * control degraded this answer. Sink-not-state (see onLaneLatency).
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
+			/**
+			 * #101: receives this call's outcome summary ({status, lanes})
+			 * exactly once. Sink-not-state; rows are value-free enums.
+			 */
+			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]>
@@ -252,6 +260,11 @@ export interface MongoDBManagerHost {
 			 * control dropped the KB vector lane. Sink-not-state.
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
+			/**
+			 * #101: receives this call's outcome summary ({status, lanes})
+			 * exactly once. Sink-not-state; rows are value-free enums.
+			 */
+			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 	): Promise<MemorySearchResult[]>
 	detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod

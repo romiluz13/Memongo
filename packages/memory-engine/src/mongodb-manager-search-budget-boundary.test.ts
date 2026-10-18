@@ -55,14 +55,16 @@ vi.mock("./mongodb-search-v2.js", async (importOriginal) => {
 						plan: { paths: [], confidence: "high", reasoning: "captured" },
 						pathsExecuted: ["hybrid"],
 						resultsByPath: {},
+						outcomeStatus: "complete",
 						...capture.metadataOverride,
 						// One lane outcome per pass lets the RET-13 merge
 						// seam be observed across passes: the response
 						// metadata must carry every pass's entries.
 						laneOutcomes: [
 							{
-								lane: `captured:call-${capture.calls.length - 1}`,
-								status: "ok",
+								lane: "hybrid",
+								stage: "lane",
+								outcome: results.length > 0 ? "ok" : "ok-empty",
 								resultCount: results.length,
 							},
 						],
@@ -246,15 +248,28 @@ describe("searchDetailed request budget boundary (RET-16)", () => {
 			embeds: 0,
 			exhausted: false,
 		})
-		// RET-13 merge seam: every pass's lane outcome survives into the
-		// response metadata, in attempt order.
+		// RET-13 / #101 E1 merge seam: every pass's lane outcome survives
+		// into the response metadata, in attempt order, tagged with its pass.
 		expect(response.metadata.laneOutcomes).toEqual(
 			capture.calls.map((_, index) => ({
-				lane: `captured:call-${index}`,
-				status: "ok",
+				lane: "hybrid",
+				stage: "lane",
+				outcome: expect.any(String),
 				resultCount: expect.any(Number),
+				pass: index,
 			})),
 		)
+		expect(response.metadata.outcomeStatus).toBe("complete")
+	})
+
+	it("E3: a partial pass is not zero hits — no corrective pass keys on it", async () => {
+		capture.metadataOverride = { outcomeStatus: "partial" }
+		const response = await runTwoPassSearch()
+		expect(capture.calls).toHaveLength(1)
+		expect(response.metadata.outcomeStatus).toBe("partial")
+		expect(response.metadata.laneOutcomes).toEqual([
+			expect.objectContaining({ lane: "hybrid", pass: 0 }),
+		])
 	})
 
 	it("one admission token admits the whole multi-pass request", async () => {

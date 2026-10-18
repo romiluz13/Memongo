@@ -7,6 +7,7 @@ import {
 	MongoServerError,
 } from "mongodb"
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { SearchLaneError } from "./search-outcomes.js"
 
 const loggerMocks = vi.hoisted(() => ({
 	debug: vi.fn(),
@@ -1188,7 +1189,7 @@ describe("mongodb-graph", () => {
 				expect(nameClause.source).toBe("C\\+\\+ \\(beta\\)")
 			})
 
-			it("falls back to the escaped $regex path when $search fails at runtime", async () => {
+			it("G2: a $search runtime failure throws typed and never falls back to $regex", async () => {
 				const findResult = {
 					sort: vi.fn().mockReturnValue({
 						limit: vi.fn().mockReturnValue({
@@ -1206,7 +1207,7 @@ describe("mongodb-graph", () => {
 					[`${PREFIX}entities`]: entCol,
 				})
 
-				await searchEntitiesAutocomplete({
+				const failure = await searchEntitiesAutocomplete({
 					db,
 					prefix: PREFIX,
 					agentId: "agent-1",
@@ -1214,10 +1215,13 @@ describe("mongodb-graph", () => {
 					scopeRef: "agent:agent-1",
 					query: "fallback",
 					textSearchAvailable: true,
-				})
+				}).catch((err: unknown) => err)
 
 				expect(entCol.aggregate).toHaveBeenCalledOnce()
-				expect(entCol.find).toHaveBeenCalledOnce()
+				expect(entCol.find).not.toHaveBeenCalled()
+				expect(failure).toBeInstanceOf(SearchLaneError)
+				expect(failure).toMatchObject({ stage: "entity-lookup" })
+				expect((failure as Error).message).not.toContain("mongot unavailable")
 			})
 		})
 

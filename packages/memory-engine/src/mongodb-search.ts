@@ -9,9 +9,9 @@ import {
 import { mergeHybridResultsMongoDB, rrfScore } from "./mongodb-hybrid.js"
 import { resolveChunkProvenance } from "./memory-derivation.js"
 import {
+	consumeSearchAggregationOrThrow,
+	consumeSearchEmbedOrThrow,
 	resolveUserSearchMaxTimeMs,
-	tryConsumeSearchAggregation,
-	tryConsumeSearchEmbed,
 } from "./mongodb-search-budget.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
@@ -21,6 +21,15 @@ import type {
 	LegacyMemorySource,
 	MemorySearchResult,
 } from "./types.js"
+import {
+	classifySearchError,
+	SearchBudgetDeniedError,
+	SearchLaneError,
+	type SearchStage,
+	type SearchTierOutcomeSink,
+	searchFailureLogFields,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 const log = createSubsystemLogger("memory:mongodb:search")
 
@@ -55,39 +64,27 @@ export type SearchTraceEvent = {
 	message?: string
 }
 
-class EmbedBudgetExhaustedError extends Error {}
-
-class SearchFallbackDisabledError extends Error {
-	constructor(message: string) {
-		super(`search fallback disabled: ${message}`)
-		this.name = "SearchFallbackDisabledError"
-	}
-}
-
-function isStrictSearchFallbackDisabled(opts: {
-	strictNoFallback?: boolean
-}): boolean {
-	const strictEnv = process.env.MEMONGO_BENCHMARK_STRICT
-	return (
-		opts.strictNoFallback === true ||
-		strictEnv === "1" ||
-		strictEnv?.toLowerCase() === "true"
-	)
-}
-
-function warnOrThrowFallback(
-	opts: { strictNoFallback?: boolean },
-	message: string,
+/**
+ * R4 (#101): a failed explain capture is a diagnostic, not retrieval — it is
+ * reported as an `explain` row with a classified reason and never changes
+ * the results or the request status.
+ */
+export function reportExplainFailure(
+	err: unknown,
+	onTierOutcome?: SearchTierOutcomeSink,
 ): void {
-	if (isStrictSearchFallbackDisabled(opts)) {
-		throw new SearchFallbackDisabledError(message)
-	}
-	log.warn(message)
+	log.debug("aggregate explain capture failed", searchFailureLogFields(err))
+	onTierOutcome?.({
+		stage: "explain",
+		outcome: "failed",
+		reason: classifySearchError(err),
+	})
 }
 
 async function captureAggregateExplain(
 	collection: Collection,
 	pipeline: Document[],
+	onTierOutcome?: SearchTierOutcomeSink,
 ): Promise<unknown> {
 	try {
 		const cursor = collection.aggregate(pipeline) as unknown as {
@@ -98,8 +95,7 @@ async function captureAggregateExplain(
 		}
 		return await cursor.explain("executionStats")
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
-		log.debug(`aggregate explain capture failed: ${message}`)
+		reportExplainFailure(err, onTierOutcome)
 		return null
 	}
 }
@@ -155,12 +151,13 @@ export async function runSearchAggregateWithRetry(
 		maxAttempts = 5,
 		initialDelayMs = 250,
 		aggregateOptions,
-		onEmbedBudgetExhausted,
+		stage = "lane",
 	}: {
 		maxAttempts?: number
 		initialDelayMs?: number
 		aggregateOptions?: AggregateOptions
-		onEmbedBudgetExhausted?: () => void
+		/** #101: the stage a budget denial or failure is reported at. */
+		stage?: SearchStage
 	} = {},
 ): Promise<Document[]> {
 	// P3.8: user-driven pipelines carry a maxTimeMS ceiling. Callers with
@@ -176,27 +173,31 @@ export async function runSearchAggregateWithRetry(
 	while (true) {
 		// P3.2 + RET-16: every ATTEMPT consumes the per-request budget — a
 		// warmup retry re-executes the aggregate server-side, so it is a
-		// real aggregation, not a replay of the original charge. Exhaustion
-		// degrades to an empty result (empty ≠ error), which also stops the
-		// caller's escalation machinery from re-firing.
-		if (!tryConsumeSearchAggregation()) {
-			return []
-		}
+		// real aggregation, not a replay of the original charge. #101: a
+		// refusal is a typed budget denial, never an empty result, so it can
+		// never read as zero hits.
+		consumeSearchAggregationOrThrow(stage)
 		if (attempt > 0) {
 			for (let embed = 0; embed < retryEmbeds; embed++) {
-				if (!tryConsumeSearchEmbed(onEmbedBudgetExhausted)) return []
+				consumeSearchEmbedOrThrow(stage)
 			}
 		}
 		try {
 			return await collection.aggregate(pipeline, options).toArray()
 		} catch (error) {
-			if (!isSearchIndexWarmupError(error) || attempt >= maxAttempts - 1) {
+			if (!isSearchIndexWarmupError(error)) {
+				// Callers type the failure at their own tier seam; recall and
+				// other non-search callers keep the driver error.
 				throw error
 			}
-			const message = error instanceof Error ? error.message : String(error)
-			log.debug(
-				`search index still warming; retrying aggregate in ${delayMs}ms: ${message}`,
-			)
+			if (attempt >= maxAttempts - 1) {
+				throw new SearchLaneError({
+					stage,
+					reason: "index-not-ready",
+					cause: error,
+				})
+			}
+			log.debug("search index still warming; retrying aggregate", { delayMs })
 			await sleep(delayMs)
 			attempt++
 			delayMs = Math.min(delayMs * 2, 2_000)
@@ -474,6 +475,24 @@ function buildSearchFilterClause(
 	return null
 }
 
+/** #101 R2: a Search-backed text tier runs only when its index is known queryable. */
+export function isTextSearchTierAvailable(
+	capabilities: DetectedCapabilities,
+	indexName: string | undefined,
+): boolean {
+	return (
+		capabilities.textSearch &&
+		indexName !== undefined &&
+		(capabilities.queryableSearchIndexes?.includes(indexName) ?? false)
+	)
+}
+
+/** The field path a splitAtlasSearchFilter clause binds to. */
+export function atlasSearchClausePath(clause: Document): string | undefined {
+	const inner: Document = clause.compound?.filter?.[0] ?? clause
+	return inner.equals?.path ?? inner.in?.path
+}
+
 export function splitAtlasSearchFilter(filter?: Document): {
 	compoundFilter?: Document[]
 	postMatch?: Document
@@ -655,7 +674,8 @@ export function buildVectorSearchStage(input: {
 	 *  collection re-fetch (requires the index to have `storedSource` configured).
 	 *  MongoDB 8.3+ feature. */
 	returnStoredSource?: boolean
-	onEmbedBudgetExhausted?: () => void
+	/** #101: the stage a refused embed is reported at. */
+	stage?: SearchStage
 }): Document | null {
 	const limit = normalizeVectorSearchLimit(input.limit)
 	const base: Document = {
@@ -685,12 +705,10 @@ export function buildVectorSearchStage(input: {
 
 	if (input.embeddingMode === "automated" && input.queryText) {
 		// P3.1/P3.2: an autoEmbed stage embeds the query text server-side — a
-		// paid embedding per pipeline. Charge the per-request budget; when it
-		// is exhausted the stage is withheld and the lane degrades to empty
-		// (empty ≠ error) instead of firing another embedding.
-		if (!tryConsumeSearchEmbed(input.onEmbedBudgetExhausted)) {
-			return null
-		}
+		// paid embedding per pipeline. Charge the per-request budget; #101:
+		// exhaustion throws a typed denial (a null stage now means only "no
+		// query text").
+		consumeSearchEmbedOrThrow(input.stage ?? "vector")
 		base.query = { text: input.queryText }
 		base.model = input.model ?? INDEX_AUTOEMBED_MODEL
 		base.path = input.textFieldPath ?? "text"
@@ -719,7 +737,7 @@ export async function vectorSearch(
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
-		onEmbedBudgetExhausted?: () => void
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const filter: Document = {}
@@ -745,10 +763,15 @@ export async function vectorSearch(
 		// mongod (the documented default lookup); storedSource reads the
 		// indexed copy, which may return stale data.
 		returnStoredSource: false,
-		onEmbedBudgetExhausted: opts.onEmbedBudgetExhausted,
+		stage: "vector",
 	})
 
 	if (!vsStage) {
+		opts.onTierOutcome?.({
+			stage: "vector",
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
 		return []
 	}
 
@@ -789,7 +812,11 @@ export async function vectorSearch(
 	]
 
 	if (opts.explain?.enabled) {
-		const explained = await captureAggregateExplain(collection, pipeline)
+		const explained = await captureAggregateExplain(
+			collection,
+			pipeline,
+			opts.onTierOutcome,
+		)
 		if (explained) {
 			opts.explain.onArtifact?.({
 				artifactType: "vectorExplain",
@@ -800,7 +827,7 @@ export async function vectorSearch(
 	}
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline, {
-		onEmbedBudgetExhausted: opts.onEmbedBudgetExhausted,
+		stage: "vector",
 	})
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
 	return filterByScore(results, opts.minScore)
@@ -820,6 +847,7 @@ export async function keywordSearch(
 		filter?: Document
 		indexName: string
 		explain?: SearchExplainOptions
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const sourceFilter = resolveLegacySourceFilter(opts.sessionKey)
@@ -875,7 +903,11 @@ export async function keywordSearch(
 	]
 
 	if (opts.explain?.enabled) {
-		const explained = await captureAggregateExplain(collection, pipeline)
+		const explained = await captureAggregateExplain(
+			collection,
+			pipeline,
+			opts.onTierOutcome,
+		)
 		if (explained) {
 			opts.explain.onArtifact?.({
 				artifactType: "searchExplain",
@@ -885,7 +917,9 @@ export async function keywordSearch(
 		}
 	}
 
-	const docs = await runSearchAggregateWithRetry(collection, pipeline)
+	const docs = await runSearchAggregateWithRetry(collection, pipeline, {
+		stage: "keyword",
+	})
 	if (opts.explain?.enabled && opts.explain.includeScoreDetails) {
 		const scoreDetailSample = docs.find(
 			(doc) => doc.scoreDetails != null,
@@ -925,7 +959,7 @@ export async function hybridSearchScoreFusion(
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
-		onEmbedBudgetExhausted?: () => void
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const sourceFilter: Document = {}
@@ -952,10 +986,15 @@ export async function hybridSearchScoreFusion(
 		// mongod (the documented default lookup); storedSource reads the
 		// indexed copy, which may return stale data.
 		returnStoredSource: false,
-		onEmbedBudgetExhausted: opts.onEmbedBudgetExhausted,
+		stage: "score-fusion",
 	})
 
 	if (!vsStage) {
+		opts.onTierOutcome?.({
+			stage: "score-fusion",
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
 		return []
 	}
 
@@ -1035,7 +1074,11 @@ export async function hybridSearchScoreFusion(
 	]
 
 	if (opts.explain?.enabled) {
-		const explained = await captureAggregateExplain(collection, pipeline)
+		const explained = await captureAggregateExplain(
+			collection,
+			pipeline,
+			opts.onTierOutcome,
+		)
 		if (explained) {
 			opts.explain.onArtifact?.({
 				artifactType: "fusionExplain",
@@ -1046,7 +1089,7 @@ export async function hybridSearchScoreFusion(
 	}
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline, {
-		onEmbedBudgetExhausted: opts.onEmbedBudgetExhausted,
+		stage: "score-fusion",
 	})
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
 	return normalizeAndFilterScoreFusionResults(
@@ -1078,7 +1121,7 @@ export async function hybridSearchRankFusion(
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
-		onEmbedBudgetExhausted?: () => void
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const sourceFilter: Document = {}
@@ -1105,10 +1148,15 @@ export async function hybridSearchRankFusion(
 		// mongod (the documented default lookup); storedSource reads the
 		// indexed copy, which may return stale data.
 		returnStoredSource: false,
-		onEmbedBudgetExhausted: opts.onEmbedBudgetExhausted,
+		stage: "rank-fusion",
 	})
 
 	if (!vsStage) {
+		opts.onTierOutcome?.({
+			stage: "rank-fusion",
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
 		return []
 	}
 
@@ -1183,7 +1231,11 @@ export async function hybridSearchRankFusion(
 	]
 
 	if (opts.explain?.enabled) {
-		const explained = await captureAggregateExplain(collection, pipeline)
+		const explained = await captureAggregateExplain(
+			collection,
+			pipeline,
+			opts.onTierOutcome,
+		)
 		if (explained) {
 			opts.explain.onArtifact?.({
 				artifactType: "fusionExplain",
@@ -1194,7 +1246,7 @@ export async function hybridSearchRankFusion(
 	}
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline, {
-		onEmbedBudgetExhausted: opts.onEmbedBudgetExhausted,
+		stage: "rank-fusion",
 	})
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
 	return normalizeAndFilterRankFusionResults(
@@ -1250,7 +1302,8 @@ export async function mongoSearch(
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		explain?: SearchExplainOptions
 		onTrace?: (event: SearchTraceEvent) => void
-		strictNoFallback?: boolean
+		/** #101: per-call sink for this lane's tier outcomes. */
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const vectorWeight = opts.vectorWeight ?? 0.7
@@ -1258,286 +1311,175 @@ export async function mongoSearch(
 	const embeddingMode = opts.embeddingMode ?? "automated"
 	const canVector =
 		embeddingMode === "automated" && opts.capabilities.vectorSearch
+	const searchOpts = { ...opts, vectorWeight, textWeight, embeddingMode }
 
-	const searchOpts = {
-		...opts,
-		vectorWeight,
-		textWeight,
-		embeddingMode,
-		onEmbedBudgetExhausted: () => {
-			throw new EmbedBudgetExhaustedError()
-		},
-	}
-
-	// P3.2 — "empty ≠ error" (fix-plan-2026-08-03, Appendix C): an empty
-	// result is a valid answer, not a trigger for escalation. Every stage
-	// below that includes the vector lane returns nearest neighbors for ANY
-	// query as long as documents exist under the filter, so an empty stage
-	// result proves there is nothing retrievable for this query+filter —
-	// re-running the same query through the next waterfall stage (and
-	// re-embedding it server-side) is pure cost. Only ERRORS escalate.
-	const emptyResult = (method: SearchTraceEvent["method"]) => {
-		opts.onTrace?.({
-			event: "method",
-			method,
-			ok: false,
-			message: "empty results",
-		})
-		return [] as MemorySearchResult[]
-	}
-
-	const reportEmbedExhaustion = (method: SearchTraceEvent["method"]): void => {
-		opts.onTrace?.({
-			event: "method",
-			method,
-			ok: false,
-			message: "embedding budget exhausted",
-		})
-		warnOrThrowFallback(opts, "embedding budget exhausted")
-	}
-	vectorPaths: {
-		// Attempt hybrid search first (best quality).
-		// Respect the user's fusionMethod preference:
-		//   "scoreFusion" → try $scoreFusion, fall back to $rankFusion, then JS merge
-		//   "rankFusion"  → try $rankFusion directly, fall back to JS merge
-		//   "js-merge"    → skip server-side fusion entirely, go straight to JS merge
-		if (canVector && opts.capabilities.textSearch) {
-			// Try $scoreFusion (only if user wants it and server supports it)
-			if (
-				opts.fusionMethod === "scoreFusion" &&
-				opts.capabilities.scoreFusion
-			) {
-				try {
-					const results = await hybridSearchScoreFusion(
-						collection,
-						query,
-						queryVector,
-						searchOpts,
-					)
-					if (results.length > 0) {
-						opts.onTrace?.({ event: "method", method: "scoreFusion", ok: true })
-						return results
-					}
-					return emptyResult("scoreFusion")
-				} catch (err) {
-					if (err instanceof EmbedBudgetExhaustedError) {
-						reportEmbedExhaustion("scoreFusion")
-						if (!opts.capabilities.textSearch) return []
-						break vectorPaths
-					}
-					if (err instanceof SearchFallbackDisabledError) {
-						throw err
-					}
-					const msg = err instanceof Error ? err.message : String(err)
-					opts.onTrace?.({
-						event: "method",
-						method: "scoreFusion",
-						ok: false,
-						message: msg,
-					})
-					warnOrThrowFallback(
-						opts,
-						`$scoreFusion failed, trying $rankFusion fallback: ${msg}`,
-					)
-				}
-			}
-
-			// Try $rankFusion (if user wants it, or as fallback from scoreFusion)
-			if (opts.fusionMethod !== "js-merge" && opts.capabilities.rankFusion) {
-				try {
-					const results = await hybridSearchRankFusion(
-						collection,
-						query,
-						queryVector,
-						searchOpts,
-					)
-					if (results.length > 0) {
-						opts.onTrace?.({ event: "method", method: "rankFusion", ok: true })
-						return results
-					}
-					return emptyResult("rankFusion")
-				} catch (err) {
-					if (err instanceof EmbedBudgetExhaustedError) {
-						reportEmbedExhaustion("rankFusion")
-						if (!opts.capabilities.textSearch) return []
-						break vectorPaths
-					}
-					if (err instanceof SearchFallbackDisabledError) {
-						throw err
-					}
-					const msg = err instanceof Error ? err.message : String(err)
-					opts.onTrace?.({
-						event: "method",
-						method: "rankFusion",
-						ok: false,
-						message: msg,
-					})
-					warnOrThrowFallback(
-						opts,
-						`$rankFusion failed, trying separate queries + JS merge: ${msg}`,
-					)
-				}
-			}
-
-			// JS merge fallback: run vector + keyword separately
-			try {
-				const [vResults, kResults] = await Promise.all([
-					vectorSearch(collection, queryVector, {
-						...searchOpts,
-						indexName: opts.vectorIndexName,
-						queryText: query,
-					}).catch((error: unknown) => {
-						if (!(error instanceof EmbedBudgetExhaustedError)) throw error
-						reportEmbedExhaustion("vector")
-						return [] as MemorySearchResult[]
-					}),
-					keywordSearch(collection, query, {
-						...searchOpts,
-						indexName: opts.textIndexName,
-					}),
-				])
-				const merged = hybridSearchJSFallback(vResults, kResults, {
-					maxResults: opts.maxResults,
-					vectorWeight,
-					textWeight,
-				})
-				if (merged.length > 0) {
-					opts.onTrace?.({ event: "method", method: "js-merge", ok: true })
-					return merged
-				}
-				// Stopping here also dedupes the old js-merge → vector-only double
-				// vectorSearch: the identical vector search just ran inside the
-				// merge, and it returned nothing.
-				return emptyResult("js-merge")
-			} catch (err) {
-				if (err instanceof SearchFallbackDisabledError) {
-					throw err
-				}
-				const msg = err instanceof Error ? err.message : String(err)
-				opts.onTrace?.({
-					event: "method",
-					method: "js-merge",
-					ok: false,
-					message: msg,
-				})
-				warnOrThrowFallback(opts, `hybrid JS merge failed: ${msg}`)
-			}
+	// #101 / decision 16: the lane runs exactly ONE tier, chosen up front from
+	// the deployment's capabilities and the fusion preference. A successful
+	// empty answer ends the lane (P3.2 "empty ≠ error"); an error or a budget
+	// denial is a typed throw at the failing stage and never escalates to a
+	// weaker tier.
+	const runTier = async (
+		method: SearchTraceEvent["method"],
+		stage: SearchStage,
+		run: () => Promise<MemorySearchResult[]>,
+	): Promise<MemorySearchResult[]> => {
+		try {
+			const results = await run()
+			opts.onTrace?.({
+				event: "method",
+				method,
+				ok: results.length > 0,
+				...(results.length > 0 ? {} : { message: "empty results" }),
+			})
+			opts.onTierOutcome?.({
+				stage,
+				outcome: results.length > 0 ? "ok" : "ok-empty",
+				...(results.length > 0 ? {} : { reason: "zero-hits" as const }),
+				resultCount: results.length,
+			})
+			return results
+		} catch (err) {
+			const typed =
+				err instanceof SearchLaneError && err.stage !== stage
+					? new SearchLaneError({
+							stage,
+							reason: err.reason,
+							cause: err.cause ?? err,
+						})
+					: toTypedSearchError(err, stage)
+			opts.onTrace?.({
+				event: "method",
+				method,
+				ok: false,
+				message: typed.message,
+			})
+			throw typed
 		}
+	}
 
-		// Vector-only fallback
-		if (canVector) {
-			try {
-				const results = await vectorSearch(collection, queryVector, {
+	if (canVector && opts.capabilities.textSearch) {
+		if (opts.fusionMethod === "scoreFusion" && opts.capabilities.scoreFusion) {
+			return runTier("scoreFusion", "score-fusion", () =>
+				hybridSearchScoreFusion(collection, query, queryVector, searchOpts),
+			)
+		}
+		if (opts.fusionMethod !== "js-merge" && opts.capabilities.rankFusion) {
+			return runTier("rankFusion", "rank-fusion", () =>
+				hybridSearchRankFusion(collection, query, queryVector, searchOpts),
+			)
+		}
+		return runTier("js-merge", "js-merge", async () => {
+			const [vResults, kResults] = await Promise.all([
+				vectorSearch(collection, queryVector, {
 					...searchOpts,
 					indexName: opts.vectorIndexName,
 					queryText: query,
-				})
-				if (results.length > 0) {
-					opts.onTrace?.({ event: "method", method: "vector", ok: true })
-					return results
-				}
-				return emptyResult("vector")
-			} catch (err) {
-				if (err instanceof EmbedBudgetExhaustedError) {
-					reportEmbedExhaustion("vector")
-					if (!opts.capabilities.textSearch) return []
-					break vectorPaths
-				}
-				if (err instanceof SearchFallbackDisabledError) {
-					throw err
-				}
-				const msg = err instanceof Error ? err.message : String(err)
-				opts.onTrace?.({
-					event: "method",
-					method: "vector",
-					ok: false,
-					message: msg,
-				})
-				warnOrThrowFallback(opts, `vector search failed: ${msg}`)
-			}
-		}
+				}).catch((error: unknown) => {
+					// S11: a refused vector embed is the vector stage's own
+					// budget-denied row; the keyword branch's results stand.
+					if (!(error instanceof SearchBudgetDeniedError)) throw error
+					opts.onTrace?.({
+						event: "method",
+						method: "vector",
+						ok: false,
+						message: "embedding budget exhausted",
+					})
+					opts.onTierOutcome?.({
+						stage: "vector",
+						outcome: "budget-denied",
+						reason: error.reason,
+					})
+					return [] as MemorySearchResult[]
+				}),
+				keywordSearch(collection, query, {
+					...searchOpts,
+					indexName: opts.textIndexName,
+				}),
+			])
+			return hybridSearchJSFallback(vResults, kResults, {
+				maxResults: opts.maxResults,
+				vectorWeight,
+				textWeight,
+			})
+		})
 	}
 
-	// Keyword-only fallback
+	if (canVector) {
+		return runTier("vector", "vector", () =>
+			vectorSearch(collection, queryVector, {
+				...searchOpts,
+				indexName: opts.vectorIndexName,
+				queryText: query,
+			}),
+		)
+	}
+
 	if (opts.capabilities.textSearch) {
-		try {
-			const results = await keywordSearch(collection, query, {
+		return runTier("keyword", "keyword", () =>
+			keywordSearch(collection, query, {
 				...searchOpts,
 				indexName: opts.textIndexName,
-			})
-			if (results.length > 0) {
-				opts.onTrace?.({ event: "method", method: "keyword", ok: true })
-				return results
-			}
-			return emptyResult("keyword")
-		} catch (err) {
-			if (err instanceof SearchFallbackDisabledError) {
-				throw err
-			}
-			const msg = err instanceof Error ? err.message : String(err)
-			opts.onTrace?.({
-				event: "method",
-				method: "keyword",
-				ok: false,
-				message: msg,
-			})
-			warnOrThrowFallback(opts, `keyword search failed: ${msg}`)
-		}
+			}),
+		)
 	}
 
-	// Last resort: basic $text index search (Community without mongot)
-	if (isStrictSearchFallbackDisabled(opts)) {
-		throw new SearchFallbackDisabledError("$text fallback would be required")
-	}
+	// R5: classic $text is the planned lexical tier ONLY on deployments with
+	// neither Search lane — exactly where its BSON text index is created
+	// (shouldEnsureTextFallbackIndexes). It is never reached after a failure.
+	return runTier("$text", "classic-text", () =>
+		classicTextSearch(collection, query, opts),
+	)
+}
+
+async function classicTextSearch(
+	collection: Collection,
+	query: string,
+	opts: {
+		maxResults: number
+		minScore: number
+		sessionKey?: string
+		filter?: Document
+	},
+): Promise<MemorySearchResult[]> {
 	// P3.2: the $text aggregate bypasses runSearchAggregateWithRetry, so it
 	// consumes the budget directly.
-	if (!tryConsumeSearchAggregation()) {
-		return []
-	}
-	try {
-		const sourceFilter = resolveLegacySourceFilter(opts.sessionKey)
-		const filter = mergeFilters(
-			{ $text: { $search: query } } as Document,
-			sourceFilter ? ({ source: sourceFilter } as Document) : undefined,
-			opts.filter,
-		) ?? { $text: { $search: query } }
-		const docs = await collection
-			.aggregate(
-				[
-					{ $match: filter },
-					{
-						$project: {
-							_id: 0,
-							path: 1,
-							startLine: 1,
-							endLine: 1,
-							text: 1,
-							source: 1,
-							// RET-11 wave-3e followup + RET-09: see the vector
-							// projection above — the $text fallback must carry
-							// the same provenance/expiry surface.
-							expiresAt: 1,
-							role: 1,
-							confidence: 1,
-							sourceReliability: 1,
-							score: { $meta: "textScore" },
-						},
+	consumeSearchAggregationOrThrow("classic-text")
+	const sourceFilter = resolveLegacySourceFilter(opts.sessionKey)
+	const filter = mergeFilters(
+		{ $text: { $search: query } } as Document,
+		sourceFilter ? ({ source: sourceFilter } as Document) : undefined,
+		opts.filter,
+	) ?? { $text: { $search: query } }
+	const docs = await collection
+		.aggregate(
+			[
+				{ $match: filter },
+				{
+					$project: {
+						_id: 0,
+						path: 1,
+						startLine: 1,
+						endLine: 1,
+						text: 1,
+						source: 1,
+						// RET-11 wave-3e followup + RET-09: see the vector
+						// projection above — the $text tier must carry the
+						// same provenance/expiry surface.
+						expiresAt: 1,
+						role: 1,
+						confidence: 1,
+						sourceReliability: 1,
+						score: { $meta: "textScore" },
 					},
-					{ $sort: { score: { $meta: "textScore" } } },
-					{ $limit: opts.maxResults },
-				],
-				// P3.8: user-driven pipelines carry a maxTimeMS ceiling.
-				{ maxTimeMS: resolveUserSearchMaxTimeMs() },
-			)
-			.toArray()
-		opts.onTrace?.({ event: "method", method: "$text", ok: true })
-		return docs
-			.map((doc: Document) => toSearchResult(doc, "memory"))
-			.filter((r: MemorySearchResult) => r.score >= opts.minScore)
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
-		opts.onTrace?.({ event: "method", method: "$text", ok: false, message })
-		log.warn("$text search fallback also failed; returning empty results")
-		return []
-	}
+				},
+				{ $sort: { score: { $meta: "textScore" } } },
+				{ $limit: opts.maxResults },
+			],
+			// P3.8: user-driven pipelines carry a maxTimeMS ceiling.
+			{ maxTimeMS: resolveUserSearchMaxTimeMs() },
+		)
+		.toArray()
+	return docs
+		.map((doc: Document) => toSearchResult(doc, "memory"))
+		.filter((r: MemorySearchResult) => r.score >= opts.minScore)
 }

@@ -112,8 +112,14 @@ describe("query failure logs use structural metadata", () => {
 		}).catch(() => {})
 		expect(failure.messageRead).not.toHaveBeenCalled()
 		expect(failure.serialized).not.toHaveBeenCalled()
-		expect(warning).toHaveBeenCalledTimes(1)
-		assertStructural(warning.mock.calls.flat().join(" "), query)
+		// #101: the failed raw-window lane now also warns (bounded fields);
+		// the coverage warning itself is emitted once.
+		const coverageWarnings = warning.mock.calls
+			.map((call) => call.join(" "))
+			.filter((line) => line.includes("Failed to load lane coverage"))
+		expect(coverageWarnings).toHaveLength(1)
+		assertStructural(coverageWarnings[0], query)
+		expect(warning.mock.calls.flat().join(" ")).not.toContain(query)
 	})
 
 	it("planner retains the error for million-character and dense uppercase echoes in a killed child", () => {

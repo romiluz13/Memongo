@@ -28,7 +28,6 @@ import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
-import { freshnessRevalidationStages } from "./mongodb-search.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	memoryQuarantineCollection,
@@ -37,10 +36,15 @@ import {
 } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
+	atlasSearchClausePath,
 	buildVectorSearchStage,
+	freshnessRevalidationStages,
+	isTextSearchTierAvailable,
 	MONGODB_MAX_NUM_CANDIDATES,
+	reportExplainFailure,
 	runSearchAggregateWithRetry,
 	type SearchExplainOptions,
+	splitAtlasSearchFilter,
 } from "./mongodb-search.js"
 import {
 	buildCurrentValidityClause,
@@ -62,8 +66,25 @@ import type {
 	MemorySourceAgent,
 	MemoryStructuredStableHandle,
 } from "./types.js"
+import {
+	SearchLaneUnavailableError,
+	type SearchTierOutcomeSink,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 const log = createSubsystemLogger("memory:mongodb:structured")
+
+// Token-mapped filter paths of the structured_mem_text Search index.
+const STRUCTURED_TEXT_FILTER_PATHS = new Set([
+	"type",
+	"tags",
+	"agentId",
+	"scope",
+	"scopeRef",
+	"state",
+	"salience",
+	"temporalScope",
+])
 
 // ---------------------------------------------------------------------------
 // Concurrency errors (P2.5)
@@ -2258,10 +2279,13 @@ export async function searchStructuredMemory(
 		}
 		capabilities: DetectedCapabilities
 		vectorIndexName: string
+		/** The structured_mem_text Search index name for the text tier. */
+		textIndexName?: string
 		embeddingMode: MemoryMongoDBEmbeddingMode
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const minScore = opts.minScore ?? 0.1
@@ -2322,162 +2346,211 @@ export async function searchStructuredMemory(
 		)
 	}
 
-	// Try vector search (F5: uses shared buildVectorSearchStage)
-	if (canVector) {
-		try {
-			const filter = buildSearchFilter()
-
-			const vsStage = buildVectorSearchStage({
-				queryVector,
-				queryText: query,
-				embeddingMode: opts.embeddingMode,
-				model: opts.queryEmbeddingModel,
-				indexName: opts.vectorIndexName,
-				numCandidates,
-				limit: opts.maxResults,
-				filter: Object.keys(filter).length > 0 ? filter : undefined,
-				textFieldPath: "value", // structured memory stores text in "value" field
-				// Authoritative serving hydrates the full current document from
-				// mongod (the documented default); storedSource may return stale
-				// data and would defeat the post-stage freshness $match below.
-				returnStoredSource: false,
-			})
-
-			if (vsStage) {
-				const pipeline: Document[] = [
-					{ $vectorSearch: vsStage },
-					// Re-validate the full filter against the hydrated document —
-					// the ANN prefilter runs against the indexed copy, which can
-					// lag the latest write.
-					...freshnessRevalidationStages(filter),
-					// P4.4.1: exclude expired docs AFTER $vectorSearch — the serving
-					// vector index does not declare expiresAt as a filter field, so
-					// the exclusion cannot live in the ANN prefilter. The TTL sweep
-					// deletes these docs within ~60s, bounding the starvation risk.
-					{ $match: buildUnexpiredClause() },
-					{ $limit: opts.maxResults },
-					{
-						$project: {
-							_id: 0,
-							type: 1,
-							key: 1,
-							value: 1,
-							context: 1,
-							confidence: 1,
-							tags: 1,
-							scope: 1,
-							scopeRef: 1,
-							state: 1,
-							salience: 1,
-							temporalScope: 1,
-							sessionId: 1,
-							updatedAt: 1,
-							provenance: 1,
-							sourceEventIds: 1,
-							sourceReliability: 1,
-							reinforcementCount: 1,
-							validFrom: 1,
-							validTo: 1,
-							reviewAt: 1,
-							lastConfirmedAt: 1,
-							artifact: 1,
-							score: { $meta: "vectorSearchScore" },
-						},
-					},
-				]
-
-				if (opts.explain?.enabled) {
-					try {
-						const cursor = collection.aggregate(pipeline) as unknown as {
-							explain?: (verbosity?: string) => Promise<unknown>
-						}
-						if (typeof cursor.explain === "function") {
-							const explained = await cursor.explain("executionStats")
-							opts.explain.onArtifact?.({
-								artifactType: "vectorExplain",
-								summary: {
-									source: "structured",
-									...summarizeExplain(explained),
-								},
-								...(opts.explain.deep ? { rawExplain: explained } : {}),
-							})
-						}
-					} catch (err) {
-						log.warn("structured vector explain failed", { error: err })
-					}
-				}
-
-				const docs = await runSearchAggregateWithRetry(collection, pipeline)
-				const results = docs
-					.map(toStructuredResult)
-					.filter((r) => r.score >= minScore)
-				if (results.length > 0) {
-					return results
-				}
-			}
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`structured memory vector search failed: ${msg}`)
-		}
+	// #101 / matrix 1d: the vector tier, then — only after a SUCCESSFUL zero
+	// hit — the structured_mem_text $search tier. Classic $text is gone (its
+	// BSON index is never created where Search exists). An error or a budget
+	// denial is a typed throw at its tier; a lane with neither tier available
+	// is a typed lane-unavailable failure, never a silent [].
+	const canText = isTextSearchTierAvailable(
+		opts.capabilities,
+		opts.textIndexName,
+	)
+	if (!canVector && !canText) {
+		throw new SearchLaneUnavailableError()
+	}
+	const report = (stage: "vector" | "atlas-search", count: number): void => {
+		opts.onTierOutcome?.({
+			stage,
+			outcome: count > 0 ? "ok" : "ok-empty",
+			...(count > 0 ? {} : { reason: "zero-hits" as const }),
+			resultCount: count,
+		})
+	}
+	const projection = {
+		_id: 0,
+		type: 1,
+		key: 1,
+		value: 1,
+		context: 1,
+		confidence: 1,
+		tags: 1,
+		scope: 1,
+		scopeRef: 1,
+		state: 1,
+		salience: 1,
+		temporalScope: 1,
+		sessionId: 1,
+		updatedAt: 1,
+		provenance: 1,
+		sourceEventIds: 1,
+		sourceReliability: 1,
+		reinforcementCount: 1,
+		validFrom: 1,
+		validTo: 1,
+		reviewAt: 1,
+		lastConfirmedAt: 1,
+		artifact: 1,
 	}
 
-	// $text fallback
-	try {
-		const matchFilter = mergeQueryClauses(
-			{ $text: { $search: query } },
-			buildSearchFilter(),
-			// P4.4.1: hide expired docs until the TTL sweep removes them.
-			buildUnexpiredClause(),
-		)
+	if (!canVector) {
+		opts.onTierOutcome?.({
+			stage: "vector",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+	} else {
+		const filter = buildSearchFilter()
+		// F5: shared stage builder; a refused embed throws budget-denied.
+		const vsStage = buildVectorSearchStage({
+			queryVector,
+			queryText: query,
+			embeddingMode: opts.embeddingMode,
+			model: opts.queryEmbeddingModel,
+			indexName: opts.vectorIndexName,
+			numCandidates,
+			limit: opts.maxResults,
+			filter: Object.keys(filter).length > 0 ? filter : undefined,
+			textFieldPath: "value", // structured memory stores text in "value" field
+			// Authoritative serving hydrates the full current document from
+			// mongod (the documented default); storedSource may return stale
+			// data and would defeat the post-stage freshness $match below.
+			returnStoredSource: false,
+			stage: "vector",
+		})
 
-		const docs = await collection
-			.aggregate([
-				{ $match: matchFilter },
+		if (!vsStage) {
+			opts.onTierOutcome?.({
+				stage: "vector",
+				outcome: "not-applicable",
+				reason: "empty-query",
+			})
+		} else {
+			const pipeline: Document[] = [
+				{ $vectorSearch: vsStage },
+				// Re-validate the full filter against the hydrated document —
+				// the ANN prefilter runs against the indexed copy, which can
+				// lag the latest write.
+				...freshnessRevalidationStages(filter),
+				// P4.4.1: exclude expired docs AFTER $vectorSearch — the serving
+				// vector index does not declare expiresAt as a filter field, so
+				// the exclusion cannot live in the ANN prefilter. The TTL sweep
+				// deletes these docs within ~60s, bounding the starvation risk.
+				{ $match: buildUnexpiredClause() },
+				{ $limit: opts.maxResults },
 				{
 					$project: {
-						_id: 0,
-						type: 1,
-						key: 1,
-						value: 1,
-						context: 1,
-						confidence: 1,
-						tags: 1,
-						scope: 1,
-						scopeRef: 1,
-						state: 1,
-						salience: 1,
-						temporalScope: 1,
-						sessionId: 1,
-						updatedAt: 1,
-						provenance: 1,
-						sourceEventIds: 1,
-						sourceReliability: 1,
-						reinforcementCount: 1,
-						validFrom: 1,
-						validTo: 1,
-						reviewAt: 1,
-						lastConfirmedAt: 1,
-						artifact: 1,
-						score: { $meta: "textScore" },
+						...projection,
+						score: { $meta: "vectorSearchScore" },
 					},
 				},
-				{ $sort: { score: { $meta: "textScore" } } },
-				{ $limit: opts.maxResults },
-			])
-			.toArray()
-		if (opts.explain?.enabled) {
-			opts.explain.onArtifact?.({
-				artifactType: "searchExplain",
-				summary: { source: "structured", method: "$text" },
-			})
+			]
+
+			if (opts.explain?.enabled) {
+				try {
+					const cursor = collection.aggregate(pipeline) as unknown as {
+						explain?: (verbosity?: string) => Promise<unknown>
+					}
+					if (typeof cursor.explain === "function") {
+						const explained = await cursor.explain("executionStats")
+						opts.explain.onArtifact?.({
+							artifactType: "vectorExplain",
+							summary: {
+								source: "structured",
+								...summarizeExplain(explained),
+							},
+							...(opts.explain.deep ? { rawExplain: explained } : {}),
+						})
+					}
+				} catch (err) {
+					reportExplainFailure(err, opts.onTierOutcome)
+				}
+			}
+
+			let docs: Document[]
+			try {
+				docs = await runSearchAggregateWithRetry(collection, pipeline, {
+					stage: "vector",
+				})
+			} catch (err) {
+				throw toTypedSearchError(err, "vector")
+			}
+			const results = docs
+				.map(toStructuredResult)
+				.filter((r) => r.score >= minScore)
+			report("vector", results.length)
+			if (results.length > 0 || !canText) {
+				if (!canText) {
+					opts.onTierOutcome?.({
+						stage: "atlas-search",
+						outcome: "not-applicable",
+						reason: "capability-absent",
+					})
+				}
+				return results
+			}
 		}
-		return docs.map(toStructuredResult).filter((r) => r.score >= minScore)
-	} catch {
-		log.warn(
-			"structured memory $text search fallback failed; returning empty results",
-		)
+		if (!canText) {
+			opts.onTierOutcome?.({
+				stage: "atlas-search",
+				outcome: "not-applicable",
+				reason: "capability-absent",
+			})
+			return []
+		}
+	}
+
+	// R2: the structured_mem_text tier, modeled on the procedures tier. Its
+	// compound filter carries only the token-mapped paths; everything else
+	// (the validity clauses) is enforced by the post-stage revalidation, so
+	// an unmapped path can never silently match nothing.
+	if (!query.trim()) {
+		opts.onTierOutcome?.({
+			stage: "atlas-search",
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
 		return []
 	}
+	const textFilter = buildSearchFilter()
+	const { compoundFilter } = splitAtlasSearchFilter(textFilter)
+	const mappedFilter = compoundFilter?.filter((clause) =>
+		STRUCTURED_TEXT_FILTER_PATHS.has(atlasSearchClausePath(clause) ?? ""),
+	)
+	const textPipeline: Document[] = [
+		{
+			$search: {
+				index: opts.textIndexName,
+				compound: {
+					must: [{ text: { query, path: ["value", "context"] } }],
+					...(mappedFilter?.length ? { filter: mappedFilter } : {}),
+				},
+			},
+		},
+		...freshnessRevalidationStages(textFilter),
+		// P4.4.1: hide expired docs until the TTL sweep removes them.
+		{ $match: buildUnexpiredClause() },
+		{ $limit: opts.maxResults },
+		{ $project: { ...projection, score: { $meta: "searchScore" } } },
+	]
+	if (opts.explain?.enabled) {
+		opts.explain.onArtifact?.({
+			artifactType: "searchExplain",
+			summary: { source: "structured", method: "atlas-search" },
+		})
+	}
+	let textDocs: Document[]
+	try {
+		textDocs = await runSearchAggregateWithRetry(collection, textPipeline, {
+			stage: "atlas-search",
+		})
+	} catch (err) {
+		throw toTypedSearchError(err, "atlas-search")
+	}
+	const textResults = textDocs
+		.map(toStructuredResult)
+		.filter((r) => r.score >= minScore)
+	report("atlas-search", textResults.length)
+	return textResults
 }
 
 // ---------------------------------------------------------------------------

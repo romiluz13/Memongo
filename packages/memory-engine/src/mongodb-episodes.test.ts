@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Db, Collection, Document } from "mongodb"
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { SearchLaneError, type SearchTierOutcome } from "./search-outcomes.js"
 
 // Mock mongodb-events.js for checkAutoEpisodeTriggers tests
 vi.mock("./mongodb-events.js", () => ({
@@ -738,7 +739,7 @@ describe("mongodb-episodes", () => {
 			expect(typeof options?.maxTimeMS).toBe("number")
 		})
 
-		it("falls back to the escaped $regex path when $search fails at runtime", async () => {
+		it("G1: a $search runtime failure throws typed and never falls back to $regex", async () => {
 			const episodeDoc = makeEpisodeDoc()
 			const findResult = {
 				sort: vi.fn().mockReturnValue({
@@ -755,17 +756,25 @@ describe("mongodb-episodes", () => {
 			})
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
-			const results = await searchEpisodes({
+			const rows: SearchTierOutcome[] = []
+			const failure = await searchEpisodes({
 				db,
 				prefix: PREFIX,
 				query: "standup",
 				agentId: AGENT_ID,
 				textSearchAvailable: true,
-			})
+				onTierOutcome: (row) => rows.push(row),
+			}).catch((err: unknown) => err)
 
 			expect(episodesCol.aggregate).toHaveBeenCalledOnce()
-			expect(episodesCol.find).toHaveBeenCalledOnce()
-			expect(results).toHaveLength(1)
+			expect(episodesCol.find).not.toHaveBeenCalled()
+			expect(failure).toBeInstanceOf(SearchLaneError)
+			expect(failure).toMatchObject({
+				stage: "atlas-search",
+				reason: "internal-error",
+			})
+			expect((failure as Error).message).not.toContain("mongot unavailable")
+			expect(rows).toEqual([])
 		})
 
 		it("keeps the regex fallback escaped when textSearch capability is off", async () => {
@@ -1040,7 +1049,7 @@ describe("mongodb-episodes", () => {
 			).rejects.toThrow("db write failed")
 		})
 
-		it("searchEpisodes wraps and re-throws errors", async () => {
+		it("G3: searchEpisodes rethrows a $regex failure typed, original as cause", async () => {
 			const episodesCol = createMockCollection({
 				find: vi.fn().mockImplementation(() => {
 					throw new Error("db read failed")
@@ -1048,14 +1057,15 @@ describe("mongodb-episodes", () => {
 			})
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
-			await expect(
-				searchEpisodes({
-					db,
-					prefix: PREFIX,
-					query: "test",
-					agentId: AGENT_ID,
-				}),
-			).rejects.toThrow("db read failed")
+			const failure = await searchEpisodes({
+				db,
+				prefix: PREFIX,
+				query: "test",
+				agentId: AGENT_ID,
+			}).catch((err: unknown) => err)
+			expect(failure).toBeInstanceOf(SearchLaneError)
+			expect(failure).toMatchObject({ stage: "episode-search" })
+			expect(((failure as Error).cause as Error).message).toBe("db read failed")
 		})
 	})
 

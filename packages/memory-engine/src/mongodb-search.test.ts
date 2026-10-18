@@ -2,7 +2,10 @@
 
 import type { Collection, Document } from "mongodb"
 import { describe, it, expect, vi } from "vitest"
-import { runWithSearchBudget } from "./mongodb-search-budget.js"
+import {
+	getSearchBudgetSnapshot,
+	runWithSearchBudget,
+} from "./mongodb-search-budget.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	isSearchIndexWarmupError,
@@ -200,26 +203,30 @@ describe("runSearchAggregateWithRetry budget charging (RET-16)", () => {
 		expect(budget.exhausted).toBe(false)
 	})
 
-	it("degrades to an empty result without further executions when the budget exhausts mid-retry", async () => {
+	it("#101: throws a typed budget denial without further executions when the budget exhausts mid-retry", async () => {
 		const col = mockCollectionWithWarmupSequence(
 			99,
 			"cannot query vector index while in state NOT_STARTED",
 			SAMPLE_DOCS,
 		)
 
-		const { value: docs, budget } = await runWithSearchBudget(
-			{ maxAggregations: 2, maxEmbeds: 5 },
-			async () =>
-				runSearchAggregateWithRetry(col, [{ $match: {} }], {
-					maxAttempts: 5,
-					initialDelayMs: 1,
-				}),
-		)
+		let budgetSnapshot: { aggregations: number; exhausted: boolean } | undefined
+		await expect(
+			runWithSearchBudget({ maxAggregations: 2, maxEmbeds: 5 }, async () => {
+				try {
+					return await runSearchAggregateWithRetry(col, [{ $match: {} }], {
+						maxAttempts: 5,
+						initialDelayMs: 1,
+					})
+				} finally {
+					budgetSnapshot = getSearchBudgetSnapshot()
+				}
+			}),
+		).rejects.toMatchObject({ reason: "budget-aggregations" })
 
-		expect(docs).toEqual([])
 		expect(col.aggregate).toHaveBeenCalledTimes(2)
-		expect(budget.aggregations).toBe(2)
-		expect(budget.exhausted).toBe(true)
+		expect(budgetSnapshot?.aggregations).toBe(2)
+		expect(budgetSnapshot?.exhausted).toBe(true)
 	})
 })
 
@@ -1041,7 +1048,7 @@ describe("mongoSearch dispatcher", () => {
 		expect(results[0]?.scoreDetails).toEqual(scoreDetails)
 	})
 
-	it("falls back from $scoreFusion to $rankFusion on error", async () => {
+	it("#101: a $scoreFusion error stops the lane; $rankFusion never runs", async () => {
 		let callCount = 0
 		const col = {
 			aggregate: vi.fn(() => ({
@@ -1062,16 +1069,15 @@ describe("mongoSearch dispatcher", () => {
 			})),
 		} as unknown as Collection
 
-		const results = await mongoSearch(col, "test query", [0.1, 0.2], {
-			...baseOpts,
-			fusionMethod: "scoreFusion",
-			capabilities: FULL_CAPS,
-			embeddingMode: "automated",
-		})
-
-		// Should have retried with $rankFusion
-		expect(col.aggregate).toHaveBeenCalledTimes(2)
-		expect(results).toHaveLength(2)
+		await expect(
+			mongoSearch(col, "test query", [0.1, 0.2], {
+				...baseOpts,
+				fusionMethod: "scoreFusion",
+				capabilities: FULL_CAPS,
+				embeddingMode: "automated",
+			}),
+		).rejects.toMatchObject({ stage: "score-fusion", reason: "internal-error" })
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 
 	it("stops the waterfall when $scoreFusion returns empty results (empty ≠ error, P3.2)", async () => {
@@ -1148,7 +1154,7 @@ describe("mongoSearch dispatcher", () => {
 		expect(results).toEqual([])
 	})
 
-	it("still falls back when a stage fails (errors, unlike empties, escalate)", async () => {
+	it("#101: a stage error no longer escalates to a weaker tier", async () => {
 		let callCount = 0
 		const col = {
 			aggregate: vi.fn(() => ({
@@ -1162,16 +1168,15 @@ describe("mongoSearch dispatcher", () => {
 			})),
 		} as unknown as Collection
 
-		const results = await mongoSearch(col, "test query", null, {
-			...baseOpts,
-			fusionMethod: "rankFusion",
-			capabilities: FULL_CAPS,
-			embeddingMode: "automated",
-		})
-
-		// rankFusion error (1 call) escalates to the js-merge pair (2 calls).
-		expect(col.aggregate).toHaveBeenCalledTimes(3)
-		expect(results).toHaveLength(2)
+		await expect(
+			mongoSearch(col, "test query", null, {
+				...baseOpts,
+				fusionMethod: "rankFusion",
+				capabilities: FULL_CAPS,
+				embeddingMode: "automated",
+			}),
+		).rejects.toMatchObject({ stage: "rank-fusion" })
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 
 	it("enforces the per-search aggregation budget when stages keep failing", async () => {
@@ -1183,25 +1188,22 @@ describe("mongoSearch dispatcher", () => {
 			})),
 		} as unknown as Collection
 
-		const { value, budget } = await runWithSearchBudget(
-			{ maxAggregations: 1, maxEmbeds: 5 },
-			async () =>
+		await expect(
+			runWithSearchBudget({ maxAggregations: 1, maxEmbeds: 5 }, async () =>
 				mongoSearch(col, "sparse query", null, {
 					...baseOpts,
 					fusionMethod: "scoreFusion",
 					capabilities: FULL_CAPS,
 					embeddingMode: "automated",
 				}),
-		)
+			),
+		).rejects.toMatchObject({ stage: "score-fusion" })
 
-		// Budget exhausted after the first stage: later stages never reach the
-		// server even though every stage error would have escalated.
+		// #101: the first stage error ends the lane, so no later stage spends
+		// budget or reaches the server.
 		expect((col.aggregate as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
 			1,
 		)
-		expect(value).toEqual([])
-		expect(budget.aggregations).toBe(1)
-		expect(budget.exhausted).toBe(true)
 	})
 
 	it("counts one server-side embed per $vectorSearch stage through the budget", async () => {
@@ -1223,7 +1225,7 @@ describe("mongoSearch dispatcher", () => {
 		expect(budget.aggregations).toBe(1)
 	})
 
-	it("returns empty instead of falling back when strictNoFallback sees no hits", async () => {
+	it("returns empty without a weaker tier when the planned tier sees no hits", async () => {
 		const col = {
 			aggregate: vi.fn(() => ({
 				toArray: vi.fn(async () => []),
@@ -1242,7 +1244,6 @@ describe("mongoSearch dispatcher", () => {
 			fusionMethod: "rankFusion",
 			capabilities: FULL_CAPS,
 			embeddingMode: "automated",
-			strictNoFallback: true,
 		})
 
 		expect(results).toEqual([])
@@ -1284,7 +1285,7 @@ describe("mongoSearch dispatcher", () => {
 		}
 	})
 
-	it("throws instead of falling back when strictNoFallback sees a search failure", async () => {
+	it("throws a typed failure instead of falling back on a search failure", async () => {
 		const col = {
 			aggregate: vi.fn(() => ({
 				toArray: vi.fn(async () => {
@@ -1306,9 +1307,8 @@ describe("mongoSearch dispatcher", () => {
 				fusionMethod: "rankFusion",
 				capabilities: FULL_CAPS,
 				embeddingMode: "automated",
-				strictNoFallback: true,
 			}),
-		).rejects.toThrow("search fallback disabled")
+		).rejects.toMatchObject({ name: "SearchLaneError", stage: "rank-fusion" })
 		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 
@@ -1425,16 +1425,16 @@ describe("mongoSearch dispatcher", () => {
 		expect(pipeline[0].$match.$text.$search).toBe("test")
 	})
 
-	it("returns empty when everything fails", async () => {
+	it("#101: throws a typed classic-text failure when the planned $text tier fails", async () => {
 		const col = mockCollectionThatFails("total failure")
 
-		const results = await mongoSearch(col, "test", null, {
-			...baseOpts,
-			capabilities: NO_CAPS,
-			embeddingMode: "automated",
-		})
-
-		expect(results).toEqual([])
+		await expect(
+			mongoSearch(col, "test", null, {
+				...baseOpts,
+				capabilities: NO_CAPS,
+				embeddingMode: "automated",
+			}),
+		).rejects.toMatchObject({ stage: "classic-text", reason: "internal-error" })
 	})
 
 	it("enables vector search in automated mode without queryVector", async () => {

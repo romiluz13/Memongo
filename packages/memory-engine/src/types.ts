@@ -5,6 +5,10 @@ import type {
 } from "@memongo/lib"
 import type { ProcedureLifecyclePatch } from "./mongodb-procedures.js"
 import type { SearchBudgetSnapshot } from "./mongodb-search-budget.js"
+import type {
+	SearchLaneOutcome,
+	SearchOutcomeStatus,
+} from "./search-outcomes.js"
 import type { StructuredMemoryLifecyclePatch } from "./mongodb-structured-memory.js"
 
 export type MemorySource = "reference" | "conversation" | "structured"
@@ -472,22 +476,15 @@ export type MemorySearchPass = {
 }
 
 /**
- * RET-13: per-lane outcome for the metadata surface — one entry per
- * executed path, failed sub-lane/phase, budget-denied lane, or
- * capability-gated skip. Statuses distinguish what pathsExecuted (attempted
- * paths) and resultsByPath (contributing lanes) cannot: WHY a lane that ran
- * produced nothing. Shared by V2SearchMetadata (per pass) and
- * MemorySearchMetadata (executor-merged across passes).
+ * #101 / decision 16: one value-free row per lane, tier or phase on the
+ * metadata surface — `{lane, stage, outcome, reason?, resultCount?, pass?}`,
+ * enums only, never provider or query text. Shared by V2SearchMetadata (per
+ * pass) and MemorySearchMetadata (executor-merged across passes).
  */
-export type SearchLaneOutcome = {
-	/** Seam label: path name, sub-lane (hybrid:chunks), or phase. */
-	lane: string
-	status: "ok" | "failed" | "budget-denied" | "unavailable"
-	/** Number of results the lane contributed (ok lanes). */
-	resultCount?: number
-	/** Failure text (failed lanes). */
-	error?: string
-}
+export type {
+	SearchLaneOutcome,
+	SearchOutcomeStatus,
+} from "./search-outcomes.js"
 
 export type MemorySearchMetadata = {
 	mode: MemorySearchMode
@@ -527,6 +524,11 @@ export type MemorySearchMetadata = {
 	 * responses, which never run v2 lanes.
 	 */
 	laneOutcomes?: SearchLaneOutcome[]
+	/**
+	 * #101 section 5: complete, partial or failed — computed over every
+	 * pass's rows. Absent where no lane ran (cache hit, admission denial).
+	 */
+	outcomeStatus?: SearchOutcomeStatus
 	/**
 	 * RET-16: the request-level search budget snapshot (aggregations/embeds
 	 * consumed across ALL passes of this request, plus the limits). Set by
