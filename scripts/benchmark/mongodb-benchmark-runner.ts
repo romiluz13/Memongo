@@ -1538,6 +1538,7 @@ export function evaluateRankingCase(params: {
 		!params.executionError &&
 		params.datasetKind === "locomo" &&
 		params.abstention !== true &&
+		params.officialRetrieval?.eligible !== false &&
 		sessionEvidenceAt5 !== undefined &&
 		sessionEvidenceAt10 !== undefined
 			? {
@@ -1804,8 +1805,10 @@ function summarizeOfficialMetrics(
 		return {
 			loCoMo: {
 				retrievalCases: loCoMoExecutions.length,
-				abstentionCases: loCoMoExecutions.filter(
-					(execution) => execution.abstention === true,
+				// Abstentions never carry retrieval metrics, so count them over every LoCoMo case.
+				abstentionCases: executions.filter(
+					(execution) =>
+						execution.datasetKind === "locomo" && execution.abstention === true,
 				).length,
 				sessionEvidenceRecallAt5:
 					avg((execution) => execution.loCoMo?.sessionEvidenceRecallAt5) ?? 0,
