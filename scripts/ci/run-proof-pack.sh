@@ -5,7 +5,7 @@
 # API key. The API process gets no provider key: embeddings come from the
 # MongoDB service. Only the PID recorded here is stopped.
 #
-# Inputs: MEMONGO_MONGODB_URI, PROOF_PACK_OUT_DIR. The API log, the recorded
+# Inputs: MEMONGO_MONGODB_URI, PROOF_PACK_OUT_DIR. The scrubbed API log, the recorded
 # PID, the database name (read by the failure diagnostics) and the proof-pack
 # verdict JSON land in PROOF_PACK_OUT_DIR.
 set -euo pipefail
@@ -62,7 +62,14 @@ stop_api() {
 			kill -KILL "${api_pid}"
 		fi
 	fi
-	echo "--- API log (pid ${api_pid}) ---"
+	# The log is printed and uploaded on failure, so it is scrubbed first; an
+	# unscrubbed log is removed rather than exposed.
+	if ! bun scripts/ci/scrub-api-log.ts "${api_log}"; then
+		rm -f "${api_log}"
+		echo "::error::API log scrub failed; the raw log was removed, not printed"
+		exit 1
+	fi
+	echo "--- API log (pid ${api_pid}, scrubbed) ---"
 	cat "${api_log}"
 }
 trap stop_api EXIT
