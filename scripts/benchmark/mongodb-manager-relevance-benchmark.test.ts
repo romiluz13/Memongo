@@ -226,6 +226,11 @@ describe("relevanceBenchmark", () => {
 			await writeFile(firstPath, '{"name":"first"}')
 			await writeFile(secondPath, '{"name":"second"}')
 			mocked(loadBenchmarkDataset).mockResolvedValue({
+				timestampValidation: {
+					policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
+					weekdayMismatches: 0,
+					literalMidnightLabels: 0,
+				},
 				name: "overlap",
 				datasetKind: "generic",
 				conversations: [],
@@ -372,6 +377,11 @@ describe("relevanceBenchmark", () => {
 			await writeFile(datasetPath, JSON.stringify({ name: "placeholder" }))
 			const resolvedDatasetPath = await realpath(datasetPath)
 			mocked(loadBenchmarkDataset).mockResolvedValue({
+				timestampValidation: {
+					policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
+					weekdayMismatches: 0,
+					literalMidnightLabels: 0,
+				},
 				name: "LongMemEval sample",
 				datasetKind: "longmemeval",
 				conversations: [],
@@ -559,6 +569,11 @@ describe("relevanceBenchmark", () => {
 		try {
 			await writeFile(datasetPath, '{"name":"gate"}')
 			mocked(loadBenchmarkDataset).mockResolvedValue({
+				timestampValidation: {
+					policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
+					weekdayMismatches: 0,
+					literalMidnightLabels: 0,
+				},
 				name: "gate",
 				datasetKind: "generic",
 				conversations: [],
@@ -784,6 +799,11 @@ describe("relevanceBenchmark", () => {
 			await mkdir(datasetDir, { recursive: true })
 			await writeFile(datasetPath, JSON.stringify({ name: "placeholder" }))
 			mocked(loadBenchmarkDataset).mockResolvedValue({
+				timestampValidation: {
+					policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
+					weekdayMismatches: 0,
+					literalMidnightLabels: 0,
+				},
 				name: "LongMemEval sample",
 				datasetKind: "longmemeval",
 				conversations: [],

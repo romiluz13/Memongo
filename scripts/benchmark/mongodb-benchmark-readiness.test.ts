@@ -17,7 +17,9 @@ function fakeDb(params: {
 	aggregate: () => any
 }): Parameters<typeof readSearchIndexStatus>[0] {
 	const collection = () => ({ aggregate: params.aggregate })
-	return { collection } as Parameters<typeof readSearchIndexStatus>[0]
+	return { collection } as unknown as Parameters<
+		typeof readSearchIndexStatus
+	>[0]
 }
 
 describe("readSearchIndexStatus (Task 1.5)", () => {
