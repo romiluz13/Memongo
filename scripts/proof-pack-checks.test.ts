@@ -66,6 +66,23 @@ describe("evaluateSearch", () => {
 		expect(verdict.ok).toBe(false)
 		expect(verdict.details).toContain("outside agent:proof-ci-1")
 	})
+
+	it("fails when the marker hit carries the expected scopeRef under another scope", () => {
+		const verdict = evaluateSearch(
+			[
+				{
+					path: "events/evt-1",
+					snippet: `User: ${marker} user prefers concise updates`,
+					source: "conversation",
+					scope: "session",
+					scopeRef: agentScopeRef,
+				},
+			],
+			{ marker, scopeRef: agentScopeRef },
+		)
+		expect(verdict.ok).toBe(false)
+		expect(verdict.details).toContain("outside agent:proof-ci-1")
+	})
 })
 
 describe("evaluateSearchDetailed", () => {
