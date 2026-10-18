@@ -789,6 +789,13 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 				.fn()
 				.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
 		} as never)
+		// The exact procedural backstop runs on this query; a healthy empty
+		// keeps the v2 answer `complete`, which M4 requires for the re-run.
+		mocked(proceduresCollection).mockReturnValue({
+			find: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
 		const base = buildMockManager()
 		const baseCfg = (
 			base as unknown as { config: { mongodb: Record<string, unknown> } }
@@ -810,7 +817,7 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 			)
 			.mockResolvedValue([])
 
-		await manager.searchDetailed({
+		const response = await manager.searchDetailed({
 			query: "authorization probe",
 			kbRestricted: true,
 		})
@@ -822,6 +829,68 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 				kind: "admission",
 				agentId: "agent-1",
 				epoch: 0,
+			}),
+			expect.any(Function),
+		)
+		expect(response.metadata.laneOutcomes).toContainEqual({
+			lane: "legacy",
+			stage: "rerun",
+			outcome: "ok-empty",
+			reason: "zero-hits",
+			resultCount: 0,
+		})
+		expect(response.metadata.outcomeStatus).toBe("complete")
+	})
+
+	it("M4: never re-runs legacy after a partial empty (a failed backstop is not zero hits)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "empty plan",
+		})
+		vi.mocked(chunksCollection).mockReturnValue({
+			aggregate: vi
+				.fn()
+				.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+		} as never)
+		mocked(proceduresCollection).mockReturnValue({
+			find: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockRejectedValue(new Error("procedures down")),
+			}),
+		} as never)
+		const base = buildMockManager()
+		const baseCfg = (
+			base as unknown as { config: { mongodb: Record<string, unknown> } }
+		).config.mongodb
+		const manager = buildMockManager({
+			config: {
+				mongodb: { ...baseCfg, legacySearchFallback: true },
+			},
+		})
+		const legacySearch = vi.spyOn(
+			manager as unknown as {
+				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
+			},
+			"legacySearch",
+		)
+
+		const response = await manager.searchDetailed({
+			query: "authorization probe",
+		})
+		// Later suites in this file rely on a healthy procedures mock.
+		mocked(proceduresCollection).mockReturnValue({
+			find: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
+
+		expect(legacySearch).not.toHaveBeenCalled()
+		expect(response.results).toEqual([])
+		expect(response.metadata.outcomeStatus).toBe("partial")
+		expect(response.metadata.laneOutcomes).toContainEqual(
+			expect.objectContaining({
+				lane: "backstop:procedural-exact",
+				outcome: "failed",
 			}),
 		)
 	})

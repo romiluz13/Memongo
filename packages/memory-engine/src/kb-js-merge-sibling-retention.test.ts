@@ -2,6 +2,7 @@ import type { Collection, Document } from "mongodb"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { searchKB } from "./mongodb-kb-search.js"
 import { runWithSearchBudget } from "./mongodb-search-budget.js"
+import { SearchLaneError, type SearchTierOutcome } from "./search-outcomes.js"
 
 const vectorError = new Error("vector failed")
 const keywordError = new Error("keyword failed")
@@ -61,10 +62,14 @@ it.each([
 		survivor === "vector" ? [doc("winner")] : vectorError,
 		survivor === "keyword" ? [doc("winner")] : keywordError,
 	)
-	const onLaneFailure = vi.fn()
+	const rows: SearchTierOutcome[] = []
 	const { value, budget } = await runWithSearchBudget(
 		{ maxAggregations: 2, maxEmbeds: 1 },
-		() => searchKB(col, "matching", null, { ...opts, onLaneFailure }),
+		() =>
+			searchKB(col, "matching", null, {
+				...opts,
+				onTierOutcome: (row) => rows.push(row),
+			}),
 	)
 	expect(value).toEqual([
 		expect.objectContaining({ path: "kb:winner", score: 0.8 }),
@@ -72,10 +77,15 @@ it.each([
 	expect(aggregate).toHaveBeenCalledTimes(2)
 	expect(budget.aggregations).toBe(2)
 	expect(budget.embeds).toBe(1)
-	expect(onLaneFailure).toHaveBeenCalledWith(
-		`kb:js-merge:${survivor === "vector" ? "keyword" : "vector"}`,
-		survivor === "vector" ? keywordError : vectorError,
-	)
+	// #101 K7: the failed branch is its own value-free row; the survivor stands.
+	expect(rows).toEqual([
+		{
+			stage: survivor === "vector" ? "keyword" : "vector",
+			outcome: "failed",
+			reason: "internal-error",
+		},
+		{ stage: survivor, outcome: "ok", resultCount: 1 },
+	])
 	for (const [pipeline, options] of aggregate.mock.calls) {
 		expect(options?.maxTimeMS).toBeGreaterThan(0)
 		expect(JSON.stringify(pipeline)).toContain("agent:owner")
@@ -97,7 +107,7 @@ it("filters and limits the lone survivor using raw scores", async () => {
 it.each([
 	{ survivor: [] },
 	{ survivor: [doc("below", 0.1)] },
-])("keeps last-resort recovery without rerunning an empty or filtered survivor", async ({
+])("#101 K7: an empty or filtered survivor stands; nothing runs after the failed branch", async ({
 	survivor,
 }) => {
 	const { col, aggregate } = collection(survivor, keywordError, [
@@ -107,27 +117,11 @@ it.each([
 		{ maxAggregations: 4, maxEmbeds: 2 },
 		() => searchKB(col, "matching", null, opts),
 	)
-	expect(value.map((hit) => hit.path)).toEqual(["kb:ordinary"])
-	expect(
-		aggregate.mock.calls.filter(([pipeline]) => pipeline[0].$vectorSearch),
-	).toHaveLength(1)
-	expect(
-		aggregate.mock.calls.filter(([pipeline]) => pipeline[0].$search),
-	).toHaveLength(2)
+	expect(value).toEqual([])
+	expect(aggregate).toHaveBeenCalledTimes(2)
 	expect(
 		aggregate.mock.calls.filter(([pipeline]) => pipeline[0].$match),
-	).toHaveLength(1)
-})
-it("preserves a survivor even if the failure hook throws", async () => {
-	const { col, aggregate } = collection([doc("winner")], keywordError)
-	const result = await searchKB(col, "matching", null, {
-		...opts,
-		onLaneFailure: () => {
-			throw new Error("hook failed")
-		},
-	})
-	expect(result.map((hit) => hit.path)).toEqual(["kb:winner"])
-	expect(aggregate).toHaveBeenCalledTimes(2)
+	).toHaveLength(0)
 })
 it("strict mode settles both branches and throws the first input error", async () => {
 	let rejectVector!: (error: Error) => void
@@ -139,12 +133,11 @@ it("strict mode settles both branches and throws the first input error", async (
 					})
 				: Promise.reject(keywordError),
 	}))
-	const onLaneFailure = vi.fn()
 	const pending = searchKB(
 		{ aggregate } as unknown as Collection,
 		"matching",
 		null,
-		{ ...opts, strict: true, onLaneFailure },
+		{ ...opts, strict: true },
 	)
 	const rejected = pending.then(
 		() => undefined,
@@ -152,22 +145,26 @@ it("strict mode settles both branches and throws the first input error", async (
 	)
 	await vi.waitFor(() => expect(rejectVector).toBeTypeOf("function"))
 	rejectVector(vectorError)
-	expect(await rejected).toBe(vectorError)
+	const err = await rejected
+	expect(err).toBeInstanceOf(SearchLaneError)
+	expect(err).toMatchObject({ stage: "vector", cause: vectorError })
 	expect(aggregate).toHaveBeenCalledTimes(2)
-	expect(onLaneFailure).not.toHaveBeenCalled()
 })
-it("retains existing fallback when both branches fail", async () => {
+it("#101 K7: both branches failing is a typed failure, never a $text fallback", async () => {
 	const { col, aggregate } = collection(vectorError, keywordError, [
 		doc("ordinary"),
 	])
-	const result = await searchKB(col, "matching", null, opts)
-	expect(result.map((hit) => hit.path)).toEqual(["kb:ordinary"])
-	expect(
-		aggregate.mock.calls.filter(([pipeline]) => pipeline[0].$vectorSearch),
-	).toHaveLength(2)
-	expect(
-		aggregate.mock.calls.filter(([pipeline]) => pipeline[0].$search),
-	).toHaveLength(2)
+	const rows: SearchTierOutcome[] = []
+	await expect(
+		searchKB(col, "matching", null, {
+			...opts,
+			onTierOutcome: (row) => rows.push(row),
+		}),
+	).rejects.toMatchObject({ stage: "vector", reason: "internal-error" })
+	expect(rows).toEqual([
+		{ stage: "keyword", outcome: "failed", reason: "internal-error" },
+	])
+	expect(aggregate).toHaveBeenCalledTimes(2)
 })
 it("keeps two successful lanes on the existing hybrid scoring path", async () => {
 	const { col, aggregate } = collection([doc("shared")], [doc("shared")])

@@ -224,16 +224,18 @@ export function searchFailureRow(
 	fallbackStage: SearchStage,
 	err: unknown,
 ): SearchLaneOutcome {
+	return { lane, ...searchFailureTierRow(fallbackStage, err) }
+}
+
+/** The tier-level failure or denial row for a caught error (no lane yet). */
+export function searchFailureTierRow(
+	fallbackStage: SearchStage,
+	err: unknown,
+): SearchTierOutcome {
 	if (err instanceof SearchBudgetDeniedError) {
-		return {
-			lane,
-			stage: err.stage,
-			outcome: "budget-denied",
-			reason: err.reason,
-		}
+		return { stage: err.stage, outcome: "budget-denied", reason: err.reason }
 	}
 	return {
-		lane,
 		stage: err instanceof SearchLaneError ? err.stage : fallbackStage,
 		outcome: "failed",
 		reason: classifySearchError(err),

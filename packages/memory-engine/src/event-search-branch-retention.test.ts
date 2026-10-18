@@ -26,6 +26,12 @@ import {
 import { searchV2 } from "./mongodb-search-v2.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { runWithSearchBudget } from "./mongodb-search-budget.js"
+import {
+	SearchBudgetDeniedError,
+	SearchLaneError,
+	type SearchTierOutcome,
+	type SearchTierOutcomeSink,
+} from "./search-outcomes.js"
 
 const capabilities = {
 	vectorSearch: true,
@@ -85,7 +91,10 @@ afterEach(() => {
 })
 
 for (const seam of ["session", "conversation"] as const) {
-	const run = (db: Db, extra = {}) => {
+	const run = (
+		db: Db,
+		extra: { onTierOutcome?: SearchTierOutcomeSink } = {},
+	) => {
 		const params = {
 			db,
 			prefix: "test_",
@@ -109,77 +118,112 @@ for (const seam of ["session", "conversation"] as const) {
 		it.each([
 			"turn-vector",
 			"turn-text",
-		])("retains sibling of failed %s and accounts unchanged budget", async (branch) => {
-			const { db, error, pipelines, options } = database(new Set([branch]))
-			const onBranchFailure = vi.fn()
+		] as const)("L1: retains sibling of failed %s and accounts unchanged budget", async (branch) => {
+			const { db, pipelines, options } = database(new Set([branch]))
+			const rows: SearchTierOutcome[] = []
+			const sibling = branch === "turn-vector" ? "turn-text" : "turn-vector"
 			const { value, budget } = await runWithSearchBudget(
 				{ maxAggregations: 4, maxEmbeds: 2 },
-				() => run(db, { onBranchFailure }),
+				() => run(db, { onTierOutcome: (row) => rows.push(row) }),
 			)
-			expect(value.map((x) => x.path)).toEqual([
-				`events/${branch === "turn-vector" ? "turn-text" : "turn-vector"}`,
-			])
-			expect(onBranchFailure).toHaveBeenCalledExactlyOnceWith(branch, error)
+			expect(value.map((x) => x.path)).toEqual([`events/${sibling}`])
+			expect(rows).toContainEqual({
+				stage: branch,
+				outcome: "failed",
+				reason: "query-error",
+			})
+			expect(rows).toContainEqual({
+				stage: sibling,
+				outcome: "ok",
+				resultCount: 1,
+			})
+			expect(JSON.stringify(rows)).not.toContain(privateText)
 			expect(budget).toMatchObject({ aggregations: 2, embeds: 1 })
 			expect(pipelines).toHaveLength(2)
 			for (const pipeline of pipelines)
 				expect(pipeline.some((stage) => stage.$match)).toBe(true)
 			expect(options).toEqual([{ maxTimeMS: 10000 }, { maxTimeMS: 10000 }])
 		})
-		it("all failed retains rejection and avoids duplicate branch hooks", async () => {
+		it("L1: all failed throws one typed error and reports only the sibling row", async () => {
 			const { db, error } = database(new Set(["turn-vector", "turn-text"]))
-			const onBranchFailure = vi.fn()
-			await expect(run(db, { onBranchFailure })).rejects.toBe(error)
-			expect(onBranchFailure).not.toHaveBeenCalled()
+			const rows: SearchTierOutcome[] = []
+			const failure = await run(db, {
+				onTierOutcome: (row) => rows.push(row),
+			}).catch((err: unknown) => err)
+			expect(failure).toBeInstanceOf(SearchLaneError)
+			expect(failure).toMatchObject({
+				stage: "turn-vector",
+				reason: "query-error",
+			})
+			expect((failure as Error).cause).toBe(error)
+			expect((failure as Error).message).not.toContain(privateText)
+			expect(rows.filter((row) => row.outcome === "failed")).toEqual([
+				{ stage: "turn-text", outcome: "failed", reason: "query-error" },
+			])
 		})
-		it("strict partial failure retains rejection", async () => {
+		it("strict partial failure throws typed with the original as cause", async () => {
 			vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "true")
 			const { db, error } = database(new Set(["turn-vector"]))
-			await expect(run(db)).rejects.toBe(error)
+			const failure = await run(db).catch((err: unknown) => err)
+			expect(failure).toBeInstanceOf(SearchLaneError)
+			expect(failure).toMatchObject({ stage: "turn-vector" })
+			expect((failure as Error).cause).toBe(error)
 		})
 		it("fulfilled empty remains distinguishable from an all-failed call", async () => {
-			const { db, error } = database(new Set(["turn-vector"]), true)
-			const onBranchFailure = vi.fn()
-			expect(await run(db, { onBranchFailure })).toEqual([])
-			expect(onBranchFailure).toHaveBeenCalledExactlyOnceWith(
-				"turn-vector",
-				error,
+			const { db } = database(new Set(["turn-vector"]), true)
+			const rows: SearchTierOutcome[] = []
+			expect(await run(db, { onTierOutcome: (row) => rows.push(row) })).toEqual(
+				[],
 			)
+			expect(rows).toContainEqual({
+				stage: "turn-vector",
+				outcome: "failed",
+				reason: "query-error",
+			})
+			expect(rows).toContainEqual({
+				stage: "turn-text",
+				outcome: "ok-empty",
+				reason: "zero-hits",
+				resultCount: 0,
+			})
 		})
-		it.each([
-			false,
-			true,
-		])("missing or broken hook (%s) retains result with structural warning", async (broken) => {
+		it("missing sink retains result with structural warning", async () => {
 			const { db } = database(new Set(["turn-vector"]))
 			const warnings: string[] = []
 			vi.spyOn(console, "warn").mockImplementation((...args) => {
 				warnings.push(args.join(" "))
 			})
-			const extra = broken
-				? {
-						onBranchFailure: () => {
-							throw new Error(privateText)
-						},
-					}
-				: {}
-			expect(await run(db, extra)).toHaveLength(1)
+			expect(await run(db)).toHaveLength(1)
 			expect(warnings).toHaveLength(1)
 			expect(warnings[0]).not.toContain(privateText)
 			expect(warnings[0]).toContain('"code":50')
 		})
-		it("no attempted aggregations remains empty", async () => {
+		it("L8/L13: no affordable aggregation is a typed budget denial, not an empty", async () => {
 			const { db, pipelines } = database(new Set())
-			const { value, budget } = await runWithSearchBudget(
+			const rows: SearchTierOutcome[] = []
+			let failure: unknown
+			const { budget } = await runWithSearchBudget(
 				{ maxAggregations: 1, maxEmbeds: 1 },
 				async () => {
 					const { tryConsumeSearchAggregation } = await import(
 						"./mongodb-search-budget.js"
 					)
 					tryConsumeSearchAggregation()
-					return run(db)
+					failure = await run(db, {
+						onTierOutcome: (row) => rows.push(row),
+					}).catch((err: unknown) => err)
 				},
 			)
-			expect(value).toEqual([])
+			expect(failure).toBeInstanceOf(SearchBudgetDeniedError)
+			expect(failure).toMatchObject({
+				stage: "turn-vector",
+				reason: "budget-aggregations",
+			})
+			expect(rows).toContainEqual({
+				stage: "turn-text",
+				outcome: "budget-denied",
+				reason: "budget-aggregations",
+			})
 			expect(pipelines).toHaveLength(0)
 			expect(budget.aggregations).toBe(1)
 		})
@@ -189,7 +233,7 @@ for (const seam of ["session", "conversation"] as const) {
 it.each([
 	"conversation-evidence",
 	"turn-precision",
-] as const)("searchV2 %s forwards branch health and retains evidence", async (phase) => {
+] as const)("searchV2 %s records the failed branch row and retains evidence", async (phase) => {
 	vi.stubEnv(
 		"MEMONGO_CONVERSATION_EVIDENCE_MODE",
 		phase === "conversation-evidence" ? "serial" : "disabled",
@@ -198,7 +242,7 @@ it.each([
 		"MEMONGO_BENCHMARK_TURN_PRECISION_MODE",
 		phase === "turn-precision" ? "enabled" : "disabled",
 	)
-	const { db, error } = database(new Set(["turn-vector"]))
+	const { db } = database(new Set(["turn-vector"]))
 	const warnings: string[] = []
 	vi.spyOn(console, "warn").mockImplementation((...args) => {
 		warnings.push(args.join(" "))
@@ -225,18 +269,20 @@ it.each([
 			},
 		},
 	)
-	const lane = `phase:${phase}:turn-vector`
 	expect(result.results.map((x) => x.path)).toContain("events/turn-text")
-	expect(onPathFailure).toHaveBeenCalledExactlyOnceWith(lane, error)
+	expect(onPathFailure).not.toHaveBeenCalled()
 	expect(result.metadata.laneOutcomes).toContainEqual({
-		lane,
-		status: "failed",
-		error: error.message,
+		lane: phase,
+		stage: "turn-vector",
+		outcome: "failed",
+		reason: "query-error",
 	})
-	expect(
-		result.metadata.laneOutcomes?.some(
-			(x) => x.lane === `phase:${phase}` && x.status === "failed",
-		),
-	).toBe(false)
+	expect(result.metadata.laneOutcomes).toContainEqual(
+		expect.objectContaining({ lane: phase, stage: "lane", outcome: "ok" }),
+	)
+	expect(result.metadata.outcomeStatus).toBe("partial")
+	expect(JSON.stringify(result.metadata.laneOutcomes)).not.toContain(
+		privateText,
+	)
 	expect(warnings.join(" ")).not.toContain(privateText)
 })

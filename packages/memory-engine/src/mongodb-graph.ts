@@ -28,6 +28,10 @@ import {
 } from "./mongodb-schema.js"
 import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
+import {
+	searchFailureLogFields,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
 	buildCurrentValidityClause,
@@ -2264,8 +2268,9 @@ export async function extractAndUpsertTypedRelations(params: {
  *
  * P3.8: the request path is capability-gated — callers pass the detected
  * textSearch capability so deployments without mongot go straight to the
- * escaped $regex fallback instead of paying a failed $search round trip per
- * lookup. A runtime $search failure still degrades to the same fallback.
+ * escaped $regex tier instead of paying a failed $search round trip per
+ * lookup. #101 G2/R8: a runtime $search failure is a typed failure, never a
+ * regex fallback.
  */
 export async function searchEntitiesAutocomplete(params: {
 	db: Db
@@ -2331,19 +2336,12 @@ export async function searchEntitiesAutocomplete(params: {
 			.toArray()
 		return docs as unknown as Entity[]
 	} catch (err) {
+		const typed = toTypedSearchError(err, "entity-lookup")
 		log.warn(
-			`searchEntitiesAutocomplete $search failed, falling back to regex: ${err instanceof Error ? err.message : String(err)}`,
+			"searchEntitiesAutocomplete $search failed",
+			searchFailureLogFields(typed),
 		)
-		// Fallback to findEntitiesByName
-		return findEntitiesByName({
-			db,
-			prefix,
-			query,
-			agentId,
-			scope,
-			scopeRef,
-			limit: maxResults,
-		})
+		throw typed
 	}
 }
 

@@ -447,7 +447,7 @@ describe("searchKB", () => {
 		expect(pipeline[0].$scoreFusion.input.normalization).toBe("minMaxScaler")
 	})
 
-	it("falls back from $scoreFusion to $rankFusion when the server rejects it (P0.10)", async () => {
+	it("#101 K5: a rejected $scoreFusion is a typed failure; $rankFusion never runs", async () => {
 		const hybridCaps: DetectedCapabilities = {
 			...baseCapabilities,
 			scoreFusion: true,
@@ -474,21 +474,19 @@ describe("searchKB", () => {
 			})),
 		} as unknown as Collection
 
-		const results = await searchKB(col, "test", [0.1], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "idx",
-			textIndexName: "txt",
-			capabilities: hybridCaps,
-			embeddingMode: "automated",
-			fusionMethod: "scoreFusion",
-		})
-
-		expect(results).toHaveLength(1)
-		const secondPipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[1][0]
-		expect(secondPipeline[0].$rankFusion).toBeDefined()
+		await expect(
+			searchKB(col, "test", [0.1], {
+				maxResults: 5,
+				minScore: 0.1,
+				scopeRef: "agent:test",
+				vectorIndexName: "idx",
+				textIndexName: "txt",
+				capabilities: hybridCaps,
+				embeddingMode: "automated",
+				fusionMethod: "scoreFusion",
+			}),
+		).rejects.toMatchObject({ stage: "score-fusion", reason: "internal-error" })
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 
 	it("skips server-side fusion when fusionMethod=js-merge (P0.10)", async () => {
@@ -709,7 +707,7 @@ describe("searchKB lane failure policy + $text budget (RET-13/RET-16)", () => {
 		expect(options.maxTimeMS).toBeGreaterThan(0)
 	})
 
-	it("returns [] without executing the $text aggregate when the budget is exhausted (RET-16)", async () => {
+	it("#101 K10: a refused $text aggregation is budget-denied and never executes", async () => {
 		const col = mockKBChunksCol([
 			{
 				path: "fallback.md",
@@ -720,9 +718,8 @@ describe("searchKB lane failure policy + $text budget (RET-13/RET-16)", () => {
 			},
 		])
 
-		const { value: results, budget } = await runWithSearchBudget(
-			{ maxAggregations: 1, maxEmbeds: 5 },
-			async () => {
+		await expect(
+			runWithSearchBudget({ maxAggregations: 1, maxEmbeds: 5 }, async () => {
 				// Spend the single aggregation so the $text lane is refused.
 				tryConsumeSearchAggregation()
 				return searchKB(col, "fallback", null, {
@@ -734,17 +731,17 @@ describe("searchKB lane failure policy + $text budget (RET-13/RET-16)", () => {
 					capabilities: noSearchCapabilities,
 					embeddingMode: "automated",
 				})
-			},
-		)
-
-		// Budget refusal degrades to empty — never an error, never an
-		// off-ledger aggregate.
-		expect(results).toEqual([])
+			}),
+		).rejects.toMatchObject({
+			name: "SearchBudgetDeniedError",
+			stage: "classic-text",
+			reason: "budget-aggregations",
+		})
+		// Never an off-ledger aggregate.
 		expect(col.aggregate).not.toHaveBeenCalled()
-		expect(budget.exhausted).toBe(true)
 	})
 
-	it("rethrows in strict mode when the $text last resort fails (RET-13)", async () => {
+	it("#101 K11: a planned $text failure is typed in every mode", async () => {
 		const col = {
 			aggregate: vi.fn(() => ({
 				toArray: vi.fn(async () => {
@@ -762,13 +759,11 @@ describe("searchKB lane failure policy + $text budget (RET-13/RET-16)", () => {
 				textIndexName: "test_kb_chunks_text",
 				capabilities: noSearchCapabilities,
 				embeddingMode: "automated",
-				strict: true,
 			}),
-		).rejects.toThrow("text index missing")
+		).rejects.toMatchObject({ stage: "classic-text", reason: "internal-error" })
 	})
 
-	it("continues the waterfall and fires onLaneFailure at the failing seam in non-strict mode (RET-13)", async () => {
-		// Vector lane fails; the keyword lane behind it still answers.
+	it("#101 K8: a vector failure stops the lane; the keyword tier never runs", async () => {
 		const col = {
 			aggregate: vi.fn((pipeline: Document[]) => ({
 				toArray: vi.fn(async () => {
@@ -789,20 +784,17 @@ describe("searchKB lane failure policy + $text budget (RET-13/RET-16)", () => {
 			})),
 		} as unknown as Collection
 
-		const laneFailures: string[] = []
-		const results = await searchKB(col, "keyword", null, {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-			onLaneFailure: (lane) => laneFailures.push(lane),
-		})
-
-		expect(results).toHaveLength(1)
-		expect(results[0].snippet).toContain("keyword hit")
-		expect(laneFailures).toEqual(["kb:vector"])
+		await expect(
+			searchKB(col, "keyword", null, {
+				maxResults: 5,
+				minScore: 0.1,
+				scopeRef: "agent:test",
+				vectorIndexName: "test_kb_chunks_vector",
+				textIndexName: "test_kb_chunks_text",
+				capabilities: baseCapabilities,
+				embeddingMode: "automated",
+			}),
+		).rejects.toMatchObject({ stage: "vector", reason: "internal-error" })
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 })
