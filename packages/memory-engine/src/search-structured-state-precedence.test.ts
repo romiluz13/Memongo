@@ -87,15 +87,20 @@ for (const vector of [true, false]) {
 				rankFusion: false,
 				storedSource: false,
 				vectorIndexMethod: false,
+				queryableSearchIndexes: ["structured_text"],
 			},
 			vectorIndexName: "structured_vector",
+			textIndexName: "structured_text",
 			embeddingMode: "automated",
 		})
 		expect(aggregate).toHaveBeenCalledOnce()
 		const pipeline = aggregate.mock.calls[0][0] as Document[]
+		// #101: with no vector tier the $search tier runs; its full filter is
+		// revalidated by the post-stage $match.
+		if (!vector) expect(pipeline[0].$search).toBeDefined()
 		const filter = vector
 			? pipeline[0].$vectorSearch.filter
-			: pipeline[0].$match
+			: pipeline[1].$match
 		const clauses: Document[] = filter.$and ?? [filter]
 		expect(clauses).toContainEqual(
 			expect.objectContaining({

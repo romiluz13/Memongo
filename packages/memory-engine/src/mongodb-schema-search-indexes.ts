@@ -414,6 +414,7 @@ export async function ensureSearchIndexes(
 					scopeRef: { type: "token" },
 					state: { type: "token" },
 					salience: { type: "token" },
+					temporalScope: { type: "token" },
 					updatedAt: { type: "date" },
 				},
 			},

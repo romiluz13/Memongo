@@ -41,7 +41,6 @@ export async function ensureOperationalStandardIndexes(
 	ttlOpts?: StandardIndexOptions,
 ): Promise<number> {
 	let applied = 0
-	const textFallbackIndexes = ttlOpts?.textFallbackIndexes ?? true
 
 	const structured = structuredMemCollection(db, prefix)
 	const ingestRuns = ingestRunsCollection(db, prefix)
@@ -126,13 +125,8 @@ export async function ensureOperationalStandardIndexes(
 		{ name: "idx_procedures_agent_source_event" },
 	)
 	applied++
-	if (textFallbackIndexes) {
-		await procedures.createIndex(
-			{ searchText: "text", name: "text" },
-			{ name: "idx_procedures_text" },
-		)
-		applied++
-	}
+	// #101 R7: no procedure query uses $text, so idx_procedures_text is no
+	// longer created. Existing deployments may drop it manually.
 
 	const procedureRevisions = procedureRevisionsCollection(db, prefix)
 	await procedureRevisions.createIndex(

@@ -461,6 +461,7 @@ export class MongoDBManagerSearchOps {
 							numCandidates: mongoCfg.numCandidates,
 							capabilities: this.host.capabilities,
 							vectorIndexName: `${this.host.prefix}structured_mem_vector`,
+							textIndexName: `${this.host.prefix}structured_mem_text`,
 							embeddingMode: mongoCfg.embeddingMode,
 							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 							explain: explainOpts,

@@ -25,10 +25,6 @@ import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
 import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
-import {
-	freshnessRevalidationStages,
-	splitAtlasSearchFilter,
-} from "./mongodb-search.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	procedureRevisionsCollection,
@@ -37,9 +33,13 @@ import {
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	buildVectorSearchStage,
+	freshnessRevalidationStages,
+	isTextSearchTierAvailable,
 	MONGODB_MAX_NUM_CANDIDATES,
+	reportExplainFailure,
 	runSearchAggregateWithRetry,
 	type SearchExplainOptions,
+	splitAtlasSearchFilter,
 } from "./mongodb-search.js"
 import {
 	buildCurrentValidityClause,
@@ -58,6 +58,11 @@ import type {
 	MemorySourceAgent,
 } from "./types.js"
 import { MemoryLifecycleConflictError } from "./mongodb-structured-memory.js"
+import {
+	SearchLaneUnavailableError,
+	type SearchTierOutcomeSink,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 const log = createSubsystemLogger("memory:mongodb:procedures")
 
@@ -1641,10 +1646,16 @@ export async function findExactProcedureMatches(
 			currentOnly?: boolean
 			asOf?: Date
 		}
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const trimmed = query.trim()
 	if (!trimmed) {
+		opts.onTierOutcome?.({
+			stage: "exact-match",
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
 		return []
 	}
 
@@ -1736,6 +1747,7 @@ export async function searchProcedures(
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
+		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
 	const minScore = opts.minScore ?? 0.1
@@ -1776,194 +1788,180 @@ export async function searchProcedures(
 		)
 	}
 
-	if (canVector) {
-		try {
-			const filter = buildFilter()
-			const vsStage = buildVectorSearchStage({
-				queryVector,
-				queryText: query,
-				embeddingMode: opts.embeddingMode,
-				model: opts.queryEmbeddingModel,
-				indexName: opts.vectorIndexName,
-				numCandidates,
-				limit: opts.maxResults,
-				filter: Object.keys(filter).length > 0 ? filter : undefined,
-				textFieldPath: "searchText",
-				// Authoritative serving hydrates the full current document from
-				// mongod (the documented default); storedSource may return stale
-				// data and would defeat the post-stage freshness $match below.
-				returnStoredSource: false,
-			})
-			if (vsStage) {
-				const pipeline: Document[] = [
-					{ $vectorSearch: vsStage },
-					// Re-validate the full filter against the hydrated document —
-					// the ANN prefilter runs against the indexed copy, which can
-					// lag the latest write.
-					...freshnessRevalidationStages(filter),
-					{ $limit: opts.maxResults },
-					{
-						$project: {
-							_id: 0,
-							procedureId: 1,
-							searchText: 1,
-							sessionId: 1,
-							// RET-09: surface the stored confidence for the
-							// provenance classifier.
-							confidence: 1,
-							updatedAt: 1,
-							state: 1,
-							scope: 1,
-							scopeRef: 1,
-							provenance: 1,
-							sourceEventIds: 1,
-							validFrom: 1,
-							validTo: 1,
-							score: { $meta: "vectorSearchScore" },
-						},
-					},
-				]
-				if (opts.explain?.enabled) {
-					try {
-						const cursor = collection.aggregate(pipeline) as unknown as {
-							explain?: (verbosity?: string) => Promise<unknown>
-						}
-						if (typeof cursor.explain === "function") {
-							const explained = await cursor.explain("executionStats")
-							opts.explain.onArtifact?.({
-								artifactType: "vectorExplain",
-								summary: {
-									source: "procedure",
-									...summarizeExplain(explained),
-								},
-								...(opts.explain.deep ? { rawExplain: explained } : {}),
-							})
-						}
-					} catch (err) {
-						log.warn("procedure vector explain failed", { error: err })
-					}
-				}
-				const docs = await runSearchAggregateWithRetry(collection, pipeline)
-				const results = docs
-					.map(toProcedureResult)
-					.filter((result) => result.score >= minScore)
-				if (results.length > 0) {
-					return results
-				}
-			}
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`procedure vector search failed: ${msg}`)
-		}
+	// #101 / matrix 1e: the vector tier, then — only after a SUCCESSFUL zero
+	// hit — the procedures_text $search tier. Classic $text is gone. An error
+	// or a budget denial is a typed throw at its tier; a lane with neither
+	// tier available is a typed lane-unavailable failure, never a silent [].
+	const canText = isTextSearchTierAvailable(
+		opts.capabilities,
+		opts.textIndexName,
+	)
+	if (!canVector && !canText) {
+		throw new SearchLaneUnavailableError()
+	}
+	const report = (stage: "vector" | "atlas-search", count: number): void => {
+		opts.onTierOutcome?.({
+			stage,
+			outcome: count > 0 ? "ok" : "ok-empty",
+			...(count > 0 ? {} : { reason: "zero-hits" as const }),
+			resultCount: count,
+		})
+	}
+	const textTierAbsent = (): MemorySearchResult[] => {
+		opts.onTierOutcome?.({
+			stage: "atlas-search",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+		return []
+	}
+	const projection = {
+		_id: 0,
+		procedureId: 1,
+		searchText: 1,
+		sessionId: 1,
+		// RET-09: surface the stored confidence for the provenance classifier.
+		confidence: 1,
+		updatedAt: 1,
+		state: 1,
+		scope: 1,
+		scopeRef: 1,
+		provenance: 1,
+		sourceEventIds: 1,
+		validFrom: 1,
+		validTo: 1,
 	}
 
-	// Atlas Search tier — uses the procedures_text Atlas Search index that is
-	// created and maintained by mongodb-schema.ts but was previously unused.
-	// Gated on capabilities.textSearch so it only runs where Atlas Search is
-	// available; falls through to $text on Community / unsupported deployments.
-	const canText = opts.capabilities.textSearch
-	if (canText && opts.textIndexName) {
-		try {
-			const textFilter = buildFilter()
-			const { compoundFilter } = splitAtlasSearchFilter(textFilter)
+	if (!canVector) {
+		opts.onTierOutcome?.({
+			stage: "vector",
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+	} else {
+		const filter = buildFilter()
+		const vsStage = buildVectorSearchStage({
+			queryVector,
+			queryText: query,
+			embeddingMode: opts.embeddingMode,
+			model: opts.queryEmbeddingModel,
+			indexName: opts.vectorIndexName,
+			numCandidates,
+			limit: opts.maxResults,
+			filter: Object.keys(filter).length > 0 ? filter : undefined,
+			textFieldPath: "searchText",
+			// Authoritative serving hydrates the full current document from
+			// mongod (the documented default); storedSource may return stale
+			// data and would defeat the post-stage freshness $match below.
+			returnStoredSource: false,
+			stage: "vector",
+		})
+		if (!vsStage) {
+			opts.onTierOutcome?.({
+				stage: "vector",
+				outcome: "not-applicable",
+				reason: "empty-query",
+			})
+		} else {
 			const pipeline: Document[] = [
-				{
-					$search: {
-						index: opts.textIndexName,
-						compound: {
-							must: [{ text: { query, path: "searchText" } }],
-							...(compoundFilter ? { filter: compoundFilter } : {}),
-						},
-					},
-				},
+				{ $vectorSearch: vsStage },
 				// Re-validate the full filter against the hydrated document —
-				// the compound filter runs against the indexed copy, which can
+				// the ANN prefilter runs against the indexed copy, which can
 				// lag the latest write.
-				...freshnessRevalidationStages(textFilter),
-				{ $limit: opts.maxResults * 4 },
+				...freshnessRevalidationStages(filter),
+				{ $limit: opts.maxResults },
 				{
-					$project: {
-						_id: 0,
-						procedureId: 1,
-						searchText: 1,
-						sessionId: 1,
-						// RET-09: surface the stored confidence for the
-						// provenance classifier.
-						confidence: 1,
-						updatedAt: 1,
-						state: 1,
-						scope: 1,
-						scopeRef: 1,
-						provenance: 1,
-						sourceEventIds: 1,
-						validFrom: 1,
-						validTo: 1,
-						score: { $meta: "searchScore" },
-					},
+					$project: { ...projection, score: { $meta: "vectorSearchScore" } },
 				},
 			]
 			if (opts.explain?.enabled) {
-				opts.explain.onArtifact?.({
-					artifactType: "searchExplain",
-					summary: { source: "procedure", method: "atlas-search" },
-				})
+				try {
+					const cursor = collection.aggregate(pipeline) as unknown as {
+						explain?: (verbosity?: string) => Promise<unknown>
+					}
+					if (typeof cursor.explain === "function") {
+						const explained = await cursor.explain("executionStats")
+						opts.explain.onArtifact?.({
+							artifactType: "vectorExplain",
+							summary: {
+								source: "procedure",
+								...summarizeExplain(explained),
+							},
+							...(opts.explain.deep ? { rawExplain: explained } : {}),
+						})
+					}
+				} catch (err) {
+					reportExplainFailure(err, opts.onTierOutcome)
+				}
 			}
-			const docs = await runSearchAggregateWithRetry(collection, pipeline)
+			let docs: Document[]
+			try {
+				docs = await runSearchAggregateWithRetry(collection, pipeline, {
+					stage: "vector",
+				})
+			} catch (err) {
+				throw toTypedSearchError(err, "vector")
+			}
 			const results = docs
 				.map(toProcedureResult)
 				.filter((result) => result.score >= minScore)
+			report("vector", results.length)
 			if (results.length > 0) {
+				if (!canText) {
+					textTierAbsent()
+				}
 				return results
 			}
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`procedure Atlas Search failed: ${msg}`)
+		}
+		if (!canText) {
+			return textTierAbsent()
 		}
 	}
 
-	try {
-		const matchFilter: Document = {
-			$text: { $search: query },
-			...buildFilter(),
-		}
-		const docs = await collection
-			.aggregate([
-				{ $match: matchFilter },
-				{
-					$project: {
-						_id: 0,
-						procedureId: 1,
-						searchText: 1,
-						sessionId: 1,
-						// RET-09: surface the stored confidence for the
-						// provenance classifier.
-						confidence: 1,
-						updatedAt: 1,
-						state: 1,
-						scope: 1,
-						scopeRef: 1,
-						provenance: 1,
-						sourceEventIds: 1,
-						validFrom: 1,
-						validTo: 1,
-						score: { $meta: "textScore" },
-					},
-				},
-				{ $sort: { score: { $meta: "textScore" } } },
-				{ $limit: opts.maxResults },
-			])
-			.toArray()
-		if (opts.explain?.enabled) {
-			opts.explain.onArtifact?.({
-				artifactType: "searchExplain",
-				summary: { source: "procedure", method: "$text" },
-			})
-		}
-		return docs
-			.map(toProcedureResult)
-			.filter((result) => result.score >= minScore)
-	} catch {
-		log.warn("procedure $text search fallback failed; returning empty results")
+	if (!query.trim()) {
+		opts.onTierOutcome?.({
+			stage: "atlas-search",
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
 		return []
 	}
+	const textFilter = buildFilter()
+	const { compoundFilter } = splitAtlasSearchFilter(textFilter)
+	const pipeline: Document[] = [
+		{
+			$search: {
+				index: opts.textIndexName,
+				compound: {
+					must: [{ text: { query, path: "searchText" } }],
+					...(compoundFilter ? { filter: compoundFilter } : {}),
+				},
+			},
+		},
+		// Re-validate the full filter against the hydrated document — the
+		// compound filter runs against the indexed copy, which can lag the
+		// latest write.
+		...freshnessRevalidationStages(textFilter),
+		{ $limit: opts.maxResults * 4 },
+		{ $project: { ...projection, score: { $meta: "searchScore" } } },
+	]
+	if (opts.explain?.enabled) {
+		opts.explain.onArtifact?.({
+			artifactType: "searchExplain",
+			summary: { source: "procedure", method: "atlas-search" },
+		})
+	}
+	let docs: Document[]
+	try {
+		docs = await runSearchAggregateWithRetry(collection, pipeline, {
+			stage: "atlas-search",
+		})
+	} catch (err) {
+		throw toTypedSearchError(err, "atlas-search")
+	}
+	const results = docs
+		.map(toProcedureResult)
+		.filter((result) => result.score >= minScore)
+	report("atlas-search", results.length)
+	return results
 }

@@ -86,6 +86,12 @@ export async function detectCapabilities(
 	 * capability gate evaluation reads this deployment's probe outcomes only.
 	 */
 	deployment?: string,
+	/**
+	 * #101 R2: collections whose `<collection>_text` Search index backs a
+	 * text tier; each is listed in `queryableSearchIndexes` only when that
+	 * index is queryable now.
+	 */
+	textTierCollections: readonly string[] = [],
 ): Promise<DetectedCapabilities> {
 	const result: DetectedCapabilities = {
 		vectorSearch: false,
@@ -214,6 +220,27 @@ export async function detectCapabilities(
 		} catch {
 			// Search index management is unavailable on this deployment.
 		}
+	}
+
+	if (textTierCollections.length > 0) {
+		const queryable: string[] = []
+		for (const collectionName of textTierCollections) {
+			const name = `${collectionName}_text`
+			try {
+				const indexes = await listSearchIndexes(db.collection(collectionName))
+				const textIndex = indexes.find((index) => index.name === name)
+				if (
+					textIndex !== undefined &&
+					isSearchIndexTypeCompatible(textIndex.type, "search") &&
+					isSearchIndexQueryable(textIndex)
+				) {
+					queryable.push(name)
+				}
+			} catch {
+				// Unknown availability: the index stays unlisted, so its tier does not run.
+			}
+		}
+		result.queryableSearchIndexes = queryable
 	}
 
 	// Capability re-enable registry (P3.6): every gated feature self-evaluates

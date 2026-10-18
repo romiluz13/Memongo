@@ -475,6 +475,24 @@ function buildSearchFilterClause(
 	return null
 }
 
+/** #101 R2: a Search-backed text tier runs only when its index is known queryable. */
+export function isTextSearchTierAvailable(
+	capabilities: DetectedCapabilities,
+	indexName: string | undefined,
+): boolean {
+	return (
+		capabilities.textSearch &&
+		indexName !== undefined &&
+		(capabilities.queryableSearchIndexes?.includes(indexName) ?? false)
+	)
+}
+
+/** The field path a splitAtlasSearchFilter clause binds to. */
+export function atlasSearchClausePath(clause: Document): string | undefined {
+	const inner: Document = clause.compound?.filter?.[0] ?? clause
+	return inner.equals?.path ?? inner.in?.path
+}
+
 export function splitAtlasSearchFilter(filter?: Document): {
 	compoundFilter?: Document[]
 	postMatch?: Document

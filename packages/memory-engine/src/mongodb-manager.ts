@@ -646,10 +646,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 			// Detect concrete serving readiness. Fusion capability is server-version
 			// based, while Search capabilities require named queryable indexes.
+			// #101 R2: the structured and procedure $search tiers run only when
+			// their own text index is queryable, not merely when chunks_text is.
+			const textTierCollections = searchIndexManagementAvailable
+				? [`${prefix}structured_mem`, `${prefix}procedures`]
+				: []
 			let capabilities = await detectCapabilities(
 				db,
 				chunksCollectionName,
 				capabilityDeployment,
+				textTierCollections,
 			)
 			log.info(`capabilities: ${JSON.stringify(capabilities)}`)
 			let nativeBitemporalVectorPrefilter = false
@@ -777,6 +783,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						db,
 						chunksCollectionName,
 						capabilityDeployment,
+						textTierCollections,
 					)
 				}
 			} else {
