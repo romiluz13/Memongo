@@ -72,12 +72,29 @@ export function isDependencyUnavailableError(err: unknown): boolean {
 export function internalError(c: Context, err: unknown, code: string) {
 	const requestId = c.get("requestId") ?? "no-request-id"
 	let errorCode: unknown
+	let commitState: unknown
 	try {
 		if (err && typeof err === "object") {
 			errorCode = Object.getOwnPropertyDescriptor(err, "code")?.value
+			commitState = Object.getOwnPropertyDescriptor(err, "commitState")?.value
 		}
 	} catch {
 		// A proxy descriptor trap must not replace the original failure.
+	}
+	// #101: a search-barrier write whose commit outcome is unknown says so;
+	// the body claims neither committed nor searchable.
+	const respond = (
+		status: 500 | 503,
+		responseCode: string,
+		message: string,
+	) => {
+		const body = apiErrorJson(responseCode, message)
+		return commitState === "unknown"
+			? c.json(
+					{ error: { ...body.error, commitState: "unknown" as const } },
+					status,
+				)
+			: c.json(body, status)
 	}
 	console.error(
 		JSON.stringify({
@@ -94,17 +111,11 @@ export function internalError(c: Context, err: unknown, code: string) {
 		}),
 	)
 	if (isDependencyUnavailableError(err)) {
-		return jsonError(
-			c,
+		return respond(
 			503,
 			"SERVICE_UNAVAILABLE",
 			`dependency unavailable (request id: ${requestId})`,
 		)
 	}
-	return jsonError(
-		c,
-		500,
-		code,
-		`internal server error (request id: ${requestId})`,
-	)
+	return respond(500, code, `internal server error (request id: ${requestId})`)
 }

@@ -918,6 +918,12 @@ export async function writeStructuredMemory(params: {
 	 * is intentionally superseded.
 	 */
 	injectionClassification?: "enforce" | "skip"
+	/**
+	 * #101: opt-in search barrier witness. Stamped in the same update as the
+	 * content on every persisting path; a write that changes no content
+	 * re-stamps it with a token-only $set.
+	 */
+	searchWriteToken?: string
 }): Promise<{
 	upserted: boolean
 	id: string
@@ -1187,6 +1193,9 @@ export async function writeStructuredMemory(params: {
 	if (entry.artifact !== undefined) {
 		setDoc.artifact = entry.artifact
 	}
+	if (params.searchWriteToken !== undefined) {
+		setDoc.searchWriteToken = params.searchWriteToken
+	}
 
 	const identityFilter: Document = {
 		...(params.expectedId !== undefined ? { _id: params.expectedId } : {}),
@@ -1247,7 +1256,16 @@ export async function writeStructuredMemory(params: {
 				changed: true,
 			}
 		}
+		const restampUnchanged = async () => {
+			if (params.searchWriteToken === undefined) return
+			await collection.updateOne(
+				identityFilter,
+				{ $set: { searchWriteToken: params.searchWriteToken } },
+				session ? { session } : {},
+			)
+		}
 		if (hasProcessedSourceEvents(existing, params.eventReceiptIds)) {
+			await restampUnchanged()
 			return {
 				upserted: false,
 				id: entry.key,
@@ -1333,6 +1351,7 @@ export async function writeStructuredMemory(params: {
 					},
 				)
 			) {
+				await restampUnchanged()
 				return {
 					upserted: false,
 					id: entry.key,

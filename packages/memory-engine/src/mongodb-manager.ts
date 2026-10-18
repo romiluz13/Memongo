@@ -117,6 +117,10 @@ import {
 	searchProcedures,
 } from "./mongodb-procedures.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
+import type {
+	SearchBarrierRequest,
+	SearchBarrierResult,
+} from "./mongodb-search-barrier.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { buildContextBundle as composeContextBundle } from "./mongodb-context-bundle.js"
 import { synthesizeProfile, type ProfileSynthesis } from "./mongodb-profile.js"
@@ -1451,21 +1455,34 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// Structured memory write (exposed for memory_write tool to avoid per-call MongoClient)
 	// ---------------------------------------------------------------------------
 
-	async writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
+	async writeStructuredMemory(
+		entry: StructuredMemoryEntry,
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
 		upserted: boolean
 		id: string
 		/** C-008: true when the entry was quarantined instead of written. */
 		quarantined?: boolean
 		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
 		matchedPatterns?: string[]
+		searchBarrier?: SearchBarrierResult
 	}> {
-		return lifecycleOpsOf(this).writeStructuredMemory(entry)
+		return options
+			? lifecycleOpsOf(this).writeStructuredMemory(entry, options)
+			: lifecycleOpsOf(this).writeStructuredMemory(entry)
 	}
 
 	async writeProcedure(
 		entry: ProcedureEntry,
-	): Promise<{ upserted: boolean; id: string }> {
-		return lifecycleOpsOf(this).writeProcedure(entry)
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		upserted: boolean
+		id: string
+		searchBarrier?: SearchBarrierResult
+	}> {
+		return options
+			? lifecycleOpsOf(this).writeProcedure(entry, options)
+			: lifecycleOpsOf(this).writeProcedure(entry)
 	}
 
 	async getLifecycleItem(
@@ -1830,8 +1847,19 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async writeConversationEvent(
 		event: WriteConversationEventInput,
 		operationRunContext?: OperationRunContext,
-	): Promise<{ eventId: string; chunkCreated: boolean }> {
-		return writeOpsOf(this).writeConversationEvent(event, operationRunContext)
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		eventId: string
+		chunkCreated: boolean
+		searchBarrier?: SearchBarrierResult
+	}> {
+		return options
+			? writeOpsOf(this).writeConversationEvent(
+					event,
+					operationRunContext,
+					options,
+				)
+			: writeOpsOf(this).writeConversationEvent(event, operationRunContext)
 	}
 
 	/**

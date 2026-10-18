@@ -47,7 +47,15 @@ import {
 import { QueryCacheInvalidationCoalescer } from "./mongodb-query-cache-invalidation.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
-import { eventsCollection } from "./mongodb-schema.js"
+import { chunksCollection, eventsCollection } from "./mongodb-schema.js"
+import {
+	annotateUncertainCommit,
+	assertSearchBarrierTargets,
+	awaitSearchBarrier,
+	mintSearchWriteToken,
+	type SearchBarrierRequest,
+	type SearchBarrierResult,
+} from "./mongodb-search-barrier.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { resolveWriteExpiresAt } from "./mongodb-temporal.js"
 import { resolveDefaultScope } from "./backend-config.js"
@@ -759,10 +767,51 @@ export class MongoDBManagerWriteOps {
 		return { eventId: existing.eventId, chunkCreated: false }
 	}
 
+	/**
+	 * #101: a barrier replay re-stamps the stored event and its chunk with a
+	 * fresh token (token-only $set), inside the replay's fenced transaction.
+	 * A stored token is never reused: a non-barrier writer may have changed
+	 * the document since it was stamped.
+	 */
+	private async restampReplayedEvent(params: {
+		eventId: string
+		searchWriteToken: string
+		session: ClientSession
+	}): Promise<{ missingChunkEvent?: CanonicalEvent }> {
+		const stored = (await eventsCollection(
+			this.host.db,
+			this.host.prefix,
+		).findOneAndUpdate(
+			{ eventId: params.eventId, agentId: this.host.agentId },
+			{ $set: { searchWriteToken: params.searchWriteToken } },
+			{
+				session: params.session,
+				returnDocument: "after",
+				includeResultMetadata: false,
+			},
+		)) as CanonicalEvent | null
+		const chunk = await chunksCollection(
+			this.host.db,
+			this.host.prefix,
+		).updateOne(
+			{ path: `events/${params.eventId}` },
+			{ $set: { searchWriteToken: params.searchWriteToken } },
+			{ session: params.session },
+		)
+		return chunk.matchedCount === 0 && stored
+			? { missingChunkEvent: stored }
+			: {}
+	}
+
 	async writeConversationEvent(
 		event: WriteConversationEventInput,
 		operationRunContext?: OperationRunContext,
-	): Promise<{ eventId: string; chunkCreated: boolean }> {
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		eventId: string
+		chunkCreated: boolean
+		searchBarrier?: SearchBarrierResult
+	}> {
 		// (P2.5 e) shutdown intake stop: once close() begins, no new writes
 		// enter the queue — a write queued during shutdown would schedule
 		// extraction jobs and derivations on workers that are stopping.
@@ -771,6 +820,17 @@ export class MongoDBManagerWriteOps {
 				"MongoDBMemoryManager is closed; refusing to queue a new write",
 			)
 		}
+		const searchBarrier = options?.searchBarrier
+		if (searchBarrier) {
+			await assertSearchBarrierTargets({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				family: "event",
+			})
+		}
+		const searchWriteToken = searchBarrier ? mintSearchWriteToken() : undefined
+		let barrierProjectionFailed = false
+		let replayMissingChunkEvent: CanonicalEvent | undefined
 		// Capture admission at the public call boundary, before queue delay can
 		// make this write appear newer than an intervening erasure. Convert the
 		// promise to a settled result immediately so a queue fast-fail cannot
@@ -865,6 +925,7 @@ export class MongoDBManagerWriteOps {
 						...(idempotencyFingerprint ? { idempotencyFingerprint } : {}),
 						extractionJobPendingAt,
 						...(expiresAt ? { expiresAt } : {}),
+						...(searchWriteToken ? { searchWriteToken } : {}),
 					},
 				})
 			const stageExtractionJob = async (
@@ -891,6 +952,32 @@ export class MongoDBManagerWriteOps {
 					},
 				})
 			}
+			// #101: a barrier replay whose chunk is missing re-projects it with
+			// the fresh token, which also heals it. A failed heal is a committed
+			// projection-failed outcome, never a rejection.
+			const healReplayChunk = async () => {
+				const missing = replayMissingChunkEvent
+				if (!missing || !searchWriteToken) return
+				try {
+					await withFencedWrite({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						token: admitted.token,
+						fn: (session) =>
+							projectEventChunk({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								event: missing,
+								session,
+								recordRun: false,
+								searchWriteToken,
+							}),
+					})
+				} catch {
+					barrierProjectionFailed = true
+					log.warn("search barrier replay chunk re-projection failed")
+				}
+			}
 			// W16: ingest-run clock starts at the write attempt. A replay returns
 			// from the fenced transaction without recording an ingest run.
 			const ingestStartMs = Date.now()
@@ -908,6 +995,15 @@ export class MongoDBManagerWriteOps {
 								session,
 							})
 							if (replay) {
+								if (searchWriteToken) {
+									replayMissingChunkEvent = (
+										await this.restampReplayedEvent({
+											eventId: replay.eventId,
+											searchWriteToken,
+											session,
+										})
+									).missingChunkEvent
+								}
 								return { kind: "replay" as const, receipt: replay }
 							}
 						}
@@ -919,6 +1015,7 @@ export class MongoDBManagerWriteOps {
 					},
 				})
 				if (outcome.kind === "replay") {
+					await healReplayChunk()
 					return outcome.receipt
 				}
 				written = outcome.written
@@ -927,22 +1024,39 @@ export class MongoDBManagerWriteOps {
 					// A duplicate-key error aborts its transaction, so replay in a
 					// new fenced transaction with the original admission token.
 					// An erasure that advanced the epoch wins this retry boundary.
-					const replay = await withFencedWrite({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						token: admitted.token,
-						fn: (session) =>
-							this.host.replayIdempotentEventWrite({
-								idempotencyKey: event.idempotencyKey as string,
-								event,
-								session,
-							}),
-					})
+					let replay: { eventId: string; chunkCreated: boolean } | null
+					try {
+						replay = await withFencedWrite({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							token: admitted.token,
+							fn: async (session) => {
+								const found = await this.host.replayIdempotentEventWrite({
+									idempotencyKey: event.idempotencyKey as string,
+									event,
+									session,
+								})
+								if (found && searchWriteToken) {
+									replayMissingChunkEvent = (
+										await this.restampReplayedEvent({
+											eventId: found.eventId,
+											searchWriteToken,
+											session,
+										})
+									).missingChunkEvent
+								}
+								return found
+							},
+						})
+					} catch (replayErr) {
+						throw searchBarrier ? annotateUncertainCommit(replayErr) : replayErr
+					}
 					if (replay) {
+						await healReplayChunk()
 						return replay
 					}
 				}
-				throw err
+				throw searchBarrier ? annotateUncertainCommit(err) : err
 			}
 			const projectionStartMs = Date.now()
 			const projectionEvent: CanonicalEvent = {
@@ -973,10 +1087,12 @@ export class MongoDBManagerWriteOps {
 							event: projectionEvent,
 							session,
 							recordRun: false,
+							...(searchWriteToken ? { searchWriteToken } : {}),
 						}),
 				})
 			} catch (err) {
 				projectionFailed = true
+				barrierProjectionFailed = true
 				projected = { chunkCreated: false }
 				log.warn(
 					`chunk projection failed for durable event ${written.eventId}; leaving it unprojected for the repair pass: ${String(err)}`,
@@ -1228,7 +1344,23 @@ export class MongoDBManagerWriteOps {
 
 		// WS-11 change 4: bounded enqueue (fast-fail at cap + saturation
 		// telemetry) replaces the unbounded promise chain.
-		return enqueueBoundedWrite(this.host, execute)
+		if (!searchBarrier || !searchWriteToken) {
+			return enqueueBoundedWrite(this.host, execute)
+		}
+		// The barrier waits after the write leaves the per-agent queue, so
+		// writes queued behind it gain no wait.
+		const receipt = await enqueueBoundedWrite(this.host, execute)
+		return {
+			...receipt,
+			searchBarrier: await awaitSearchBarrier({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				family: "event",
+				token: searchWriteToken,
+				request: searchBarrier,
+				projectionFailed: barrierProjectionFailed,
+			}),
+		}
 	}
 
 	/**

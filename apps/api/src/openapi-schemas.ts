@@ -43,6 +43,59 @@ export const CLIENT_VERSION_HEADER_PARAMETER = {
 export const EXPIRES_AT_FIELD_DESCRIPTION =
 	"ISO 8601 instant after which this document expires (P4.4.1 TTL). Must be in the future; an invalid or past value is rejected with 400 VALIDATION_ERROR."
 
+/** #101: opt-in search visibility barrier request field. */
+export const searchBarrierRequestSchema = {
+	type: "object",
+	additionalProperties: false,
+	description:
+		'Opt-in search visibility barrier. The write returns once every search index it feeds returns this exact written version, or returns a committed searchBarrier outcome that says it is not yet searchable. Without this field the write keeps eventual visibility and gains no wait. A target index that is missing, not queryable or does not map the barrier token rejects the request with 400 BARRIER_UNSUPPORTED before anything is written. An uncertain commit rejects with error.commitState = "unknown".',
+	properties: {
+		timeoutMs: {
+			type: "number",
+			description:
+				"Lower the 10000 ms default wait; clamped to between 1000 and 10000 ms.",
+		},
+	},
+}
+
+/** #101: the barrier outcome returned with a committed barrier write. */
+export const searchBarrierResultSchema = {
+	type: "object",
+	required: ["committed", "status", "targets"],
+	properties: {
+		committed: { type: "boolean", enum: [true] },
+		status: {
+			type: "string",
+			enum: ["searchable", "not-yet-searchable", "cancelled"],
+		},
+		reason: {
+			type: "string",
+			enum: [
+				"timeout",
+				"projection-failed",
+				"probe-failed",
+				"cancelled",
+				"quarantined",
+			],
+		},
+		targets: {
+			type: "array",
+			items: {
+				type: "object",
+				required: ["index", "status", "attempts"],
+				properties: {
+					index: { type: "string" },
+					status: {
+						type: "string",
+						enum: ["confirmed", "pending", "failed"],
+					},
+					attempts: { type: "integer", minimum: 0, maximum: 10 },
+				},
+			},
+		},
+	},
+}
+
 export const lifecycleSourceAgentSchema = {
 	type: "object",
 	required: ["id", "name"],

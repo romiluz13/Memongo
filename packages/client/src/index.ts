@@ -68,6 +68,8 @@ export type {
 	MemongoRecallTrace,
 	MemongoScanNoveltyInput,
 	MemongoScope,
+	MemongoSearchBarrierRequest,
+	MemongoSearchBarrierResult,
 	MemongoDegradation,
 	MemongoSearchInput,
 	MemongoSearchKBResponse,

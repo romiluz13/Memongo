@@ -9,6 +9,7 @@ import type {
 import type {
 	MemoryContextBundle,
 	MemoryProviderStatus,
+	SearchBarrierRequest,
 	MemorySearchDegradation,
 	MemorySearchResult,
 	MemorySearchTimeRange,
@@ -250,6 +251,8 @@ export async function memongoBridgeAdd(params: {
 	scopeRef?: string
 	idempotencyKey?: string
 	expiresAt?: string
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	return memongoBridgeWriteConversationEvent({
 		agentId: params.agentId,
@@ -261,6 +264,7 @@ export async function memongoBridgeAdd(params: {
 		scopeRef: params.scopeRef,
 		idempotencyKey: params.idempotencyKey,
 		expiresAt: params.expiresAt,
+		...(params.searchBarrier ? { searchBarrier: params.searchBarrier } : {}),
 	})
 }
 
@@ -277,13 +281,15 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	scopeRef?: string
 	idempotencyKey?: string
 	expiresAt?: string
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const timestamp = params.timestamp ? new Date(params.timestamp) : undefined
 	const validAt = params.validAt ? new Date(params.validAt) : undefined
 	const invalidAt = params.invalidAt ? new Date(params.invalidAt) : undefined
 	const expiresAt = params.expiresAt ? new Date(params.expiresAt) : undefined
-	return m.writeConversationEvent({
+	const event = {
 		role: params.role,
 		body: params.body,
 		sessionId: params.sessionId,
@@ -295,7 +301,12 @@ export async function memongoBridgeWriteConversationEvent(params: {
 		scopeRef: params.scopeRef,
 		idempotencyKey: params.idempotencyKey,
 		expiresAt,
-	})
+	}
+	return params.searchBarrier
+		? m.writeConversationEvent(event, undefined, {
+				searchBarrier: params.searchBarrier,
+			})
+		: m.writeConversationEvent(event)
 }
 
 /**
@@ -359,10 +370,12 @@ export async function memongoBridgeWriteStructuredMemory(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	entry: StructuredMemoryEntry
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const id = resolveAgentId(params.agentId)
-	return m.writeStructuredMemory({
+	const entry: StructuredMemoryEntry = {
 		...params.entry,
 		// Issue #42: the manager/collection prefix is selected from the
 		// authorized identity, so the stored agentId MUST be that identity.
@@ -374,7 +387,10 @@ export async function memongoBridgeWriteStructuredMemory(params: {
 		// keep the entry's own value.
 		...(params.scope !== undefined ? { scope: params.scope } : {}),
 		...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
-	})
+	}
+	return params.searchBarrier
+		? m.writeStructuredMemory(entry, { searchBarrier: params.searchBarrier })
+		: m.writeStructuredMemory(entry)
 }
 
 export async function memongoBridgeWriteProcedure(params: {
@@ -382,10 +398,12 @@ export async function memongoBridgeWriteProcedure(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	entry: ProcedureEntry
+	/** #101: opt-in search visibility barrier. */
+	searchBarrier?: SearchBarrierRequest
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const id = resolveAgentId(params.agentId)
-	return m.writeProcedure({
+	const entry: ProcedureEntry = {
 		...params.entry,
 		// Issue #42: force the authorized identity; never trust entry.agentId.
 		agentId: id,
@@ -393,7 +411,10 @@ export async function memongoBridgeWriteProcedure(params: {
 		// entry smuggle (see memongoBridgeWriteStructuredMemory).
 		...(params.scope !== undefined ? { scope: params.scope } : {}),
 		...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
-	})
+	}
+	return params.searchBarrier
+		? m.writeProcedure(entry, { searchBarrier: params.searchBarrier })
+		: m.writeProcedure(entry)
 }
 
 export async function memongoBridgeProfile(params: {

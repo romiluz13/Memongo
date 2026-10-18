@@ -159,6 +159,11 @@ export type CanonicalEvent = {
 	 * Absent on pre-B4 rows; replay falls back to the legacy field compare.
 	 */
 	idempotencyFingerprint?: string
+	/**
+	 * #101: opaque witness of this exact written version, stamped only by an
+	 * opt-in search barrier write (see mongodb-search-barrier.ts).
+	 */
+	searchWriteToken?: string
 }
 
 /**
@@ -472,6 +477,9 @@ export function buildCanonicalEventDocument(
 			? { extractionJobPendingAt: event.extractionJobPendingAt }
 			: {}),
 		...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
+		...(event.searchWriteToken
+			? { searchWriteToken: event.searchWriteToken }
+			: {}),
 	}
 }
 
@@ -1536,6 +1544,8 @@ export async function projectEventChunk(params: {
 	event: CanonicalEvent
 	recordRun?: boolean
 	session?: ClientSession
+	/** #101: barrier witness, set (not set-on-insert) so re-projection re-stamps. */
+	searchWriteToken?: string
 }): Promise<{ chunkCreated: boolean }> {
 	const { db, prefix, event } = params
 	if (params.session && params.recordRun !== false) {
@@ -1586,6 +1596,9 @@ export async function projectEventChunk(params: {
 					...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
 					validAt: event.validAt ?? event.timestamp,
 					invalidAt: event.invalidAt ?? null,
+					...(params.searchWriteToken
+						? { searchWriteToken: params.searchWriteToken }
+						: {}),
 				},
 			},
 			params.session

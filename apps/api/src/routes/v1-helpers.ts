@@ -3,6 +3,7 @@ import type {
 	MemoryStableHandle,
 	StructuredMemoryEntry,
 } from "@memongo/memory-bridge"
+import { apiErrorJson } from "../lib/errors.js"
 import {
 	InvalidJsonError,
 	UnsupportedMediaTypeError,
@@ -409,6 +410,89 @@ export type ProcedureLifecyclePatchBody = {
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/** #101: the only write routes that accept an opt-in search barrier. */
+export const SEARCH_BARRIER_ROUTE_PATHS = new Set([
+	"/v1/add",
+	"/v1/write-event",
+	"/v1/write-structured",
+	"/v1/write-procedure",
+])
+
+const SEARCH_BARRIER_UNSUPPORTED_REASONS = new Set([
+	"write-family-unsupported",
+	"target-missing",
+	"target-not-queryable",
+	"target-not-filter-capable",
+])
+
+export type ApiSearchBarrierRequest = {
+	timeoutMs?: number
+	signal: AbortSignal
+}
+
+/**
+ * Validates the `searchBarrier` request field. The engine clamps the
+ * timeout; the request's abort signal lets a client disconnect after commit
+ * end the wait as a committed `cancelled` outcome.
+ */
+export function readSearchBarrier(
+	c: Context,
+	body: Record<string, unknown>,
+):
+	| { ok: true; value?: ApiSearchBarrierRequest }
+	| { ok: false; message: string } {
+	if (!Object.hasOwn(body, "searchBarrier")) return { ok: true }
+	const raw = body.searchBarrier
+	if (!isRecord(raw)) {
+		return { ok: false, message: "searchBarrier must be an object" }
+	}
+	if (Object.keys(raw).some((key) => key !== "timeoutMs")) {
+		return { ok: false, message: "searchBarrier accepts only timeoutMs" }
+	}
+	if (
+		raw.timeoutMs !== undefined &&
+		(typeof raw.timeoutMs !== "number" || !Number.isFinite(raw.timeoutMs))
+	) {
+		return {
+			ok: false,
+			message: "searchBarrier.timeoutMs must be a finite number",
+		}
+	}
+	return {
+		ok: true,
+		value: {
+			...(raw.timeoutMs !== undefined ? { timeoutMs: raw.timeoutMs } : {}),
+			signal: c.req.raw.signal,
+		},
+	}
+}
+
+export function readSearchBarrierUnsupportedReason(
+	error: unknown,
+): string | undefined {
+	if (
+		!(error instanceof Error) ||
+		error.name !== "SearchBarrierUnsupportedError" ||
+		(error as { code?: unknown }).code !== "BARRIER_UNSUPPORTED"
+	) {
+		return undefined
+	}
+	const reason = (error as { reason?: unknown }).reason
+	return typeof reason === "string" &&
+		SEARCH_BARRIER_UNSUPPORTED_REASONS.has(reason)
+		? reason
+		: undefined
+}
+
+/** HTTP 400 for a barrier rejected before the write; nothing was written. */
+export function searchBarrierUnsupported(c: Context, reason: string) {
+	const body = apiErrorJson(
+		"BARRIER_UNSUPPORTED",
+		`search barrier unsupported: ${reason}`,
+	)
+	return c.json({ error: { ...body.error, reason } }, 400)
 }
 
 export function readStringArray(raw: unknown): string[] | null | undefined {

@@ -35,6 +35,10 @@ import { searchKB } from "./mongodb-kb-search.js"
 import type { V2Status } from "./mongodb-manager-admin.js"
 import type { ManagerReadResult } from "./mongodb-manager-read.js"
 import type {
+	SearchBarrierRequest,
+	SearchBarrierResult,
+} from "./mongodb-search-barrier.js"
+import type {
 	WriteConversationEventInput,
 	WriteConversationEventReceipt,
 } from "./mongodb-manager-write.js"
@@ -388,7 +392,12 @@ export interface MongoDBManagerHost {
 	writeConversationEvent(
 		event: WriteConversationEventInput,
 		operationRunContext?: OperationRunContext,
-	): Promise<{ eventId: string; chunkCreated: boolean }>
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		eventId: string
+		chunkCreated: boolean
+		searchBarrier?: SearchBarrierResult
+	}>
 	writeConversationEventsBatch(
 		events: WriteConversationEventInput[],
 		operationRunContext?: OperationRunContext,
@@ -445,17 +454,26 @@ export interface MongoDBManagerHost {
 		expandEvents: boolean
 		session?: ClientSession
 	}): Promise<ManagerReadResult>
-	writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
+	writeStructuredMemory(
+		entry: StructuredMemoryEntry,
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
 		upserted: boolean
 		id: string
 		/** C-008: true when the entry was quarantined instead of written. */
 		quarantined?: boolean
 		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
 		matchedPatterns?: string[]
+		searchBarrier?: SearchBarrierResult
 	}>
 	writeProcedure(
 		entry: ProcedureEntry,
-	): Promise<{ upserted: boolean; id: string }>
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		upserted: boolean
+		id: string
+		searchBarrier?: SearchBarrierResult
+	}>
 	getLifecycleItem(
 		handle: MemoryStableHandle,
 	): Promise<MemoryLifecycleItem | null>

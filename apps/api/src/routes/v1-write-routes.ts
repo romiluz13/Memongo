@@ -33,6 +33,9 @@ import {
 	isIdempotencyConflictError,
 	isRecord,
 	readDateValue,
+	readSearchBarrier,
+	readSearchBarrierUnsupportedReason,
+	searchBarrierUnsupported,
 	type V1RouterEnv,
 } from "./v1-helpers.js"
 
@@ -42,6 +45,10 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 		const content = typeof body.content === "string" ? body.content : ""
 		if (!content.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "content is required")
+		}
+		const searchBarrier = readSearchBarrier(c, body)
+		if (!searchBarrier.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", searchBarrier.message)
 		}
 		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
@@ -83,14 +90,20 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 				scopeRef: await readScopeRef(c),
 				idempotencyKey: readIdempotencyKey(c, body),
 				expiresAt: expiresAt?.toISOString(),
+				...(searchBarrier.value ? { searchBarrier: searchBarrier.value } : {}),
 			})
 			return c.json({
 				ok: true,
 				eventId: out.eventId,
 				chunkCreated: out.chunkCreated,
+				...(out.searchBarrier ? { searchBarrier: out.searchBarrier } : {}),
 			})
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
+			const barrierReason = readSearchBarrierUnsupportedReason(err)
+			if (barrierReason) {
+				return searchBarrierUnsupported(c, barrierReason)
+			}
 			if (isErasureGateConflictError(err)) {
 				return jsonError(
 					c,
@@ -133,6 +146,10 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 		}
 		if (!bodyText.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "body is required")
+		}
+		const searchBarrier = readSearchBarrier(c, body)
+		if (!searchBarrier.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", searchBarrier.message)
 		}
 		const timestamp = readDateValue(body.timestamp)
 		const validAt = readDateValue(body.validAt)
@@ -198,14 +215,20 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 				scopeRef: await readScopeRef(c),
 				idempotencyKey: readIdempotencyKey(c, body),
 				expiresAt: expiresAt?.toISOString(),
+				...(searchBarrier.value ? { searchBarrier: searchBarrier.value } : {}),
 			})
 			return c.json({
 				ok: true,
 				eventId: out.eventId,
 				chunkCreated: out.chunkCreated,
+				...(out.searchBarrier ? { searchBarrier: out.searchBarrier } : {}),
 			})
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
+			const barrierReason = readSearchBarrierUnsupportedReason(err)
+			if (barrierReason) {
+				return searchBarrierUnsupported(c, barrierReason)
+			}
 			if (isErasureGateConflictError(err)) {
 				return jsonError(
 					c,
@@ -471,6 +494,10 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 		if (!entry.ok) {
 			return jsonError(c, 400, "VALIDATION_ERROR", entry.message)
 		}
+		const searchBarrier = readSearchBarrier(c, body)
+		if (!searchBarrier.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", searchBarrier.message)
+		}
 		const validFrom = readDateValue(entry.value.validFrom)
 		const validTo = readDateValue(entry.value.validTo)
 		const lastConfirmedAt = readDateValue(entry.value.lastConfirmedAt)
@@ -520,6 +547,7 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 					...(lastConfirmedAt ? { lastConfirmedAt } : {}),
 					...(entryExpiresAt ? { expiresAt: entryExpiresAt } : {}),
 				} as StructuredMemoryEntry,
+				...(searchBarrier.value ? { searchBarrier: searchBarrier.value } : {}),
 			})
 			// C-008: an injection-likely verdict is not an error — the write
 			// was accepted but routed to memory_quarantine pending human
@@ -530,6 +558,10 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			return c.json(out)
 		} catch (err) {
+			const barrierReason = readSearchBarrierUnsupportedReason(err)
+			if (barrierReason) {
+				return searchBarrierUnsupported(c, barrierReason)
+			}
 			if (isStructuredMemoryRevisionConflictError(err)) {
 				return jsonError(
 					c,
@@ -550,15 +582,24 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 		if (!entry.ok) {
 			return jsonError(c, 400, "VALIDATION_ERROR", entry.message)
 		}
+		const searchBarrier = readSearchBarrier(c, body)
+		if (!searchBarrier.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", searchBarrier.message)
+		}
 		try {
 			const out = await memongoBridgeWriteProcedure({
 				agentId: await readAgentId(c),
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 				entry: entry.value as ProcedureEntry,
+				...(searchBarrier.value ? { searchBarrier: searchBarrier.value } : {}),
 			})
 			return c.json(out)
 		} catch (err) {
+			const barrierReason = readSearchBarrierUnsupportedReason(err)
+			if (barrierReason) {
+				return searchBarrierUnsupported(c, barrierReason)
+			}
 			return internalError(c, err, "WRITE_PROCEDURE_FAILED")
 		}
 	})

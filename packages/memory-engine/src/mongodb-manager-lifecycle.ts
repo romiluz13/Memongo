@@ -41,6 +41,14 @@ import {
 } from "./mongodb-schema.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
+import {
+	annotateUncertainCommit,
+	assertSearchBarrierTargets,
+	awaitSearchBarrier,
+	mintSearchWriteToken,
+	type SearchBarrierRequest,
+	type SearchBarrierResult,
+} from "./mongodb-search-barrier.js"
 import { getActiveSources } from "./mongodb-search-ranking.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import type {
@@ -80,16 +88,71 @@ const log = createSubsystemLogger("memory:mongodb")
 export class MongoDBManagerLifecycleOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
 
-	async writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
+	async writeStructuredMemory(
+		entry: StructuredMemoryEntry,
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
 		upserted: boolean
 		id: string
 		/** C-008: true when the entry was quarantined instead of written. */
 		quarantined?: boolean
 		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
 		matchedPatterns?: string[]
+		searchBarrier?: SearchBarrierResult
 	}> {
 		if (entry.agentId !== this.host.agentId)
 			throw new ErasureGateConflictError(this.host.agentId)
+		const searchBarrier = options?.searchBarrier
+		if (!searchBarrier) return this.persistStructuredMemory(entry)
+		return this.writeWithSearchBarrier("structured", searchBarrier, (token) =>
+			this.persistStructuredMemory(entry, token),
+		)
+	}
+
+	/**
+	 * #101: the pre-write check, a fresh token on the write, then the bounded
+	 * post-commit wait. An uncertain commit rejects annotated and never waits.
+	 */
+	private async writeWithSearchBarrier<T extends object>(
+		family: "structured" | "procedure",
+		request: SearchBarrierRequest,
+		write: (searchWriteToken: string) => Promise<T>,
+	): Promise<T & { searchBarrier: SearchBarrierResult }> {
+		await assertSearchBarrierTargets({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			family,
+		})
+		const searchWriteToken = mintSearchWriteToken()
+		let written: T
+		try {
+			written = await write(searchWriteToken)
+		} catch (err) {
+			throw annotateUncertainCommit(err)
+		}
+		return {
+			...written,
+			searchBarrier: await awaitSearchBarrier({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				family,
+				token: searchWriteToken,
+				request,
+				quarantined:
+					(written as { quarantined?: unknown }).quarantined === true,
+			}),
+		}
+	}
+
+	private async persistStructuredMemory(
+		entry: StructuredMemoryEntry,
+		searchWriteToken?: string,
+	): Promise<{
+		upserted: boolean
+		id: string
+		quarantined?: boolean
+		matchedPatterns?: string[]
+	}> {
 		const admission = await captureAdmissionToken({
 			db: this.host.db,
 			prefix: this.host.prefix,
@@ -120,14 +183,31 @@ export class MongoDBManagerLifecycleOps {
 			// the "skip" overrule is reserved for the internal
 			// promoteQuarantined flow (human review), which calls the
 			// standalone writer directly.
+			...(searchWriteToken ? { searchWriteToken } : {}),
 		})
 	}
 
 	async writeProcedure(
 		entry: ProcedureEntry,
-	): Promise<{ upserted: boolean; id: string }> {
+		options?: { searchBarrier?: SearchBarrierRequest },
+	): Promise<{
+		upserted: boolean
+		id: string
+		searchBarrier?: SearchBarrierResult
+	}> {
 		if (entry.agentId !== this.host.agentId)
 			throw new ErasureGateConflictError(this.host.agentId)
+		const searchBarrier = options?.searchBarrier
+		if (!searchBarrier) return this.persistProcedure(entry)
+		return this.writeWithSearchBarrier("procedure", searchBarrier, (token) =>
+			this.persistProcedure(entry, token),
+		)
+	}
+
+	private async persistProcedure(
+		entry: ProcedureEntry,
+		searchWriteToken?: string,
+	): Promise<{ upserted: boolean; id: string }> {
 		const admission = await captureAdmissionToken({
 			db: this.host.db,
 			prefix: this.host.prefix,
@@ -150,6 +230,7 @@ export class MongoDBManagerLifecycleOps {
 			embeddingMode: mongoCfg.embeddingMode,
 			client: this.host.client,
 			admission,
+			...(searchWriteToken ? { searchWriteToken } : {}),
 		})
 	}
 
