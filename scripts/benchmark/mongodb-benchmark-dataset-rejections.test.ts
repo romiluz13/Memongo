@@ -10,8 +10,14 @@ import {
 	it,
 } from "vitest"
 import { describeIngestFailures } from "./benchmark-answer-quality.js"
-import { loadBenchmarkDataset } from "./mongodb-benchmark-dataset.js"
-import { ingestBenchmarkDataset } from "./mongodb-benchmark-harness.js"
+import {
+	countBenchmarkRejections,
+	loadBenchmarkDataset,
+} from "./mongodb-benchmark-dataset.js"
+import {
+	importConversationDataset,
+	ingestBenchmarkDataset,
+} from "./mongodb-benchmark-harness.js"
 import {
 	isLegacyBenchmarkFallbackCandidate,
 	type MongoDBManagerBenchmarkOps,
@@ -152,6 +158,82 @@ describe("rejection totals reach receipts and completeness", () => {
 			rejectedConversations: 2,
 			turnsIngested: 1,
 		})
+	})
+
+	// Decision 7 negative controls: a dropped LongMemEval QA item and a
+	// malformed nested turn each reach the receipt as incomplete input.
+	const longMemEval = (overrides: Record<string, unknown>) => ({
+		question_id: "q",
+		question: "what?",
+		answer: "gold",
+		haystack_session_ids: ["s"],
+		haystack_sessions: [
+			[
+				{ role: "user", content: "fact", has_answer: true },
+				{ role: "user", content: "" },
+			],
+		],
+		answer_session_ids: ["s"],
+		...overrides,
+	})
+	const kept = longMemEval({ question_id: "kept", answer_session_ids: [] })
+
+	it.each([
+		[
+			"a dropped QA item",
+			longMemEval({ answer: null }),
+			{ rejectedTurns: 0, rejectedConversations: 1 },
+		],
+		[
+			"a malformed nested turn",
+			longMemEval({
+				haystack_sessions: [
+					[{ role: "user", content: "fact", has_answer: true }, ["bad"]],
+				],
+			}),
+			{ rejectedTurns: 1, rejectedConversations: 0 },
+		],
+	])("maps %s into the ingest and import receipts", async (_label, broken, counts) => {
+		const datasetPath = await file("lme.json", JSON.stringify([kept, broken]))
+		const receipt = await ingestBenchmarkDataset({
+			datasetPath,
+			writeTurn: async () => {},
+		})
+		expect(receipt).toMatchObject({ failedLines: 0, ...counts })
+		expect(describeIngestFailures(receipt).length).toBeGreaterThan(0)
+		const imported = await importConversationDataset({
+			datasetPath,
+			writeTurn: async () => {},
+		})
+		expect(imported).toMatchObject({ ...counts, rejections: [] })
+	})
+
+	it("keeps informational skips out of the completeness counters", async () => {
+		const receipt = await ingestBenchmarkDataset({
+			datasetPath: await file("lme.json", JSON.stringify([kept])),
+			writeTurn: async () => {},
+		})
+		expect(receipt).toMatchObject({
+			rejectedTurns: 0,
+			rejectedConversations: 0,
+		})
+		expect(describeIngestFailures(receipt)).toEqual([])
+	})
+
+	it("maps adapter totals into the existing counters (decision 7)", () => {
+		expect(
+			countBenchmarkRejections(undefined, {
+				entries: [],
+				totals: {
+					rejectedTurns: 2,
+					rejectedSessions: 3,
+					emptiedSessions: 5,
+					rejectedQuestions: 7,
+					rejectedQaItems: 11,
+					informationalSkips: 13,
+				},
+			}),
+		).toEqual({ rejectedTurns: 2, rejectedConversations: 21 })
 	})
 
 	it("names rejected input as an ingest failure", () => {

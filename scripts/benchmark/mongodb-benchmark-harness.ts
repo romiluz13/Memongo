@@ -12,6 +12,7 @@ import type {
 	MemoryConversationImportRejection,
 	MemoryBenchmarkTurn,
 } from "../../packages/memory-engine/src/types.js"
+import type { BenchmarkAdapterDiagnostics } from "./benchmark-adapter-diagnostics.js"
 import {
 	countBenchmarkRejections,
 	loadBenchmarkDataset,
@@ -338,6 +339,7 @@ export async function ingestBenchmarkConversations(params: {
 	conversations: MemoryBenchmarkConversation[]
 	failedLines?: number
 	rejections?: MemoryConversationImportRejection[]
+	adapterDiagnostics?: BenchmarkAdapterDiagnostics
 	scope?: MemoryScope
 	limitConversations?: number
 	limitTurnsPerConversation?: number
@@ -369,7 +371,7 @@ export async function ingestBenchmarkConversations(params: {
 		skippedConversations: result.skippedConversations,
 		failedLines: result.failedLines,
 		failedTurns: result.failedTurns,
-		...countBenchmarkRejections(params.rejections),
+		...countBenchmarkRejections(params.rejections, params.adapterDiagnostics),
 		startedAt: result.startedAt,
 		completedAt: result.completedAt,
 	}
@@ -399,6 +401,7 @@ export async function ingestBenchmarkDataset(params: {
 		conversations: dataset.conversations,
 		failedLines: dataset.failedLines,
 		rejections: dataset.rejections,
+		adapterDiagnostics: dataset.adapterDiagnostics,
 		scope: params.scope,
 		limitConversations: params.limitConversations,
 		limitTurnsPerConversation: params.limitTurnsPerConversation,
@@ -440,5 +443,9 @@ export async function importConversationDataset(params: {
 		writeTurns: params.writeTurns,
 	})
 	const rejections = dataset.rejections ?? []
-	return { ...result, ...countBenchmarkRejections(rejections), rejections }
+	return {
+		...result,
+		...countBenchmarkRejections(rejections, dataset.adapterDiagnostics),
+		rejections,
+	}
 }
