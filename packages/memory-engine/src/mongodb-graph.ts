@@ -906,9 +906,22 @@ export async function getEntityLinks(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Find entities by name (regex search on name/aliases)
+// Find entities by exact name or alias ($search equals)
 // ---------------------------------------------------------------------------
 
+/** The Search index that serves entity exact-name and prefix lookups. */
+const ENTITY_SEARCH_INDEX = "entity_autocomplete"
+
+/**
+ * Exact entity name or alias lookup: `$search` `equals` on the `name` and
+ * `aliases` token fields, which the manifest indexes with the lowercase
+ * normalizer. The match is the full value, case-insensitive; a partial or
+ * mid-word substring does not match.
+ *
+ * The Search stage only selects candidates: owner and scope are checked again
+ * on the hydrated document before the limit. A Search failure is a typed
+ * failure, never a different lookup.
+ */
 export async function findEntitiesByName(params: {
 	db: Db
 	prefix: string
@@ -918,38 +931,50 @@ export async function findEntitiesByName(params: {
 	scopeRef?: string
 	limit?: number
 }): Promise<Entity[]> {
-	const { db, prefix, query, agentId, scope, scopeRef, limit } = params
+	const { db, prefix, agentId, scope, scopeRef, limit } = params
+	const name = params.query.trim()
+	if (!name) {
+		return []
+	}
 	try {
 		const collection = entitiesCollection(db, prefix)
-
-		// Case-insensitive regex search on name and aliases
-		const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-		const regex = new RegExp(escapedQuery, "i")
-
-		const filter: Document = {
-			agentId,
-			$or: [{ name: { $regex: regex } }, { aliases: { $regex: regex } }],
-		}
+		const tenant: Document = { agentId }
 		if (scope) {
-			filter.scope = scope
+			tenant.scope = scope
 		}
 		if (scopeRef) {
-			filter.scopeRef = scopeRef
+			tenant.scopeRef = scopeRef
 		}
-
+		const pipeline: Document[] = [
+			{
+				$search: {
+					index: ENTITY_SEARCH_INDEX,
+					compound: {
+						should: [
+							{ equals: { path: "name", value: name } },
+							{ equals: { path: "aliases", value: name } },
+						],
+						minimumShouldMatch: 1,
+						filter: Object.entries(tenant).map(([path, value]) => ({
+							equals: { path, value },
+						})),
+					},
+				},
+			},
+			// The compound filter runs against the indexed copy, which can lag
+			// the latest write.
+			{ $match: tenant },
+			{ $sort: { updatedAt: -1 } },
+			{ $limit: limit ?? 50 },
+		]
 		const docs = await collection
-			.find(filter)
-			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
-			.sort({ updatedAt: -1 })
-			.limit(limit ?? 50)
+			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 			.toArray()
-
 		return docs as unknown as Entity[]
 	} catch (err) {
-		log.error(
-			`findEntitiesByName failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-		throw err
+		const typed = toTypedSearchError(err, "entity-lookup")
+		log.warn("findEntitiesByName $search failed", searchFailureLogFields(typed))
+		throw typed
 	}
 }
 
@@ -2266,13 +2291,12 @@ export async function extractAndUpsertTypedRelations(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Search entities using Atlas Search autocomplete on name/aliases.
+ * Entity prefix lookup: `$search` `autocomplete` (edgeGram) on name and
+ * aliases. One operation: a Search failure is a typed failure, never a
+ * regex or any other lookup, and no capability flag chooses a tier.
  *
- * P3.8: the request path is capability-gated — callers pass the detected
- * textSearch capability so deployments without mongot go straight to the
- * escaped $regex tier instead of paying a failed $search round trip per
- * lookup. #101 G2/R8: a runtime $search failure is a typed failure, never a
- * regex fallback.
+ * The Search stage only selects candidates: owner and scope are checked again
+ * on the hydrated document before the limit.
  */
 export async function searchEntitiesAutocomplete(params: {
 	db: Db
@@ -2282,22 +2306,11 @@ export async function searchEntitiesAutocomplete(params: {
 	scopeRef: string
 	query: string
 	limit?: number
-	/** Detected textSearch capability; false/omitted uses the regex fallback. */
-	textSearchAvailable?: boolean
 }): Promise<Entity[]> {
 	const { db, prefix, agentId, scope, scopeRef, query, limit } = params
 	const maxResults = limit ?? 10
-
-	if (params.textSearchAvailable !== true) {
-		return findEntitiesByName({
-			db,
-			prefix,
-			query,
-			agentId,
-			scope,
-			scopeRef,
-			limit: maxResults,
-		})
+	if (!query.trim()) {
+		return []
 	}
 
 	try {
@@ -2305,7 +2318,7 @@ export async function searchEntitiesAutocomplete(params: {
 		const pipeline: Document[] = [
 			{
 				$search: {
-					index: "entity_autocomplete",
+					index: ENTITY_SEARCH_INDEX,
 					compound: {
 						should: [
 							{
@@ -2321,6 +2334,8 @@ export async function searchEntitiesAutocomplete(params: {
 								},
 							},
 						],
+						// A filter alone makes `should` optional; require a match.
+						minimumShouldMatch: 1,
 						filter: [
 							{ equals: { path: "agentId", value: agentId } },
 							{ equals: { path: "scope", value: scope } },
@@ -2329,6 +2344,9 @@ export async function searchEntitiesAutocomplete(params: {
 					},
 				},
 			},
+			// The compound filter runs against the indexed copy, which can lag
+			// the latest write.
+			{ $match: { agentId, scope, scopeRef } },
 			{ $limit: maxResults },
 		]
 

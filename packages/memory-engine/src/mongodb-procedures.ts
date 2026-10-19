@@ -25,7 +25,6 @@ import { bestEffort } from "./best-effort.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
-import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	procedureRevisionsCollection,
@@ -292,10 +291,6 @@ function applyProcedureOutcomeSnapshot(
 		updated.lastFailureAt = now
 	}
 	return updated
-}
-
-function escapeRegex(input: string): string {
-	return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 function hasProcedureChanged(
@@ -1641,11 +1636,25 @@ function toProcedureResult(doc: Document): MemorySearchResult {
 	}
 }
 
+/**
+ * Exact procedure name or trigger-query match: `$search` `equals` on the
+ * `name` and `triggerQueries` token fields, which the manifest indexes with
+ * the lowercase normalizer. The match is the full value, case-insensitive;
+ * a prefix, a superset or a mid-word substring does not match.
+ *
+ * The Search stage only selects candidates. The full filter (owner, scope,
+ * state, validity window) is applied again to the hydrated document before
+ * the limit, so a procedure that changed after it was indexed cannot return.
+ * A Search failure or budget denial is a typed throw, never a different
+ * lookup.
+ */
 export async function findExactProcedureMatches(
 	collection: Collection,
 	query: string,
 	opts: {
 		maxResults: number
+		/** The Search index that serves `equals` on name and triggerQueries. */
+		textIndexName: string
 		filter?: {
 			agentId?: string
 			scope?: MemoryScope
@@ -1687,43 +1696,58 @@ export async function findExactProcedureMatches(
 	if (opts.filter?.intentTags?.length) {
 		filter.intentTags = { $in: opts.filter.intentTags }
 	}
-	const exactAlias = new RegExp(`^${escapeRegex(trimmed)}$`, "i")
-	const exactAliasFilter = {
-		$or: [{ name: exactAlias }, { triggerQueries: exactAlias }],
-	}
-	const docs = await collection
-		.find(
-			mergeQueryClauses(
-				filter,
-				opts.filter?.currentOnly
-					? buildCurrentValidityClause({ asOf })
-					: undefined,
-				exactAliasFilter,
-			),
-			{
-				maxTimeMS: resolveUserSearchMaxTimeMs(),
-				projection: {
-					_id: 0,
-					procedureId: 1,
-					searchText: 1,
-					sessionId: 1,
-					// RET-09: surface the stored confidence for the
-					// provenance classifier.
-					confidence: 1,
-					updatedAt: 1,
-					state: 1,
-					scope: 1,
-					scopeRef: 1,
-					provenance: 1,
-					sourceEventIds: 1,
-					validFrom: 1,
-					validTo: 1,
+	const canonicalFilter = mergeQueryClauses(
+		filter,
+		opts.filter?.currentOnly ? buildCurrentValidityClause({ asOf }) : undefined,
+	)
+	const { compoundFilter } = splitAtlasSearchFilter(canonicalFilter)
+	const pipeline: Document[] = [
+		{
+			$search: {
+				index: opts.textIndexName,
+				compound: {
+					should: [
+						{ equals: { path: "name", value: trimmed } },
+						{ equals: { path: "triggerQueries", value: trimmed } },
+					],
+					minimumShouldMatch: 1,
+					...(compoundFilter ? { filter: compoundFilter } : {}),
 				},
-				sort: { updatedAt: -1 },
-				limit: opts.maxResults,
 			},
-		)
-		.toArray()
+		},
+		// The compound filter runs against the indexed copy, which can lag the
+		// latest write; revalidate the whole filter on the hydrated document.
+		...freshnessRevalidationStages(canonicalFilter),
+		{ $sort: { updatedAt: -1 } },
+		{ $limit: opts.maxResults },
+		{
+			$project: {
+				_id: 0,
+				procedureId: 1,
+				searchText: 1,
+				sessionId: 1,
+				// RET-09: surface the stored confidence for the
+				// provenance classifier.
+				confidence: 1,
+				updatedAt: 1,
+				state: 1,
+				scope: 1,
+				scopeRef: 1,
+				provenance: 1,
+				sourceEventIds: 1,
+				validFrom: 1,
+				validTo: 1,
+			},
+		},
+	]
+	let docs: Document[]
+	try {
+		docs = await runSearchAggregateWithRetry(collection, pipeline, {
+			stage: "exact-match",
+		})
+	} catch (err) {
+		throw toTypedSearchError(err, "exact-match")
+	}
 
 	return docs.map((doc) =>
 		toProcedureResult({

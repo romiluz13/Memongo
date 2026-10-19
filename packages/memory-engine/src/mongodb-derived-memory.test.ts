@@ -1,4 +1,4 @@
-import type { ClientSession, Collection, Db } from "mongodb"
+import type { ClientSession, Collection, Db, Document } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	getBestEffortFailureCounts,
@@ -84,15 +84,18 @@ function createMockCollection(
 ): Collection {
 	return {
 		findOne: vi.fn(async () => null),
-		find: vi.fn(() => ({
-			sort: vi.fn().mockReturnValue({
-				limit: vi.fn().mockReturnValue({
-					toArray: vi.fn(async () => []),
-				}),
-			}),
-		})),
+		find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
 		...overrides,
 	} as unknown as Collection
+}
+
+// The supporting-event lookup is one `$search` aggregate; `events` is what the
+// Search stage proposes.
+function searchProposes(events: Document[]) {
+	return {
+		aggregate: vi.fn(() => ({ toArray: vi.fn(async () => events) })),
+	}
 }
 
 function createMockDb(collections: Record<string, Collection>): Db {
@@ -197,15 +200,7 @@ describe("mongodb-derived-memory", () => {
 				timestamp: new Date("2026-03-20T10:00:00Z"),
 			},
 		]
-		const eventsCol = createMockCollection({
-			find: vi.fn(() => ({
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn(async () => supportingEvents),
-					}),
-				}),
-			})),
-		})
+		const eventsCol = createMockCollection(searchProposes(supportingEvents))
 
 		const promotable = await resolveStructuredCandidatesForPromotion({
 			db: createMockDb({
@@ -236,21 +231,15 @@ describe("mongodb-derived-memory", () => {
 
 	it("builds candidates from prefetched session facts without a per-event extraction call (P3.9)", async () => {
 		const structuredCol = createMockCollection()
-		const eventsCol = createMockCollection({
-			find: vi.fn(() => ({
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn(async () => [
-							{
-								eventId: "evt-sibling",
-								body: "The user grows cherry tomatoes in their garden.",
-								timestamp: new Date("2026-03-20T10:00:00Z"),
-							},
-						]),
-					}),
-				}),
-			})),
-		})
+		const eventsCol = createMockCollection(
+			searchProposes([
+				{
+					eventId: "evt-sibling",
+					body: "The user grows cherry tomatoes in their garden.",
+					timestamp: new Date("2026-03-20T10:00:00Z"),
+				},
+			]),
+		)
 		const chatCompletion = vi.fn(async () => ({
 			content: JSON.stringify({ validFrom: null, validTo: null }),
 		}))
@@ -318,6 +307,7 @@ describe("mongodb-derived-memory", () => {
 		expect(promotable[0]?.type).toBe("fact")
 		expect(promotable[0]?.value).toContain("Blue Finch")
 		expect(structuredCol.findOne).not.toHaveBeenCalled()
+		expect(eventsCol.aggregate).not.toHaveBeenCalled()
 		expect(eventsCol.find).not.toHaveBeenCalled()
 	})
 
@@ -476,21 +466,15 @@ describe("mongodb-derived-memory", () => {
 		const structuredCol = createMockCollection()
 		// Reinforcement path: LLM facts are requires-reinforcement, so supply
 		// one supporting event so the candidate becomes promotable.
-		const eventsCol = createMockCollection({
-			find: vi.fn(() => ({
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn(async () => [
-							{
-								eventId: "evt-support-0",
-								body: "earlier chat about deployment",
-								timestamp: new Date("2026-03-20T10:00:00Z"),
-							},
-						]),
-					}),
-				}),
-			})),
-		})
+		const eventsCol = createMockCollection(
+			searchProposes([
+				{
+					eventId: "evt-support-0",
+					body: "User deploys to AWS us-east-1",
+					timestamp: new Date("2026-03-20T10:00:00Z"),
+				},
+			]),
+		)
 
 		const provider = mockLlmProvider(
 			JSON.stringify({
@@ -937,15 +921,8 @@ describe("TTL expiry guards (B1)", () => {
 	})
 
 	it("excludes expired events when searching for supporting evidence", async () => {
-		const supportingFind = vi.fn(() => ({
-			sort: vi.fn().mockReturnValue({
-				limit: vi.fn().mockReturnValue({
-					toArray: vi.fn(async () => []),
-				}),
-			}),
-		}))
 		const structuredCol = createMockCollection()
-		const eventsCol = createMockCollection({ find: supportingFind })
+		const eventsCol = createMockCollection()
 
 		await resolveStructuredCandidatesForPromotion({
 			db: createMockDb({
@@ -964,8 +941,10 @@ describe("TTL expiry guards (B1)", () => {
 			},
 		})
 
-		expect(supportingFind).toHaveBeenCalled()
-		expect(supportingFind.mock.calls[0]?.[0]).toMatchObject({
+		expect(eventsCol.aggregate).toHaveBeenCalled()
+		const pipeline = (eventsCol.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0]?.[0] as Document[]
+		expect(pipeline[1]?.$match).toMatchObject({
 			$and: expect.arrayContaining([
 				{
 					$or: [

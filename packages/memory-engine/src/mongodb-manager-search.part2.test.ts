@@ -565,9 +565,6 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 		} as never)
 		mocked(proceduresCollection).mockReturnValue({
 			aggregate: proceduresAggregate,
-			find: vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([]),
-			}),
 		} as never)
 
 		const result = await searchV2(
@@ -772,7 +769,7 @@ describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", ()
 		// The exact procedural backstop runs on this query; a healthy empty
 		// keeps the v2 answer `complete`.
 		mocked(proceduresCollection).mockReturnValue({
-			find: vi.fn().mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([]),
 			}),
 		} as never)
@@ -805,7 +802,7 @@ describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", ()
 				.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
 		} as never)
 		mocked(proceduresCollection).mockReturnValue({
-			find: vi.fn().mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
 				toArray: vi.fn().mockRejectedValue(new Error("procedures down")),
 			}),
 		} as never)
@@ -815,7 +812,7 @@ describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", ()
 		})
 		// Later suites in this file rely on a healthy procedures mock.
 		mocked(proceduresCollection).mockReturnValue({
-			find: vi.fn().mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([]),
 			}),
 		} as never)
