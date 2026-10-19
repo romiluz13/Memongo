@@ -21,6 +21,7 @@ import {
 	recordEmbeddingSpend,
 	recordEmbeddingSpendInSession,
 } from "./mongodb-cost-ledger.js"
+import { bestEffort } from "./best-effort.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
@@ -48,7 +49,7 @@ import {
 } from "./mongodb-temporal.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
-	isTransactionUnsupported,
+	typedTransactionError,
 } from "./mongodb-transactions.js"
 import type {
 	MemoryActorRole,
@@ -922,13 +923,7 @@ export async function writeProcedure(params: {
 							}
 						)
 					} catch (err) {
-						if (!isTransactionUnsupported(err)) {
-							throw err
-						}
-						log.info(
-							"transactions not supported for procedure writes, falling back to direct writes",
-						)
-						return await persist()
+						throw typedTransactionError(err)
 					} finally {
 						await session.endSession()
 					}
@@ -988,9 +983,7 @@ export async function writeProcedure(params: {
 		if (session) {
 			await audit
 		} else {
-			audit.catch((err) => {
-				log.warn("procedure audit failed", { error: err })
-			})
+			void bestEffort("procedure-audit", () => audit)
 		}
 	}
 	if (params.session) {
@@ -1193,13 +1186,7 @@ export async function invalidateProcedureByHandle(params: {
 					await persist(session)
 				}, MAJORITY_TRANSACTION_OPTIONS)
 			} catch (err) {
-				if (!isTransactionUnsupported(err)) {
-					throw err
-				}
-				log.info(
-					"transactions not supported for procedure lifecycle, falling back to direct writes",
-				)
-				await persist()
+				throw typedTransactionError(err)
 			} finally {
 				await session.endSession()
 			}
@@ -1242,9 +1229,7 @@ export async function invalidateProcedureByHandle(params: {
 			if (session) {
 				await audit
 			} else {
-				audit.catch((err) => {
-					log.warn("procedure invalidate audit failed", { error: err })
-				})
+				void bestEffort("procedure-invalidate-audit", () => audit)
 			}
 		}
 		if (params.session && params.transactionalSideEffects === "inline") {
@@ -1362,25 +1347,25 @@ export async function recordProcedureOutcome(params: {
 			return false
 		}
 		const updated = applyProcedureOutcomeSnapshot(oldSnapshot, success, now)
-		recordMutation({
-			db,
-			prefix,
-			mutation: {
-				collectionName: "procedures",
-				documentId: procedureHandleFromDoc(updated).id,
-				operation: "update",
-				agentId,
-				oldValue: oldSnapshot,
-				newValue: updated,
-				changedFields: success
-					? ["successCount", "lastSuccessAt"]
-					: ["failCount", "lastFailureAt"],
-				actorRole: actorRole ?? "system",
-				...(mutationMeta ? { meta: mutationMeta } : {}),
-			},
-		}).catch((error) => {
-			log.warn("recordProcedureOutcome audit failed", { error })
-		})
+		void bestEffort("procedure-outcome-audit", () =>
+			recordMutation({
+				db,
+				prefix,
+				mutation: {
+					collectionName: "procedures",
+					documentId: procedureHandleFromDoc(updated).id,
+					operation: "update",
+					agentId,
+					oldValue: oldSnapshot,
+					newValue: updated,
+					changedFields: success
+						? ["successCount", "lastSuccessAt"]
+						: ["failCount", "lastFailureAt"],
+					actorRole: actorRole ?? "system",
+					...(mutationMeta ? { meta: mutationMeta } : {}),
+				},
+			}),
+		)
 		return true
 	} catch (err) {
 		log.error("recordProcedureOutcome failed", { procedureId, error: err })
@@ -1462,9 +1447,7 @@ export async function reportProcedureOutcomeByHandle(params: {
 		if (session) {
 			await audit
 		} else {
-			audit.catch((error) => {
-				log.warn("procedure outcome audit failed", { error })
-			})
+			void bestEffort("procedure-outcome-audit", () => audit)
 		}
 		return procedureLifecycleItemFromDoc(updated)
 	}

@@ -14,6 +14,7 @@ import {
 	RegexEntityExtractor,
 	isAmbiguousPersonName,
 } from "./mongodb-entity-extractor.js"
+import { bestEffort, recordBestEffortFailure } from "./best-effort.js"
 import { recordMutation } from "./mongodb-mutations.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
@@ -40,7 +41,7 @@ import {
 	resolveTemporalAsOf,
 } from "./mongodb-temporal.js"
 import {
-	isTransactionUnsupported,
+	typedTransactionError,
 	MAJORITY_TRANSACTION_OPTIONS,
 } from "./mongodb-transactions.js"
 
@@ -452,7 +453,7 @@ export async function upsertEntity(params: {
 		)
 
 		// Fire-and-forget: record mutation audit trail (non-blocking)
-		Promise.allSettled([
+		void bestEffort("entity-audit", () =>
 			recordMutation({
 				db,
 				prefix,
@@ -466,11 +467,7 @@ export async function upsertEntity(params: {
 					actorRole: "system",
 				},
 			}),
-		]).catch((err) => {
-			log.warn(
-				`entity audit failed: ${err instanceof Error ? err.message : String(err)}`,
-			)
-		})
+		)
 
 		return { upserted }
 	} catch (err) {
@@ -711,11 +708,7 @@ export async function upsertRelation(params: {
 								}
 							)
 						} catch (err) {
-							if (!isTransactionUnsupported(err)) throw err
-							log.info(
-								"transactions not supported for relation writes, falling back to direct writes",
-							)
-							return await persist()
+							throw typedTransactionError(err)
 						} finally {
 							await session.endSession()
 						}
@@ -745,11 +738,7 @@ export async function upsertRelation(params: {
 		if (params.session) {
 			await audit
 		} else {
-			Promise.allSettled([audit]).catch((err) => {
-				log.warn(
-					`relation audit failed: ${err instanceof Error ? err.message : String(err)}`,
-				)
-			})
+			void bestEffort("relation-audit", () => audit)
 		}
 
 		return { upserted }
@@ -1458,10 +1447,11 @@ export async function deleteEntityConservative(params: {
 				}),
 			])
 			auditRecorded = auditResult.status === "fulfilled"
+			if (auditResult.status === "rejected") {
+				recordBestEffortFailure("entity-delete-audit", auditResult.reason)
+			}
 		} catch (err) {
-			log.warn(
-				`deleteEntityConservative audit failed: ${err instanceof Error ? err.message : String(err)}`,
-			)
+			recordBestEffortFailure("entity-delete-audit", err)
 		}
 
 		log.info(
@@ -1733,29 +1723,33 @@ export async function extractAndUpsertEntities(params: {
 	if (extracted.length === 0) {
 		const durationMs = Date.now() - startMs
 		if (params.recordRun !== false) {
-			await Promise.allSettled([
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "entities",
-						status: "ok",
-						itemsProjected: 0,
-						durationMs,
-					},
-				}),
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "relations",
-						status: "ok",
-						itemsProjected: 0,
-						durationMs,
-					},
-				}),
+			await Promise.all([
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "entities",
+							status: "ok",
+							itemsProjected: 0,
+							durationMs,
+						},
+					}),
+				),
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "relations",
+							status: "ok",
+							itemsProjected: 0,
+							durationMs,
+						},
+					}),
+				),
 			])
 		}
 		return {
@@ -2063,29 +2057,33 @@ export async function extractAndUpsertEntities(params: {
 				entitiesExtracted: extracted.length,
 			})
 
-			await Promise.allSettled([
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "entities",
-						status: "ok",
-						itemsProjected: extracted.length,
-						durationMs,
-					},
-				}),
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "relations",
-						status: "ok",
-						itemsProjected: relationsCreated,
-						durationMs,
-					},
-				}),
+			await Promise.all([
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "entities",
+							status: "ok",
+							itemsProjected: extracted.length,
+							durationMs,
+						},
+					}),
+				),
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "relations",
+							status: "ok",
+							itemsProjected: relationsCreated,
+							durationMs,
+						},
+					}),
+				),
 			])
 		}
 		return {
@@ -2114,29 +2112,33 @@ export async function extractAndUpsertEntities(params: {
 				entitiesExtracted: 0,
 			})
 
-			await Promise.allSettled([
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "entities",
-						status: "failed",
-						itemsProjected: 0,
-						durationMs: Date.now() - startMs,
-					},
-				}),
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "relations",
-						status: "failed",
-						itemsProjected: 0,
-						durationMs: Date.now() - startMs,
-					},
-				}),
+			await Promise.all([
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "entities",
+							status: "failed",
+							itemsProjected: 0,
+							durationMs: Date.now() - startMs,
+						},
+					}),
+				),
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "relations",
+							status: "failed",
+							itemsProjected: 0,
+							durationMs: Date.now() - startMs,
+						},
+					}),
+				),
 			])
 		}
 		if (!params.session) {
