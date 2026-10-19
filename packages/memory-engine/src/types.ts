@@ -99,7 +99,7 @@ export type MemorySearchResult = {
 	score: number
 	snippet: string
 	/**
-	 * Full passage text for the reranker and the reader (B5). `snippet`
+	 * Full passage text for the reader (B5). `snippet`
 	 * stays the short display preview; this carries the complete body so
 	 * answers past the preview length remain reachable. Absent on lanes
 	 * that only produce previews (fall back to `snippet`).
@@ -380,6 +380,11 @@ export type SearchConfig = {
 	sourcePreference?: MemorySearchSourcePreference[]
 	timeRange?: MemorySearchTimeRange
 	needExactEvidence?: boolean
+	/**
+	 * A demand for a rerank stage. M2 has none: `true` is rejected with a typed
+	 * `rerank-unsupported` error, and `false` is always honored.
+	 */
+	rerank?: boolean
 	/**
 	 * RET-01: opt-in for the executor's constraint-relaxation fallback.
 	 * Explicit caller constraints (timeRange, needExactEvidence) are hard by

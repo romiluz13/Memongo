@@ -11,7 +11,6 @@ import {
 	resetSearchAdmissionForTests,
 	tryConsumeSearchAdmission,
 } from "./mongodb-search-admission.js"
-import { crossEncoderRerank } from "./mongodb-reranker.js"
 import { SearchBudgetDeniedError } from "./search-outcomes.js"
 import type { MemorySearchResult } from "./types.js"
 import {
@@ -65,10 +64,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	(
 		await import("./test-helpers/manager-test-kit.js")
 	).queryRewriterModuleMock(),
-)
-
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
 )
 
 vi.mock("./mongodb-lane-coverage.js", async () =>
@@ -129,11 +124,6 @@ const { captureAdmissionToken } = await import("./mongodb-write-fence.js")
 describe("searchV2 cost controls (P3.1/P3.2)", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-			results,
-			reranked: false,
-			latencyMs: 0,
-		}))
 	})
 
 	it("fuses conversation and bridge chunk lanes into one embedded search per request (P3.1)", async () => {
@@ -1538,11 +1528,6 @@ describe("resolveObservedSearchMethod", () => {
 describe("searchV2 lane latency instrumentation", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-			results,
-			reranked: false,
-			latencyMs: 0,
-		}))
 	})
 
 	it("records a latency sample for every executed lane, including one that fails", async () => {
@@ -2258,11 +2243,6 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-			results,
-			reranked: false,
-			latencyMs: 0,
-		}))
 	})
 
 	it("arms the fused chunk lane with the explicit-range timestamp guard (RET-02)", async () => {

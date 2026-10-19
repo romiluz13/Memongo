@@ -161,17 +161,14 @@ export type MemoryMongoDBConfig = {
 		method?: "synonym-expansion"
 		maxTokens?: number
 	}
+	/**
+	 * The client-side Voyage reranker was removed in M2, and its keys (`model`,
+	 * `topN`, `minScore`, `voyageApiKey`, `instruction`, `recencyBoost`,
+	 * `accessBoost`) fail boot. Native `$rerank` (Atlas only) arrives in M4.
+	 */
 	reranking?: {
-		enabled?: boolean
-		model?: "rerank-3" | "rerank-3-lite" | "rerank-2.5" | "rerank-2.5-lite"
-		topN?: number
-		minScore?: number
-		voyageApiKey?: string
-		instruction?: string
-		/** Post-cross-encoder recency boost weight (0 disables; default 0.2). */
-		recencyBoost?: number
-		/** Post-cross-encoder access-count boost weight (0 disables; default 0.2). */
-		accessBoost?: number
+		/** Only `false` is accepted; `true` fails boot as `rerank-unsupported`. */
+		enabled?: false
 		/**
 		 * Raw-window lane temporal-proximity weight (P4.4.4): when the query
 		 * implies a temporal window, events nearer the window midpoint score

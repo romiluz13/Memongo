@@ -88,11 +88,6 @@ const HOST = {
 		mongodb: {
 			...SYNTHETIC_BENCHMARK_HOST.config.mongodb,
 			uri: URLS.mongo,
-			reranking: {
-				enabled: true,
-				model: "rerank-model",
-				voyageApiKey: C.voyageKey,
-			},
 		},
 	},
 }
@@ -304,9 +299,7 @@ describe("benchmark artifacts and errors under synthetic credentials", () => {
 				"env.MEMONGO_BENCHMARK_ANSWER_BASE_URL.hmac"
 			],
 		).toMatch(/^[0-9a-f]{64}$/)
-		expect(runContext.configuration.settings.rerankerApiKeyHmac).toMatch(
-			/^[0-9a-f]{64}$/,
-		)
+		expect(runContext.configuration.settings.rerankerApiKeyHmac).toBeNull()
 		const text = [
 			JSON.stringify(runContext.configuration),
 			JSON.stringify(report),

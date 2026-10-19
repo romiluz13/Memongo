@@ -82,13 +82,7 @@ function makeConfig(
 			method: "synonym-expansion" as const,
 			maxTokens: 128,
 		},
-		reranking: {
-			enabled: false,
-			model: "rerank-2.5" as const,
-			topN: 20,
-			minScore: 0.1,
-			voyageApiKey: "",
-		},
+		reranking: { temporalProximityBoost: 0.1 },
 		cache: {
 			enabled: true,
 			conversationTtlSec: 300,

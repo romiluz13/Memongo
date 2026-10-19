@@ -1502,17 +1502,6 @@ export function applyLaneAwareResultControls(params: {
 	classification: MemorySearchClassification
 	planPaths?: RetrievalPath[]
 	topK?: number
-	/**
-	 * RET-08: number of leading results that were scored by the cross-encoder
-	 * (the reranked partition). When set (0 < count < length), the score sort
-	 * is applied within the CE head and the untouched tail separately, so
-	 * unreranked overflow with a high retrieval score cannot displace
-	 * CE-ranked results. Unset → global sort (pre-rerank and non-reranked
-	 * callers). Its presence also marks the post-rerank invocation, where
-	 * per-session diversification is skipped (B10: the cap must never
-	 * override the cross-encoder's ordering).
-	 */
-	rerankPartitionCount?: number
 }): { results: MemorySearchResult[]; summary: LaneControlSummary } {
 	const planPaths = params.planPaths ?? []
 	const topK = params.topK ?? 10
@@ -1618,25 +1607,7 @@ export function applyLaneAwareResultControls(params: {
 			: { ...result, score: Number((result.score * multiplier).toFixed(6)) }
 	})
 
-	// RET-08: sort segment-stable when a rerank partition boundary is
-	// supplied — retrieval scores and cross-encoder scores are not
-	// calibrated against each other, so a global sort would let unreranked
-	// overflow with a high retrieval score displace CE-ranked results. The
-	// head (CE-scored) and tail (untouched partitions) each sort by score
-	// within their segment; caps and session diversification then walk the
-	// composed order.
-	const rerankPartitionCount = params.rerankPartitionCount
-	const byScoreDesc = (a: MemorySearchResult, b: MemorySearchResult) =>
-		b.score - a.score
-	const sorted =
-		rerankPartitionCount !== undefined &&
-		rerankPartitionCount > 0 &&
-		rerankPartitionCount < rescored.length
-			? [
-					...rescored.slice(0, rerankPartitionCount).toSorted(byScoreDesc),
-					...rescored.slice(rerankPartitionCount).toSorted(byScoreDesc),
-				]
-			: rescored.toSorted(byScoreDesc)
+	const sorted = rescored.toSorted((a, b) => b.score - a.score)
 	const caps = defaultCaps({
 		conversationEvidenceQuery,
 		classification: params.classification,
@@ -1669,20 +1640,14 @@ export function applyLaneAwareResultControls(params: {
 	// nearly every question and used to cut the assistant turn of the best
 	// session out of single-session answers. Everything else allows 3 per
 	// session so a single-session answer can carry the user turn, the
-	// assistant turn, and one more piece of the same conversation. And it is
-	// never re-applied after the reranker (rerankPartitionCount set): the
-	// cross-encoder already ranked globally, so a per-session cap there would
-	// override its ordering and push CE-ranked turns to the tail.
+	// assistant turn, and one more piece of the same conversation.
 	const multiSessionBreadthQuery = queryNeedsMultiSessionBreadth(params.query)
 	const composed = [...top, ...rest, ...overflow]
-	const diversified =
-		rerankPartitionCount !== undefined
-			? { results: composed, capped: 0 }
-			: diversifyTopSessions({
-					results: composed,
-					topK,
-					maxPerSession: multiSessionBreadthQuery ? 1 : 3,
-				})
+	const diversified = diversifyTopSessions({
+		results: composed,
+		topK,
+		maxPerSession: multiSessionBreadthQuery ? 1 : 3,
+	})
 	summary.sessionCapped = diversified.capped
 	summary.applied =
 		summary.boosted > 0 ||

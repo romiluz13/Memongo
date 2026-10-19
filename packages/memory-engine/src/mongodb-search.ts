@@ -306,7 +306,7 @@ function toSearchResult(
 		score,
 		snippet: typeof doc.text === "string" ? doc.text.slice(0, 700) : "",
 		// B5: the full chunk text rides alongside the 700-char display
-		// preview so the reranker and the reader see whole turns.
+		// preview so the reader sees whole turns.
 		text:
 			typeof doc.text === "string"
 				? doc.text.slice(0, MAX_RESULT_TEXT_CHARS)
@@ -672,7 +672,7 @@ export const MONGODB_MAX_NUM_CANDIDATES = 10_000
  * B5: bound for the full-text field carried on `MemorySearchResult`.
  * Chunks are whole turns and LongMemEval assistant turns run to thousands
  * of characters (median 429, p99 3,495, max observed 76,560), so a 700-char
- * snippet preview hides answers from both the reranker and the reader. This
+ * snippet preview hides answers from the reader. This
  * cap covers every realistic turn while keeping pathological documents from
  * blowing the answer prompt.
  */

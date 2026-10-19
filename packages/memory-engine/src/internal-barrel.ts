@@ -330,11 +330,6 @@ export {
 	type ProfileEpisode,
 	type ActivityPatterns,
 } from "./mongodb-profile.js"
-export {
-	crossEncoderRerank,
-	type RerankConfig,
-	type RerankResult,
-} from "./mongodb-reranker.js"
 export type { RelevanceSourceScope } from "./mongodb-relevance.js"
 export type {
 	RelevanceArtifact,

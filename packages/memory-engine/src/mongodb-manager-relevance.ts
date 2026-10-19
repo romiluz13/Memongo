@@ -139,7 +139,7 @@ export class MongoDBManagerRelevanceOps {
 				searchOptions: {
 					// Same default chain as search(), so the diagnostic runs
 					// the pipeline at the thresholds the served path uses.
-					minScore: params.minScore ?? mongoCfg.reranking?.minScore ?? 0.01,
+					minScore: params.minScore ?? 0.01,
 					sessionKey: params.sessionKey,
 					numCandidates: mongoCfg.numCandidates,
 					capabilities: this.host.capabilities,

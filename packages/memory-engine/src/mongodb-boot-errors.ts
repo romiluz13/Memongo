@@ -19,6 +19,7 @@ export type MemongoBootFailureCode =
 	| "collection-absent"
 	| "config-invalid"
 	| "config-removed"
+	| "rerank-unsupported"
 
 export type MemongoBootFailureDetail = {
 	code: MemongoBootFailureCode
@@ -105,7 +106,10 @@ export function isPrivilegeDenial(err: unknown): boolean {
 export function bootConfigError(
 	setting: string,
 	message: string,
-	code: "config-invalid" | "config-removed" = "config-invalid",
+	code:
+		| "config-invalid"
+		| "config-removed"
+		| "rerank-unsupported" = "config-invalid",
 ): MemongoBootError {
 	return new MemongoBootError(
 		{ code, setting, requirement: `valid ${setting}` },

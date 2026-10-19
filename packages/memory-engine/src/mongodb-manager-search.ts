@@ -59,6 +59,7 @@ import type {
 import {
 	isSearchFailureOutcome,
 	SearchBudgetDeniedError,
+	SearchLaneError,
 	type SearchOutcomeSummary,
 	searchFailureLogFields,
 	searchFailureRow,
@@ -754,7 +755,7 @@ export class MongoDBManagerSearchOps {
 
 		const mongoCfg = this.host.config.mongodb!
 		const maxResults = clampSearchMaxResults(opts?.maxResults ?? 10)
-		const minScore = opts?.minScore ?? mongoCfg.reranking?.minScore ?? 0.01
+		const minScore = opts?.minScore ?? 0.01
 		const activeSources = getActiveSources(
 			mongoCfg.sources,
 			mongoCfg.kb.enabled && opts?.kbRestricted !== true,
@@ -1183,10 +1184,7 @@ export class MongoDBManagerSearchOps {
 				"phase:temporal-candidate-merge",
 				"phase:turn-precision",
 				"phase:precision-merge",
-				"phase:lane-controls-pre-rerank",
-				"phase:rerank-input",
-				"phase:rerank",
-				"phase:lane-controls-post-rerank",
+				"phase:lane-controls",
 				"phase:final-normalize",
 				"phase:projection",
 			].reduce((total, phase) => total + (laneLatency[phase] ?? 0), 0)
@@ -1205,6 +1203,12 @@ export class MongoDBManagerSearchOps {
 		request: MemorySearchRequest,
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResponse> {
+		if (request.searchConfig?.rerank === true) {
+			throw new SearchLaneError({
+				stage: "request",
+				reason: "rerank-unsupported",
+			})
+		}
 		const normalized = normalizeDetailedSearchRequest(request)
 		// WS-16 (C-030): the clamp happened inside normalize — emit the
 		// telemetry marker here, where the host db/prefix are in reach, so
