@@ -379,7 +379,7 @@ describe("createApp", () => {
 						preview: "Assistant: Phoenix ships on Friday.",
 					},
 					score: 0.91,
-					matchType: "semantic",
+					matchType: "hybrid",
 				},
 			],
 			metadata: {
@@ -391,7 +391,7 @@ describe("createApp", () => {
 					"startTime:2026-04-08T00:00:00.000Z",
 					"endTime:2026-04-08T23:59:59.999Z",
 				],
-				searchMethod: "semantic",
+				searchMethod: "hybrid",
 				durationMs: 12,
 			},
 		})
@@ -425,7 +425,7 @@ describe("createApp", () => {
 						preview: "Assistant: Phoenix ships on Friday.",
 					},
 					score: 0.91,
-					matchType: "semantic",
+					matchType: "hybrid",
 				},
 			],
 			metadata: {
@@ -437,7 +437,7 @@ describe("createApp", () => {
 					"startTime:2026-04-08T00:00:00.000Z",
 					"endTime:2026-04-08T23:59:59.999Z",
 				],
-				searchMethod: "semantic",
+				searchMethod: "hybrid",
 				durationMs: 12,
 			},
 		})

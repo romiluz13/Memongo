@@ -227,7 +227,9 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			if (isRecallConversationValidationError(err)) {
 				return jsonError(c, 400, "VALIDATION_ERROR", message)
 			}
-			return internalError(c, err, "RECALL_CONVERSATION_FAILED")
+			// M2: recall with a query is one typed lane; its failure or budget
+			// denial maps through the shared search status table.
+			return searchErrorResponse(c, err, "RECALL_CONVERSATION_FAILED")
 		}
 	})
 

@@ -643,7 +643,7 @@ export const searchPaths = {
 								query: {
 									type: "string",
 									description:
-										"Semantic recall query. Omit for filter-only conversation recall.",
+										"Recall query, run as one hybrid ($rankFusion) lane. Omit for a filter-only chronological listing.",
 								},
 								sessionId: {
 									type: "string",
@@ -730,7 +730,7 @@ export const searchPaths = {
 												score: { type: "number" },
 												matchType: {
 													type: "string",
-													enum: ["filter", "semantic", "hybrid"],
+													enum: ["filter", "hybrid"],
 												},
 											},
 										},
@@ -752,18 +752,9 @@ export const searchPaths = {
 											},
 											searchMethod: {
 												type: "string",
-												enum: ["standard", "semantic", "hybrid"],
+												enum: ["standard", "hybrid"],
 											},
 											durationMs: { type: "number" },
-											throttled: {
-												type: "object",
-												required: ["retryAfterMs"],
-												properties: {
-													retryAfterMs: { type: "number" },
-												},
-												description:
-													"WS-11: set when admission control denied the semantic recall pass — the empty results are throttling, not a retrieval verdict.",
-											},
 										},
 									},
 								},
@@ -771,6 +762,11 @@ export const searchPaths = {
 						},
 					},
 				},
+				"400": {
+					description:
+						"VALIDATION_ERROR: invalid input, including an invalid timezone (never replaced by UTC).",
+				},
+				...searchFailureResponses,
 			},
 		},
 	},

@@ -194,19 +194,14 @@ describe("conversation recall regression suite", () => {
 		const debugging = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
+			// M2 T6: a query recall is one hybrid Search lane, which this
+			// in-memory corpus cannot serve; the session boundary is checked
+			// on the chronological listing instead.
 			request: {
 				agentId,
-				query: "debugging",
+				sessionId: "C",
 				asOf: new Date("2026-04-12T00:00:00.000Z"),
 				limit: 20,
-			},
-			capabilities: {
-				vectorSearch: false,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 		const sessionOnly = await recallConversation({

@@ -489,7 +489,7 @@ export type MemongoConversationRecallCitation = {
 export type MemongoConversationRecallResult = {
 	citation: MemongoConversationRecallCitation
 	score?: number
-	matchType: "filter" | "semantic" | "hybrid"
+	matchType: "filter" | "hybrid"
 }
 
 export type MemongoConversationRecallResponse = {
@@ -498,10 +498,8 @@ export type MemongoConversationRecallResponse = {
 		totalMatched: number
 		queryUsed?: string
 		filtersApplied: string[]
-		searchMethod: "standard" | "semantic" | "hybrid"
+		searchMethod: "standard" | "hybrid"
 		durationMs: number
-		/** Set when admission control denied the semantic pass — empties are throttling, not a verdict. */
-		throttled?: { retryAfterMs: number }
 	}
 	/** Present in silent mode when the call was swallowed (auth/throttle/unavailable). */
 	degradation?: MemongoDegradation

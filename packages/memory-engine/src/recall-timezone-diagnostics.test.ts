@@ -40,17 +40,12 @@ describe("invalid recall timezone diagnostics", () => {
 	it.each([
 		"Mars/Olympus",
 		`private-timezone-marker-${"x".repeat(100_000)}`,
-	])("omits caller text and retains UTC fallback (case %#)", async (timezone) => {
-		const { response, filter } = await recall(timezone)
-		expect(warn).toHaveBeenCalledExactlyOnceWith(
-			"invalid conversation recall timezone, falling back to UTC",
-		)
-		expect(JSON.stringify(warn.mock.calls)).not.toContain(timezone)
-		expect(filter?.timestamp).toEqual({
-			$gte: new Date("2026-04-08T00:00:00Z"),
-			$lte: new Date("2026-04-08T23:59:59.999Z"),
-		})
-		expect(response.metadata.searchMethod).toBe("standard")
+	])("rejects an invalid timezone with a constant message and no read (case %#)", async (timezone) => {
+		const failure = await recall(timezone).catch((error: unknown) => error)
+		expect(failure).toBeInstanceOf(Error)
+		expect((failure as Error).message).toBe("invalid timezone")
+		expect(warn).not.toHaveBeenCalled()
+		expect(vi.mocked(eventsCollection)().find).not.toHaveBeenCalled()
 	})
 	it.each([
 		undefined,

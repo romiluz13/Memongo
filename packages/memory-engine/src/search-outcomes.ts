@@ -22,6 +22,7 @@ export type SearchLane =
 	| "conversation-evidence"
 	| "temporal-coverage"
 	| "turn-precision"
+	| "recall"
 	| "backstop:procedural-exact"
 	| "backstop:procedural"
 	| "backstop:hybrid"
