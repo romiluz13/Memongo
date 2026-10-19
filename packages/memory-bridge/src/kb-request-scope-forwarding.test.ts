@@ -44,7 +44,7 @@ it.each([
 		maxResults: 7,
 		minScore: 0.2,
 		filter: { category: "runbook" },
-		fusionMethod: "js-merge",
+		fusionMethod: "rankFusion",
 	} as Params)
 	expect(mocks.getManager).toHaveBeenCalledExactlyOnceWith(
 		expect.objectContaining({ agentId: "owner" }),
@@ -58,27 +58,19 @@ it.each([
 			maxResults: 7,
 			minScore: 0.2,
 			filter: { category: "runbook" },
-			fusionMethod: "js-merge",
+			fusionMethod: "rankFusion",
 		}),
 	)
 })
-it("preserves the degradation sink with explicit scope", async () => {
-	const marker = {
-		kind: "throttled",
-		scope: "vector-lane-skipped",
-		retryAfterMs: 1,
-	}
-	mocks.searchKB.mockImplementation(async (_query, opts) => {
-		;(opts.onDegradation as (value: unknown) => void)(marker)
-		return []
-	})
+it("forwards an explicit scope and no degradation sink", async () => {
 	expect(
 		await memongoBridgeSearchKBWithDegradation({
 			query: "architecture",
 			scope: "global",
 		} as Params),
-	).toEqual({ results: [], degradation: marker })
+	).toEqual({ results: [] })
 	expect(mocks.searchKB.mock.calls[0][1].scope).toBe("global")
+	expect(mocks.searchKB.mock.calls[0][1]).not.toHaveProperty("onDegradation")
 })
 it.each([
 	memongoBridgeSearchKB,

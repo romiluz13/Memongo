@@ -38,7 +38,7 @@ import {
 
 type EngineDegradation = {
 	kind: "throttled"
-	scope: "denied" | "legacy-fallback-skipped" | "vector-lane-skipped"
+	scope: "denied"
 	retryAfterMs: number
 }
 
@@ -115,35 +115,33 @@ describe("bridge search degradation passthrough (WS-12, C-019)", () => {
 		expect("degradation" in out).toBe(false)
 	})
 
-	it("merges the vector-lane-skip marker into the KB search envelope", async () => {
-		searchKB.mockImplementation(
-			async (
-				_query: string,
-				opts?: { onDegradation?: (degradation: EngineDegradation) => void },
-			) => {
-				opts?.onDegradation?.({
-					kind: "throttled",
-					scope: "vector-lane-skipped",
-					retryAfterMs: 4000,
-				})
-				return []
-			},
-		)
+	it("passes no degradation sink to the KB engine call: a denied KB search throws", async () => {
+		searchKB.mockImplementation(async () => [])
 
-		const out = await memongoBridgeSearchKBWithDegradation({
+		await memongoBridgeSearchKBWithDegradation({
 			agentId: "agent-A",
 			query: "onboarding guide",
 			scopeRef: "acme/platform",
 		})
 
-		expect(out).toEqual({
-			results: [],
-			degradation: {
-				kind: "throttled",
-				scope: "vector-lane-skipped",
-				retryAfterMs: 4000,
-			},
+		const opts = searchKB.mock.calls[0][1] as Record<string, unknown>
+		expect(opts).not.toHaveProperty("onDegradation")
+		expect(opts.onOutcomes).toEqual(expect.any(Function))
+	})
+
+	it("propagates a KB admission denial instead of returning a marker", async () => {
+		const denied = Object.assign(new Error("budget denied"), {
+			name: "SearchBudgetDeniedError",
+			retryAfterMs: 4000,
 		})
+		searchKB.mockRejectedValue(denied)
+
+		await expect(
+			memongoBridgeSearchKBWithDegradation({
+				agentId: "agent-A",
+				query: "onboarding guide",
+			}),
+		).rejects.toBe(denied)
 	})
 
 	it("keeps the KB search envelope bare on a healthy empty answer", async () => {

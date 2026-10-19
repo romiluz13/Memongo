@@ -3,7 +3,6 @@ export type MemoryBackend = "mongodb"
 export type MemoryMongoDBDeploymentProfile =
 	| "atlas-local-preview"
 	| "atlas-managed"
-	| "community-mongot"
 
 export type MemoryMongoDBEmbeddingMode = "automated"
 
@@ -12,10 +11,7 @@ export type MemoryMongoDBQueryEmbeddingModel =
 	| "voyage-4"
 	| "voyage-4-lite"
 
-export type MemoryMongoDBFusionMethod =
-	| "scoreFusion"
-	| "rankFusion"
-	| "js-merge"
+export type MemoryMongoDBFusionMethod = "scoreFusion" | "rankFusion"
 
 export type MemoryMongoDBRecallProfile = "latency" | "balanced" | "proof"
 
@@ -47,22 +43,17 @@ export type MemoryMongoDBConfig = {
 	quantization?: "none" | "scalar" | "binary"
 	watchDebounceMs?: number
 	/**
-	 * Dead knob under autoEmbed (fix-plan-2026-08-03 P3.2): Atlas/Voyage
-	 * decide the dimensions server-side, so this value only flows into
-	 * validator warnings and the generic index preset. resolveMongoDBConfig
-	 * logs an error when it is set.
+	 * Under autoEmbed, Atlas/Voyage decide the dimensions server-side. The
+	 * value is accepted only when unset or equal to the autoEmbed model's
+	 * dimension; any other value fails boot with `config-invalid`.
 	 */
 	numDimensions?: number
-	/**
-	 * P3.2: opt-in legacySearch re-run after searchV2 returns empty or
-	 * errors. Default OFF — "empty ≠ error": the v2 empty answer stands.
-	 */
-	legacySearchFallback?: boolean
 	/**
 	 * P3.2: per-search cost budget overrides (see
 	 * packages/memory-engine/src/mongodb-search-budget.ts). Caps the
 	 * aggregations and paid server-side query embeddings one search request
-	 * may consume; exhaustion degrades remaining lanes to empty results.
+	 * may consume; exhaustion is a typed `budget-denied` outcome for each
+	 * remaining lane, never an empty result.
 	 */
 	searchBudget?: {
 		maxAggregations?: number
@@ -70,7 +61,7 @@ export type MemoryMongoDBConfig = {
 		/**
 		 * RET-16: optional wall-clock ceiling (ms) for one search request —
 		 * the deadline spans retries and all passes, and consumption past it
-		 * degrades remaining lanes to empty results. Default OFF; see
+		 * is a typed `budget-denied` outcome. Default OFF; see
 		 * packages/memory-engine/src/mongodb-search-budget.ts.
 		 */
 		maxWallMs?: number

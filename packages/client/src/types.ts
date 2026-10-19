@@ -851,7 +851,6 @@ export type MemongoNoveltyResponse = {
 		nearestNeighborDistance: number
 	}>
 	scannedCount: number
-	error?: string
 	agentId: string
 }
 

@@ -135,18 +135,6 @@ describe.each([
 		})
 	})
 
-	it("returns the throttle marker instead of a bare empty answer", async () => {
-		engine.mockImplementation(async (_q: string, opts: Sinks) => {
-			opts.onDegradation?.(THROTTLED)
-			return []
-		})
-
-		await expect(call({ query: "q" })).resolves.toEqual({
-			results: [],
-			degradation: THROTTLED,
-		})
-	})
-
 	it("returns an empty envelope for a healthy zero-hit call", async () => {
 		engine.mockImplementation(async (_q: string, opts: Sinks) => {
 			opts.onOutcomes?.({
@@ -177,5 +165,19 @@ describe.each([
 		engine.mockRejectedValue(typed)
 
 		await expect(call({ query: "q" })).rejects.toBe(typed)
+	})
+})
+
+describe("memongoBridgeSearch throttle marker", () => {
+	it("returns the throttle marker instead of a bare empty answer", async () => {
+		search.mockImplementation(async (_q: string, opts: Sinks) => {
+			opts.onDegradation?.(THROTTLED)
+			return []
+		})
+
+		await expect(memongoBridgeSearch({ query: "q" })).resolves.toEqual({
+			results: [],
+			degradation: THROTTLED,
+		})
 	})
 })

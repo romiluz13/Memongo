@@ -519,30 +519,6 @@ describe("throttling keeps its 200 marker (R3)", () => {
 			marker: (json: Record<string, unknown>) => json.degradation,
 		},
 		{
-			path: "/v1/search-kb",
-			arrange: () =>
-				bridge.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
-					results: [],
-					degradation: {
-						kind: "throttled",
-						scope: "vector-lane-skipped",
-						retryAfterMs: 9,
-					},
-					outcomes: {
-						status: "complete",
-						lanes: [
-							{
-								lane: "kb",
-								stage: "lane",
-								outcome: "ok-empty",
-								reason: "zero-hits",
-							},
-						],
-					},
-				}),
-			marker: (json: Record<string, unknown>) => json.degradation,
-		},
-		{
 			path: "/v1/search-detailed",
 			arrange: () =>
 				bridge.memongoBridgeSearchDetailed.mockResolvedValue({
@@ -563,6 +539,110 @@ describe("throttling keeps its 200 marker (R3)", () => {
 
 		expect(res.status).toBe(200)
 		expect(marker((await res.json()) as Record<string, unknown>)).toBeDefined()
+	})
+})
+
+describe("budget 503 carries Retry-After from the denial (T11)", () => {
+	const budgetError = (retryAfterMs?: number) =>
+		Object.assign(new Error("typed search failure"), {
+			name: "SearchBudgetDeniedError",
+			lane: "kb",
+			stage: "request",
+			reason: "budget-embeds",
+			...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+		})
+
+	it.each([
+		{ ms: 1, header: "1" },
+		{ ms: 1000, header: "1" },
+		{ ms: 1001, header: "2" },
+		{ ms: 2500, header: "3" },
+	])("an admission denial with retryAfterMs $ms sends Retry-After $header", async ({
+		ms,
+		header,
+	}) => {
+		bridge.memongoBridgeSearchKBWithDegradation.mockRejectedValue(
+			budgetError(ms),
+		)
+
+		const res = await post("/v1/search-kb")
+
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBe(header)
+		const json = (await res.json()) as { error: { code: string } }
+		expect(json.error.code).toBe("SEARCH_BUDGET_EXHAUSTED")
+	})
+
+	it("a per-request budget denial has no retry hint and sends no Retry-After", async () => {
+		bridge.memongoBridgeSearchKBWithDegradation.mockRejectedValue(budgetError())
+
+		const res = await post("/v1/search-kb")
+
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBeNull()
+	})
+
+	it.each([
+		{ ms: Number.POSITIVE_INFINITY },
+		{ ms: Number.NaN },
+		{ ms: 0 },
+		{ ms: -5 },
+	])("an unusable retryAfterMs ($ms) sends no Retry-After", async ({ ms }) => {
+		bridge.memongoBridgeSearchKBWithDegradation.mockRejectedValue(
+			budgetError(ms),
+		)
+
+		const res = await post("/v1/search-kb")
+
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBeNull()
+	})
+
+	it("a retryable lane failure never sends Retry-After", async () => {
+		bridge.memongoBridgeSearchKBWithDegradation.mockRejectedValue(
+			Object.assign(new Error("typed search failure"), {
+				name: "SearchLaneError",
+				lane: "kb",
+				stage: "lane",
+				reason: "index-not-ready",
+				retryAfterMs: 4000,
+			}),
+		)
+
+		const res = await post("/v1/search-kb")
+
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBeNull()
+	})
+
+	it("the recall route carries the header too", async () => {
+		bridge.memongoBridgeRecallConversation.mockRejectedValue(
+			Object.assign(budgetError(4200), { lane: "recall" }),
+		)
+
+		const res = await post("/v1/recall-conversation")
+
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBe("5")
+	})
+
+	it("the OpenAPI 503 documents the Retry-After header", async () => {
+		const res = await createApp().request("/openapi.json")
+		const doc = (await res.json()) as {
+			paths: Record<
+				string,
+				{
+					post: {
+						responses: Record<string, { headers?: Record<string, unknown> }>
+					}
+				}
+			>
+		}
+		for (const path of ["/v1/search", "/v1/search-kb", "/v1/search-detailed"]) {
+			expect(doc.paths[path].post.responses["503"].headers).toHaveProperty(
+				"Retry-After",
+			)
+		}
 	})
 })
 
