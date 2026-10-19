@@ -533,8 +533,9 @@ describe("direct chunk readers — unexpired guard (C-005 r1 defect 5)", () => {
 		])
 
 		const ops = buildReadOps(fake)
-		const live = await ops.readConversationChunk("events/evt-r-live")
-		const dead = await ops.readConversationChunk("events/evt-r-dead")
+		const tenant = "scope=session&scopeRef=session%3As-1"
+		const live = await ops.readConversationChunk(`events/evt-r-live?${tenant}`)
+		const dead = await ops.readConversationChunk(`events/evt-r-dead?${tenant}`)
 
 		expect(live.text).toContain("live chunk text")
 		// Expired chunk hidden AND its event (never written) hidden — empty.
@@ -561,12 +562,9 @@ describe("direct chunk readers — unexpired guard (C-005 r1 defect 5)", () => {
 		})
 
 		const ops = buildReadOps(fake)
-		const inRange = await ops.readConversationChunk("sessions/s-1/turn-1", 4, 2)
-		const outOfRange = await ops.readConversationChunk(
-			"sessions/s-1/turn-1",
-			20,
-			5,
-		)
+		const locator = "sessions/s-1/turn-1?scope=session&scopeRef=session%3As-1"
+		const inRange = await ops.readConversationChunk(locator, 4, 2)
+		const outOfRange = await ops.readConversationChunk(locator, 20, 5)
 
 		expect(inRange.text).toContain("range chunk text")
 		expect(outOfRange.text).toBe("")
