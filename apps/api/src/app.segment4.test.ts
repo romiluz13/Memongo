@@ -99,6 +99,7 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
 			results: [],
 		})
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockReset()
 		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
 			results: [],
 		})
@@ -772,24 +773,67 @@ describe("createApp", () => {
 		)
 	})
 
-	it("ignores an invalid fusionMethod on /v1/search-kb (P0.10)", async () => {
+	it("forwards rankFusion on /v1/search-kb", async () => {
 		const res = await createApp().request("/v1/search-kb", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				query: "architecture",
 				agentId: "agent-42",
-				fusionMethod: "made-up",
+				fusionMethod: "rankFusion",
 			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeSearchKBWithDegradation,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({ fusionMethod: "rankFusion" }),
+		)
+	})
+
+	it("leaves the configured fusion in force when /v1/search-kb omits fusionMethod", async () => {
+		const res = await createApp().request("/v1/search-kb", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "architecture", agentId: "agent-42" }),
 		})
 
 		expect(res.status).toBe(200)
 		const call = bridgeMocks.memongoBridgeSearchKBWithDegradation.mock.calls.at(
 			-1,
-		)?.[0] as {
-			fusionMethod?: string
-		}
+		)?.[0] as { fusionMethod?: string }
 		expect(call.fusionMethod).toBeUndefined()
+	})
+
+	it.each([
+		"js-merge",
+		"made-up",
+		"",
+		null,
+		42,
+	])("rejects fusionMethod %j on /v1/search-kb with a typed 400 and never searches", async (fusionMethod) => {
+		const res = await createApp().request("/v1/search-kb", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "architecture",
+				agentId: "agent-42",
+				fusionMethod,
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("VALIDATION_ERROR")
+		expect(body.error.message).toBe(
+			"fusionMethod must be scoreFusion or rankFusion",
+		)
+		expect(
+			bridgeMocks.memongoBridgeSearchKBWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("schedules background extraction for one event", async () => {

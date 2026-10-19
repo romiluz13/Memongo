@@ -114,6 +114,23 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			filter = parsedFilter.value
 		}
+		// M2 decision 9: KB search runs one configured native fusion. An unknown
+		// value, and the removed js-merge, is rejected instead of ignored.
+		let fusionMethod: "scoreFusion" | "rankFusion" | undefined
+		if (body.fusionMethod !== undefined) {
+			if (
+				body.fusionMethod !== "scoreFusion" &&
+				body.fusionMethod !== "rankFusion"
+			) {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					"fusionMethod must be scoreFusion or rankFusion",
+				)
+			}
+			fusionMethod = body.fusionMethod
+		}
 		try {
 			const { results, degradation, outcomes } =
 				await memongoBridgeSearchKBWithDegradation({
@@ -126,20 +143,12 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 					minScore:
 						typeof body.minScore === "number" ? body.minScore : undefined,
 					filter,
-					fusionMethod:
-						body.fusionMethod === "scoreFusion" ||
-						body.fusionMethod === "rankFusion" ||
-						body.fusionMethod === "js-merge"
-							? body.fusionMethod
-							: undefined,
+					fusionMethod,
 				})
 			const mapping = mapSearchOutcomes(outcomes)
 			if (outcomes && mapping.status !== 200) {
 				return searchFailureResponse(c, mapping, outcomes)
 			}
-			// WS-12 (C-019): a dropped vector lane means the text-lane results
-			// stand with degraded ranking — the marker says which, so degraded
-			// ranking never reads as authoritative.
 			return c.json({
 				results,
 				...(degradation ? { degradation } : {}),
