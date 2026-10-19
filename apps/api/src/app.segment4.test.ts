@@ -1066,6 +1066,25 @@ describe("createApp", () => {
 		})
 	})
 
+	it("rejects the removed searchConfig.lexicalPrefilter with a typed 400 and never reaches the bridge", async () => {
+		const res = await createApp().request("/v1/search-detailed", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "what changed",
+				searchConfig: { lexicalPrefilter: "disabled" },
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("VALIDATION_ERROR")
+		expect(body.error.message).toContain("lexicalPrefilter")
+		expect(bridgeMocks.memongoBridgeSearchDetailed).not.toHaveBeenCalled()
+	})
+
 	it("forwards searchDetailed request options and returns bridge metadata", async () => {
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [
@@ -1094,7 +1113,6 @@ describe("createApp", () => {
 					fusionMethod: "rankFusion",
 					hybridMode: "hybrid",
 					allowHybridBackstop: true,
-					lexicalPrefilter: "disabled",
 				},
 				passes: [
 					{

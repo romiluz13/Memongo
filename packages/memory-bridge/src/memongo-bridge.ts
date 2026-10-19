@@ -695,7 +695,6 @@ export async function memongoBridgeSearchDetailed(params: {
 		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
 		hybridMode?: "hybrid" | "vector-only"
 		allowHybridBackstop?: boolean
-		lexicalPrefilter?: "disabled" | "experimental"
 	}
 	kbRestricted?: boolean
 }) {
@@ -775,7 +774,6 @@ export async function memongoBridgeSearchDetailed(params: {
 					fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
 					hybridMode?: "hybrid" | "vector-only"
 					allowHybridBackstop?: boolean
-					lexicalPrefilter?: "disabled" | "experimental"
 			  }
 			| undefined,
 	})

@@ -363,10 +363,6 @@ export const searchPaths = {
 											enum: ["hybrid", "vector-only"],
 										},
 										allowHybridBackstop: { type: "boolean" },
-										lexicalPrefilter: {
-											type: "string",
-											enum: ["disabled", "experimental"],
-										},
 									},
 								},
 								maxResults: {
@@ -499,7 +495,6 @@ export const searchPaths = {
 													fusionMethod: { type: "string" },
 													hybridMode: { type: "string" },
 													allowHybridBackstop: { type: "boolean" },
-													lexicalPrefilter: { type: "string" },
 												},
 											},
 											passes: {

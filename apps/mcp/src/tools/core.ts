@@ -122,10 +122,6 @@ export const coreTools: readonly McpToolDefinition[] = [
 							enum: ["hybrid", "vector-only"],
 						},
 						allowHybridBackstop: { type: "boolean" },
-						lexicalPrefilter: {
-							type: "string",
-							enum: ["disabled", "experimental"],
-						},
 					},
 				},
 			},
