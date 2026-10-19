@@ -19,6 +19,8 @@ import type {
 	MemoryStableHandle,
 	MongoDBMemoryManager,
 	RelevanceExplainResult,
+	SearchBudgetReason,
+	SearchFailureReason,
 	SearchOutcomeSummary,
 	V2Status,
 } from "@memongo/memory-engine"
@@ -54,6 +56,8 @@ import type {
 	QuarantineStatus,
 } from "@memongo/memory-engine/internal"
 import {
+	SearchBudgetDeniedError,
+	SearchLaneError,
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
 } from "@memongo/memory-engine"
@@ -110,27 +114,6 @@ export async function memongoBridgeGetManager(
 	return manager as MongoDBMemoryManager
 }
 
-export async function memongoBridgeSearch(params: {
-	query: string
-	agentId?: string
-	maxResults?: number
-	minScore?: number
-	sessionKey?: string
-	scope?: MemoryScope
-	scopeRef?: string
-	kbRestricted?: boolean
-}) {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.search(params.query, {
-		maxResults: params.maxResults,
-		minScore: params.minScore,
-		sessionKey: params.sessionKey,
-		scope: params.scope,
-		scopeRef: params.scopeRef,
-		kbRestricted: params.kbRestricted,
-	})
-}
-
 /**
  * #101 / decision 16: the per-call search envelope. `outcomes` is the
  * engine's value-free outcome summary for this call (complete, partial or
@@ -141,6 +124,50 @@ export type MemongoBridgeSearchEnvelope = {
 	results: MemorySearchResult[]
 	degradation?: MemorySearchDegradation
 	outcomes?: SearchOutcomeSummary
+}
+
+/**
+ * M2 T10 (X-01, X-02): a call whose outcome summary is `failed` has no
+ * answer, so the library accessors throw the engine's typed lane error
+ * instead of returning an empty envelope. The full summary rides on the
+ * error as `outcomes`. The HTTP routes use the WithDegradation accessors and
+ * map the same summary to a non-2xx themselves.
+ */
+function throwIfSearchFailed(envelope: MemongoBridgeSearchEnvelope): void {
+	const { outcomes } = envelope
+	if (outcomes?.status !== "failed") {
+		return
+	}
+	const failedRow = outcomes.lanes.find(
+		(row) => row.stage !== "explain" && row.outcome === "failed",
+	)
+	if (failedRow) {
+		throw Object.assign(
+			new SearchLaneError({
+				lane: failedRow.lane,
+				stage: failedRow.stage,
+				reason: (failedRow.reason as SearchFailureReason) ?? "internal-error",
+			}),
+			{ outcomes },
+		)
+	}
+	const deniedRow = outcomes.lanes.find(
+		(row) => row.stage !== "explain" && row.outcome === "budget-denied",
+	)
+	if (deniedRow) {
+		throw Object.assign(
+			new SearchBudgetDeniedError({
+				lane: deniedRow.lane,
+				stage: deniedRow.stage,
+				reason: (deniedRow.reason as SearchBudgetReason) ?? "budget-reservation",
+			}),
+			{ outcomes },
+		)
+	}
+	throw Object.assign(
+		new SearchLaneError({ stage: "request", reason: "internal-error" }),
+		{ outcomes },
+	)
 }
 
 function searchEnvelope(
@@ -192,29 +219,13 @@ export async function memongoBridgeSearchWithDegradation(params: {
 	return searchEnvelope(results, degradation, outcomes)
 }
 
-export async function memongoBridgeSearchKB(params: {
-	query: string
-	agentId?: string
-	scope?: MemoryScope
-	sessionKey?: string
-	scopeRef?: string
-	maxResults?: number
-	minScore?: number
-	filter?: { tags?: string[]; category?: string; source?: string }
-	fusionMethod?: MemoryMongoDBFusionMethod
-}) {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.searchKB(params.query, {
-		maxResults: params.maxResults,
-		minScore: params.minScore,
-		// Explicit references win; otherwise searchKB derives an explicit scope.
-		// Omitted scope retains the legacy agent partition.
-		scope: params.scope,
-		sessionKey: params.sessionKey,
-		scopeRef: params.scopeRef,
-		filter: params.filter,
-		fusionMethod: params.fusionMethod,
-	})
+/** Library search: the WithDegradation envelope, thrown when the call failed. */
+export async function memongoBridgeSearch(
+	params: Parameters<typeof memongoBridgeSearchWithDegradation>[0],
+): Promise<MemongoBridgeSearchEnvelope> {
+	const envelope = await memongoBridgeSearchWithDegradation(params)
+	throwIfSearchFailed(envelope)
+	return envelope
 }
 
 /**
@@ -255,6 +266,15 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 		},
 	})
 	return searchEnvelope(results, degradation, outcomes)
+}
+
+/** Library KB search: the WithDegradation envelope, thrown when the call failed. */
+export async function memongoBridgeSearchKB(
+	params: Parameters<typeof memongoBridgeSearchKBWithDegradation>[0],
+): Promise<MemongoBridgeSearchEnvelope> {
+	const envelope = await memongoBridgeSearchKBWithDegradation(params)
+	throwIfSearchFailed(envelope)
+	return envelope
 }
 
 export async function memongoBridgeReadFile(params: {
