@@ -314,7 +314,7 @@ export function kbRefreshFailureResponse(c: Context, err: unknown) {
 		c,
 		500,
 		"KB_REFRESH_FAILED",
-		`KB refresh failed${reason ? ` (${reason})` : ""}: ${fileSync}${imported}the refresh marker was not advanced, so the next sync retries (request id: ${requestId})`,
+		`KB refresh failed${reason ? ` (${reason})` : ""}: ${fileSync}${imported}${reason === "marker-write-failed" ? "the refresh marker write failed and its outcome is not known, so the next sync may not retry until the refresh interval passes" : "the refresh marker was not advanced, so the next sync retries"} (request id: ${requestId})`,
 		commit,
 	)
 }

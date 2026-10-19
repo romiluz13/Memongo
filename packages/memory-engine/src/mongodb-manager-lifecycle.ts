@@ -23,6 +23,7 @@ import type {
 } from "./mongodb-procedures.js"
 import { synthesizeProfile } from "./mongodb-profile.js"
 import type { ProfileSynthesis } from "./mongodb-profile.js"
+import { attachCommitReport } from "./mongodb-commit-report.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import {
 	captureAdmissionToken,
@@ -885,13 +886,29 @@ export class MongoDBManagerLifecycleOps {
 					agentId: this.host.agentId,
 					workspaceDir: this.host.workspaceDir,
 				})
-			await invalidateQueryCache({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-				scope,
-				scopeRef,
-			})
+			try {
+				await invalidateQueryCache({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+					scope,
+					scopeRef,
+				})
+			} catch (err) {
+				// The run finished and committed before the cache write failed.
+				throw attachCommitReport(err, {
+					commitState: "committed",
+					commit: {
+						operation: "consolidate",
+						runId: result.runId,
+						eventsProcessed: result.eventsProcessed,
+						factsPromoted: result.factsPromoted,
+						factsInferred: result.factsInferred ?? 0,
+						factsMerged: result.factsMerged ?? 0,
+						factsPruned: result.factsPruned,
+					},
+				})
+			}
 			if (jobTrackingEnabled) {
 				try {
 					await updateMemoryJob({

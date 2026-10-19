@@ -241,6 +241,22 @@ describe("POST /v1/sync KB refresh failure (R7)", () => {
 		expect(body.error?.message).not.toContain("undefined")
 	})
 
+	it("a failed marker write says its outcome is not known, never that the marker was not advanced", async () => {
+		bridge.memongoBridgeSync.mockRejectedValue(
+			refreshFailure("marker-write-failed"),
+		)
+		const { status, body } = await call("sync")
+		expect(status).toBe(500)
+		expect(body.error?.message).toContain("outcome is not known")
+		expect(body.error?.message).not.toContain("was not advanced")
+	})
+
+	it("other refresh failures say the marker was not advanced", async () => {
+		bridge.memongoBridgeSync.mockRejectedValue(refreshFailure("import-errors"))
+		const { body } = await call("sync")
+		expect(body.error?.message).toContain("was not advanced")
+	})
+
 	it("an unrecognized refresh reason is not echoed", async () => {
 		bridge.memongoBridgeSync.mockRejectedValue(
 			refreshFailure("sk-secret-2 free text"),

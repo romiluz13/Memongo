@@ -682,7 +682,7 @@ Review 1242 found two gaps left by the R7 and R8 fixes: a configured KB source t
 
 ### Not changed
 
-- **Residues.** A consolidation that completes and then fails on the query-cache invalidation in the lifecycle `consolidate` is not annotated, so its error makes no commit claim. A consolidation run by the background job scheduler has no response to carry the report; the job record keeps the failure text and not the commit report. A `marker-write-failed` message still says the marker was not advanced, which an uncertain marker commit does not establish. `committed` can hold with every count zero (the file sync or the run's own row committed). `kbImport` counts are acknowledged work only. An error object that cannot take properties (frozen) cannot carry a report; that is logged. No real MongoDB or Atlas test covers these paths: the tests use the stateful in-memory fake.
+- **Residues.** A consolidation run by the background job scheduler has no response to carry the report; the job record keeps the failure text and not the commit report. (Fixed by the lead at merge: a consolidation that completes and then fails on the query-cache invalidation now carries `commitState: "committed"` and the run's counts, and a `marker-write-failed` message says the marker write's outcome is not known instead of claiming it was not advanced.) `committed` can hold with every count zero (the file sync or the run's own row committed). `kbImport` counts are acknowledged work only. An error object that cannot take properties (frozen) cannot carry a report; that is logged. No real MongoDB or Atlas test covers these paths: the tests use the stateful in-memory fake.
 
 ## T11 follow-up: failure-matrix test gaps (#121)
 
