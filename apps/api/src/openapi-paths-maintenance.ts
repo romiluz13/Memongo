@@ -10,6 +10,7 @@
  * hand-written paths and the live router disagree.
  */
 import { AGENT_ID_FIELD_DESCRIPTION } from "@memongo/lib"
+import { nonSearchFailureResponses } from "./openapi-paths-search.js"
 import { memoryScopeEnum } from "./openapi-schemas.js"
 
 export const maintenancePaths = {
@@ -134,7 +135,7 @@ export const maintenancePaths = {
 			},
 			responses: {
 				"200": { description: "Consolidation result" },
-				"500": { description: "Consolidation failed" },
+				...nonSearchFailureResponses("CONSOLIDATE_FAILED"),
 			},
 		},
 	},

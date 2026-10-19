@@ -145,6 +145,24 @@ export const searchFailureResponses = {
 	},
 }
 
+/**
+ * M2 review R8: the same typed Search failures for a route that is not a
+ * search route but runs engine Search underneath. `routeCode` is the route's
+ * own generic code for every other failure.
+ */
+export function nonSearchFailureResponses(routeCode: string) {
+	return {
+		"500": {
+			description: `SEARCH_LANES_FAILED: the search this operation runs failed with a defect (query-error or internal-error). The body adds \`outcomes\` (status failed, the failing row). Other unexpected failures return ${routeCode}.`,
+		},
+		"503": {
+			description:
+				"SEARCH_LANES_UNAVAILABLE: the search this operation runs could not run (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable). SEARCH_BUDGET_EXHAUSTED: a search budget denial; an admission-bucket denial also sets the Retry-After header. The body adds `outcomes`. SERVICE_UNAVAILABLE: the database is unreachable.",
+			headers: searchFailureResponses["503"].headers,
+		},
+	} as const
+}
+
 export const searchPaths = {
 	"/health": {
 		get: {
