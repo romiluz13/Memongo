@@ -9,6 +9,7 @@ import type {
 	SearchLaneOutcome,
 	SearchOutcomeStatus,
 } from "./search-outcomes.js"
+import type { SectionFailure } from "./section-failures.js"
 import type { StructuredMemoryLifecyclePatch } from "./mongodb-structured-memory.js"
 
 export type MemorySource = "reference" | "conversation" | "structured"
@@ -486,6 +487,7 @@ export type {
 	SearchLaneOutcome,
 	SearchOutcomeStatus,
 } from "./search-outcomes.js"
+export type { SectionFailure } from "./section-failures.js"
 
 export type MemorySearchMetadata = {
 	mode: MemorySearchMode
@@ -595,7 +597,10 @@ export type MemoryDiscoveryProjectionSection = {
 }
 
 export type MemoryDiscoveryProjectionMetadata = {
+	/** True iff `failures` is non-empty; the typed rows are the source of truth. */
 	partial: boolean
+	/** T8: one bounded enum row per section that failed; empty when healthy. */
+	failures: SectionFailure[]
 	evidenceCount: number
 	sourceCounts: Record<string, number>
 	timeRange?: {
@@ -658,7 +663,10 @@ export type MemoryActiveSlateItem = {
 export type MemoryActiveSlateMetadata = {
 	maxItems: number
 	truncated: boolean
+	/** True iff `failures` is non-empty; the typed rows are the source of truth. */
 	partial: boolean
+	/** T8: one bounded enum row per lane that failed; empty when healthy. */
+	failures: SectionFailure[]
 	countsByKind: Record<string, number>
 	sourceCounts: Record<string, number>
 }
@@ -733,10 +741,22 @@ export type MemoryContextBundleSection = {
 export type MemoryContextBundleMetadata = {
 	tokenBudget: number
 	estimatedTokensUsed: number
+	/** True iff `failures` is non-empty; the typed rows are the source of truth. */
 	partial: boolean
+	/**
+	 * T8: one bounded enum row per section that failed; nested rows carry a
+	 * `<section>:<child>` name. Empty when healthy.
+	 */
+	failures: SectionFailure[]
 	truncated: boolean
 	pathsExecuted: string[]
 	trustSummary?: MemorySearchTrustSummary
+	/** X-09: the query-evidence search's lane rows, kept instead of dropped. */
+	laneOutcomes?: SearchLaneOutcome[]
+	/** X-09: the query-evidence search's status, computed from its lane rows. */
+	outcomeStatus?: SearchOutcomeStatus
+	/** X-09: set when admission control denied the query-evidence search. */
+	throttled?: { retryAfterMs: number }
 	sectionsIncluded: MemoryContextBundleSectionKind[]
 }
 

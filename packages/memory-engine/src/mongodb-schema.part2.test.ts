@@ -1093,6 +1093,10 @@ describe("search index readiness helpers", () => {
 				indexNames: ["test_structured_mem_text", "test_structured_mem_vector"],
 			},
 			{
+				collectionName: "test_structured_mem_revisions",
+				indexNames: ["test_structured_mem_revisions_text"],
+			},
+			{
 				collectionName: "test_procedures",
 				indexNames: ["test_procedures_text", "test_procedures_vector"],
 			},
@@ -1443,7 +1447,10 @@ describe("ensureSearchIndexes text-analyzer strategy (C-029)", () => {
 			type: "string",
 			analyzer: "lucene.standard",
 		})
-		expect(structFields.key).toEqual({ type: "token" })
+		expect(structFields.key).toEqual([
+			{ type: "token" },
+			{ type: "string", analyzer: "lucene.standard" },
+		])
 	})
 
 	it("folding switches NL fields to lucene.folding and identifier-heavy fields to dual keyword+folding", async () => {

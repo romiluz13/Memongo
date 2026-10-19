@@ -128,6 +128,7 @@ describe("the manifest carries the mappings the store lanes query", () => {
 			expect(mapped[path], path).toEqual([
 				{ type: "autocomplete" },
 				LOWERCASE_TOKEN,
+				{ type: "string", analyzer: "lucene.standard" },
 			])
 		}
 		for (const path of ["agentId", "scope", "scopeRef"]) {

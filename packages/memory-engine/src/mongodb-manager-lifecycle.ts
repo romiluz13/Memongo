@@ -635,7 +635,7 @@ export class MongoDBManagerLifecycleOps {
 						},
 					},
 				)
-				const expandedResults =
+				const expansion =
 					params.scope === "session"
 						? await expandSearchContext({
 								db: this.host.db,
@@ -646,8 +646,8 @@ export class MongoDBManagerLifecycleOps {
 								results: result.results,
 								maxResults: params.maxResults,
 							})
-						: result.results
-				const trustedResults = annotateResultsWithTrust(expandedResults, {
+						: { results: result.results, failures: [] }
+				const trustedResults = annotateResultsWithTrust(expansion.results, {
 					scope: params.scope,
 					scopeRef: params.scopeRef,
 					sessionKey: params.scope === "session" ? params.sessionId : undefined,
@@ -661,6 +661,18 @@ export class MongoDBManagerLifecycleOps {
 					results: trustedResults,
 					pathsExecuted: result.metadata.pathsExecuted,
 					trustSummary: summarizeTrust(trustedResults),
+					// X-09: the search's lane rows, status and throttle marker
+					// reach the bundle instead of being dropped here.
+					...(result.metadata.laneOutcomes
+						? { laneOutcomes: result.metadata.laneOutcomes }
+						: {}),
+					...(result.metadata.outcomeStatus
+						? { outcomeStatus: result.metadata.outcomeStatus }
+						: {}),
+					...(result.metadata.throttled
+						? { throttled: result.metadata.throttled }
+						: {}),
+					failures: expansion.failures,
 				}
 			},
 		})

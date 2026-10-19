@@ -403,3 +403,43 @@ M2 ticket #115: recall, raw-window and temporal expansion run through Search, an
 - **The expansion selects through `$search`.** The lane used to expand its hit sessions with an uncharged `find` sorted by time. It now uses one `$search` with these clauses in `compound.filter`: the session ids, `role: "user"`, identity, and `timestamp <= questionDate`. The lane terms are an optional `should` clause. After the Search stage, each candidate is re-checked for identity, role, time and lifecycle.
 - **The bound now keeps the most relevant turns.** The per-session pick still sorts its candidates by time and takes the earliest. Under the bound (`max(maxEvents × 4, sessions × 6)`), the candidates are now the most relevant turns rather than the earliest ones.
 - **The expansion is charged and typed.** It counts one aggregation, and a failure throws typed (stage `atlas-search`) instead of the driver error.
+
+## T8: discovery projections and context bundle through Search (#117)
+
+Discovery briefs and the context bundle's episode summary now select content with `$search` `text`, not with a regular expression, and a failed section is a typed row instead of an empty one.
+
+### Content matching
+
+- **Substring matching is removed.** Entity, structured memory, episode, procedure, revision and event lookups used to build a case-insensitive `RegExp` from up to 8 distinct query words and match it as a substring. They now run one `$search` `text` over the analyzed fields, with the tenant (`agentId`, `scope`, `scopeRef`) and the state or date window in `compound.filter`. A query word now matches whole analyzed terms, any word suffices, and case and punctuation do not matter. `redi` no longer finds `Redis`, `80` no longer finds `8080`, and `reds` finds nothing. The 8-word cap is gone; the query is clamped to the existing search query length (2000 characters).
+- **Search hits are candidates, not proof.** Every hit goes through a canonical `$match` (tenant, state, window, expiry, lifecycle) before it can reach a brief, so a record that was deleted, superseded, expired or moved out of the window after it was indexed is dropped. The pool is the first 100 re-checked hits in relevance order, which are then ordered by recency (the previous ordering) and limited to the brief size. Recency now orders only within that pool.
+- **Eventual consistency.** A record written after the last index snapshot is invisible to a brief until it is indexed. Briefs used to read their own writes immediately.
+- **Fields that match.**
+  - Entities match on name and aliases.
+  - Structured memory matches on key, value, context and tags.
+  - Episodes match on title, summary, tags and topics. The context bundle's episode summary matches on title, summary and topics; it no longer matches the short, medium and long term summary fields.
+  - Procedures match on name and `searchText`, which already embeds the steps, intent tags and trigger queries.
+  - Events match on body. Revisions match on key, value, context and tags.
+- **Relation briefs search entities first.** A relation brief matches entities (name, aliases, type) through Search and then reads relations by the matched entity ids. A query that only names a relation type, such as `related_to`, no longer finds relations.
+- **No query keeps the canonical listing.** `what-changed` and `contradiction-report` without a query, and the bundle's episode summary without a query, read the newest records and run no Search. A whitespace-only query counts as no query.
+- **`what-changed` events gain their lifecycle clause.** The events window used to return expired, invalidated and not-yet-valid events. It now applies the same lifecycle clause as the event search lanes, with or without a query.
+- **`key` and `tags` text matching under dual keyword mapping.** Where the structured memory index maps `key` for folding strategies, `key` matches as a whole value.
+
+### Typed section failures
+
+- **A failed section is a row, never `null`.** `metadata.failures` on the active slate, discovery projections and the context bundle lists one row per failed section: `{ section, stage, outcome: "failed" | "budget-denied", reason }`. Rows carry enum values only, with no query, document text or driver message. `metadata.partial` stays and is true exactly when `failures` is not empty. Nested rows are named `parent:child` (`active-slate:procedures`, `discovery-projection:episodes`, `query-evidence:context-expansion`).
+- **Total failure throws.** When every planned section of a brief, slate or bundle fails, the call throws the representative typed error (a defect first, then unavailability, then a budget denial) instead of returning an empty 200. `/v1/hydrate-active-slate`, `/v1/discovery-projection` and `/v1/context-bundle` map it with the search failure table: 500 `SEARCH_LANES_FAILED`, 503 `SEARCH_LANES_UNAVAILABLE` or 503 `SEARCH_BUDGET_EXHAUSTED`, with the bounded `outcomes` row. Any other error keeps the route's internal error code. A healthy sibling still returns a 200 with the failed section as a row.
+- **Context expansion reports failures.** A session whose raw-window read fails no longer vanishes; one deduplicated `context-expansion` row is reported under `query-evidence`. Expansion stays optional enrichment and never throws.
+- **Query evidence keeps its lane outcomes (X-09).** `metadata.laneOutcomes`, `metadata.outcomeStatus` and `metadata.throttled` from the bundle's search now reach the bundle response. A throttled query-evidence search is a `budget-denied` row (stage `request`, reason `budget-reservation`); a failed lane row is a `failed` row.
+- **The projection run record is declared best-effort.** `recordReadProjectionRun`'s silent `.catch(() => {})` is replaced by a counted warning (`discovery-projection-run`). The brief is still returned when the run record cannot be written, and the loss is logged and counted instead of swallowed.
+
+### Index manifest
+
+- New `{prefix}structured_mem_revisions_text` Search index on `structured_mem_revisions` (full profile only), serving revision lookups in `what-changed`.
+- `structured_mem_text` maps `key` and `tags` as analyzed strings as well as tokens, so they can be matched as text without losing their token filters.
+- `entity_autocomplete` maps `name`, `aliases` as `[autocomplete, string]` and `type` as a string. `episode_autocomplete` maps `title`, `summary` as `[autocomplete, string]`, `topics` and `tags` as strings, and `status` as a token.
+- A changed definition is drift, so boot updates the existing index in place. No index or collection is dropped.
+
+### API and SDK
+
+- The three routes above can return the typed non-2xx described above. OpenAPI adds `failures` to the three metadata objects, `laneOutcomes`, `outcomeStatus` and `throttled` to the bundle metadata, and the 500 and 503 responses.
+- `@memongo/client` adds the optional `failures` (and, on the bundle, `laneOutcomes`, `outcomeStatus`, `throttled`) to the slate, projection and bundle response types, and exports `MemongoSectionFailure`.

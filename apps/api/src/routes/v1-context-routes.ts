@@ -7,6 +7,7 @@ import {
 	memongoBridgeReadFile,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
+import { searchErrorResponse } from "../lib/search-outcomes.js"
 import {
 	contextBundleModeSchema,
 	timeRangeSchema,
@@ -57,7 +58,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(slate)
 		} catch (err) {
-			return internalError(c, err, "ACTIVE_SLATE_FAILED")
+			return searchErrorResponse(c, err, "ACTIVE_SLATE_FAILED")
 		}
 	})
 
@@ -96,7 +97,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(projection)
 		} catch (err) {
-			return internalError(c, err, "DISCOVERY_PROJECTION_FAILED")
+			return searchErrorResponse(c, err, "DISCOVERY_PROJECTION_FAILED")
 		}
 	})
 
@@ -173,7 +174,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(bundle)
 		} catch (err) {
-			return internalError(c, err, "CONTEXT_BUNDLE_FAILED")
+			return searchErrorResponse(c, err, "CONTEXT_BUNDLE_FAILED")
 		}
 	})
 

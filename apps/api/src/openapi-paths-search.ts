@@ -46,14 +46,14 @@ const searchDegradationSchema = {
  * #101 / decision 16: the value-free outcome vocabulary of a search call
  * (enum values only; no query, body or provider text).
  */
-const searchOutcomeStatusSchema = {
+export const searchOutcomeStatusSchema = {
 	type: "string",
 	enum: ["complete", "partial", "failed"],
 	description:
 		"complete: no lane failed or was budget-denied. partial: some lanes failed or were denied and the rest answered (200, even with zero results). failed: no required lane answered (served as a non-2xx).",
 }
 
-const searchLaneOutcomeSchema = {
+export const searchLaneOutcomeSchema = {
 	type: "object",
 	required: ["lane", "stage", "outcome"],
 	properties: {

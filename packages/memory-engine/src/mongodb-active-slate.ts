@@ -1,4 +1,3 @@
-import { settledFailureMeta } from "./query-diagnostics.js"
 import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import {
@@ -17,6 +16,7 @@ import {
 	ErasureGateConflictError,
 	type AdmissionToken,
 } from "./mongodb-write-fence.js"
+import { SectionFailureCollector } from "./section-failures.js"
 import type {
 	MemoryActiveSlate,
 	MemoryActiveSlateItem,
@@ -216,21 +216,6 @@ function toAnchorItem(doc: Document): MemoryActiveSlateItem {
 	}
 }
 
-async function settled<T>(
-	label: string,
-	fn: () => Promise<T>,
-): Promise<T | null> {
-	try {
-		return await fn()
-	} catch (error) {
-		log.warn(
-			`hydrateActiveSlate: ${label} query failed`,
-			settledFailureMeta(error),
-		)
-		return null
-	}
-}
-
 export async function hydrateActiveSlate(params: {
 	admission?: AdmissionToken
 	db: Db
@@ -273,10 +258,21 @@ export async function hydrateActiveSlate(params: {
 	// the events-lane guards.
 	const anchorLifecycleFilter = buildEventLifecycleClause({ asOf: now })
 
+	const collector = new SectionFailureCollector({
+		log,
+		operation: "hydrateActiveSlate",
+	})
+	const settled = <T>(
+		label: string,
+		fn: () => Promise<T>,
+		lane: "active-critical" | "procedural" | "structured" | "raw-window",
+	) => collector.settle(label, "lane", fn, { lane })
+
 	try {
-		const [activeCriticalDocs, procedureDocs, durableDocs, anchorDocs] =
-			await Promise.all([
-				settled("active-critical", () =>
+		const [activeCritical, procedures, durable, anchors] = await Promise.all([
+			settled(
+				"active-critical",
+				() =>
 					structuredMemCollection(db, prefix)
 						.find({
 							...scopeFilter,
@@ -313,8 +309,11 @@ export async function hydrateActiveSlate(params: {
 							tags: 1,
 						})
 						.toArray(),
-				),
-				settled("procedures", () =>
+				"active-critical",
+			),
+			settled(
+				"procedures",
+				() =>
 					proceduresCollection(db, prefix)
 						.find({
 							...scopeFilter,
@@ -337,8 +336,11 @@ export async function hydrateActiveSlate(params: {
 							tags: 1,
 						})
 						.toArray(),
-				),
-				settled("durable-structured", () =>
+				"procedural",
+			),
+			settled(
+				"durable-structured",
+				() =>
 					structuredMemCollection(db, prefix)
 						.find({
 							...scopeFilter,
@@ -372,8 +374,11 @@ export async function hydrateActiveSlate(params: {
 							sourceEventIds: 1,
 						})
 						.toArray(),
-				),
-				settled("recent-anchors", () =>
+				"structured",
+			),
+			settled(
+				"recent-anchors",
+				() =>
 					eventsCollection(db, prefix)
 						.find({
 							...scopeFilter,
@@ -390,23 +395,30 @@ export async function hydrateActiveSlate(params: {
 							scopeRef: 1,
 						})
 						.toArray(),
-				),
-			])
+				"raw-window",
+			),
+		])
+
+		collector.throwIfAllFailed()
+		const activeCriticalDocs = activeCritical.value ?? []
+		const procedureDocs = procedures.value ?? []
+		const durableDocs = durable.value ?? []
+		const anchorDocs = anchors.value ?? []
 
 		const items: MemoryActiveSlateItem[] = []
 		const seenPaths = new Set<string>()
 		const candidateArrays = [
-			sortActiveStructuredDocs(activeCriticalDocs ?? []).map((doc) =>
+			sortActiveStructuredDocs(activeCriticalDocs).map((doc) =>
 				toStructuredItem(doc, "active-critical"),
 			),
-			(procedureDocs ?? []).map((doc) => toProcedureItem(doc)),
-			(durableDocs ?? []).map((doc) =>
+			procedureDocs.map((doc) => toProcedureItem(doc)),
+			durableDocs.map((doc) =>
 				toStructuredItem(
 					doc,
 					doc.type === "decision" ? "decision" : "current-state",
 				),
 			),
-			(anchorDocs ?? []).map((doc) => toAnchorItem(doc)),
+			anchorDocs.map((doc) => toAnchorItem(doc)),
 		]
 
 		for (const group of candidateArrays) {
@@ -434,12 +446,6 @@ export async function hydrateActiveSlate(params: {
 				return counts
 			}, new Map<string, number>()),
 		)
-		const partial = [
-			activeCriticalDocs,
-			procedureDocs,
-			durableDocs,
-			anchorDocs,
-		].some((result) => result === null)
 		const candidateCount = candidateArrays.reduce(
 			(total, group) => total + group.length,
 			0,
@@ -452,7 +458,8 @@ export async function hydrateActiveSlate(params: {
 			metadata: {
 				maxItems,
 				truncated: candidateCount > items.length,
-				partial,
+				partial: collector.failures.length > 0,
+				failures: collector.failures,
 				countsByKind,
 				sourceCounts,
 			},

@@ -1004,6 +1004,18 @@ export type MemongoSearchLaneOutcome = {
 /** #101: complete (no failure), partial (some lanes failed) or failed (non-2xx). */
 export type MemongoSearchOutcomeStatus = "complete" | "partial" | "failed"
 
+/**
+ * M2 T8 (#117): one typed row per failed section of an active slate, a
+ * discovery projection or a context bundle. Enum values only. A section that
+ * failed is a row here, never an empty section; nested rows read `parent:child`.
+ */
+export type MemongoSectionFailure = {
+	section: string
+	stage: string
+	outcome: "failed" | "budget-denied"
+	reason: MemongoSearchOutcomeReason
+}
+
 /** #101: a search call's outcome summary. */
 export type MemongoSearchOutcomes = {
 	status: MemongoSearchOutcomeStatus
