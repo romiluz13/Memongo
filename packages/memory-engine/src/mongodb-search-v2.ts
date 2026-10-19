@@ -2179,6 +2179,7 @@ async function searchV2WithBudget(
 					runLane("backstop:procedural-exact", (onTierOutcome) =>
 						findExactProcedureMatches(proceduresCollection(db, prefix), query, {
 							maxResults: context.maxResults ?? 10,
+							textIndexName: `${prefix}procedures_text`,
 							filter: proceduralFilter,
 							onTierOutcome,
 						}),

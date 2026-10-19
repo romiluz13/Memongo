@@ -256,7 +256,13 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 			mappings: {
 				dynamic: false,
 				fields: {
-					name: { type: "string", analyzer: ctx.textAnalyzer },
+					// T7: `name` is also a lowercase token so the exact-match lane
+					// can run `equals`; `triggerQueries` has no other consumer.
+					name: [
+						{ type: "string", analyzer: ctx.textAnalyzer },
+						{ type: "token", normalizer: "lowercase" },
+					],
+					triggerQueries: { type: "token", normalizer: "lowercase" },
 					searchText: { type: "string", analyzer: ctx.textAnalyzer },
 					intentTags: { type: "token" },
 					agentId: { type: "token" },
@@ -432,12 +438,20 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 		name: "entity_autocomplete",
 		type: "search",
 		label: "entity autocomplete",
+		// T7: prefix lookup keeps the edgeGram `autocomplete` mapping; exact
+		// names run `equals` on the lowercase `token` mapping beside it.
 		definition: () => ({
 			mappings: {
 				dynamic: false,
 				fields: {
-					name: { type: "autocomplete" },
-					aliases: { type: "autocomplete" },
+					name: [
+						{ type: "autocomplete" },
+						{ type: "token", normalizer: "lowercase" },
+					],
+					aliases: [
+						{ type: "autocomplete" },
+						{ type: "token", normalizer: "lowercase" },
+					],
 					agentId: { type: "token" },
 					scope: { type: "token" },
 					scopeRef: { type: "token" },
@@ -451,12 +465,14 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 		name: "episode_autocomplete",
 		type: "search",
 		label: "episode autocomplete",
-		definition: () => ({
+		// T7: episode search runs `text`, so title and summary are analyzed
+		// strings. Nothing queries them with `autocomplete` any more.
+		definition: (ctx) => ({
 			mappings: {
 				dynamic: false,
 				fields: {
-					title: { type: "autocomplete" },
-					summary: { type: "autocomplete" },
+					title: { type: "string", analyzer: ctx.textAnalyzer },
+					summary: { type: "string", analyzer: ctx.textAnalyzer },
 					agentId: { type: "token" },
 					scope: { type: "token" },
 					scopeRef: { type: "token" },
