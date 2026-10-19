@@ -125,3 +125,65 @@ export function internalError(c: Context, err: unknown, code: string) {
 	}
 	return respond(500, code, `internal server error (request id: ${requestId})`)
 }
+
+const KB_REFRESH_REASONS: ReadonlySet<string> = new Set([
+	"import-rejected",
+	"import-errors",
+	"marker-write-failed",
+])
+
+function commitCount(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+		? value
+		: undefined
+}
+
+/**
+ * M2 review R7/R8: a sync whose KB auto-refresh did not complete. The engine
+ * throws `KBRefreshError` (matched by name, as the other engine errors are,
+ * because the class does not cross every bridge boundary reliably). The body
+ * is a route-authored message built from the enum reason and the import's
+ * commit counts only: the error's message, cause and sampled import errors
+ * stay in the engine log and never reach the client. Any other error returns
+ * undefined so the caller keeps its generic envelope.
+ */
+export function kbRefreshFailureResponse(c: Context, err: unknown) {
+	if (!(err instanceof Error) || err.name !== "KBRefreshError") {
+		return undefined
+	}
+	const typed = err as Error & {
+		reason?: unknown
+		documentsProcessed?: unknown
+		chunksCreated?: unknown
+		skipped?: unknown
+	}
+	const reason =
+		typeof typed.reason === "string" && KB_REFRESH_REASONS.has(typed.reason)
+			? typed.reason
+			: undefined
+	const documents = commitCount(typed.documentsProcessed)
+	const chunks = commitCount(typed.chunksCreated)
+	const skipped = commitCount(typed.skipped)
+	const requestId = c.get("requestId") ?? "no-request-id"
+	console.error(
+		JSON.stringify({
+			level: "error",
+			msg: "kb refresh failed",
+			requestId,
+			code: "KB_REFRESH_FAILED",
+			method: c.req.method,
+			path: c.req.path,
+			...(reason ? { reason } : {}),
+		}),
+	)
+	const committed =
+		documents !== undefined && chunks !== undefined
+			? `the import committed ${documents} documents and ${chunks} chunks${skipped === undefined ? "" : ` (${skipped} skipped)`}; `
+			: ""
+	return jsonError(
+		c,
+		500,
+		"KB_REFRESH_FAILED",
+		`KB refresh failed${reason ? ` (${reason})` : ""}: ${committed}the refresh marker was not advanced, so the next sync retries (request id: ${requestId})`,
+	)
+}

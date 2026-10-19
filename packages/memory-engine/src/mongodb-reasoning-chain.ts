@@ -17,7 +17,10 @@ import type { Db, Document } from "mongodb"
 import type { ChainTraceCollectionValue, MemoryScope } from "@memongo/lib"
 import { isChainTraceCollectionValue } from "@memongo/lib"
 import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
-import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import {
+	buildEventLifecycleClause,
+	buildUnexpiredClause,
+} from "./mongodb-temporal.js"
 import type {
 	ReasoningChain,
 	ReasoningChainNode,
@@ -95,6 +98,9 @@ export async function traceReasoningChain(params: {
 	const tenant = requireTenantIdentity("traceReasoningChain", params)
 	const { agentId } = tenant
 	const maxDepth = Math.max(0, options?.maxDepth ?? DEFAULT_MAX_DEPTH)
+	// One validity clock for the whole trace: the fact, its premises and every
+	// leaf event are judged at the same instant.
+	const asOf = new Date()
 
 	const emptyResult: ReasoningChain = {
 		factId,
@@ -123,7 +129,13 @@ export async function traceReasoningChain(params: {
 		// P4.4.1 (B1): hide TTL-expired docs from the trace (starting fact and
 		// traversed premises) until the sweep removes them. Semantics-neutral
 		// for collections without expiresAt via the $exists:false branch.
-		{ $match: { [idField]: factId, ...tenant, ...buildUnexpiredClause() } },
+		{
+			$match: {
+				[idField]: factId,
+				...tenant,
+				...buildUnexpiredClause({ asOf }),
+			},
+		},
 		{
 			$graphLookup: {
 				from: fullCollectionName,
@@ -133,7 +145,10 @@ export async function traceReasoningChain(params: {
 				as: "premises",
 				maxDepth,
 				depthField: "hopDistance",
-				restrictSearchWithMatch: { ...tenant, ...buildUnexpiredClause() },
+				restrictSearchWithMatch: {
+					...tenant,
+					...buildUnexpiredClause({ asOf }),
+				},
 			},
 		},
 	]
@@ -168,7 +183,10 @@ export async function traceReasoningChain(params: {
 	)
 	const leafEventIds = [...allEventIds].filter((id) => !premiseIds.has(id))
 
-	// Phase 2: Fetch leaf events via $lookup
+	// Phase 2: Fetch leaf events via $lookup. A leaf is evidence only while its
+	// event is retained, already valid and not retracted at the trace clock
+	// (the store's full event lifecycle, as every other events read applies);
+	// a leaf outside it becomes a gap, never a body.
 	const eventsCol = db.collection(`${prefix}events`)
 	const eventDocs =
 		leafEventIds.length > 0
@@ -176,7 +194,7 @@ export async function traceReasoningChain(params: {
 					.find({
 						eventId: { $in: leafEventIds },
 						...tenant,
-						...buildUnexpiredClause(),
+						...buildEventLifecycleClause({ asOf }),
 					})
 					.sort({ timestamp: 1 })
 					.toArray()

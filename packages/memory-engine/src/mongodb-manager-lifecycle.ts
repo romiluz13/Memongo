@@ -722,6 +722,15 @@ export class MongoDBManagerLifecycleOps {
 			...request,
 			agentId: this.host.agentId,
 		})
+		// M2 review R3: recall reads tenant events, so it takes the same
+		// erasure admission as readFile and KB search. A gate already closed is
+		// the typed ErasureGateConflictError (409 ERASURE_IN_PROGRESS on the
+		// route), never an empty or a partial answer.
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		// M2 decision 8: a querying recall is one hybrid lane on the events
 		// indexes and never runs against one observed unhealthy at admission.
 		// A query-less recall is a plain find and reads no Search index.
@@ -730,7 +739,7 @@ export class MongoDBManagerLifecycleOps {
 		}
 		const nativeBitemporalVectorPrefilter =
 			await this.host.refreshNativeBitemporalVectorPrefilter()
-		return recallConversationCore({
+		const response = await recallConversationCore({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			request: {
@@ -743,6 +752,17 @@ export class MongoDBManagerLifecycleOps {
 				this.host.config?.mongodb?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL,
 			nativeBitemporalVectorPrefilter,
 		})
+		// The admission above only proves erasure had not begun when this read
+		// started. Re-check the gate at the return boundary, so events read
+		// while erasure began are never returned; a denial is the same typed
+		// conflict, never the answer.
+		await withFencedWrite({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			token: admission,
+			fn: async () => undefined,
+		})
+		return response
 	}
 
 	async refreshNativeBitemporalVectorPrefilter(): Promise<boolean> {

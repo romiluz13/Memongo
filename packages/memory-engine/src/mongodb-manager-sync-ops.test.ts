@@ -31,7 +31,10 @@ import {
 	getBestEffortFailureCounts,
 	resetBestEffortFailureCounts,
 } from "./best-effort.js"
-import { MongoDBManagerSyncOps } from "./mongodb-manager-sync.js"
+import {
+	KBRefreshError,
+	MongoDBManagerSyncOps,
+} from "./mongodb-manager-sync.js"
 
 const SYNC_RESULT = {
 	filesProcessed: 1,
@@ -106,6 +109,31 @@ describe("runSync tenant totals", () => {
 		expect(host.chunkCount).toBe(-1)
 		expect(host.dirty).toBe(true)
 		expect(host.maybeAutoRefreshKB).not.toHaveBeenCalled()
+	})
+})
+
+describe("runSync KB auto-refresh", () => {
+	it("a failed KB refresh is the sync's typed failure, after the file sync committed", async () => {
+		collections.files.countDocuments.mockResolvedValue(3)
+		collections.chunks.countDocuments.mockResolvedValue(9)
+		const { host, ops } = buildOps()
+		const refreshFailure = new KBRefreshError({
+			reason: "import-errors",
+			message: "KB auto-refresh failed: the import reported 1 error(s)",
+			result: {
+				documentsProcessed: 0,
+				chunksCreated: 0,
+				skipped: 0,
+				errors: ["doc.md: boom"],
+			},
+		})
+		host.maybeAutoRefreshKB.mockRejectedValue(refreshFailure)
+
+		await expect(ops.runSync()).rejects.toBe(refreshFailure)
+
+		expect(host.fileCount).toBe(3)
+		expect(host.chunkCount).toBe(9)
+		expect(host.dirty).toBe(false)
 	})
 })
 

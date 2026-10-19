@@ -20,6 +20,7 @@ import {
 	metaCollection,
 } from "./mongodb-schema.js"
 import { bestEffort } from "./best-effort.js"
+import { safeBootText } from "./mongodb-boot-errors.js"
 import { syncToMongoDB } from "./mongodb-sync.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
@@ -30,6 +31,7 @@ import {
 	isErasureGateConflictError,
 	withFencedWrite,
 } from "./mongodb-write-fence.js"
+import type { KBIngestResult } from "./mongodb-kb.js"
 import type { MemorySyncProgressUpdate } from "./types.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import { createSubsystemLogger } from "@memongo/lib"
@@ -44,6 +46,51 @@ const log = createSubsystemLogger("memory:mongodb")
  */
 
 const CHANGE_STREAM_RESUME_TOKEN_META_KEY = "change_stream_resume_token"
+
+const KB_REFRESH_ERROR_SAMPLE = 5
+const KB_REFRESH_ERROR_MAX_LENGTH = 200
+
+/**
+ * M2 review R7: a KB auto-refresh that did not complete is a typed failure,
+ * never a log line. `reason` says which step failed, and the counts say what
+ * the import had already committed (a failed import can have written some
+ * documents). The success marker never advances on a failure, so the next
+ * cycle re-attempts the whole refresh. `errors` holds the first import errors,
+ * bounded and scrubbed; the full list is in the import result, not here.
+ */
+export class KBRefreshError extends Error {
+	readonly code = "KB_REFRESH_FAILED"
+	readonly reason: "import-rejected" | "import-errors" | "marker-write-failed"
+	readonly documentsProcessed?: number
+	readonly chunksCreated?: number
+	readonly skipped?: number
+	readonly errors: string[]
+
+	constructor(params: {
+		reason: KBRefreshError["reason"]
+		message: string
+		cause?: unknown
+		result?: {
+			documentsProcessed: number
+			chunksCreated: number
+			skipped: number
+			errors: string[]
+		}
+	}) {
+		super(
+			safeBootText(params.message),
+			params.cause === undefined ? undefined : { cause: params.cause },
+		)
+		this.name = "KBRefreshError"
+		this.reason = params.reason
+		this.documentsProcessed = params.result?.documentsProcessed
+		this.chunksCreated = params.result?.chunksCreated
+		this.skipped = params.result?.skipped
+		this.errors = (params.result?.errors ?? [])
+			.slice(0, KB_REFRESH_ERROR_SAMPLE)
+			.map((error) => safeBootText(error).slice(0, KB_REFRESH_ERROR_MAX_LENGTH))
+	}
+}
 
 type RepairDiagnostics = {
 	status: "ok" | "failed"
@@ -612,6 +659,7 @@ export class MongoDBManagerSyncOps {
 		log.info(
 			`KB auto-refresh: ${hoursSinceRefresh.toFixed(1)}h since last import, refreshing ${paths.length} paths`,
 		)
+		let imported: KBIngestResult | undefined
 		try {
 			// S1 (plan e5ec10dc §4.1): capture once before any scan/read/CPU
 			// work; the token threads through the ingest and the marker
@@ -633,6 +681,18 @@ export class MongoDBManagerSyncOps {
 				chunking: mongoCfg.kb.chunking,
 				admission: token,
 			})
+			imported = result
+			// M2 review R7: an import that resolved with errors did not refresh
+			// the KB. The marker stays put, so the next cycle re-attempts the
+			// whole refresh, and the caller sees the failure with what the
+			// import had committed.
+			if (result.errors.length > 0) {
+				throw new KBRefreshError({
+					reason: "import-errors",
+					message: `KB auto-refresh failed: the import reported ${result.errors.length} error(s) (${result.documentsProcessed} docs, ${result.chunksCreated} chunks written, ${result.skipped} skipped)`,
+					result,
+				})
+			}
 			log.info(
 				`KB auto-refresh complete: ${result.documentsProcessed} docs, ${result.chunksCreated} chunks, ${result.skipped} skipped`,
 			)
@@ -661,8 +721,25 @@ export class MongoDBManagerSyncOps {
 				log.warn("KB auto-refresh deferred: tenant erasure in progress")
 				return
 			}
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`KB auto-refresh failed: ${msg}`)
+			if (err instanceof KBRefreshError) {
+				log.warn(err.message)
+				throw err
+			}
+			// A rejected import (or a marker write that failed after a clean
+			// import) is a typed failure for the caller, never a swallowed log.
+			const causeText = safeBootText(
+				err instanceof Error ? err.message : String(err),
+			).slice(0, KB_REFRESH_ERROR_MAX_LENGTH)
+			const failed = new KBRefreshError({
+				reason: imported ? "marker-write-failed" : "import-rejected",
+				message: imported
+					? `KB auto-refresh failed: the refresh marker could not be written after a clean import (${causeText})`
+					: `KB auto-refresh failed: the import was rejected (${causeText})`,
+				cause: err,
+				result: imported,
+			})
+			log.warn(failed.message)
+			throw failed
 		}
 	}
 

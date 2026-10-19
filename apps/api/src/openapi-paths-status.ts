@@ -1,3 +1,4 @@
+import { nonSearchFailureResponses } from "./openapi-paths-search.js"
 import {
 	CLIENT_VERSION_HEADER_PARAMETER,
 	memoryScopeEnum,
@@ -118,7 +119,13 @@ export const statusPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "Ok" } },
+			responses: {
+				"200": { description: "Ok" },
+				"500": {
+					description:
+						"KB_REFRESH_FAILED: the file sync committed, but the KB auto-refresh did not complete (a rejected import, an import that reported errors, or a marker write that failed after a clean import). The message names the reason and what the import committed; the refresh marker is not advanced, so the next sync retries. Other unexpected failures return SYNC_FAILED.",
+				},
+			},
 		},
 	},
 	"/v1/probes/embedding": {
@@ -130,7 +137,10 @@ export const statusPaths = {
 	"/v1/probes/vector": {
 		get: {
 			summary: "Probe vector search availability",
-			responses: { "200": { description: "{ ok: boolean }" } },
+			responses: {
+				"200": { description: "{ ok: boolean }" },
+				...nonSearchFailureResponses("PROBE_VECTOR_FAILED"),
+			},
 		},
 	},
 } as const

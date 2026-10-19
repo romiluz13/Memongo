@@ -6,7 +6,10 @@ import {
 	memongoBridgeSelfEdit,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
-import { searchErrorResponse } from "../lib/search-outcomes.js"
+import {
+	searchErrorResponse,
+	searchFailureOrInternalError,
+} from "../lib/search-outcomes.js"
 import {
 	chainTraceCollectionSchema,
 	validateWithSchema,
@@ -122,7 +125,7 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(result)
 		} catch (err) {
-			return internalError(c, err, "CONSOLIDATE_FAILED")
+			return searchFailureOrInternalError(c, err, "CONSOLIDATE_FAILED")
 		}
 	})
 

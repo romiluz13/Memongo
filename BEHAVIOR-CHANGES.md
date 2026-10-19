@@ -623,6 +623,44 @@ A tenant is `(agentId, scope, scopeRef)`. The reads below used to filter by `age
 - **Discovery.** Each discovery content read checks the section's `*_text` Search index through the request-local snapshot and fails typed `index-stale` or `index-unavailable` (a section failure row per T8; a total failure throws). `hydrateActiveSlate` and `buildDiscoveryProjection` open a request scope. The check names the Search index type, so a text-only read is not refused for an unrelated vector index.
 - **Slate and context expansion are not gated.** They read plain `find`s and no Search index, so there is no index to be stale; this is pinned by tests. The brief expected them to read through Search.
 
+## Review fixes R3, R4, R6-R9 (1237)
+
+Fixes for the blocking findings of the final M2 review (ticket #122). R1, R2 and R5 are a separate section.
+
+### R3: conversation recall honors the erasure gate
+
+- **Refused while an erasure runs.** `POST /v1/recall-conversation`, `recallConversation` in the client, `memongo_recall_conversation`, `memongo_recall_messages` and the AI SDK tool of the same name take the erasure admission before they read, as `readFile` and KB search do. While an erasure is in progress for the agent the recall is `409 ERASURE_IN_PROGRESS` (the engine's `ErasureGateConflictError`), for a query recall and for a chronological listing alike. It used to answer with the events the sweep had not reached yet. The refusal comes after the tenant identity check and before the index-health check.
+- **Closed during the read.** The recall re-checks the gate against its admission at the return boundary. An erasure that began while the recall ran is the same 409, and the events it read are not returned.
+- **Cost.** Each recall now writes the gate's admission (a majority-acknowledged upsert) and runs the fence transaction once, as `readFile` and KB search already do.
+
+### R4: each host proves its own serving definition
+
+- **Index assessment.** Boot, preflight and the per-request index health judge each `statusDetail` host on that host's own proof: the `mainIndex.definition` it reports or, for a host whose comparable generation equals `latestDefinitionVersion`, the listing's `latestDefinition`. A previous host's definition is never reused for another host. A host that proves only a generation, beside a drifted `latestDefinition`, is `drift` (boot repairs it; a request sees `index-stale`) even when another host reports the intended definition. It used to be judged serving on that other host's definition. A host that proves a current generation when the listing carries no `latestDefinition` is `index-metadata-unknown`.
+- **Generations must be finite numbers.** A `latestDefinitionVersion.version` or a host `definitionVersion.version` that is NaN, an infinity or any non-number (it used to count as "not comparable" and fall back to a definition) is `index-metadata-unknown`. An absent generation is still "no generation reported".
+
+### R6: configuration refusals no longer echo the rejected value
+
+- **Messages name the setting, not the value.** The refusals for `MEMONGO_QUERY_EMBEDDING_MODEL` / `memory.mongodb.queryEmbeddingModel`, `MEMONGO_CONVERSATION_EVIDENCE_MODE`, `memory.backend`, `MEMONGO_SEARCH_DEFAULT_SCOPE`, `MEMONGO_DEFAULT_SCOPE` and the embedding-pipeline contract check used to repeat the rejected value in the error (for example `memory.mongodb.queryEmbeddingModel "<value>" is not supported`). A value that was a connection string reached the error, the `memory backend resolution failed` log line and the `error` of `getMemorySearchManager`. The messages now say which setting is wrong and what is accepted. The `MEMONGO_DEFAULT_SCOPE` conflict warning no longer prints the legacy `MEMONGO_SEARCH_DEFAULT_SCOPE` value.
+- **The manager scrubs what is left.** `getMemorySearchManager` passes a configuration refusal through the boot-safe renderer before it logs it or returns it as `error`, so a URI, host or address in any resolver message becomes `<uri>` or `<host>`. `cause` still holds the original error object.
+
+### R7: a failed KB auto-refresh is a typed failure
+
+- **`sync` rejects.** The KB auto-refresh that runs at the end of `sync` (and so at startup, on a watch event and on `POST /v1/sync`) used to log a rejected import and resolve, and to write the success marker after an import that resolved with `errors`. It now throws `KBRefreshError` (`code: "KB_REFRESH_FAILED"`, `reason` of `import-rejected`, `import-errors` or `marker-write-failed`) carrying the import's `documentsProcessed`, `chunksCreated` and `skipped` counts, a bounded scrubbed sample of its `errors` and the original `cause`. The file sync and the tenant totals are already committed when it throws.
+- **The marker never advances on a failure.** The `kb_last_auto_refresh` marker is written only after an import with no errors, so the next cycle re-attempts the whole refresh. A refresh that is due is retried on every sync until it succeeds, where an import with errors used to suppress it for `autoRefreshHours`.
+- **Erasure deferral is unchanged.** An erasure conflict at admission or at the marker fence still defers the refresh with a warn line and no error.
+- **Startup.** The startup sync's failure is recorded under the `startup-sync` best-effort counter, which now also counts a failed KB refresh. A path `ingestFilesToKB` cannot scan or a file it cannot read is still logged and skipped; it is not an import error.
+
+### R8: typed Search failures reach the routes that run Search underneath
+
+- **`POST /v1/consolidate` and `GET /v1/probes/vector`.** A typed Search failure from the engine (a lane failure, `index-unavailable`, `index-stale`, `index-not-ready` or a budget denial) used to surface as the generic 500 `CONSOLIDATE_FAILED` or `PROBE_VECTOR_FAILED`, which hid a retryable 503 from a client. It now goes through the same outcome and status mapper as the search routes: 503 `SEARCH_LANES_UNAVAILABLE`, 503 `SEARCH_BUDGET_EXHAUSTED` (with `Retry-After` when the denial carries a retry hint) or 500 `SEARCH_LANES_FAILED`, with the bounded `outcomes` row in the body. The client SDK and the MCP tools already read `outcomes` from any error body, so they need no change. The OpenAPI document lists the new 500 and 503 responses on both routes.
+- **Unexpected errors stay generic.** An error that is not one of the typed Search errors (by class name and enum reason) keeps the route's own code (`CONSOLIDATE_FAILED`, `PROBE_VECTOR_FAILED`) with a request id and no engine text.
+- **`POST /v1/sync`.** A failed KB auto-refresh (R7) is `500 KB_REFRESH_FAILED`. The message names the reason (`import-rejected`, `import-errors` or `marker-write-failed`) and the documents and chunks the import had already committed, and says the refresh marker was not advanced so the next sync retries. It carries no engine message, cause or import error text. Before this fix the same call answered 200 `{ ok: true }` after logging the failure. The file sync and the tenant totals are already committed when it fails. A client that treated every `/v1/sync` 200 as a complete refresh now sees the failure.
+- **Audited and unchanged.** The other non-search routes (`/v1/chain-trace`, `/v1/extract`, `/v1/profile`, `/v1/state`, `/v1/status`, `/v1/status/detailed`, `/v1/stats`, the write, lifecycle and admin routes) do not reach a Search runner, so no typed Search failure can arrive there; their route-coded errors are unchanged.
+
+### R9: reasoning chain leaves follow the event lifecycle
+
+- **Leaf events.** `POST /v1/chain-trace`, `traceChain`, `memongo_chain_trace` and the AI SDK tool hydrate each leaf event under the store's full event lifecycle at one clock taken when the trace starts: retained (`expiresAt`), already valid (`validAt`) and not retracted (`invalidAt`). The read used to apply expiry only, so a leaf whose `invalidAt` had passed, or whose `validAt` was still in the future, came back with its body. Such a leaf is now a `gap` node (reason `deleted`, the same row an expired leaf already produced) and `chainComplete` is `false`. The starting fact and its premises are unchanged and now use the same clock.
+
 ## T11 follow-up: failure-matrix test gaps (#121)
 
 Test gaps in the failure matrix (#121). This work adds tests only; no production behavior changed.

@@ -30,7 +30,7 @@ describe("resolveSearchDefaultScope (P1.4: MEMONGO_SEARCH_DEFAULT_SCOPE)", () =>
 
 	it("throws on invalid values like other enum envs", () => {
 		expect(() => resolveSearchDefaultScope("everything")).toThrow(
-			/MEMONGO_SEARCH_DEFAULT_SCOPE "everything" is not a valid memory scope/,
+			/MEMONGO_SEARCH_DEFAULT_SCOPE is not a valid memory scope/,
 		)
 		expect(() => resolveSearchDefaultScope("GLOBAL")).toThrow(
 			/not a valid memory scope/,
@@ -57,7 +57,7 @@ describe("resolveDefaultScope (D1/B3: MEMONGO_DEFAULT_SCOPE)", () => {
 	it("throws on an invalid MEMONGO_DEFAULT_SCOPE like other enum envs", () => {
 		expect(() =>
 			resolveDefaultScope({ value: "everything", applyTo: "read" }),
-		).toThrow(/MEMONGO_DEFAULT_SCOPE "everything" is not a valid memory scope/)
+		).toThrow(/MEMONGO_DEFAULT_SCOPE is not a valid memory scope/)
 	})
 
 	it("the legacy name alone remains a read alias but does not move writes", () => {

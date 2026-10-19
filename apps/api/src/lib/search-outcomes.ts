@@ -209,11 +209,44 @@ function isErasureInProgressError(err: unknown): boolean {
 }
 
 /**
- * The catch-block mapping: a typed search failure goes through the same
- * table; any other error keeps the generic internal error envelope. A rerank
- * demand is the caller's request, not a lane failure: 400 RERANK_UNSUPPORTED.
- * An erasure in progress refuses the read (M2 T13, review F2): 409
- * ERASURE_IN_PROGRESS, never an empty answer and never an internal error.
+ * M2 review R8: the catch-block mapping for a route that is not a search
+ * route but runs engine Search underneath (/consolidate, /probes/vector). A
+ * recognized typed Search failure (lane failure, index-unavailable,
+ * index-stale, budget denial) goes through the same table and body as the
+ * search routes, with its outcome row and `Retry-After` where the denial
+ * carries one. Any other error keeps the generic internal error envelope
+ * under the route's own code: an unexpected failure is never labeled as a
+ * Search failure and never leaks its message.
+ */
+export function searchFailureOrInternalError(
+	c: Context,
+	err: unknown,
+	fallbackCode: string,
+) {
+	const outcomes = searchOutcomesFromError(err)
+	const mapping = mapSearchOutcomes(outcomes)
+	if (!outcomes || mapping.status === 200) {
+		return internalError(c, err, fallbackCode)
+	}
+	const retryAfterMs =
+		err instanceof Error && err.name === "SearchBudgetDeniedError"
+			? (err as Error & { retryAfterMs?: unknown }).retryAfterMs
+			: undefined
+	return searchFailureResponse(
+		c,
+		mapping,
+		outcomes,
+		typeof retryAfterMs === "number" ? retryAfterMs : undefined,
+	)
+}
+
+/**
+ * The catch-block mapping for a search route: a typed search failure goes
+ * through the same table; any other error keeps the generic internal error
+ * envelope. A rerank demand is the caller's request, not a lane failure: 400
+ * RERANK_UNSUPPORTED. An erasure in progress refuses the read (M2 T13, review
+ * F2): 409 ERASURE_IN_PROGRESS, never an empty answer and never an internal
+ * error.
  */
 export function searchErrorResponse(
 	c: Context,
@@ -231,19 +264,5 @@ export function searchErrorResponse(
 			"read refused: an erasure is in progress for this agent",
 		)
 	}
-	const outcomes = searchOutcomesFromError(err)
-	const mapping = mapSearchOutcomes(outcomes)
-	if (!outcomes || mapping.status === 200) {
-		return internalError(c, err, fallbackCode)
-	}
-	const retryAfterMs =
-		err instanceof Error && err.name === "SearchBudgetDeniedError"
-			? (err as Error & { retryAfterMs?: unknown }).retryAfterMs
-			: undefined
-	return searchFailureResponse(
-		c,
-		mapping,
-		outcomes,
-		typeof retryAfterMs === "number" ? retryAfterMs : undefined,
-	)
+	return searchFailureOrInternalError(c, err, fallbackCode)
 }

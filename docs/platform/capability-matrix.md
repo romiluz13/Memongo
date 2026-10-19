@@ -114,6 +114,11 @@ exist.
 | Reranking is requested | Boot fails with `rerank-unsupported` when `reranking.enabled` or `MEMONGO_RERANKING_ENABLED` is true, and a request with `rerank: true` is rejected with the same code. Reranking is not part of the contract. |
 | A healthy answer with no hits | `ok-empty` with reason `zero-hits`, a 200 and an empty result list. It is final, except for the planned follow-ups below. |
 
+The two routes that are not search routes but run engine Search underneath,
+`/v1/consolidate` and `/v1/probes/vector`, answer a typed Search failure with
+the same statuses, codes and `outcomes` body. Any other error on them stays the
+route's own generic 500.
+
 A partial answer keeps every row: a lane that failed stays visible as a failed
 row beside the lanes that answered, and the response `outcomes.status` is
 `partial`. Per-route behavior and its tests are in
