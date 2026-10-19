@@ -681,21 +681,24 @@ describe("session evidence — expiry propagation (C-005 r1 defect 6)", () => {
 		const fake = createStatefulMongoFake({ prefix: PREFIX })
 		const early = new Date("2026-09-01T00:00:00.000Z")
 		const late = new Date("2026-09-15T00:00:00.000Z")
+		const tenant = { scope: "agent", scopeRef: "agent:agent-1" } as const
 		await fake.collection("events").insertMany([
 			{
 				eventId: "ev-a1",
 				agentId: AGENT,
+				...tenant,
 				expiresAt: early,
 			},
-			{ eventId: "ev-a2", agentId: AGENT, expiresAt: late },
+			{ eventId: "ev-a2", agentId: AGENT, ...tenant, expiresAt: late },
 			// Session B has one never-expiring event → no entry (permanent).
-			{ eventId: "ev-b1", agentId: AGENT },
+			{ eventId: "ev-b1", agentId: AGENT, ...tenant },
 		])
 
 		const map = await resolveSessionEvidenceExpiresAt({
 			db: fake.db,
 			prefix: PREFIX,
 			agentId: AGENT,
+			...tenant,
 			sessionEventMap: new Map([
 				["s-evi-a", ["ev-a1", "ev-a2"]],
 				["s-evi-b", ["ev-b1"]],
@@ -704,6 +707,65 @@ describe("session evidence — expiry propagation (C-005 r1 defect 6)", () => {
 
 		expect(map.get("s-evi-a")).toEqual(late)
 		expect(map.has("s-evi-b")).toBe(false)
+	})
+
+	it("resolveSessionEvidenceExpiresAt ignores a source event of another scopeRef (M2 T13)", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const early = new Date("2026-09-01T00:00:00.000Z")
+		const late = new Date("2026-09-15T00:00:00.000Z")
+		await fake.collection("events").insertMany([
+			{
+				eventId: "ev-a1",
+				agentId: AGENT,
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				expiresAt: early,
+			},
+			{
+				eventId: "ev-a2",
+				agentId: AGENT,
+				scope: "agent",
+				scopeRef: "agent:other",
+				expiresAt: late,
+			},
+		])
+
+		const map = await resolveSessionEvidenceExpiresAt({
+			db: fake.db,
+			prefix: PREFIX,
+			agentId: AGENT,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			sessionEventMap: new Map([["s-evi-a", ["ev-a1", "ev-a2"]]]),
+		})
+
+		expect(map.has("s-evi-a")).toBe(false)
+	})
+
+	it.each([
+		["no scope", { scopeRef: "agent:agent-1" }, ["scope"]],
+		["no scopeRef", { scope: "agent" }, ["scopeRef"]],
+	])("resolveSessionEvidenceExpiresAt fails typed before any read with %s (M2 T13)", async (_label, identity, missing) => {
+		const failure = await resolveSessionEvidenceExpiresAt({
+			db: {
+				collection: () => {
+					throw new Error("a collection was touched")
+				},
+			} as never,
+			prefix: PREFIX,
+			agentId: AGENT,
+			sessionEventMap: new Map([["s-evi-a", ["ev-a1"]]]),
+			...identity,
+		} as never).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+
+		expect(failure).toMatchObject({
+			name: "TenantIdentityRequiredError",
+			operation: "resolveSessionEvidenceExpiresAt",
+			missing,
+		})
 	})
 
 	it("carries the resolved expiry onto the session-evidence documents", () => {

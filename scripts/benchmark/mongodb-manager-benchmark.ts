@@ -1361,6 +1361,8 @@ export class MongoDBManagerBenchmarkOps {
 								db: this.host.db,
 								prefix: this.host.prefix,
 								agentId: scenarioManager.agentId,
+								scope: "agent",
+								scopeRef,
 								sessionEventMap,
 							})
 
