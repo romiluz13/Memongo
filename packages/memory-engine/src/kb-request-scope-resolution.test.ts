@@ -17,8 +17,10 @@ function fixture() {
 		agentScopeRef: "agent:owner",
 		workspaceDir: "/memongo-fixture-workspace",
 		config: {
-			mongodb: { embeddingMode: "automated", fusionMethod: "js-merge" },
+			mongodb: { embeddingMode: "automated", fusionMethod: "scoreFusion" },
 		},
+		// Every capability off: KB search must still run its fusion, where it
+		// used to fall to $text.
 		capabilities: {
 			vectorSearch: false,
 			textSearch: false,
@@ -29,6 +31,10 @@ function fixture() {
 		},
 	}) as MongoDBMemoryManager
 	return { manager, aggregate, collection }
+}
+// The partition predicate the fused aggregate hands to $vectorSearch.
+function vectorFilterOf(pipeline: Document[]): Document {
+	return pipeline[0].$scoreFusion.input.pipelines.vector[0].$vectorSearch.filter
 }
 beforeEach(() => vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "false"))
 afterEach(() => {
@@ -60,8 +66,7 @@ it.each([
 	const { manager, aggregate } = fixture()
 	await manager.searchKB("architecture", options as KBOptions)
 	expect(aggregate).toHaveBeenCalledOnce()
-	expect((aggregate.mock.calls[0][0] as Document[])[0].$match).toEqual({
-		$text: { $search: "architecture" },
+	expect(vectorFilterOf(aggregate.mock.calls[0][0] as Document[])).toEqual({
 		scopeRef: reference,
 	})
 })
@@ -69,9 +74,9 @@ it("keeps omitted KB scope in the legacy agent partition under a user default", 
 	vi.stubEnv("MEMONGO_DEFAULT_SCOPE", "user")
 	const { manager, aggregate } = fixture()
 	await manager.searchKB("architecture")
-	expect((aggregate.mock.calls[0][0] as Document[])[0].$match.scopeRef).toBe(
-		"agent:owner",
-	)
+	expect(
+		vectorFilterOf(aggregate.mock.calls[0][0] as Document[]).scopeRef,
+	).toBe("agent:owner")
 })
 it("does not carry scope state across calls on the same manager", async () => {
 	const { manager, aggregate } = fixture()
@@ -83,7 +88,7 @@ it("does not carry scope state across calls on the same manager", async () => {
 		await manager.searchKB("architecture", options as KBOptions)
 	expect(
 		aggregate.mock.calls.map(
-			([pipeline]) => (pipeline as Document[])[0].$match.scopeRef,
+			([pipeline]) => vectorFilterOf(pipeline as Document[]).scopeRef,
 		),
 	).toEqual(["global", "agent:owner", "explicit"])
 })

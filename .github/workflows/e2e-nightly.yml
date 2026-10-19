@@ -91,7 +91,6 @@ jobs:
           --require-suite structured-history.e2e.test.ts
           --require-suite erasure-two-process.e2e.test.ts
           --require-suite search-community-contracts.e2e.test.ts
-          --require-suite kb-scope-community.e2e.test.ts
 
       # The scripts e2e QA (answer+judge over a live LLM) is the live half of
       # the QA corpus; its unit half runs in the PR quality job.

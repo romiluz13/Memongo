@@ -12,6 +12,7 @@ import {
 	tryConsumeSearchAdmission,
 } from "./mongodb-search-admission.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
+import { SearchBudgetDeniedError } from "./search-outcomes.js"
 import type { MemorySearchResult } from "./types.js"
 import {
 	mocked,
@@ -1871,7 +1872,7 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		expect(lastSearchModeOf(manager)).toBe("v2:empty")
 	})
 
-	it("searchKB() drops the vector lane on denial and marks kb:throttled", async () => {
+	it("searchKB() on denial is a typed budget-denied failure: the search never runs and kb:throttled is marked", async () => {
 		exhaustBucket()
 		mocked(searchKB).mockResolvedValue([])
 		const manager = buildMockManager({
@@ -1884,8 +1885,11 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 				scoreFusion: false,
 			},
 		})
+		const onOutcomes = vi.fn()
 
-		await manager.searchKB("qzx kb throttle")
+		const failure = await manager
+			.searchKB("qzx kb throttle", { onOutcomes })
+			.catch((err: unknown) => err)
 
 		expect(captureAdmissionToken).toHaveBeenCalledTimes(1)
 		expect(emitTelemetry).toHaveBeenCalledWith(
@@ -1898,21 +1902,35 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 			vi.mocked(captureAdmissionToken).mock.invocationCallOrder[0],
 		).toBeLessThan(Number(vi.mocked(emitTelemetry).mock.invocationCallOrder[0]))
 
-		// Denial degrades ranking (text lane), not completeness: searchKB
-		// still runs, with the vector lane explicitly dropped.
+		// Denial is a typed row, never a text-only answer: the KB search does
+		// not run at all (it used to run with its vector lane dropped).
 		expect(lastSearchModeOf(manager)).toBe("kb:throttled")
-		const opts = mocked(searchKB).mock.calls[0]?.[3] as
-			| { skipVectorLane?: boolean }
-			| undefined
-		expect(opts?.skipVectorLane).toBe(true)
+		expect(failure).toBeInstanceOf(SearchBudgetDeniedError)
+		expect(failure).toMatchObject({
+			lane: "kb",
+			stage: "request",
+			reason: "budget-embeds",
+		})
+		expect(searchKB).not.toHaveBeenCalled()
+		expect(onOutcomes).toHaveBeenCalledExactlyOnceWith({
+			status: "failed",
+			lanes: [
+				{
+					lane: "kb",
+					stage: "request",
+					outcome: "budget-denied",
+					reason: "budget-embeds",
+				},
+			],
+		})
 	})
 
-	it("searchKB() keeps the vector lane when admission grants a token", async () => {
+	it("searchKB() runs the fused search when admission grants a token, whatever the capabilities say", async () => {
 		mocked(searchKB).mockResolvedValue([])
 		const manager = buildMockManager({
 			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
+				vectorSearch: false,
+				textSearch: false,
 				rankFusion: false,
 				storedSource: false,
 				vectorIndexMethod: false,
@@ -1923,10 +1941,10 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		await manager.searchKB("qzx kb admitted")
 
 		expect(lastSearchModeOf(manager)).not.toBe("kb:throttled")
-		const opts = mocked(searchKB).mock.calls[0]?.[3] as
-			| { skipVectorLane?: boolean }
-			| undefined
-		expect(opts?.skipVectorLane).toBeUndefined()
+		expect(searchKB).toHaveBeenCalledTimes(1)
+		const opts = mocked(searchKB).mock.calls[0]?.[3] as Record<string, unknown>
+		expect(opts).not.toHaveProperty("skipVectorLane")
+		expect(opts).not.toHaveProperty("capabilities")
 	})
 })
 
@@ -2056,7 +2074,7 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 		}
 	})
 
-	it("searchKB() fires the sink with vector-lane-skipped on vector-lane denial", async () => {
+	it("searchKB() leaves the degradation sink silent on denial: denial is a typed failure, not a degraded answer", async () => {
 		exhaustBucket()
 		mocked(searchKB).mockResolvedValue([])
 		const manager = buildMockManager({
@@ -2071,16 +2089,14 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 		})
 		const degradations: Array<Record<string, unknown>> = []
 
-		const results = await manager.searchKB("qzx sink kb lane", {
-			onDegradation: (degradation) => degradations.push(degradation),
-		} as Parameters<typeof manager.searchKB>[1])
+		await expect(
+			manager.searchKB("qzx sink kb lane", {
+				onDegradation: (degradation) => degradations.push(degradation),
+			} as Parameters<typeof manager.searchKB>[1]),
+		).rejects.toBeInstanceOf(SearchBudgetDeniedError)
 
-		expect(results).toEqual([])
-		expect(degradations).toHaveLength(1)
-		expect(degradations[0]).toMatchObject({
-			kind: "throttled",
-			scope: "vector-lane-skipped",
-		})
+		expect(degradations).toHaveLength(0)
+		expect(searchKB).not.toHaveBeenCalled()
 	})
 
 	it("searchKB() leaves the sink silent when admission grants the vector lane", async () => {

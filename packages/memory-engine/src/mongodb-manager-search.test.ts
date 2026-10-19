@@ -715,10 +715,10 @@ describe("searchV2", () => {
 		}
 	})
 
-	it("degrades only the failing KB sub-lanes and keeps sibling paths contributing (RET-13)", async () => {
+	it("degrades only the failing KB lane and keeps sibling paths contributing (RET-13)", async () => {
 		// The KB chunks collection rejects every aggregate: the real searchKB
-		// waterfall (not mocked here) must surface each failed stage at its
-		// seam while the sibling episodic path still contributes.
+		// (not mocked here) must surface its failed fusion stage at its seam
+		// while the sibling episodic path still contributes.
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["kb", "episodic"],
 			confidence: "medium",
@@ -759,9 +759,9 @@ describe("searchV2", () => {
 			},
 		)
 
-		// K4/V4: the first KB tier error stops the lane — no weaker tier runs
-		// after it — and is reported once at its tier; the sibling episodic
-		// path keeps its results and the request is partial.
+		// K4/V4: the KB fusion error stops the lane — no weaker tier exists
+		// to run after it — and is reported once at its stage; the sibling
+		// episodic path keeps its results and the request is partial.
 		expect(laneFailures).toEqual(["kb"])
 		expect(result.metadata.pathsExecuted).toEqual(
 			expect.arrayContaining(["kb", "episodic"]),
@@ -773,7 +773,7 @@ describe("searchV2", () => {
 		).toEqual([
 			{
 				lane: "kb",
-				stage: "rank-fusion",
+				stage: "score-fusion",
 				outcome: "failed",
 				reason: "internal-error",
 			},
@@ -781,7 +781,7 @@ describe("searchV2", () => {
 		expect(result.metadata.outcomeStatus).toBe("partial")
 	})
 
-	it("fails loudly in benchmark strict mode when a KB waterfall stage fails (RET-13)", async () => {
+	it("fails loudly in benchmark strict mode when the KB fusion fails (RET-13)", async () => {
 		const previous = process.env.MEMONGO_BENCHMARK_STRICT
 		process.env.MEMONGO_BENCHMARK_STRICT = "1"
 		try {

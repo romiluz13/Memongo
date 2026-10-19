@@ -1746,15 +1746,11 @@ async function searchV2WithBudget(
 							numCandidates,
 							vectorIndexName: `${prefix}kb_chunks_vector`,
 							textIndexName: `${prefix}kb_chunks_text`,
-							capabilities,
 							embeddingMode,
 							queryEmbeddingModel,
 							onTierOutcome,
 							fusionMethod,
 							kbDocs: kbCollection(db, prefix),
-							// #101 K7: strict mode fails the lane on a js-merge branch
-							// failure instead of letting the survivor stand.
-							strict: isBenchmarkStrictMode(),
 						},
 					)
 					pathResults = kbHits
@@ -1847,7 +1843,7 @@ async function searchV2WithBudget(
 						textIndexName: `${prefix}procedures_text`,
 					})
 				case "kb":
-					return kbLaneCost({ capabilities, embeddingMode, fusionMethod })
+					return kbLaneCost({ embeddingMode })
 				case "hybrid": {
 					const subLane =
 						hybridMode === "vector-only"

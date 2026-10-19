@@ -5,15 +5,16 @@
  * collection prefix), the Knowledge Base does not leak across tenants:
  * one agent cannot list, remove, stat, or SEARCH another agent's KB documents.
  *
- * searchKB isolation is exercised through the last-resort $text path (all Atlas
- * Search capabilities off), which is reachable on a plain replica set without
- * mongot — the vector/keyword pre-filter paths carry the same scopeRef filter.
+ * searchKB runs one native fusion that needs Atlas Search and a query embedding,
+ * which this keyless tier never has. Its isolation is exercised by capturing
+ * the tenant predicate searchKB hands to $vectorSearch and applying that exact
+ * predicate to the stored chunks.
  *
  * Run: bun run --filter @memongo/memory-engine test:e2e
  * (auto-discovers the running mongodb/mongodb-atlas-local:preview container)
  */
 import { randomUUID } from "node:crypto"
-import { type Db, MongoClient } from "mongodb"
+import { type Collection, type Db, type Document, MongoClient } from "mongodb"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { hashText } from "./internal.js"
 import { searchKB } from "./mongodb-kb-search.js"
@@ -25,23 +26,11 @@ import {
 	removeKBDocument,
 } from "./mongodb-kb.js"
 import {
-	type DetectedCapabilities,
 	ensureCollections,
 	ensureStandardIndexes,
 	kbChunksCollection,
-	kbCollection,
 } from "./mongodb-schema.js"
 import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
-
-// All Atlas Search capabilities off → searchKB uses the $text fallback path.
-const NO_ATLAS_SEARCH: DetectedCapabilities = {
-	vectorSearch: false,
-	textSearch: false,
-	scoreFusion: false,
-	rankFusion: false,
-	storedSource: false,
-	vectorIndexMethod: false,
-}
 
 const TEST_URI = resolvePreviewMongoTestUri(
 	"mongodb://127.0.0.1:27019/?directConnection=true",
@@ -71,7 +60,6 @@ beforeAll(async () => {
 	await client.connect()
 	db = client.db(TEST_DB)
 	await ensureCollections(db, PREFIX)
-	// Creates idx_kbchunks_text ($text index) so the searchKB fallback runs.
 	await ensureStandardIndexes(db, PREFIX)
 
 	await ingestToKB({
@@ -168,26 +156,37 @@ describe("KB tenant isolation (shared collection)", () => {
 		expect(bTitles).toContain("shared-title")
 	})
 
-	it("does not return another tenant's chunks from searchKB", async () => {
+	it("scopes searchKB to the calling tenant: the predicate it hands to Search isolates the stored chunks", async () => {
+		const emitted: Document[][] = []
+		const recorder = {
+			aggregate: (pipeline: Document[]) => {
+				emitted.push(pipeline)
+				return { toArray: async () => [] }
+			},
+		} as unknown as Collection
 		const searchOpts = (agentId: string) => ({
 			maxResults: 10,
 			minScore: 0,
 			scopeRef: `agent:${agentId}`,
-			capabilities: NO_ATLAS_SEARCH,
 			embeddingMode: "automated" as const,
 			vectorIndexName: `${PREFIX}kb_chunks_vector`,
 			textIndexName: `${PREFIX}kb_chunks_text`,
-			kbDocs: kbCollection(db, PREFIX),
 		})
+		await searchKB(recorder, "alpha", null, searchOpts(AGENT_A))
+		await searchKB(recorder, "alpha", null, searchOpts(AGENT_B))
+		const tenantPredicate = (pipeline: Document[]): Document =>
+			pipeline[0].$scoreFusion.input.pipelines.vector[0].$vectorSearch.filter
 		const chunks = kbChunksCollection(db, PREFIX)
 
-		// "alpha" only appears in agent A's document.
-		const asA = await searchKB(chunks, "alpha", null, searchOpts(AGENT_A))
-		const asB = await searchKB(chunks, "alpha", null, searchOpts(AGENT_B))
+		const asA = await chunks.find(tenantPredicate(emitted[0])).toArray()
+		const asB = await chunks.find(tenantPredicate(emitted[1])).toArray()
 
-		expect(asA.length).toBeGreaterThan(0)
-		expect(asA.every((r) => r.snippet.includes("alpha"))).toBe(true)
+		// "alpha" only appears in agent A's document.
+		expect(asA.some((chunk) => String(chunk.text).includes("alpha"))).toBe(true)
+		expect(asB.length).toBeGreaterThan(0)
 		// Agent B must not see agent A's chunk even though it matches the query.
-		expect(asB).toHaveLength(0)
+		expect(asB.some((chunk) => String(chunk.text).includes("alpha"))).toBe(
+			false,
+		)
 	})
 })

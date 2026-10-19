@@ -5,7 +5,6 @@
 // more than the lane can ever charge.
 import type { Collection, Db, Document } from "mongodb"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { searchKB } from "./mongodb-kb-search.js"
 import { searchProcedures } from "./mongodb-procedures.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { mongoSearch } from "./mongodb-search.js"
@@ -19,7 +18,6 @@ import { searchConversationEvidenceEvents } from "./mongodb-search-lanes.js"
 import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import {
 	conversationEvidenceLaneCost,
-	kbLaneCost,
 	mongoSearchTierCost,
 	structuredLaneCost,
 } from "./search-lane-cost.js"
@@ -142,26 +140,6 @@ describe("per-lane cost table (decision 18)", () => {
 	]) {
 		for (const [fusionMethod, fusionCaps] of fusionMatrix) {
 			const caps = { ...base, ...fusionCaps }
-			it(`kb, ${label}, ${fusionMethod} (score ${fusionCaps.scoreFusion}, rank ${fusionCaps.rankFusion}): charges exactly its reservation`, async () => {
-				const cost = kbLaneCost({
-					capabilities: caps,
-					embeddingMode: "automated",
-					fusionMethod,
-				})
-				const charged = await chargedWithin(cost, () =>
-					searchKB(zeroHits(), "rotation policy", null, {
-						maxResults: 5,
-						minScore: 0,
-						scopeRef: "agent:agent-1",
-						vectorIndexName: "t_kb_chunks_vector",
-						textIndexName: "t_kb_chunks_text",
-						capabilities: caps,
-						embeddingMode: "automated",
-						fusionMethod,
-					}),
-				)
-				expect(charged).toEqual(cost)
-			})
 			it(`mongoSearch tier, ${label}, ${fusionMethod} (score ${fusionCaps.scoreFusion}, rank ${fusionCaps.rankFusion}): charges exactly its reservation`, async () => {
 				const cost = mongoSearchTierCost({
 					capabilities: caps,

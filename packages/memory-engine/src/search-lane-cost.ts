@@ -78,31 +78,11 @@ export function vectorLeafCost(context: {
 	return context.embeddingMode === "automated" ? VECTOR_TIER : NO_SEARCH_COST
 }
 
-/** `kb`: fusion tiers, then vector, then keyword (or classic $text without Search). */
-export function kbLaneCost(
-	context: LaneCostContext & { fusionMethod: MemoryMongoDBFusionMethod },
-): SearchWorkCost {
-	const { capabilities, fusionMethod } = context
-	const vector = canVector(context)
-	const text = capabilities.textSearch
-	if (vector && text && fusionMethod === "js-merge") {
-		return addSearchCosts(VECTOR_TIER, TEXT_TIER)
-	}
-	const fusion =
-		vector && text
-			? addSearchCosts(
-					fusionMethod === "scoreFusion" && capabilities.scoreFusion
-						? VECTOR_TIER
-						: NO_SEARCH_COST,
-					capabilities.rankFusion ? VECTOR_TIER : NO_SEARCH_COST,
-				)
-			: NO_SEARCH_COST
-	// Without Search the planned lexical tier is classic $text (R5/K11).
-	return addSearchCosts(
-		fusion,
-		vector ? VECTOR_TIER : NO_SEARCH_COST,
-		TEXT_TIER,
-	)
+/** `kb`: one fused aggregate, whichever fusion is configured: one aggregation and the embed of its vector input. */
+export function kbLaneCost(context: {
+	embeddingMode: MemoryMongoDBEmbeddingMode
+}): SearchWorkCost {
+	return vectorLeafCost(context)
 }
 
 /** `conversation-evidence`: the inline turn-vector and turn-text branches. */

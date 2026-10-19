@@ -3,10 +3,11 @@ import type { Collection, Document } from "mongodb"
 import { describe, it, expect, vi } from "vitest"
 import {
 	runWithSearchBudget,
-	tryConsumeSearchAggregation,
+	runWithSearchReservation,
+	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
 import { searchKB } from "./mongodb-kb-search.js"
-import type { DetectedCapabilities } from "./mongodb-schema.js"
+import { kbLaneCost } from "./search-lane-cost.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -30,50 +31,46 @@ function mockKBDocsCol(ids: Array<string | number> = []): Collection {
 	} as unknown as Collection
 }
 
-const baseCapabilities: DetectedCapabilities = {
-	vectorSearch: true,
-	textSearch: true,
-	scoreFusion: false,
-	rankFusion: false,
-	storedSource: false,
-	vectorIndexMethod: false,
+const baseOpts = {
+	maxResults: 5,
+	minScore: 0.1,
+	scopeRef: "agent:test",
+	vectorIndexName: "test_kb_chunks_vector",
+	textIndexName: "test_kb_chunks_text",
+	embeddingMode: "automated" as const,
 }
 
-const noSearchCapabilities: DetectedCapabilities = {
-	vectorSearch: false,
-	textSearch: false,
-	scoreFusion: false,
-	rankFusion: false,
-	storedSource: false,
-	vectorIndexMethod: false,
+function pipelinesOf(col: Collection): Document[][] {
+	return (col.aggregate as ReturnType<typeof vi.fn>).mock.calls.map(
+		([pipeline]) => pipeline as Document[],
+	)
+}
+
+function scoreFusionInputs(pipeline: Document[]) {
+	return pipeline[0].$scoreFusion.input.pipelines as {
+		vector: Document[]
+		text: Document[]
+	}
+}
+
+const aHit = {
+	path: "guide.md",
+	startLine: 1,
+	endLine: 10,
+	text: "KB content about architecture",
+	docId: "doc-1",
+	score: 0.85,
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("searchKB", () => {
-	it("returns results from vector search", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "guide.md",
-				startLine: 1,
-				endLine: 10,
-				text: "KB content about architecture",
-				docId: "doc-1",
-				score: 0.85,
-			},
-		])
+describe("searchKB: one configured native fusion", () => {
+	it("maps a fused hit to a reference result", async () => {
+		const col = mockKBChunksCol([aHit])
 
-		const results = await searchKB(col, "architecture", [0.1, 0.2], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-		})
+		const results = await searchKB(col, "architecture", null, baseOpts)
 
 		expect(results).toHaveLength(1)
 		expect(results[0].source).toBe("reference")
@@ -84,35 +81,83 @@ describe("searchKB", () => {
 		expect(results[0].snippet).toContain("KB content about architecture")
 	})
 
-	it("projects the retention deadline in every $project stage (RET-11 followup)", async () => {
-		// Wave-3e §5 discovery: the KB mapper carried expiresAt since wave
-		// 3d but no KB $project included the field, so the carry was dead.
-		// Guard the vector lane's projection against silent re-dropping.
-		const col = mockKBChunksCol([
-			{
-				path: "guide.md",
-				startLine: 1,
-				endLine: 10,
-				text: "KB content about architecture",
-				docId: "doc-1",
-				score: 0.85,
-			},
-		])
+	it("runs exactly one $scoreFusion aggregate by default", async () => {
+		const col = mockKBChunksCol([aHit])
 
-		await searchKB(col, "architecture", [0.1, 0.2], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
+		await searchKB(col, "architecture", null, baseOpts)
+
+		const pipelines = pipelinesOf(col)
+		expect(pipelines).toHaveLength(1)
+		expect(Object.keys(pipelines[0][0])).toEqual(["$scoreFusion"])
+	})
+
+	it("keeps the $scoreFusion settings: minMaxScaler, avg, 0.7/0.3 weights", async () => {
+		const col = mockKBChunksCol([aHit])
+
+		await searchKB(col, "architecture", null, baseOpts)
+
+		const fusion = pipelinesOf(col)[0][0].$scoreFusion
+		expect(fusion.input.normalization).toBe("minMaxScaler")
+		expect(fusion.combination).toEqual({
+			weights: { vector: 0.7, text: 0.3 },
+			method: "avg",
+		})
+		const { vector, text } = scoreFusionInputs(pipelinesOf(col)[0])
+		expect(vector[0].$vectorSearch.index).toBe("test_kb_chunks_vector")
+		expect(vector[0].$vectorSearch.query).toEqual({ text: "architecture" })
+		expect(text[0].$search.index).toBe("test_kb_chunks_text")
+	})
+
+	it("runs exactly one $rankFusion aggregate with the existing weights when configured", async () => {
+		const col = mockKBChunksCol([aHit])
+
+		await searchKB(col, "architecture", null, {
+			...baseOpts,
+			fusionMethod: "rankFusion",
 		})
 
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		// Pipeline: $vectorSearch, $match (freshness revalidation), $limit, $project
-		const projectStage = pipeline[3].$project
+		const pipelines = pipelinesOf(col)
+		expect(pipelines).toHaveLength(1)
+		expect(Object.keys(pipelines[0][0])).toEqual(["$rankFusion"])
+		const fusion = pipelines[0][0].$rankFusion
+		expect(fusion.combination).toEqual({
+			weights: { vector: 0.7, text: 0.3 },
+		})
+		expect(fusion.input.pipelines.vector[0].$vectorSearch).toBeDefined()
+		expect(fusion.input.pipelines.text[0].$search).toBeDefined()
+	})
+
+	it("does not consult the deployment capabilities: it runs the fusion either way", async () => {
+		const col = mockKBChunksCol([aHit])
+
+		const results = await searchKB(col, "architecture", null, {
+			...baseOpts,
+			// A leftover caller still passing the removed option changes nothing.
+			...({
+				capabilities: {
+					vectorSearch: false,
+					textSearch: false,
+					scoreFusion: false,
+					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
+				},
+			} as object),
+		})
+
+		expect(results).toHaveLength(1)
+		expect(Object.keys(pipelinesOf(col)[0][0])).toEqual(["$scoreFusion"])
+	})
+
+	it("projects the retention deadline in the fused $project (RET-11 followup)", async () => {
+		// Wave-3e §5 discovery: the KB mapper carried expiresAt since wave
+		// 3d but no KB $project included the field, so the carry was dead.
+		const col = mockKBChunksCol([aHit])
+
+		await searchKB(col, "architecture", null, baseOpts)
+
+		// Pipeline: fusion, $limit, $project
+		const projectStage = pipelinesOf(col)[0][2].$project
 		expect(projectStage.expiresAt).toBe(1)
 	})
 
@@ -122,15 +167,7 @@ describe("searchKB", () => {
 		// instanceof style for other date fields.
 		const expiresAt = new Date("2026-09-01T00:00:00.000Z")
 		const col = mockKBChunksCol([
-			{
-				path: "guide.md",
-				startLine: 1,
-				endLine: 10,
-				text: "KB content with a retention deadline",
-				docId: "doc-1",
-				score: 0.85,
-				expiresAt,
-			},
+			{ ...aHit, expiresAt },
 			{
 				path: "stale-shape.md",
 				startLine: 1,
@@ -142,14 +179,9 @@ describe("searchKB", () => {
 			},
 		])
 
-		const results = await searchKB(col, "retention", [0.1, 0.2], {
-			maxResults: 5,
+		const results = await searchKB(col, "retention", null, {
+			...baseOpts,
 			minScore: 0,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
 		})
 
 		expect(results[0].expiresAt).toEqual(expiresAt)
@@ -157,644 +189,176 @@ describe("searchKB", () => {
 		expect(results[1].expiresAt).toBeUndefined()
 	})
 
-	it("returns empty results when no matches", async () => {
-		const col = mockKBChunksCol([])
-
-		const results = await searchKB(col, "nonexistent", [0.1, 0.2], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-		})
-
-		expect(results).toHaveLength(0)
-	})
-
 	it("filters results below minScore threshold", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "low.md",
-				startLine: 1,
-				endLine: 5,
-				text: "Low score content",
-				score: 0.05,
-			},
-		])
+		const col = mockKBChunksCol([{ ...aHit, score: 0.05 }])
 
-		const results = await searchKB(col, "content", [0.1], {
-			maxResults: 5,
+		const results = await searchKB(col, "content", null, {
+			...baseOpts,
 			minScore: 0.3,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
 		})
 
 		expect(results).toHaveLength(0)
-	})
-
-	it("falls back to $text search when no vector capabilities", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "fallback.md",
-				startLine: 1,
-				endLine: 3,
-				text: "Fallback text match",
-				score: 1.5,
-			},
-		])
-
-		const results = await searchKB(col, "fallback", null, {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: noSearchCapabilities,
-			embeddingMode: "automated",
-		})
-
-		expect(results).toHaveLength(1)
-		expect(results[0].source).toBe("reference")
 	})
 
 	it("caps numCandidates at 10000 in KB search (F1)", async () => {
-		const col = mockKBChunksCol([
-			{ path: "a.md", startLine: 1, endLine: 5, text: "content", score: 0.9 },
-		])
+		const col = mockKBChunksCol([aHit])
 
-		await searchKB(col, "test", [0.1], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "idx",
-			textIndexName: "txt",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-			numCandidates: 15000,
-		})
+		await searchKB(col, "test", null, { ...baseOpts, numCandidates: 15000 })
 
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const vsStage = pipeline[0].$vectorSearch
-		expect(vsStage.numCandidates).toBeLessThanOrEqual(10000)
+		const { vector } = scoreFusionInputs(pipelinesOf(col)[0])
+		expect(vector[0].$vectorSearch.numCandidates).toBeLessThanOrEqual(10000)
 	})
 
-	it("includes $limit after $vectorSearch in KB search (F7)", async () => {
-		const col = mockKBChunksCol([
-			{ path: "a.md", startLine: 1, endLine: 5, text: "content", score: 0.9 },
-		])
+	it("bounds the fused output with $limit before projecting (F7)", async () => {
+		const col = mockKBChunksCol([aHit])
 
-		await searchKB(col, "test", [0.1], {
-			maxResults: 3,
-			minScore: 0,
-			scopeRef: "agent:test",
-			vectorIndexName: "idx",
-			textIndexName: "txt",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-		})
+		await searchKB(col, "test", null, { ...baseOpts, maxResults: 3 })
 
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		// Pipeline: $vectorSearch, $match (freshness revalidation), $limit, $project
-		expect(pipeline[2].$limit).toBe(3)
-	})
-
-	it("tries hybrid search ($rankFusion) before vector-only when rankFusion available (F12)", async () => {
-		const hybridCaps: DetectedCapabilities = {
-			...baseCapabilities,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		}
-		const col = mockKBChunksCol([
-			{
-				path: "hybrid.md",
-				startLine: 1,
-				endLine: 5,
-				text: "hybrid result",
-				score: 0.9,
-			},
-		])
-
-		const results = await searchKB(col, "test", [0.1], {
-			maxResults: 5,
-			minScore: 0,
-			scopeRef: "agent:test",
-			vectorIndexName: "idx",
-			textIndexName: "txt",
-			capabilities: hybridCaps,
-			embeddingMode: "automated",
-		})
-
-		expect(results).toHaveLength(1)
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$rankFusion).toBeDefined()
-	})
-
-	it("uses automated embedding mode query", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "auto.md",
-				startLine: 1,
-				endLine: 5,
-				text: "Auto embed result",
-				score: 0.9,
-			},
-		])
-
-		const results = await searchKB(col, "auto embed", null, {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-		})
-
-		expect(results).toHaveLength(1)
-		// In automated mode, vector search uses query text instead of queryVector
-		const aggregateCalls = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls
-		expect(aggregateCalls.length).toBeGreaterThan(0)
-	})
-
-	it("short-circuits when KB metadata filter resolves to no matching documents", async () => {
-		const col = mockKBChunksCol([
-			{ path: "never.md", startLine: 1, endLine: 1, text: "nope", score: 0.9 },
-		])
-		const kbDocs = mockKBDocsCol([])
-
-		const results = await searchKB(col, "vector", [0.1], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			filter: { tags: ["missing"], category: "none", source: "file" },
-			kbDocs,
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-		})
-
-		expect(results).toHaveLength(0)
-		expect(col.aggregate).not.toHaveBeenCalled()
-	})
-
-	it("applies KB metadata filter to vector search stage", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "filtered.md",
-				startLine: 1,
-				endLine: 3,
-				text: "filtered",
-				score: 0.8,
-			},
-		])
-		const kbDocs = mockKBDocsCol(["doc-a", "doc-b"])
-
-		await searchKB(col, "filtered", [0.2], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			filter: { tags: ["docs"], category: "architecture", source: "file" },
-			kbDocs,
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const vsStage = pipeline[0].$vectorSearch
-		expect(vsStage.filter).toEqual({
-			scopeRef: "agent:test",
-			docId: { $in: ["doc-a", "doc-b"] },
-		})
+		// Pipeline: fusion, $limit, $project
+		expect(pipelinesOf(col)[0][1].$limit).toBe(3)
 	})
 
 	it("normalizes raw $rankFusion scores into [0,1] before applying minScore (P0.10)", async () => {
-		const hybridCaps: DetectedCapabilities = {
-			...baseCapabilities,
-			rankFusion: true,
-		}
 		// Raw RRF output ceiling is (0.7+0.3) * rrfScore(1) = 1/61 ≈ 0.0164;
 		// half of the ceiling must read as a 0.5 relevance, not 0.008.
-		const col = mockKBChunksCol([
-			{
-				path: "mid.md",
-				startLine: 1,
-				endLine: 5,
-				text: "half-ceiling RRF result",
-				score: 0.0082,
-			},
-		])
+		const col = mockKBChunksCol([{ ...aHit, score: 0.0082 }])
 
-		const results = await searchKB(col, "test", [0.1], {
-			maxResults: 5,
+		const results = await searchKB(col, "test", null, {
+			...baseOpts,
 			minScore: 0.4,
-			scopeRef: "agent:test",
-			vectorIndexName: "idx",
-			textIndexName: "txt",
-			capabilities: hybridCaps,
-			embeddingMode: "automated",
+			fusionMethod: "rankFusion",
 		})
 
 		expect(results).toHaveLength(1)
 		expect(results[0].score).toBeCloseTo(0.5002, 4)
 	})
 
-	it("uses $scoreFusion with minMaxScaler when fusionMethod=scoreFusion and capable (P0.10)", async () => {
-		const hybridCaps: DetectedCapabilities = {
-			...baseCapabilities,
-			scoreFusion: true,
-			rankFusion: true,
-		}
-		const col = mockKBChunksCol([
-			{
-				path: "fused.md",
-				startLine: 1,
-				endLine: 5,
-				text: "score-fused result",
-				score: 0.62,
-			},
-		])
+	it("keeps the native minMaxScaler score of $scoreFusion without a local rescale", async () => {
+		const col = mockKBChunksCol([{ ...aHit, score: 0.62 }])
 
-		const results = await searchKB(col, "test", [0.1], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "idx",
-			textIndexName: "txt",
-			capabilities: hybridCaps,
-			embeddingMode: "automated",
+		const results = await searchKB(col, "test", null, {
+			...baseOpts,
 			fusionMethod: "scoreFusion",
 		})
 
 		expect(results).toHaveLength(1)
-		// minMaxScaler yields a native [0,1] fused score — no local rescale.
 		expect(results[0].score).toBeCloseTo(0.62, 4)
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$scoreFusion.input.normalization).toBe("minMaxScaler")
+	})
+})
+
+describe("searchKB: tenant scope and metadata filters", () => {
+	it("constrains the vector input, the text input and the freshness re-check to the caller's scopeRef", async () => {
+		const col = mockKBChunksCol([aHit])
+
+		await searchKB(col, "architecture", null, baseOpts)
+
+		const { vector, text } = scoreFusionInputs(pipelinesOf(col)[0])
+		expect(vector[0].$vectorSearch.filter).toEqual({ scopeRef: "agent:test" })
+		expect(text[0].$search.compound.filter).toEqual([
+			{ equals: { path: "scopeRef", value: "agent:test" } },
+		])
+		expect(vector[1].$match).toEqual({ scopeRef: "agent:test" })
+		expect(text[1].$match).toEqual({ scopeRef: "agent:test" })
 	})
 
-	it("#101 K5: a rejected $scoreFusion is a typed failure; $rankFusion never runs", async () => {
-		const hybridCaps: DetectedCapabilities = {
-			...baseCapabilities,
-			scoreFusion: true,
-			rankFusion: true,
-		}
-		let call = 0
-		const col = {
-			aggregate: vi.fn(() => ({
-				toArray: vi.fn(async () => {
-					call += 1
-					if (call === 1) {
-						throw new Error("$scoreFusion is not supported on this server")
-					}
-					return [
-						{
-							path: "rank.md",
-							startLine: 1,
-							endLine: 5,
-							text: "rank-fusion fallback",
-							score: 0.9,
-						},
-					]
-				}),
-			})),
-		} as unknown as Collection
+	it("short-circuits when the KB metadata filter resolves to no matching documents", async () => {
+		const col = mockKBChunksCol([aHit])
+		const kbDocs = mockKBDocsCol([])
+		const rows: Document[] = []
 
-		await expect(
-			searchKB(col, "test", [0.1], {
-				maxResults: 5,
-				minScore: 0.1,
-				scopeRef: "agent:test",
-				vectorIndexName: "idx",
-				textIndexName: "txt",
-				capabilities: hybridCaps,
-				embeddingMode: "automated",
-				fusionMethod: "scoreFusion",
-			}),
-		).rejects.toMatchObject({ stage: "score-fusion", reason: "internal-error" })
-		expect(col.aggregate).toHaveBeenCalledTimes(1)
-	})
-
-	it("skips server-side fusion when fusionMethod=js-merge (P0.10)", async () => {
-		const hybridCaps: DetectedCapabilities = {
-			...baseCapabilities,
-			scoreFusion: true,
-			rankFusion: true,
-		}
-		const col = {
-			aggregate: vi.fn((pipeline: Document[]) => ({
-				toArray: vi.fn(async () =>
-					pipeline[0]?.$vectorSearch
-						? [
-								{
-									path: "vector.md",
-									startLine: 1,
-									endLine: 5,
-									text: "vector lane",
-									score: 0.9,
-								},
-							]
-						: [
-								{
-									path: "lexical.md",
-									startLine: 1,
-									endLine: 5,
-									text: "lexical-only lane",
-									score: 8,
-								},
-							],
-				),
-			})),
-		} as unknown as Collection
-
-		const results = await searchKB(col, "test", [0.1], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "idx",
-			textIndexName: "txt",
-			capabilities: hybridCaps,
-			embeddingMode: "automated",
-			fusionMethod: "js-merge",
+		const results = await searchKB(col, "vector", null, {
+			...baseOpts,
+			filter: { tags: ["missing"], category: "none", source: "file" },
+			kbDocs,
+			onTierOutcome: (row) => rows.push(row),
 		})
 
-		expect(results.map((result) => result.path)).toEqual(
-			expect.arrayContaining(["kb:vector.md", "kb:lexical.md"]),
-		)
-		const pipelines = (
-			col.aggregate as ReturnType<typeof vi.fn>
-		).mock.calls.map(([pipeline]) => pipeline)
-		expect(pipelines).toHaveLength(2)
-		expect(pipelines[0][0].$vectorSearch).toBeDefined()
-		expect(pipelines[1][0].$search).toBeDefined()
-		expect(
-			pipelines.some(
-				(pipeline) =>
-					pipeline[0].$rankFusion !== undefined ||
-					pipeline[0].$scoreFusion !== undefined,
-			),
-		).toBe(false)
-	})
-
-	it("pushes KB docId filters into the text-side compound.filter", async () => {
-		const hybridCaps: DetectedCapabilities = {
-			...baseCapabilities,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		}
-		const col = mockKBChunksCol([
+		expect(results).toHaveLength(0)
+		expect(col.aggregate).not.toHaveBeenCalled()
+		expect(rows).toEqual([
 			{
-				path: "filtered.md",
-				startLine: 1,
-				endLine: 3,
-				text: "filtered",
-				score: 0.8,
+				stage: "filter",
+				outcome: "ok-empty",
+				reason: "zero-hits",
+				resultCount: 0,
 			},
 		])
+	})
+
+	it("applies the resolved KB document ids to both fusion inputs", async () => {
+		const col = mockKBChunksCol([aHit])
 		const kbDocs = mockKBDocsCol(["doc-a", "doc-b"])
 
-		await searchKB(col, "filtered", [0.2], {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
+		await searchKB(col, "filtered", null, {
+			...baseOpts,
 			filter: { tags: ["docs"], category: "architecture", source: "file" },
 			kbDocs,
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: hybridCaps,
-			embeddingMode: "automated",
 		})
 
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const textPipeline = pipeline[0].$rankFusion.input.pipelines.text
-		expect(textPipeline[0].$search.compound.filter).toEqual([
+		const { vector, text } = scoreFusionInputs(pipelinesOf(col)[0])
+		const chunkFilter = {
+			scopeRef: "agent:test",
+			docId: { $in: ["doc-a", "doc-b"] },
+		}
+		expect(vector[0].$vectorSearch.filter).toEqual(chunkFilter)
+		expect(text[0].$search.compound.filter).toEqual([
 			// Tenant isolation pre-filter is always present (issue #27).
 			{ equals: { path: "scopeRef", value: "agent:test" } },
 			{ in: { path: "docId", value: ["doc-a", "doc-b"] } },
 		])
-		// The full chunk filter is re-validated post-$search against the
+		// The full chunk filter is re-validated post-search against the
 		// hydrated document — the compound filter runs against the indexed
-		// copy, which can lag the latest write (platform probe: stale
-		// admissions in both lanes).
-		expect(textPipeline[1]?.$match).toEqual({
-			scopeRef: "agent:test",
-			docId: { $in: ["doc-a", "doc-b"] },
-		})
+		// copy, which can lag the latest write.
+		expect(vector[1].$match).toEqual(chunkFilter)
+		expect(text[1].$match).toEqual(chunkFilter)
 	})
 
-	// WS-11: the manager passes skipVectorLane when the search-admission
-	// bucket denies a KB search — the query embed burn must stop, but the
-	// text lane still answers. This pins the degradation contract.
-	it("skipVectorLane runs the text lane without any $vectorSearch stage", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "text-lane.md",
-				startLine: 1,
-				endLine: 5,
-				text: "keyword hit without embeddings",
-				docId: "doc-1",
-				score: 0.8,
-			},
-		])
+	it("treats a filter that normalizes to nothing as no filter, with or without kbDocs", async () => {
+		const col = mockKBChunksCol([aHit])
 
-		const results = await searchKB(col, "keyword", null, {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			skipVectorLane: true,
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
-		})
-
-		// The text lane answered: degraded ranking, not degraded completeness.
-		expect(results).toHaveLength(1)
-		expect(results[0].snippet).toContain("keyword hit without embeddings")
-		const calls = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls
-		expect(calls.length).toBeGreaterThan(0)
-		for (const pipeline of calls) {
-			expect(JSON.stringify(pipeline)).not.toContain("$vectorSearch")
-			expect(JSON.stringify(pipeline)).toContain("$search")
-		}
-	})
-
-	it("without skipVectorLane the automated-mode vector lane still runs $vectorSearch", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "vector.md",
-				startLine: 1,
-				endLine: 5,
-				text: "vector hit",
-				docId: "doc-1",
-				score: 0.9,
-			},
-		])
-
-		const results = await searchKB(col, "vector", null, {
-			maxResults: 5,
-			minScore: 0.1,
-			scopeRef: "agent:test",
-			vectorIndexName: "test_kb_chunks_vector",
-			textIndexName: "test_kb_chunks_text",
-			capabilities: baseCapabilities,
-			embeddingMode: "automated",
+		const results = await searchKB(col, "architecture", null, {
+			...baseOpts,
+			filter: { tags: [" "], category: " ", source: "" },
 		})
 
 		expect(results).toHaveLength(1)
-		const calls = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls
-		const sawVectorStage = calls.some((pipeline) =>
-			JSON.stringify(pipeline).includes("$vectorSearch"),
-		)
-		// Contrast with the skipVectorLane test: without the flag the
-		// automated-mode lane issues a server-side query embed.
-		expect(sawVectorStage).toBe(true)
+		const { vector } = scoreFusionInputs(pipelinesOf(col)[0])
+		expect(vector[0].$vectorSearch.filter).toEqual({ scopeRef: "agent:test" })
 	})
 })
 
-// ---------------------------------------------------------------------------
-// RET-13/RET-16: KB waterfall lane-failure policy + $text budget charging
-// ---------------------------------------------------------------------------
-
-describe("searchKB lane failure policy + $text budget (RET-13/RET-16)", () => {
-	it("charges the budget and carries maxTimeMS when the $text last resort executes", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "fallback.md",
-				startLine: 1,
-				endLine: 3,
-				text: "Fallback text match",
-				score: 1.5,
-			},
-		])
-
+describe("searchKB: ledger", () => {
+	// #101 decision 18: the manager reserves kbLaneCost before the lane runs,
+	// so the lane must charge exactly what the table says. The old cascade
+	// reserved and charged up to three aggregations and two embeds.
+	async function chargedWithin(
+		fusionMethod: "scoreFusion" | "rankFusion",
+		results: Document[],
+	) {
+		const cost = kbLaneCost({ embeddingMode: "automated" })
 		const { budget } = await runWithSearchBudget(
-			{ maxAggregations: 5, maxEmbeds: 5 },
-			async () =>
-				searchKB(col, "fallback", null, {
-					maxResults: 5,
-					minScore: 0.1,
-					scopeRef: "agent:test",
-					vectorIndexName: "test_kb_chunks_vector",
-					textIndexName: "test_kb_chunks_text",
-					capabilities: noSearchCapabilities,
-					embeddingMode: "automated",
-				}),
-		)
-
-		// No earlier lane ran (no capabilities), so the $text aggregate is
-		// the one and only budget charge.
-		expect(budget.aggregations).toBe(1)
-		const call = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0]
-		const options = call[1] as { maxTimeMS?: number }
-		expect(typeof options?.maxTimeMS).toBe("number")
-		expect(options.maxTimeMS).toBeGreaterThan(0)
-	})
-
-	it("#101 K10: a refused $text aggregation is budget-denied and never executes", async () => {
-		const col = mockKBChunksCol([
-			{
-				path: "fallback.md",
-				startLine: 1,
-				endLine: 3,
-				text: "Fallback text match",
-				score: 1.5,
+			{ maxAggregations: 12, maxEmbeds: 5 },
+			async () => {
+				const reservation = tryReserveSearchBudget(cost)
+				if (!reservation) throw new Error("fixture reservation refused")
+				await runWithSearchReservation(reservation, () =>
+					searchKB(mockKBChunksCol(results), "rotation policy", null, {
+						...baseOpts,
+						fusionMethod,
+					}),
+				)
 			},
-		])
+		)
+		return { cost, charged: budget }
+	}
 
-		await expect(
-			runWithSearchBudget({ maxAggregations: 1, maxEmbeds: 5 }, async () => {
-				// Spend the single aggregation so the $text lane is refused.
-				tryConsumeSearchAggregation()
-				return searchKB(col, "fallback", null, {
-					maxResults: 5,
-					minScore: 0.1,
-					scopeRef: "agent:test",
-					vectorIndexName: "test_kb_chunks_vector",
-					textIndexName: "test_kb_chunks_text",
-					capabilities: noSearchCapabilities,
-					embeddingMode: "automated",
-				})
-			}),
-		).rejects.toMatchObject({
-			name: "SearchBudgetDeniedError",
-			stage: "classic-text",
-			reason: "budget-aggregations",
-		})
-		// Never an off-ledger aggregate.
-		expect(col.aggregate).not.toHaveBeenCalled()
-	})
+	it.each([
+		"scoreFusion",
+		"rankFusion",
+	] as const)("%s: a healthy zero hit charges exactly one aggregation and one embed", async (fusionMethod) => {
+		const { cost, charged } = await chargedWithin(fusionMethod, [])
 
-	it("#101 K11: a planned $text failure is typed in every mode", async () => {
-		const col = {
-			aggregate: vi.fn(() => ({
-				toArray: vi.fn(async () => {
-					throw new Error("text index missing")
-				}),
-			})),
-		} as unknown as Collection
-
-		await expect(
-			searchKB(col, "anything", null, {
-				maxResults: 5,
-				minScore: 0.1,
-				scopeRef: "agent:test",
-				vectorIndexName: "test_kb_chunks_vector",
-				textIndexName: "test_kb_chunks_text",
-				capabilities: noSearchCapabilities,
-				embeddingMode: "automated",
-			}),
-		).rejects.toMatchObject({ stage: "classic-text", reason: "internal-error" })
-	})
-
-	it("#101 K8: a vector failure stops the lane; the keyword tier never runs", async () => {
-		const col = {
-			aggregate: vi.fn((pipeline: Document[]) => ({
-				toArray: vi.fn(async () => {
-					if (JSON.stringify(pipeline).includes("$vectorSearch")) {
-						throw new Error("vector lane broke")
-					}
-					return [
-						{
-							path: "keyword.md",
-							startLine: 1,
-							endLine: 3,
-							text: "keyword hit",
-							docId: "doc-1",
-							score: 0.8,
-						},
-					]
-				}),
-			})),
-		} as unknown as Collection
-
-		await expect(
-			searchKB(col, "keyword", null, {
-				maxResults: 5,
-				minScore: 0.1,
-				scopeRef: "agent:test",
-				vectorIndexName: "test_kb_chunks_vector",
-				textIndexName: "test_kb_chunks_text",
-				capabilities: baseCapabilities,
-				embeddingMode: "automated",
-			}),
-		).rejects.toMatchObject({ stage: "vector", reason: "internal-error" })
-		expect(col.aggregate).toHaveBeenCalledTimes(1)
+		expect(cost).toEqual({ aggregations: 1, embeds: 1 })
+		expect(charged).toMatchObject({ aggregations: 1, embeds: 1 })
 	})
 })
