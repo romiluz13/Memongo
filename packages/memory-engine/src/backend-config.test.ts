@@ -26,7 +26,7 @@ describe("resolveMemoryBackendConfig", () => {
 			memory: { backend: "custom" as never },
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/Unsupported memory\.backend "custom"/,
+			/Unsupported memory\.backend\./,
 		)
 	})
 
@@ -130,7 +130,9 @@ describe("resolveMemoryBackendConfig", () => {
 				} as unknown as MemongoConfig,
 				agentId: "main",
 			})
-		expect(resolve).toThrow(/queryEmbeddingModel "voyage-code-3"/)
+		expect(resolve).toThrow(
+			/memory\.mongodb\.queryEmbeddingModel is not supported/,
+		)
 	})
 
 	describe("embedding pipeline supported-target contract (C-007 / EL-002 F1)", () => {
@@ -168,28 +170,23 @@ describe("resolveMemoryBackendConfig", () => {
 			}
 		})
 
-		it("normalizes community-mongot into the contract instead of failing it", () => {
-			const resolved = resolveMemoryBackendConfig({
-				cfg: {
-					agents: { defaults: { workspace: "/tmp/memory-test" } },
-					memory: {
-						backend: "mongodb",
-						mongodb: {
-							uri: "mongodb://localhost:27017",
-							deploymentProfile: "community-mongot",
-							embeddingMode: "automated",
-						},
-					},
-				} as unknown as MemongoConfig,
-				agentId: "main",
-			})
-			expect(resolved.mongodb?.deploymentProfile).toBe("atlas-local-preview")
+		it("rejects the community-mongot alias at boot instead of rewriting it (M2)", () => {
 			expect(() =>
-				assertEmbeddingPipelineSupport({
-					deploymentProfile: resolved.mongodb?.deploymentProfile ?? "",
-					embeddingMode: resolved.mongodb?.embeddingMode ?? "",
-				} as Parameters<typeof assertEmbeddingPipelineSupport>[0]),
-			).not.toThrow()
+				resolveMemoryBackendConfig({
+					cfg: {
+						agents: { defaults: { workspace: "/tmp/memory-test" } },
+						memory: {
+							backend: "mongodb",
+							mongodb: {
+								uri: "mongodb://localhost:27017",
+								deploymentProfile: "community-mongot",
+								embeddingMode: "automated",
+							},
+						},
+					} as unknown as MemongoConfig,
+					agentId: "main",
+				}),
+			).toThrow(/memory\.mongodb\.deploymentProfile is not supported/)
 		})
 
 		it("throws when the resolved pair drifts outside the declared contract", () => {
@@ -234,7 +231,7 @@ describe("resolveMemoryBackendConfig", () => {
 					uri: "mongodb://localhost:27017",
 					database: "mydb",
 					collectionPrefix: "custom_",
-					deploymentProfile: "community-mongot",
+					deploymentProfile: "atlas-local-preview",
 					embeddingMode: "automated",
 					fusionMethod: "rankFusion",
 					recallProfile: "proof",
@@ -476,7 +473,21 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.numDimensions).toBe(1024)
 	})
 
-	it("resolves custom numDimensions", () => {
+	it("accepts numDimensions equal to the autoEmbed model dimension", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017", numDimensions: 1024 },
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb?.numDimensions).toBe(1024)
+	})
+
+	// M2: a numDimensions that disagrees with the autoEmbed model fails boot
+	// (it used to resolve and log that it was ignored).
+	it("rejects a numDimensions mismatch at boot, naming the setting", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -484,32 +495,9 @@ describe("resolveMemoryBackendConfig", () => {
 				mongodb: { uri: "mongodb://localhost:27017", numDimensions: 768 },
 			},
 		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.numDimensions).toBe(768)
-	})
-
-	// P3.1 dead knob: numDimensions is accepted for config-schema compat but
-	// ignored — autoEmbed indexes are server-managed, the embedding model
-	// determines dimensions. The knob logs at error level when set.
-	it("logs at error level that an explicitly configured numDimensions is ignored (P3.1)", () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-		try {
-			const cfg = {
-				agents: { defaults: { workspace: "/tmp/memory-test" } },
-				memory: {
-					backend: "mongodb",
-					mongodb: { uri: "mongodb://localhost:27017", numDimensions: 768 },
-				},
-			} as unknown as MemongoConfig
-			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			// Schema compat: the value still resolves, it is just inert.
-			expect(resolved.mongodb?.numDimensions).toBe(768)
-			const logged = errorSpy.mock.calls.flat().join(" ")
-			expect(logged).toContain("numDimensions")
-			expect(logged).toContain("ignored")
-		} finally {
-			errorSpy.mockRestore()
-		}
+		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
+			/memory\.mongodb\.numDimensions does not match/,
+		)
 	})
 
 	it("does not log the numDimensions dead-knob error when it is not configured", () => {
@@ -528,33 +516,6 @@ describe("resolveMemoryBackendConfig", () => {
 		} finally {
 			errorSpy.mockRestore()
 		}
-	})
-
-	it("defaults legacySearchFallback to off (opt-in, P3.2)", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.legacySearchFallback).toBe(false)
-	})
-
-	it("honors legacySearchFallback when explicitly enabled", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: "mongodb://localhost:27017",
-					legacySearchFallback: true,
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.legacySearchFallback).toBe(true)
 	})
 
 	it("resolves the per-search budget with defaults and valid overrides (P3.2)", () => {
@@ -797,7 +758,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/deploymentProfile "community-bare" is not supported/,
+			/deploymentProfile is not supported/,
 		)
 	})
 
@@ -813,7 +774,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/deploymentProfile "atlas-m0" is not supported/,
+			/deploymentProfile is not supported/,
 		)
 	})
 
@@ -830,7 +791,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/embeddingMode "managed" is not supported/,
+			/memory\.mongodb\.embeddingMode is not supported/,
 		)
 	})
 
@@ -876,8 +837,8 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.fusionMethod).toBe("scoreFusion")
 	})
 
-	it("allows fusionMethod override via MEMONGO_MONGODB_FUSION_METHOD env var", () => {
-		vi.stubEnv("MEMONGO_MONGODB_FUSION_METHOD", "js-merge")
+	it("lets MEMONGO_MONGODB_FUSION_METHOD override the configured fusionMethod", () => {
+		vi.stubEnv("MEMONGO_MONGODB_FUSION_METHOD", "scoreFusion")
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -889,7 +850,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.fusionMethod).toBe("js-merge")
+		expect(resolved.mongodb?.fusionMethod).toBe("scoreFusion")
 	})
 
 	it("throws when mongodb backend has no URI", () => {
@@ -1234,82 +1195,6 @@ describe("resolveMemoryBackendConfig", () => {
 	// reranking config resolution
 	// ---------------------------------------------------------------------------
 
-	it("resolves reranking defaults (enabled, rerank-3, topN=20, minScore=0.01)", () => {
-		vi.stubEnv("VOYAGE_API_KEY", "")
-		try {
-			const cfg = {
-				agents: { defaults: { workspace: "/tmp/memory-test" } },
-				memory: {
-					backend: "mongodb",
-					mongodb: { uri: "mongodb://localhost:27017" },
-				},
-			} as unknown as MemongoConfig
-			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb?.reranking.enabled).toBe(true)
-			expect(resolved.mongodb?.reranking.model).toBe("rerank-3")
-			expect(resolved.mongodb?.reranking.topN).toBe(20)
-			expect(resolved.mongodb?.reranking.minScore).toBe(0.01)
-			expect(resolved.mongodb?.reranking.voyageApiKey).toBe("")
-		} finally {
-			vi.unstubAllEnvs()
-		}
-	})
-
-	it("resolves reranking with explicit values", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: "mongodb://localhost:27017",
-					reranking: {
-						enabled: true,
-						model: "rerank-2.5-lite",
-						topN: 10,
-						minScore: 0.3,
-						voyageApiKey: "voy-test-key",
-						instruction: "Prioritize recent results",
-					},
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.reranking.enabled).toBe(true)
-		expect(resolved.mongodb?.reranking.model).toBe("rerank-2.5-lite")
-		expect(resolved.mongodb?.reranking.topN).toBe(10)
-		expect(resolved.mongodb?.reranking.minScore).toBe(0.3)
-		expect(resolved.mongodb?.reranking.voyageApiKey).toBe("voy-test-key")
-	})
-
-	it("defaults reranking recency/access boost weights to 0.2", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.reranking.recencyBoost).toBe(0.2)
-		expect(resolved.mongodb?.reranking.accessBoost).toBe(0.2)
-	})
-
-	it("resolves custom reranking recency/access boost weights", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: "mongodb://localhost:27017",
-					reranking: { recencyBoost: 0.5, accessBoost: 0 },
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.reranking.recencyBoost).toBe(0.5)
-		expect(resolved.mongodb?.reranking.accessBoost).toBe(0)
-	})
-
 	it("resolves reranking temporalProximityBoost with a 0.1 default (P4.4.4)", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -1355,40 +1240,6 @@ describe("resolveMemoryBackendConfig", () => {
 		).toBe(0.1)
 	})
 
-	it("resolves reranking.voyageApiKey from env fallback", () => {
-		vi.stubEnv("VOYAGE_API_KEY", "voy-from-env")
-		try {
-			const cfg = {
-				agents: { defaults: { workspace: "/tmp/memory-test" } },
-				memory: {
-					backend: "mongodb",
-					mongodb: { uri: "mongodb://localhost:27017" },
-				},
-			} as unknown as MemongoConfig
-			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb?.reranking.voyageApiKey).toBe("voy-from-env")
-		} finally {
-			vi.unstubAllEnvs()
-		}
-	})
-
-	it("allows reranking.enabled override via MEMONGO_RERANKING_ENABLED env var", () => {
-		vi.stubEnv("MEMONGO_RERANKING_ENABLED", "false")
-		try {
-			const cfg = {
-				agents: { defaults: { workspace: "/tmp/memory-test" } },
-				memory: {
-					backend: "mongodb",
-					mongodb: { uri: "mongodb://localhost:27017" },
-				},
-			} as unknown as MemongoConfig
-			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb?.reranking.enabled).toBe(false)
-		} finally {
-			vi.unstubAllEnvs()
-		}
-	})
-
 	// ---------------------------------------------------------------------------
 	// graph.entityExtraction config resolution
 	// ---------------------------------------------------------------------------
@@ -1407,7 +1258,7 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.graph.entityExtraction.timeoutMs).toBe(5000)
 	})
 
-	it("resolves graph.entityExtraction with llm method", () => {
+	it("rejects graph.entityExtraction method llm with no provider, naming the setting (M2)", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -1424,12 +1275,9 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			},
 		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
-		expect(resolved.mongodb?.graph.entityExtraction.model).toBe(
-			"claude-3-haiku",
+		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
+			/memory\.mongodb\.graph\.entityExtraction\.method "llm"/,
 		)
-		expect(resolved.mongodb?.graph.entityExtraction.timeoutMs).toBe(10000)
 	})
 
 	it("preserves existing graph.enabled and maxGraphDepth behavior", () => {
@@ -1442,7 +1290,7 @@ describe("resolveMemoryBackendConfig", () => {
 					graph: {
 						enabled: false,
 						maxGraphDepth: 5, // above the ≤4 clamp — must not pass through
-						entityExtraction: { method: "llm" },
+						entityExtraction: { method: "regex" },
 					},
 				},
 			},
@@ -1453,27 +1301,7 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.graph.enabled).toBe(false)
 		expect(resolved.mongodb?.graph.maxGraphDepth).toBe(4)
 		// New entityExtraction field works alongside
-		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
-	})
-
-	// H2 audit fix: warn when entity extraction method is 'llm' but no LLM function injected
-	it("logs warning when entityExtraction.method is 'llm'", () => {
-		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://localhost:27017/test")
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				mongodb: {
-					graph: { entityExtraction: { method: "llm" } },
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
-		// The warning is logged via createSubsystemLogger, which we cannot easily spy on
-		// in this test setup. Instead, verify the config is preserved correctly.
-		warnSpy.mockRestore()
-		vi.unstubAllEnvs()
+		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("regex")
 	})
 
 	// ---------------------------------------------------------------------------
@@ -1492,18 +1320,6 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.numCandidates).toBe(500)
 	})
 
-	it("defaults reranking.minScore to 0.01 for recall-oriented retrieval", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.reranking.minScore).toBe(0.01)
-	})
-
 	it("allows numCandidates override via MEMONGO_NUM_CANDIDATES env var", () => {
 		vi.stubEnv("MEMONGO_NUM_CANDIDATES", "300")
 		const cfg = {
@@ -1515,20 +1331,6 @@ describe("resolveMemoryBackendConfig", () => {
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 		expect(resolved.mongodb?.numCandidates).toBe(300)
-		vi.unstubAllEnvs()
-	})
-
-	it("allows reranking.minScore override via MEMONGO_RERANK_MIN_SCORE env var", () => {
-		vi.stubEnv("MEMONGO_RERANK_MIN_SCORE", "0.05")
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.reranking.minScore).toBe(0.05)
 		vi.unstubAllEnvs()
 	})
 })

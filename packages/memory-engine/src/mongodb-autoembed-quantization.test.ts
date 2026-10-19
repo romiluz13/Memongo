@@ -11,13 +11,16 @@ function storage(rejectName?: string, existing = false) {
 	let updates = 0
 	const db = {
 		admin: () => ({ command: async () => ({ versionArray: [9, 0, 4] }) }),
-		collection: () => ({
-			listSearchIndexes: (name: string) => ({
+		collection: (collectionName: string) => ({
+			collectionName,
+			aggregate: () => ({
 				toArray: async () =>
-					existing && name === rejectName
+					existing &&
+					rejectName !== undefined &&
+					rejectName.startsWith(collectionName)
 						? [
 								{
-									name,
+									name: rejectName,
 									type: "vectorSearch",
 									latestDefinition: { fields: [autoEmbedVectorField("text")] },
 								},
@@ -47,6 +50,8 @@ function storage(rejectName?: string, existing = false) {
 	return { db, rejection, attempts, updates: () => updates }
 }
 
+// M2: a rejected autoEmbed definition is a typed boot failure
+// (autoembed-unavailable) naming the index, never retried without the option.
 describe("explicit autoEmbed quantization at the real index ensure seam", () => {
 	it.each([
 		"scalar",
@@ -56,7 +61,10 @@ describe("explicit autoEmbed quantization at the real index ensure seam", () => 
 		const f = storage("test_session_chunks_vector")
 		await expect(
 			ensureSearchIndexes(f.db, "test_", "atlas-managed", "automated", mode),
-		).rejects.toBe(f.rejection)
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "autoembed-unavailable",
+		})
 		expect(f.attempts).toHaveLength(1)
 		expect(f.attempts[0].definition.fields[0].quantization).toBe(mode)
 	})
@@ -71,7 +79,10 @@ describe("explicit autoEmbed quantization at the real index ensure seam", () => 
 				"automated",
 				"scalar",
 			),
-		).rejects.toBe(f.rejection)
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "autoembed-unavailable",
+		})
 		expect(f.updates()).toBe(1)
 		expect(f.attempts).toEqual([])
 	})
@@ -96,7 +107,10 @@ describe("explicit autoEmbed quantization at the real index ensure seam", () => 
 				"automated",
 				"scalar",
 			),
-		).rejects.toBe(f.rejection)
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "autoembed-unavailable",
+		})
 		const rejected = f.attempts.filter(
 			(index) => index.name === `test_${lane}_vector`,
 		)

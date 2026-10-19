@@ -296,7 +296,7 @@ QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage (`b02-keyed-v3`) includes the judge model, auth
+run cannot verify. Coverage (`b02-keyed-v4`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, and the configured MongoDB connection inputs described below.
 Checkpoints without a valid manifest, including every earlier run, every
@@ -307,8 +307,7 @@ retroactive certification.
 
 Credentials never enter a manifest raw or as a plain digest, which anyone could
 confirm by guessing. The enrichment, answer and judge API keys and base URLs
-(`env.<KEY>.hmac`) and the Voyage reranker key (`rerankerApiKeyHmac`) are
-recorded as HMAC-SHA-256 under the operator's
+(`env.<KEY>.hmac`) are recorded as HMAC-SHA-256 under the operator's
 `MEMONGO_BENCHMARK_FINGERPRINT_KEY`, over a fixed scheme label, the setting
 name and the effective value, separated by NUL bytes. The effective value is
 the env value trimmed as the provider resolvers trim it, and the Voyage key as
@@ -368,11 +367,9 @@ now fails as a non-retryable `EnrichmentResponseError` with shape
 `malformed-body` instead of a raw `SyntaxError`, and any other unrecognized
 failure, including an `EnrichmentResponseError` thrown by an injected `fetch`,
 becomes a plain non-retryable `Error`. An `EnrichmentHttpError` thrown by an
-injected `fetch` keeps only its status, and so its retry decision. The Voyage reranker follows
-the same rule in its fallback log and strict-mode error and never echoes a
-non-numeric result index. HTTP status codes, the timeout 408 and the retry,
-fallback and capture classification of the default `fetch` are otherwise
-unchanged. This covers configured credentials in these failure diagnostics; it
+injected `fetch` keeps only its status, and so its retry decision. HTTP status
+codes, the timeout 408 and the retry and capture classification of the default
+`fetch` are otherwise unchanged. This covers configured credentials in these failure diagnostics; it
 does not cover MongoDB driver errors, successful provider content or dataset
 text.
 

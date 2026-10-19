@@ -15,6 +15,8 @@ import {
 	eventsVectorIndex,
 	scanNovelty,
 } from "./mongodb-novelty.js"
+import { openSearchBudget } from "./mongodb-search-budget.js"
+import { SearchBudgetDeniedError, SearchLaneError } from "./search-outcomes.js"
 
 const PREFIX = "test_"
 const AGENT_ID = "agent-1"
@@ -337,7 +339,7 @@ describe("scanNovelty", () => {
 		expect(result.events.length).toBe(2)
 	})
 
-	it("degrades gracefully when vectorSearch fails", async () => {
+	it("throws a typed SearchLaneError when vectorSearch fails, never an empty report", async () => {
 		const findDocs = [
 			{
 				_id: "id1",
@@ -347,19 +349,55 @@ describe("scanNovelty", () => {
 				timestamp: new Date(),
 			},
 		]
-		const db = createMockDb({
-			findDocs,
-			aggregateError: new Error("$vectorSearch not available"),
-		})
+		const cause = new Error("$vectorSearch not available")
+		const db = createMockDb({ findDocs, aggregateError: cause })
 
-		const result = await scanNovelty({
+		const failure = await scanNovelty({
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
-		})
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
 
-		expect(result.events).toEqual([])
-		expect(result.error).toBe("mongot_unavailable")
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect(failure).toMatchObject({ stage: "vector" })
+		expect((failure as SearchLaneError).cause).toBe(cause)
+	})
+
+	it("charges each k-NN probe to the active search ledger", async () => {
+		const findDocs = ["e1", "e2", "e3"].map((eventId, index) => ({
+			_id: `id${index}`,
+			eventId,
+			body: `body ${eventId}`,
+			role: "user",
+			timestamp: new Date(),
+		}))
+		const db = createMockDb({ findDocs, aggregateResults: [] })
+		const ledger = openSearchBudget({ maxAggregations: 50, maxEmbeds: 50 })
+
+		await ledger.run(() =>
+			scanNovelty({ db, prefix: PREFIX, agentId: AGENT_ID }),
+		)
+
+		expect(ledger.snapshot()).toMatchObject({ aggregations: 3, embeds: 3 })
+	})
+
+	it("a denied ledger charge is a typed budget denial, not an empty report", async () => {
+		const findDocs = ["e1", "e2"].map((eventId, index) => ({
+			_id: `id${index}`,
+			eventId,
+			body: `body ${eventId}`,
+			role: "user",
+			timestamp: new Date(),
+		}))
+		const db = createMockDb({ findDocs, aggregateResults: [] })
+		const ledger = openSearchBudget({ maxAggregations: 1, maxEmbeds: 1 })
+
+		await expect(
+			ledger.run(() => scanNovelty({ db, prefix: PREFIX, agentId: AGENT_ID })),
+		).rejects.toBeInstanceOf(SearchBudgetDeniedError)
 	})
 
 	it("filters by agentId in find query", async () => {

@@ -10,6 +10,7 @@ export type {
 	MemongoMemoryBlockLabel,
 	MemongoMemoryBlocksResponse,
 	MemongoSearchDetailedResponse,
+	MemongoStateFailure,
 	MemongoStateResponse,
 } from "./client.js"
 export type {
@@ -75,8 +76,13 @@ export type {
 	MemongoSearchLaneOutcome,
 	MemongoSearchLaneOutcomeStatus,
 	MemongoSearchOutcomeReason,
+	MemongoCommitDetail,
+	MemongoCommitState,
+	MemongoConsolidateCommit,
 	MemongoSearchOutcomes,
+	MemongoSyncCommit,
 	MemongoSearchOutcomeStatus,
+	MemongoSectionFailure,
 	MemongoSearchKBResponse,
 	MemongoSearchResponse,
 	SearchConfig,

@@ -4,9 +4,58 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 
 ## Components
 
-1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local:preview` (floating tag in `docker/docker-compose.yml`; record its resolved digest when validating a deployment).
+1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014` (the digest pin in `docker/docker-compose.yml`; boot requires MongoDB 8.3 or later).
 2. `apps/api` - stateless HTTP service.
 3. Optional: `apps/web` and `apps/mcp`.
+
+## Deployment contract
+
+M2 is an intentional breaking change. Memongo serves retrieval only from a deployment that can run all of it, and refuses to start otherwise. There is no compatibility mode, and it never serves weaker retrieval while indexes build.
+
+| Requirement | Boot failure code |
+|---|---|
+| The server is reachable | `server-unreachable` |
+| MongoDB 8.3 or later | `server-version-unsupported`, `server-version-unreadable` |
+| Search index management (managed Atlas, or the Atlas Local preview image with mongot) | `search-management-unavailable` |
+| Search index management privileges for the connecting user, read through `connectionStatus` | `search-privileges-denied` |
+| Automated Embedding (autoEmbed) on every vector index, with an Atlas Model key in `VOYAGE_API_KEY` | `autoembed-unavailable` |
+| A replica set, because writes run in transactions | A write fails with `TransactionUnsupportedError` (`TRANSACTION_UNSUPPORTED`) |
+| Every index of the required-index manifest for the selected profile is READY, queryable and serving its manifest definition within one deadline (180 s by default; `MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS` sets it) | `index-absent`, `index-not-ready`, `index-failed`, `index-stale`, `index-type-mismatch`, `index-definition-rejected`, `index-metadata-unknown`, `boot-deadline-exceeded` |
+| A configuration with no removed key | `config-removed`, `config-invalid`, `rerank-unsupported` |
+
+Boot creates or updates Search indexes and waits for them. It never drops a Search index. When a requirement is unmet, the process exits with a typed `MemongoBootError`; `apps/api` does not bind. No URI, host, database name or secret appears in the diagnostics.
+
+The capability table, with the index each retrieval lane needs and what it does when that index is unhealthy, is in [capability-matrix.md](capability-matrix.md#retrieval-capabilities).
+
+### Preflight
+
+Run preflight before replacing a binary or changing a deployment. It reports every unmet requirement for the configured deployment, writes nothing and starts no server:
+
+```bash
+bun run --filter @memongo/api preflight
+```
+
+The report is JSON on stdout. The exit code is 0 when boot would pass as is and 1 otherwise, with one entry per unmet requirement (one per failed collection for index listings). Run it with the same environment as the service.
+
+`GET /ready` is the readiness probe. On each call it checks MongoDB, the vector index, the embedding provider and the same manifest, and it answers 503 with a `lanes` object that names each unmet manifest index. `GET /health` is liveness only.
+
+### First boot after an upgrade
+
+The first M2 boot updates changed Search index definitions in place and creates new ones: `procedures_text`, `entity_autocomplete`, `episode_autocomplete` and `structured_mem_text` change, and `structured_mem_revisions_text` is new. Each update rebuilds that index. Boot waits up to the readiness deadline and fails with `index-not-ready` while one is still building; the build continues on the server, so start the service again. The connecting user needs the privilege to update Search indexes, or boot fails with `search-privileges-denied`. The full list of behavior changes is in [BEHAVIOR-CHANGES.md](../../BEHAVIOR-CHANGES.md).
+
+### Local Atlas preview image
+
+Local runs and CI use `mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014`. The digest is the pin in `docker/docker-compose.yml`, `.github/workflows/ci.yml` and the nightly workflow. The `preview` tag moves, so a floating tag is not a supported way to run Memongo. Change the digest in all three places together.
+
+### Rolling back to the prior binary
+
+Rollback is a binary swap. Stop the M2 binary and start the prior one against the same database:
+
+1. Stop the M2 API and its workers. M2 holds no state outside MongoDB.
+2. Start the prior binary with its own configuration. Remove nothing from MongoDB first.
+3. Expect the prior binary to behave as it did before M2, including its weaker retrieval paths when an index is missing.
+
+M2 boot creates Search indexes and updates their definitions. It drops no Search index and no collection, so there is no data step to reverse. Search indexes M2 created stay in place. An index whose definition M2 updated keeps the M2 definition until the prior binary's own boot rewrites it. No rolling upgrade is claimed: do not run M2 and the prior binary against one database at the same time.
 
 ## Configuration
 
@@ -14,7 +63,7 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 - `MEMONGO_API_KEY` - set in any untrusted network.
 - `MEMONGO_API_SCOPED_KEYS` - optional JSON policy for narrower bearer tokens bound to explicit `agentId`, `scope`, and `scopeRef` values.
 - `MEMONGO_API_PORT` / `MEMONGO_API_HOST` - bind address for `apps/api`.
-- `VOYAGE_API_KEY` - required for auto-embed and hybrid retrieval quality. Use an Atlas Model key with the `al-...` prefix.
+- `VOYAGE_API_KEY` - required, because every vector index uses Automated Embedding. Use an Atlas Model key with the `al-...` prefix.
 
 Connection budget defaults: all managers for the same MongoDB URI share one
 client and therefore one bounded pool (`MEMONGO_MONGODB_MAX_POOL_SIZE`,
@@ -58,7 +107,7 @@ flipped without a restart:
 
 Memongo's automated semantic-search path uses MongoDB Automated Embedding,
 currently labeled [Preview by MongoDB](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/).
-Verify the upstream requirements for the deployment you use.
+Boot refuses a deployment that does not support it (`autoembed-unavailable`). Verify the upstream requirements for the deployment you use.
 
 ## MongoDB runtimes
 

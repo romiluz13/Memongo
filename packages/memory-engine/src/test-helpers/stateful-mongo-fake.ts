@@ -477,6 +477,11 @@ function applyUpdateOperators(
 					)
 				}
 				break
+			case "$currentDate":
+				for (const path of Object.keys(spec)) {
+					setPath(doc, path, new Date())
+				}
+				break
 			case "$unset":
 				for (const path of Object.keys(spec)) {
 					unsetPath(doc, path)
@@ -1023,6 +1028,17 @@ class FakeCollection {
 		this.docs.length = 0
 		this.docs.push(...keep)
 		return { acknowledged: true, deletedCount }
+	}
+
+	async deleteOne(filter: Document): Promise<{
+		acknowledged: true
+		deletedCount: number
+	}> {
+		this.gate("deleteOne")
+		const index = this.docs.findIndex((doc) => matchesFilter(doc, filter))
+		if (index === -1) return { acknowledged: true, deletedCount: 0 }
+		this.docs.splice(index, 1)
+		return { acknowledged: true, deletedCount: 1 }
 	}
 
 	async countDocuments(filter: Document = {}): Promise<number> {

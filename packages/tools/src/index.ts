@@ -121,8 +121,8 @@ const contextBundleSchema = z.object({
 const recallConversationSchema = z.object({
 	query: z.string().optional(),
 	agentId: z.string().optional(),
-	scope: memoryScopeSchema.optional(),
-	scopeRef: z.string().optional(),
+	scope: memoryScopeSchema,
+	scopeRef: z.string().min(1),
 	sessionId: z.string().optional(),
 	roles: z.array(z.enum(["user", "assistant", "system", "tool"])).optional(),
 	startTime: z.string().optional(),
@@ -357,7 +357,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 		}),
 		memongo_read_file: tool({
 			description:
-				"Read a memory file path or structured: URI (memory_get parity).",
+				"Read a memory file path or structured: URI (memory_get parity). Tenant locators need ?scope=<scope>&scopeRef=<scopeRef> on relPath.",
 			inputSchema: readFileSchema,
 			execute: async (input) =>
 				withUntrustedMemoryProvenance(await client.readFile(input)),
@@ -440,6 +440,8 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 			inputSchema: z.object({
 				factId: z.string(),
 				collection: chainTraceCollectionSchema,
+				scope: memoryScopeSchema,
+				scopeRef: z.string().min(1),
 				agentId: z.string().optional(),
 				maxDepth: z.number().optional(),
 			}),

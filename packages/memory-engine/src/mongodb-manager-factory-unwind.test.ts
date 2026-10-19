@@ -12,12 +12,15 @@ import {
 import type { MongoClient } from "mongodb"
 import type { MemongoConfig } from "@memongo/lib"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
+import { ChangeStreamUnavailableError } from "./mongodb-change-stream.js"
+import { MemongoBootError } from "./mongodb-boot-errors.js"
+import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
 import * as schemaModule from "./mongodb-schema.js"
-import {
-	resolveSearchIndexReadinessTiming,
-	getExpectedSearchIndexTargets,
-} from "./mongodb-schema-search-definitions.js"
+import { resolveSearchIndexReadinessTiming } from "./mongodb-schema-search-definitions.js"
 
 // ---------------------------------------------------------------------------
 // Module-graph mocks (same seam set as mongodb-manager-lifecycle.test.ts)
@@ -66,10 +69,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	).queryRewriterModuleMock(),
 )
 
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
-)
-
 vi.mock("./mongodb-lane-coverage.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).laneCoverageModuleMock(),
 )
@@ -105,6 +104,7 @@ vi.mock("./mongodb-telemetry.js", async () =>
 const mongoDriverHarness = vi.hoisted(() => {
 	class FakeMongoClient {
 		static instances: FakeMongoClient[] = []
+		static connectError: Error | null = null
 		uri: string
 		closeCalls = 0
 		closeError: Error | null = null
@@ -113,6 +113,9 @@ const mongoDriverHarness = vi.hoisted(() => {
 			FakeMongoClient.instances.push(this)
 		}
 		async connect(): Promise<FakeMongoClient> {
+			if (FakeMongoClient.connectError) {
+				throw FakeMongoClient.connectError
+			}
 			return this
 		}
 		db(name?: string): unknown {
@@ -174,7 +177,8 @@ const W17_URI = "mongodb://w17-unwind-unit:27017/w17"
 
 const STRICT_ENV_KEYS = [
 	"MEMONGO_BENCHMARK_STRICT",
-	"MEMONGO_STRICT_SEARCH_INDEX_READY",
+	"MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS",
+	"MEMONGO_SEARCH_INDEX_READINESS_POLL_MS",
 	"MEMONGO_FORCE_MONGODB_URI",
 	"MEMONGO_MONGODB_URI",
 ] as const
@@ -235,9 +239,6 @@ function resetFactoryMocks(): void {
 		textSearch: false,
 		vectorSearch: false,
 	} as never)
-	vi.mocked(schemaModule.isSearchIndexManagementAvailable).mockResolvedValue(
-		false,
-	)
 	vi.mocked(schemaModule.ensureCollections).mockResolvedValue(
 		undefined as never,
 	)
@@ -274,9 +275,107 @@ beforeEach(() => {
 		delete process.env[key]
 	}
 	mongoDriverHarness.FakeMongoClient.instances.length = 0
+	mongoDriverHarness.FakeMongoClient.connectError = null
 	accessTrackerHarness.state.constructorError = null
 	accessTrackerHarness.state.instances.length = 0
 	resetFactoryMocks()
+})
+
+// ---------------------------------------------------------------------------
+// T11 (review F5): the pre-contract connect path is a typed boot failure
+// ---------------------------------------------------------------------------
+
+describe("pre-contract connect failure is a typed server-unreachable boot error", () => {
+	const SENTINELS = [
+		"SENTINEL-password-4471",
+		"private-host.example.net",
+		"tenant-db-sentinel",
+		"mongodb://",
+		"10.1.2.3",
+	]
+	const SENTINEL_URI =
+		"mongodb://dbuser:SENTINEL-password-4471@private-host.example.net:27017/tenant-db-sentinel"
+
+	function captured(spies: Array<ReturnType<typeof vi.spyOn>>): string {
+		return spies
+			.flatMap((spy) =>
+				spy.mock.calls.map((call) => call.map(String).join(" ")),
+			)
+			.join("\n")
+	}
+
+	it("throws MemongoBootError server-unreachable with no URI, host, address, database or secret anywhere", async () => {
+		const spies = [
+			vi.spyOn(console, "log").mockImplementation(() => {}),
+			vi.spyOn(console, "info").mockImplementation(() => {}),
+			vi.spyOn(console, "warn").mockImplementation(() => {}),
+			vi.spyOn(console, "error").mockImplementation(() => {}),
+			vi.spyOn(console, "debug").mockImplementation(() => {}),
+		]
+		mongoDriverHarness.FakeMongoClient.connectError = Object.assign(
+			new Error(
+				`connect ECONNREFUSED 10.1.2.3:27017 for ${SENTINEL_URI} (db tenant-db-sentinel)`,
+			),
+			{ name: "MongoNetworkError" },
+		)
+		const cfg: MemongoConfig = {
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: SENTINEL_URI, database: "tenant-db-sentinel" },
+			},
+		}
+
+		const failure = await MongoDBMemoryManager.create({
+			cfg,
+			agentId: "t11-unit",
+			resolved: resolveMemoryBackendConfig({ cfg, agentId: "t11-unit" }),
+		}).catch((err: unknown) => err)
+
+		expect(failure).toBeInstanceOf(MemongoBootError)
+		expect(failure).toMatchObject({
+			name: "MemongoBootError",
+			code: "server-unreachable",
+		})
+		const surfaces = [
+			(failure as Error).message,
+			JSON.stringify((failure as MemongoBootError).failures),
+			captured(spies),
+		].join("\n")
+		for (const sentinel of SENTINELS) {
+			expect(surfaces).not.toContain(sentinel)
+		}
+		expect(surfaces).toContain("MongoNetworkError")
+		expect(mongoDriverHarness.FakeMongoClient.instances).toHaveLength(1)
+		expect(mongoDriverHarness.FakeMongoClient.instances[0].closeCalls).toBe(1)
+	})
+
+	it("the success path logs no URI, host or database either", async () => {
+		const spies = [
+			vi.spyOn(console, "log").mockImplementation(() => {}),
+			vi.spyOn(console, "info").mockImplementation(() => {}),
+		]
+		const cfg: MemongoConfig = {
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: SENTINEL_URI, database: "tenant-db-sentinel" },
+			},
+		}
+		vi.mocked(schemaModule.ensureCollections).mockRejectedValueOnce(
+			new Error("stop after connect"),
+		)
+
+		await MongoDBMemoryManager.create({
+			cfg,
+			agentId: "t11-unit",
+			resolved: resolveMemoryBackendConfig({ cfg, agentId: "t11-unit" }),
+		}).catch(() => undefined)
+
+		const logged = captured(spies)
+		expect(logged).toContain("connecting to MongoDB")
+		for (const sentinel of SENTINELS) {
+			expect(logged).not.toContain(sentinel)
+		}
+	})
 })
 
 // ---------------------------------------------------------------------------
@@ -373,6 +472,38 @@ describe("W17 factory failure unwind (owned client)", () => {
 		// the unwind, not leaked with its flush timer.
 		expect(accessTrackerHarness.state.instances).toHaveLength(1)
 		expect(accessTrackerHarness.state.instances[0].closed).toBe(true)
+	})
+
+	it("fails the factory with a typed error, with no file-watcher-only fallback, when enabled change streams cannot open", async () => {
+		const cfg = {
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: W17_URI, enableChangeStreams: true },
+			},
+		} as MemongoConfig
+		vi.mocked(schemaModule.chunksCollection).mockReturnValue({
+			watch: () => {
+				throw new Error(
+					"The $changeStream stage is only supported on replica sets",
+				)
+			},
+		} as never)
+		const onClosed = vi.fn()
+
+		const outcome = MongoDBMemoryManager.create({
+			cfg,
+			agentId: "w17-unit",
+			resolved: resolveMemoryBackendConfig({ cfg, agentId: "w17-unit" }),
+			onClosed,
+		})
+
+		await expect(outcome).rejects.toBeInstanceOf(ChangeStreamUnavailableError)
+		await expect(outcome).rejects.toMatchObject({
+			code: "CHANGE_STREAM_UNAVAILABLE",
+		})
+		expect(mongoDriverHarness.FakeMongoClient.instances).toHaveLength(1)
+		expect(mongoDriverHarness.FakeMongoClient.instances[0].closeCalls).toBe(1)
+		expect(onClosed).toHaveBeenCalledTimes(1)
 	})
 
 	it("rethrows the original factory error even when the cleanup close fails", async () => {
@@ -493,120 +624,160 @@ describe("W17 factory happy path under the unwind wrap", () => {
 	})
 })
 
-describe("required readiness timing reaches the actual factory waiter", () => {
+describe("startup sync and projection repair are declared best-effort (J-09)", () => {
+	it("counts a failed startup sync and a failed projection repair by label, logs no driver text, and still returns the manager", async () => {
+		resetBestEffortFailureCounts()
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		vi.mocked(prototypeSeams.sync).mockRejectedValueOnce(
+			new Error("sync failed at mongodb://user:SENTINEL-sync@db.example:27017"),
+		)
+		vi.mocked(prototypeSeams.repairEventProjections).mockRejectedValueOnce(
+			new Error("repair failed at mongodb://user:SENTINEL-repair@db.example"),
+		)
+
+		const manager = await MongoDBMemoryManager.create({
+			cfg: buildCfg(),
+			agentId: "j09-unit",
+			resolved: resolveMemoryBackendConfig({
+				cfg: buildCfg(),
+				agentId: "j09-unit",
+			}),
+		})
+
+		expect(manager).toBeInstanceOf(MongoDBMemoryManager)
+		expect(getBestEffortFailureCounts()).toEqual({
+			"startup-sync": 1,
+			"startup-projection-repair": 1,
+		})
+		const logged = warn.mock.calls.map((call) => call.map(String).join(" "))
+		expect(logged.join("\n")).not.toContain("SENTINEL")
+		await manager.close()
+		warn.mockRestore()
+	})
+
+	it("counts nothing when both startup tasks succeed", async () => {
+		resetBestEffortFailureCounts()
+
+		const manager = await MongoDBMemoryManager.create({
+			cfg: buildCfg(),
+			agentId: "j09-unit-ok",
+			resolved: resolveMemoryBackendConfig({
+				cfg: buildCfg(),
+				agentId: "j09-unit-ok",
+			}),
+		})
+
+		expect(getBestEffortFailureCounts()).toEqual({})
+		await manager.close()
+	})
+})
+
+describe("startup contract timing reaches the boot contract", () => {
 	const cases = [
-		["defaults unset", undefined, undefined, "", "", 60000, 1000],
-		["defaults empty", "", "", "", "", 60000, 1000],
-		["invalid timeout valid poll", "0", "250", "", "", 60000, 250],
-		["valid timeout invalid poll", "42000", "NaN", "", "", 42000, 1000],
-		["whitespace", "   ", " ", "", "", 60000, 1000],
-		["zero", "0", "0", "", "", 60000, 1000],
-		["literal NaN", "NaN", "NaN", "", "", 60000, 1000],
-		["negative", "-1", "-2", "", "", 60000, 1000],
-		["infinite", "Infinity", "Infinity", "", "", 60000, 1000],
-		["valid", "180000", "250", "", "", 180000, 250],
-		["valid padded", " 42000 ", " 125 ", "", "", 42000, 125],
-		["valid fractional", "42000.9", "125.9", "", "", 42000, 125],
-		["benchmark strict zero", "0", "0", "1", "", 180000, 1000],
-		["search strict NaN", "NaN", "NaN", "", "1", 180000, 1000],
-		["search true budget", "NaN", "NaN", "", "true", 180000, 1000],
-		["strict whitespace", " ", " ", "1", "", 180000, 1000],
-		["benchmark true budget", " ", " ", "true", "", 180000, 1000],
+		["defaults unset", undefined, undefined, 180_000, 1_000],
+		["defaults empty", "", "", 180_000, 1_000],
+		["whitespace", "   ", " ", 180_000, 1_000],
+		["valid", "42000", "250", 42_000, 250],
+		["valid padded", " 42000 ", " 125 ", 42_000, 125],
 	] as const
 	it.each(
 		cases,
-	)("%s preserves required waiting with positive finite timing", async (_name, timeout, poll, benchmarkStrict, searchStrict, expectedTimeout, expectedPoll) => {
-		const keys = {
-			MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: timeout,
-			MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: poll,
-			MEMONGO_BENCHMARK_STRICT: benchmarkStrict,
-			MEMONGO_STRICT_SEARCH_INDEX_READY: searchStrict,
+	)("%s passes one total deadline and a bounded poll to enforceBootContract", async (_name, timeout, poll, expectedDeadline, expectedPoll) => {
+		if (timeout !== undefined) {
+			process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS = timeout
 		}
-		const originals = Object.fromEntries(
-			Object.keys(keys).map((key) => [key, process.env[key]]),
-		)
-		let releaseWaiter = () => {}
-		const waitGate = new Promise<void>((resolve) => {
-			releaseWaiter = resolve
+		if (poll !== undefined) {
+			process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS = poll
+		}
+		vi.mocked(
+			schemaModule.resolveSearchIndexReadinessTiming,
+		).mockImplementation(resolveSearchIndexReadinessTiming)
+		const contract = vi.mocked(schemaModule.enforceBootContract)
+		contract.mockClear()
+		const { client } = buildSharedClient()
+
+		const manager = await MongoDBMemoryManager.create({
+			cfg: buildCfg(),
+			agentId: "readiness",
+			resolved: resolveMemoryBackendConfig({
+				cfg: buildCfg(),
+				agentId: "readiness",
+			}),
+			client,
 		})
-		try {
-			for (const [key, value] of Object.entries(keys)) {
-				if (value === undefined) delete process.env[key]
-				else process.env[key] = value
-			}
-			vi.mocked(
-				schemaModule.resolveSearchIndexReadinessTiming,
-			).mockImplementation(resolveSearchIndexReadinessTiming)
-			vi.mocked(schemaModule.getExpectedSearchIndexTargets).mockImplementation(
-				getExpectedSearchIndexTargets,
-			)
-			vi.mocked(
-				schemaModule.isSearchIndexManagementAvailable,
-			).mockResolvedValue(true)
-			vi.mocked(schemaModule.listSearchIndexes).mockResolvedValue([])
-			vi.mocked(schemaModule.ensureSearchIndexes).mockResolvedValue({
-				text: true,
-				vector: true,
-			})
-			const waiter = vi.mocked(schemaModule.waitForSearchIndexesQueryable)
-			waiter.mockClear()
-			waiter.mockImplementation(async () => {
-				await waitGate
-				return {
-					ready: false,
-					indexes: [],
-					pending: ["offline-pending"],
-					failed: [],
-				}
-			})
-			vi.mocked(schemaModule.ensureStandardIndexes).mockClear()
-			vi.mocked(schemaModule.ensureStandardIndexes).mockRejectedValue(
-				new Error("offline-stop-after-required-wait"),
-			)
-			const { client } = buildSharedClient()
-			const creation = MongoDBMemoryManager.create({
+		await manager.close()
+
+		expect(contract).toHaveBeenCalledOnce()
+		expect(contract.mock.calls[0]?.[1]).toMatchObject({
+			mode: "repair",
+			deadlineMs: expectedDeadline,
+			pollMs: expectedPoll,
+		})
+	})
+
+	it.each([
+		["MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS", "0"],
+		["MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS", "NaN"],
+		["MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS", "-1"],
+		["MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS", "Infinity"],
+		["MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS", "42000.9"],
+		["MEMONGO_SEARCH_INDEX_READINESS_POLL_MS", "0"],
+		["MEMONGO_SEARCH_INDEX_READINESS_POLL_MS", "NaN"],
+	] as const)("rejects %s=%s at boot, naming the setting, before any index work", async (setting, value) => {
+		process.env[setting] = value
+		vi.mocked(
+			schemaModule.resolveSearchIndexReadinessTiming,
+		).mockImplementation(resolveSearchIndexReadinessTiming)
+		const contract = vi.mocked(schemaModule.enforceBootContract)
+		contract.mockClear()
+
+		await expect(
+			MongoDBMemoryManager.create({
 				cfg: buildCfg(),
 				agentId: "readiness",
 				resolved: resolveMemoryBackendConfig({
 					cfg: buildCfg(),
 					agentId: "readiness",
 				}),
-				client,
-			})
-			let settled = false
-			void creation.then(
-				() => {
-					settled = true
+			}),
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "config-invalid",
+			setting,
+		})
+		expect(contract).not.toHaveBeenCalled()
+		expect(mongoDriverHarness.FakeMongoClient.instances[0]?.closeCalls).toBe(1)
+	})
+
+	it("serves nothing when the boot contract fails: the typed failure propagates and the owned client closes", async () => {
+		const { MemongoBootError } = await import("./mongodb-boot-errors.js")
+		vi.mocked(schemaModule.detectCapabilities).mockClear()
+		vi.mocked(schemaModule.ensureStandardIndexes).mockClear()
+		vi.mocked(schemaModule.enforceBootContract).mockRejectedValueOnce(
+			new MemongoBootError(
+				{
+					code: "index-not-ready",
+					requirement: "READY and serving its manifest definition",
+					index: "memongo_chunks_vector",
+					collection: "memongo_chunks",
+					status: "BUILDING",
 				},
-				() => {
-					settled = true
-				},
-			)
-			await setImmediate()
-			expect(settled).toBe(false)
-			expect(schemaModule.ensureStandardIndexes).not.toHaveBeenCalled()
-			releaseWaiter()
-			await expect(creation).rejects.toThrow(
-				benchmarkStrict === "1" || searchStrict === "1"
-					? "search indexes not fully queryable"
-					: "offline-stop-after-required-wait",
-			)
-			expect(waiter.mock.calls.length).toBeGreaterThan(0)
-			for (const [, timing] of waiter.mock.calls) {
-				expect(timing?.timeoutMs).toBe(expectedTimeout)
-				expect(timing?.pollMs).toBe(expectedPoll)
-				expect(Number.isFinite(timing?.timeoutMs)).toBe(true)
-				expect(Number.isFinite(timing?.pollMs)).toBe(true)
-				expect(timing?.timeoutMs).toBeGreaterThan(0)
-				expect(timing?.pollMs).toBeGreaterThan(0)
-				expect(timing?.indexNames.length).toBeGreaterThan(0)
-			}
-		} finally {
-			releaseWaiter()
-			for (const [key, value] of Object.entries(originals)) {
-				if (value === undefined) delete process.env[key]
-				else process.env[key] = value
-			}
-		}
+				"boot refused after the 180 s readiness deadline",
+			),
+		)
+
+		await expect(
+			MongoDBMemoryManager.create({
+				cfg: buildCfg(),
+				agentId: "readiness",
+				resolved: resolveMemoryBackendConfig({
+					cfg: buildCfg(),
+					agentId: "readiness",
+				}),
+			}),
+		).rejects.toBeInstanceOf(MemongoBootError)
+		expect(schemaModule.detectCapabilities).not.toHaveBeenCalled()
+		expect(schemaModule.ensureStandardIndexes).not.toHaveBeenCalled()
+		expect(mongoDriverHarness.FakeMongoClient.instances[0]?.closeCalls).toBe(1)
 	})
 })

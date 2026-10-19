@@ -1012,8 +1012,6 @@ export function buildBenchmarkRunReport(
  *   - `datasetKind` — determines retrieval unit (currently always "turn").
  *   - `mongoEmbeddingConfig` — from resolved backend config
  *     (`numDimensions` + `quantization`).
- *   - `mongoRerankerConfig` — from resolved backend config
- *     (`enabled`, `model`, `topN`).
  *   - `latencySamples` — per-case retrieval latencies collected during
  *     the benchmark run. Emits p50 + p95.
  *   - `cost` — immutable snapshot from the run-scoped accounting ledger.
@@ -1029,11 +1027,6 @@ export async function projectBenchmarkParityFields(params: {
 	mongoEmbeddingConfig: {
 		numDimensions: number
 		quantization: "none" | "scalar" | "binary"
-	}
-	mongoRerankerConfig: {
-		enabled: boolean
-		model: string
-		topN: number
 	}
 	latencySamples: number[]
 	cost: BenchmarkCostAccounting
@@ -1056,7 +1049,7 @@ export async function projectBenchmarkParityFields(params: {
 		params.retrievalLane,
 	)
 	const embedding = resolveBenchmarkEmbeddingConfig(params.mongoEmbeddingConfig)
-	const reranker = resolveBenchmarkRerankerConfig(params.mongoRerankerConfig)
+	const reranker = resolveBenchmarkRerankerConfig()
 	const storage = await collectStorageFootprint({
 		db: params.db,
 		collectionName: params.collectionName,

@@ -2234,7 +2234,10 @@ describe("tenant erasure gate — manager boundary (real replica set)", () => {
 				).toBe(1)
 
 				// B's manager-level read runs normally as well.
-				await tenantManager(agentB, db).listQuarantined()
+				await tenantManager(agentB, db).listQuarantined({
+					scope: "agent",
+					scopeRef: `agent:${agentB}`,
+				})
 
 				// B's counts grew ONLY by its own write; its seeded rows are
 				// untouched by A's mid-sweep window.

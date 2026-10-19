@@ -1050,6 +1050,8 @@ describe("createApp", () => {
 			body: JSON.stringify({
 				factId: "fact-1",
 				collection: "structured_mem",
+				scope: "workspace",
+				scopeRef: "workspace:demo",
 				agentId: "agent-42",
 				maxDepth: 3,
 			}),
@@ -1067,6 +1069,8 @@ describe("createApp", () => {
 			agentId: "agent-42",
 			factId: "fact-1",
 			collection: "structured_mem",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			maxDepth: 3,
 		})
 	})
@@ -1327,7 +1331,7 @@ describe("createApp", () => {
 			},
 		])
 		const res = await createApp().request(
-			"/v1/admin/quarantine?agentId=agent-42&status=pending-review&limit=25",
+			"/v1/admin/quarantine?agentId=agent-42&scope=workspace&scopeRef=workspace%3Ademo&status=pending-review&limit=25",
 		)
 		expect(res.status).toBe(200)
 		const json = (await res.json()) as Array<Record<string, unknown>>
@@ -1338,9 +1342,28 @@ describe("createApp", () => {
 		})
 		expect(bridgeMocks.memongoBridgeListQuarantined).toHaveBeenCalledWith({
 			agentId: "agent-42",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			status: "pending-review",
 			limit: 25,
 		})
+	})
+
+	it.each([
+		["scope", "scopeRef=workspace%3Ademo"],
+		["scopeRef", "scope=workspace"],
+		["scope and scopeRef", "agentId=agent-42"],
+	])("rejects a quarantine list with no %s before the bridge (M2 T13)", async (_label, query) => {
+		bridgeMocks.memongoBridgeListQuarantined.mockResolvedValue([])
+		const res = await createApp().request(`/v1/admin/quarantine?${query}`)
+		expect(res.status).toBe(400)
+		expect(await res.json()).toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "scope and scopeRef are required",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeListQuarantined).not.toHaveBeenCalled()
 	})
 
 	it("rejects an invalid quarantine status filter before the bridge", async () => {
@@ -1360,7 +1383,9 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeListQuarantined.mockRejectedValue(
 			new Error("queue read failed"),
 		)
-		const res = await createApp().request("/v1/admin/quarantine")
+		const res = await createApp().request(
+			"/v1/admin/quarantine?scope=workspace&scopeRef=workspace%3Ademo",
+		)
 		expect(res.status).toBe(500)
 		const json = (await res.json()) as { error: { code: string } }
 		expect(json.error.code).toBe("QUARANTINE_LIST_FAILED")
@@ -1827,13 +1852,24 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 		process.env = { ...prevEnv }
 	})
 
-	it("serves the degradation marker on /v1/search when the engine throttles (C-019)", async () => {
+	it("answers a throttled /v1/search with a typed 503, not a degraded 200 (C-019, review 1237 ruling 4)", async () => {
 		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
 			results: [],
 			degradation: {
 				kind: "throttled",
 				scope: "denied",
 				retryAfterMs: 4000,
+			},
+			outcomes: {
+				status: "failed",
+				lanes: [
+					{
+						lane: "search",
+						stage: "request",
+						outcome: "budget-denied",
+						reason: "budget-embeds",
+					},
+				],
 			},
 		})
 
@@ -1843,21 +1879,14 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 			body: JSON.stringify({ query: "anything" }),
 		})
 
-		expect(res.status).toBe(200)
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBe("4")
 		const body = (await res.json()) as {
-			results: unknown[]
-			degradation?: {
-				kind: string
-				scope: string
-				retryAfterMs?: number
-			}
+			error: { code: string }
+			degradation?: unknown
 		}
-		expect(body.results).toEqual([])
-		expect(body.degradation).toEqual({
-			kind: "throttled",
-			scope: "denied",
-			retryAfterMs: 4000,
-		})
+		expect(body.error.code).toBe("SEARCH_BUDGET_EXHAUSTED")
+		expect(body.degradation).toBeUndefined()
 	})
 
 	it("omits the degradation field on /v1/search when nothing degraded", async () => {
@@ -1876,11 +1905,16 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 		expect(body.degradation).toBeUndefined()
 	})
 
-	it("serves the degradation marker on /v1/search-kb when the vector lane is skipped (C-019)", async () => {
-		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
-			results: [],
-			degradation: { kind: "throttled", scope: "vector-lane-skipped" },
-		})
+	it("serves a KB admission denial as 503 SEARCH_BUDGET_EXHAUSTED with Retry-After, not a degraded 200", async () => {
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockRejectedValue(
+			Object.assign(new Error("typed search failure"), {
+				name: "SearchBudgetDeniedError",
+				lane: "kb",
+				stage: "request",
+				reason: "budget-embeds",
+				retryAfterMs: 2500,
+			}),
+		)
 
 		const res = await createApp().request("/v1/search-kb", {
 			method: "POST",
@@ -1888,16 +1922,14 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 			body: JSON.stringify({ query: "lucene index" }),
 		})
 
-		expect(res.status).toBe(200)
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBe("3")
 		const body = (await res.json()) as {
-			results: unknown[]
-			degradation?: { kind: string; scope: string }
+			error: { code: string }
+			degradation?: unknown
 		}
-		expect(body.results).toEqual([])
-		expect(body.degradation).toEqual({
-			kind: "throttled",
-			scope: "vector-lane-skipped",
-		})
+		expect(body.error.code).toBe("SEARCH_BUDGET_EXHAUSTED")
+		expect(body.degradation).toBeUndefined()
 	})
 
 	it("omits the degradation field on /v1/search-kb when nothing degraded", async () => {
@@ -1916,7 +1948,7 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 		expect(body.degradation).toBeUndefined()
 	})
 
-	it("documents degradation in the OpenAPI search schemas (C-019)", async () => {
+	it("documents degradation on /v1/search only; KB denial is a typed 503, not a marker (C-019)", async () => {
 		const res = await createApp().request("/openapi.json")
 		const json = (await res.json()) as {
 			components?: unknown
@@ -1943,6 +1975,7 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 					properties?: Record<string, unknown>
 			  }
 			| undefined
-		expect(kbSchema?.properties).toHaveProperty("degradation")
+		expect(kbSchema?.properties).not.toHaveProperty("degradation")
+		expect(kbSchema?.properties).toHaveProperty("outcomes")
 	})
 })

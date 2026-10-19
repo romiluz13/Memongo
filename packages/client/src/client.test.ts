@@ -494,6 +494,24 @@ describe("MemongoClient scope forwarding (P1.3)", () => {
 		expect(body.scopeRef).toBe("ref-A")
 	})
 
+	it("forwards the tenant identity on traceChain", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { factId: "fact-1", nodes: [] })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.traceChain({
+			factId: "fact-1",
+			collection: "structured_mem",
+			scope: "tenant",
+			scopeRef: "ref-A",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/chain-trace")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("tenant")
+		expect(body.scopeRef).toBe("ref-A")
+	})
+
 	it("forwards canonical scopes on event writes and consolidation", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = []
 		stubJsonFetch(calls)
@@ -717,19 +735,21 @@ describe("MemongoClient quarantine review (C-004)", () => {
 		)
 		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
 		const response = await client.listQuarantined({
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			agentId: "agent-42",
 			status: "pending-review",
 			limit: 5,
 		})
 		expect(calls).toHaveLength(1)
 		expect(calls[0].url).toBe(
-			"http://127.0.0.1:3100/v1/admin/quarantine?agentId=agent-42&status=pending-review&limit=5",
+			"http://127.0.0.1:3100/v1/admin/quarantine?agentId=agent-42&scope=workspace&scopeRef=workspace%3Ademo&status=pending-review&limit=5",
 		)
 		expect(calls[0].init.method).toBe("GET")
 		expect(response).toEqual(entries)
 	})
 
-	it("lists every stage when no filters are given", async () => {
+	it("lists every stage when only the tenant is given", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = []
 		vi.stubGlobal(
 			"fetch",
@@ -742,9 +762,14 @@ describe("MemongoClient quarantine review (C-004)", () => {
 			}),
 		)
 		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
-		const response = await client.listQuarantined()
+		const response = await client.listQuarantined({
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		})
 		expect(calls).toHaveLength(1)
-		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/admin/quarantine")
+		expect(calls[0].url).toBe(
+			"http://127.0.0.1:3100/v1/admin/quarantine?scope=workspace&scopeRef=workspace%3Ademo",
+		)
 		expect(response).toEqual([])
 	})
 

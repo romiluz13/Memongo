@@ -7,7 +7,9 @@ import { buildContextBundle as composeContextBundle } from "./mongodb-context-bu
 import { expandSearchContext } from "./mongodb-context-expansion.js"
 import { recallConversation as recallConversationCore } from "./mongodb-conversation-recall.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
+import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	createMemoryJob,
 	getMemoryJob,
@@ -21,6 +23,7 @@ import type {
 } from "./mongodb-procedures.js"
 import { synthesizeProfile } from "./mongodb-profile.js"
 import type { ProfileSynthesis } from "./mongodb-profile.js"
+import { attachCommitReport } from "./mongodb-commit-report.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import {
 	captureAdmissionToken,
@@ -580,6 +583,7 @@ export class MongoDBManagerLifecycleOps {
 			  }
 			| undefined
 
+		const capabilities = await this.host.requestCapabilities()
 		const bundle = await composeContextBundle({
 			admission: readAdmission,
 			db: this.host.db,
@@ -603,7 +607,7 @@ export class MongoDBManagerLifecycleOps {
 						searchOptions: {
 							minScore: 0.1,
 							numCandidates: mongoCfg.numCandidates,
-							capabilities: this.host.capabilities,
+							capabilities,
 							fusionMethod: mongoCfg.fusionMethod,
 							embeddingMode: mongoCfg.embeddingMode,
 							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
@@ -635,7 +639,7 @@ export class MongoDBManagerLifecycleOps {
 						},
 					},
 				)
-				const expandedResults =
+				const expansion =
 					params.scope === "session"
 						? await expandSearchContext({
 								db: this.host.db,
@@ -646,8 +650,8 @@ export class MongoDBManagerLifecycleOps {
 								results: result.results,
 								maxResults: params.maxResults,
 							})
-						: result.results
-				const trustedResults = annotateResultsWithTrust(expandedResults, {
+						: { results: result.results, failures: [] }
+				const trustedResults = annotateResultsWithTrust(expansion.results, {
 					scope: params.scope,
 					scopeRef: params.scopeRef,
 					sessionKey: params.scope === "session" ? params.sessionId : undefined,
@@ -661,6 +665,18 @@ export class MongoDBManagerLifecycleOps {
 					results: trustedResults,
 					pathsExecuted: result.metadata.pathsExecuted,
 					trustSummary: summarizeTrust(trustedResults),
+					// X-09: the search's lane rows, status and throttle marker
+					// reach the bundle instead of being dropped here.
+					...(result.metadata.laneOutcomes
+						? { laneOutcomes: result.metadata.laneOutcomes }
+						: {}),
+					...(result.metadata.outcomeStatus
+						? { outcomeStatus: result.metadata.outcomeStatus }
+						: {}),
+					...(result.metadata.throttled
+						? { throttled: result.metadata.throttled }
+						: {}),
+					failures: expansion.failures,
 				}
 			},
 		})
@@ -703,9 +719,28 @@ export class MongoDBManagerLifecycleOps {
 	async recallConversation(
 		request: Omit<ConversationRecallRequest, "agentId">,
 	): Promise<ConversationRecallResponse> {
+		requireTenantIdentity("recallConversation", {
+			...request,
+			agentId: this.host.agentId,
+		})
+		// M2 review R3: recall reads tenant events, so it takes the same
+		// erasure admission as readFile and KB search. A gate already closed is
+		// the typed ErasureGateConflictError (409 ERASURE_IN_PROGRESS on the
+		// route), never an empty or a partial answer.
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
+		// M2 decision 8: a querying recall is one hybrid lane on the events
+		// indexes and never runs against one observed unhealthy at admission.
+		// A query-less recall is a plain find and reads no Search index.
+		if (request.query?.trim()) {
+			await assertCollectionIndexesHealthy(["events"], "recall")
+		}
 		const nativeBitemporalVectorPrefilter =
 			await this.host.refreshNativeBitemporalVectorPrefilter()
-		return recallConversationCore({
+		const response = await recallConversationCore({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			request: {
@@ -716,14 +751,19 @@ export class MongoDBManagerLifecycleOps {
 			textIndexName: `${this.host.prefix}events_text`,
 			queryEmbeddingModel:
 				this.host.config?.mongodb?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL,
-			capabilities: this.host.capabilities,
 			nativeBitemporalVectorPrefilter,
-			// RET-13: recall stage failures (hybrid/semantic) surface through
-			// the same lane failure sink the search paths use, so index
-			// readiness re-polls instead of staying stale.
-			onLaneFailure: (lane, error) =>
-				this.host.noteSearchLaneFailure(lane, error),
 		})
+		// The admission above only proves erasure had not begun when this read
+		// started. Re-check the gate at the return boundary, so events read
+		// while erasure began are never returned; a denial is the same typed
+		// conflict, never the answer.
+		await withFencedWrite({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			token: admission,
+			fn: async () => undefined,
+		})
+		return response
 	}
 
 	async refreshNativeBitemporalVectorPrefilter(): Promise<boolean> {
@@ -736,36 +776,30 @@ export class MongoDBManagerLifecycleOps {
 			return this.host.nativeBitemporalVectorPrefilter
 		}
 		this.host.nativeBitemporalPrefilterCheckedAt = now
-		if (!this.host.capabilities.vectorSearch) {
-			this.host.nativeBitemporalVectorPrefilter = false
-			return false
-		}
-		try {
-			const collection = eventsCollection(this.host.db, this.host.prefix)
-			this.host.nativeBitemporalVectorPrefilter =
-				await isEventsVectorBitemporalPrefilterReady(
-					collection,
-					`${this.host.prefix}events_vector`,
-				)
-			return this.host.nativeBitemporalVectorPrefilter
-		} catch (err) {
-			this.host.nativeBitemporalVectorPrefilter = false
-			log.warn(
-				`could not refresh native bitemporal prefilter readiness: ${String(err)}`,
+		// G4-77: a readiness probe that cannot answer propagates; it used to be
+		// caught and silently disable the prefilter.
+		const collection = eventsCollection(this.host.db, this.host.prefix)
+		this.host.nativeBitemporalVectorPrefilter =
+			await isEventsVectorBitemporalPrefilterReady(
+				collection,
+				`${this.host.prefix}events_vector`,
 			)
-			return false
-		}
+		return this.host.nativeBitemporalVectorPrefilter
 	}
 
 	async traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}) {
 		return traceReasoningChain({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
 			factId: params.factId,
 			collection: params.collection,
 			options: params.options,
@@ -852,13 +886,29 @@ export class MongoDBManagerLifecycleOps {
 					agentId: this.host.agentId,
 					workspaceDir: this.host.workspaceDir,
 				})
-			await invalidateQueryCache({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-				scope,
-				scopeRef,
-			})
+			try {
+				await invalidateQueryCache({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+					scope,
+					scopeRef,
+				})
+			} catch (err) {
+				// The run finished and committed before the cache write failed.
+				throw attachCommitReport(err, {
+					commitState: "committed",
+					commit: {
+						operation: "consolidate",
+						runId: result.runId,
+						eventsProcessed: result.eventsProcessed,
+						factsPromoted: result.factsPromoted,
+						factsInferred: result.factsInferred ?? 0,
+						factsMerged: result.factsMerged ?? 0,
+						factsPruned: result.factsPruned,
+					},
+				})
+			}
 			if (jobTrackingEnabled) {
 				try {
 					await updateMemoryJob({

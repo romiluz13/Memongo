@@ -103,6 +103,11 @@ export const coreTools: readonly McpToolDefinition[] = [
 							},
 						},
 						needExactEvidence: { type: "boolean" },
+						rerank: {
+							type: "boolean",
+							description:
+								"A demand for a rerank stage. There is no reranker yet: true fails with rerank-unsupported; false is accepted.",
+						},
 						allowConstraintRelaxation: {
 							type: "boolean",
 							description:
@@ -115,17 +120,13 @@ export const coreTools: readonly McpToolDefinition[] = [
 						numCandidates: { type: "number" },
 						fusionMethod: {
 							type: "string",
-							enum: ["scoreFusion", "rankFusion", "js-merge"],
+							enum: ["scoreFusion", "rankFusion"],
 						},
 						hybridMode: {
 							type: "string",
 							enum: ["hybrid", "vector-only"],
 						},
 						allowHybridBackstop: { type: "boolean" },
-						lexicalPrefilter: {
-							type: "string",
-							enum: ["disabled", "experimental"],
-						},
 					},
 				},
 			},
@@ -333,11 +334,11 @@ export const coreTools: readonly McpToolDefinition[] = [
 				scope: {
 					type: "string",
 					enum: memoryScopeEnum,
-					description: "Optional memory isolation scope for recall.",
+					description: "Memory isolation scope whose messages are recalled.",
 				},
 				scopeRef: {
 					type: "string",
-					description: "Optional reference for the selected memory scope.",
+					description: "Reference for the selected memory scope.",
 				},
 				sessionId: {
 					type: "string",
@@ -381,6 +382,7 @@ export const coreTools: readonly McpToolDefinition[] = [
 					description: "Maximum results to return. Default 50, max 200.",
 				},
 			},
+			required: ["scope", "scopeRef"],
 		},
 		category: "core",
 	},

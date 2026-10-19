@@ -11,8 +11,9 @@ import type { SearchWorkCost } from "./mongodb-search-budget.js"
 // reservation. A lane's cost is the sum, over every tier it can reach on this
 // deployment, of that tier's first-attempt charges, assuming zero hits at
 // every tier: an autoEmbed vector stage is one aggregation and one embed; a
-// $search, $text or fusion aggregate is one aggregation (plus the embed of
-// its vector input). It is the lane's upper bound without warmup retries,
+// $search or fusion aggregate is one aggregation (plus the embed of
+// each vector input). The chunk lanes have one tier: a native fusion
+// aggregate. It is the lane's upper bound without warmup retries,
 // which pay from the unreserved remainder. search-lane-cost.test.ts runs the
 // real lane functions against this table.
 // ---------------------------------------------------------------------------
@@ -54,21 +55,17 @@ export function structuredLaneCost(
 	)
 }
 
-/** One `mongoSearch` call (a hybrid sub-lane): exactly one tier runs. */
-export function mongoSearchTierCost(
-	context: LaneCostContext & { fusionMethod: MemoryMongoDBFusionMethod },
-): SearchWorkCost {
-	const { capabilities, fusionMethod } = context
-	if (canVector(context) && capabilities.textSearch) {
-		if (fusionMethod === "scoreFusion" && capabilities.scoreFusion) {
-			return VECTOR_TIER
-		}
-		if (fusionMethod !== "js-merge" && capabilities.rankFusion) {
-			return VECTOR_TIER
-		}
-		return addSearchCosts(VECTOR_TIER, TEXT_TIER)
-	}
-	return canVector(context) ? VECTOR_TIER : TEXT_TIER
+/**
+ * One `mongoSearch` call (a hybrid sub-lane) is one native fusion aggregate:
+ * one aggregation plus each embedded vector input it fuses.
+ */
+export function nativeFusionCost(context: {
+	embeddingMode: MemoryMongoDBEmbeddingMode
+	vectorInputs?: number
+}): SearchWorkCost {
+	return context.embeddingMode === "automated"
+		? { aggregations: 1, embeds: context.vectorInputs ?? 1 }
+		: NO_SEARCH_COST
 }
 
 /** A `vector-only` hybrid sub-lane: one autoEmbed vector stage. */
@@ -78,39 +75,41 @@ export function vectorLeafCost(context: {
 	return context.embeddingMode === "automated" ? VECTOR_TIER : NO_SEARCH_COST
 }
 
-/** `kb`: fusion tiers, then vector, then keyword (or classic $text without Search). */
-export function kbLaneCost(
-	context: LaneCostContext & { fusionMethod: MemoryMongoDBFusionMethod },
-): SearchWorkCost {
-	const { capabilities, fusionMethod } = context
-	const vector = canVector(context)
-	const text = capabilities.textSearch
-	if (vector && text && fusionMethod === "js-merge") {
-		return addSearchCosts(VECTOR_TIER, TEXT_TIER)
-	}
-	const fusion =
-		vector && text
-			? addSearchCosts(
-					fusionMethod === "scoreFusion" && capabilities.scoreFusion
-						? VECTOR_TIER
-						: NO_SEARCH_COST,
-					capabilities.rankFusion ? VECTOR_TIER : NO_SEARCH_COST,
-				)
-			: NO_SEARCH_COST
-	// Without Search the planned lexical tier is classic $text (R5/K11).
-	return addSearchCosts(
-		fusion,
-		vector ? VECTOR_TIER : NO_SEARCH_COST,
-		TEXT_TIER,
-	)
+/** `kb`: one fused aggregate, whichever fusion is configured: one aggregation and the embed of its vector input. */
+export function kbLaneCost(context: {
+	embeddingMode: MemoryMongoDBEmbeddingMode
+}): SearchWorkCost {
+	return vectorLeafCost(context)
 }
 
-/** `conversation-evidence`: the inline turn-vector and turn-text branches. */
+/** `conversation-evidence`: one native `$rankFusion` aggregate and the embed of its vector input; nothing when it cannot run. */
 export function conversationEvidenceLaneCost(
 	context: LaneCostContext,
 ): SearchWorkCost {
-	return addSearchCosts(
-		canVector(context) ? VECTOR_TIER : NO_SEARCH_COST,
-		context.capabilities.textSearch ? TEXT_TIER : NO_SEARCH_COST,
-	)
+	return canVector(context) &&
+		context.capabilities.textSearch &&
+		context.capabilities.rankFusion
+		? VECTOR_TIER
+		: NO_SEARCH_COST
+}
+
+/** `raw-window`: one `$search` aggregate over the window; no embed. */
+export function rawWindowLaneCost(): SearchWorkCost {
+	return TEXT_TIER
+}
+
+/** #122 R1: the most entity candidates the `graph` lane looks up. */
+export const GRAPH_LANE_MAX_LOOKUPS = 4
+
+/** `graph`: one `$search` autocomplete aggregate per entity candidate it looks up; no embed. */
+export function graphLaneCost(candidates: number): SearchWorkCost {
+	return {
+		aggregations: Math.min(Math.max(0, candidates), GRAPH_LANE_MAX_LOOKUPS),
+		embeds: 0,
+	}
+}
+
+/** `episodic`: one `$search` aggregate over the episodes; no embed. */
+export function episodicLaneCost(): SearchWorkCost {
+	return TEXT_TIER
 }

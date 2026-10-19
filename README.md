@@ -39,6 +39,9 @@ Prerequisites:
 
 - Node.js and Bun versions specified by `engines.node` and `packageManager` in [package.json](package.json)
 - Docker (for the local MongoDB path — uses MongoDB Atlas Local Preview with mongot for Atlas Search)
+- MongoDB 8.3 or later with Search index management and Automated Embedding.
+  Memongo refuses to start on anything less, and says which requirement is
+  unmet. See the [deployment contract](docs/platform/self-host.md#deployment-contract).
 - A MongoDB replica set or sharded cluster. Memongo writes use transactions,
   which a [standalone `mongod` does not support](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/);
   writes then fail with `ADD_FAILED`. Atlas clusters and the Docker stack below
@@ -65,10 +68,9 @@ export MEMONGO_API_KEY="local-dev-secret"
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 ```
 
-The default Docker file uses MongoDB Atlas Local Preview. Set `VOYAGE_API_KEY`
-to a MongoDB Atlas Model API key with the `al-...` prefix when you want MongoDB
-auto-embeddings. Without it, you can still use local development paths that do
-not require auto-embed.
+The default Docker file uses MongoDB Atlas Local Preview, pinned by digest.
+Set `VOYAGE_API_KEY` to a MongoDB Atlas Model API key with the `al-...` prefix:
+every vector index uses MongoDB auto-embeddings.
 
 [MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/)
 is an upstream Preview feature. Review its deployment requirements and current
@@ -97,8 +99,10 @@ curl -s http://127.0.0.1:3847/v1/search \
   -d '{"query":"What does the user prefer?","sessionKey":"demo-user","maxResults":5}'
 ```
 
-> Semantic search returns `{"results":[]}` until `VOYAGE_API_KEY` is set (see
-> above) — embeddings are required to match stored memories by meaning.
+> Semantic search needs `VOYAGE_API_KEY` (see above) to match stored memories
+> by meaning. A search that cannot embed its query fails with a typed error;
+> it never answers with an empty list. To check a deployment before starting
+> the API, run `bun run --filter @memongo/api preflight`.
 
 For a guided setup, see [Quickstart](apps/docs/quickstart.mdx).
 
@@ -168,7 +172,7 @@ Common variables:
 | `MEMONGO_MANAGER_CACHE_IDLE_TTL_MS` | Idle managers evicted after this long, default `600000` (10 min) |
 | `MEMONGO_JOB_SWEEP_MS` | Standing memory-job sweep interval, default `30000` (writes still drain immediately) |
 | `MEMONGO_MONGODB_RECALL_PROFILE` | `latency`, `balanced`, or `proof`; default `balanced` |
-| `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion`, `rankFusion`, or `js-merge`; default `scoreFusion` with capability fallback |
+| `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion` or `rankFusion`; default `scoreFusion`. Any other value, including the removed `js-merge`, fails boot |
 | `MEMONGO_QUERY_EMBEDDING_MODEL` | Compatible Voyage 4 query model; default `voyage-4-large` |
 | `VOYAGE_API_KEY` | Atlas Model API key for MongoDB auto-embed lanes |
 | `MEMONGO_ENRICHMENT_BASE_URL` | Optional OpenAI-compatible or Anthropic endpoint for LLM enrichment |
@@ -206,8 +210,10 @@ scenario successfully and achieved:
 | Internal R@10 | **97.16%** |
 | Internal hit rate | **98.94%** |
 
-The run used MongoDB-native `$scoreFusion`, Voyage 4 Large query embeddings,
-Voyage `rerank-2.5`, and no generative LLM enrichment. These are retrieval
+The run used a build from before M2 with MongoDB-native `$scoreFusion`, Voyage
+4 Large query embeddings, Voyage `rerank-2.5`, and no generative LLM
+enrichment. The current release has no rerank stage, so the run does not
+describe it. These are retrieval
 metrics, not generated-answer accuracy. The registered release contract still
 classifies the run as **not publishable** because its 1,244 ms p95 exceeded the
 1,000 ms gate and build, cost, and native-operation evidence was incomplete.

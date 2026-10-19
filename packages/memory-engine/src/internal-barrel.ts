@@ -205,9 +205,8 @@ export {
 // P2.2: exported so the bridge can type its capability surface with the real
 // engine type instead of re-declaring it.
 export type { DetectedCapabilities } from "./mongodb-schema.js"
-// #101 section 3 step 7: the API derives its classic $text lane from the
-// same rule that creates the $text indexes, never from a copy of it.
-export { shouldEnsureTextFallbackIndexes } from "./mongodb-schema.js"
+// M2 startup contract: preflight for deploy targets (memongo-api).
+export { runMemongoPreflight } from "./mongodb-boot-preflight.js"
 // P3.6: capability re-enable registry — the single surface where gated
 // MongoDB features declare their unblock condition.
 export {
@@ -331,11 +330,6 @@ export {
 	type ProfileEpisode,
 	type ActivityPatterns,
 } from "./mongodb-profile.js"
-export {
-	crossEncoderRerank,
-	type RerankConfig,
-	type RerankResult,
-} from "./mongodb-reranker.js"
 export type { RelevanceSourceScope } from "./mongodb-relevance.js"
 export type {
 	RelevanceArtifact,
@@ -364,13 +358,7 @@ export {
 	type EntityExtractor,
 	type ExtractedEntity as ExtractedEntityV2,
 	type EntityExtractionContext,
-	type LLMFunction,
 	RegexEntityExtractor,
-	LLMEntityExtractor,
-	buildExtractionPrompt,
-	buildUserExtractionPrompt,
-	buildAssistantExtractionPrompt,
-	parseExtractionResponse,
 	AMBIGUOUS_PERSON_NAMES,
 	isAmbiguousPersonName,
 } from "./mongodb-entity-extractor.js"
@@ -382,11 +370,7 @@ export {
 	type ConversationWindow,
 } from "./mongodb-conversation-windows.js"
 export {
-	buildTieredSummaryPrompt,
-	parseTieredSummaryResponse,
-	withTieredSummaries,
-} from "./mongodb-tiered-summary.js"
-export {
+	ReasoningChainCollectionError,
 	traceReasoningChain,
 	type ReasoningChain,
 	type ReasoningChainNode,

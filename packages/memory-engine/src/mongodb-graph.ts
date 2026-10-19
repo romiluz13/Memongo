@@ -14,6 +14,7 @@ import {
 	RegexEntityExtractor,
 	isAmbiguousPersonName,
 } from "./mongodb-entity-extractor.js"
+import { bestEffort, recordBestEffortFailure } from "./best-effort.js"
 import { recordMutation } from "./mongodb-mutations.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
@@ -27,20 +28,20 @@ import {
 	relationsCollection,
 } from "./mongodb-schema.js"
 import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
+import { runSearchAggregateWithRetry } from "./mongodb-search.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	searchFailureLogFields,
 	toTypedSearchError,
 } from "./search-outcomes.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
-	buildCurrentValidityClause,
-	buildLiveStateClause,
+	buildRelationLifecycleClause,
 	mergeQueryClauses,
-	resolveTemporalAsOf,
 } from "./mongodb-temporal.js"
 import {
-	isTransactionUnsupported,
+	typedTransactionError,
 	MAJORITY_TRANSACTION_OPTIONS,
 } from "./mongodb-transactions.js"
 
@@ -290,17 +291,6 @@ function inferRelationReviewAt(
 	return undefined
 }
 
-function buildRelationTraversalClause(asOf?: Date): Document {
-	const resolvedAsOf = resolveTemporalAsOf(asOf)
-	return mergeQueryClauses(
-		buildLiveStateClause({
-			liveStates: ["active", "conflicted"],
-			includeMissingAsLive: true,
-		}),
-		buildCurrentValidityClause({ asOf: resolvedAsOf }),
-	)
-}
-
 function makeEntityLinkId(params: {
 	fromEntityId: string
 	toEntityId: string
@@ -452,7 +442,7 @@ export async function upsertEntity(params: {
 		)
 
 		// Fire-and-forget: record mutation audit trail (non-blocking)
-		Promise.allSettled([
+		void bestEffort("entity-audit", () =>
 			recordMutation({
 				db,
 				prefix,
@@ -466,11 +456,7 @@ export async function upsertEntity(params: {
 					actorRole: "system",
 				},
 			}),
-		]).catch((err) => {
-			log.warn(
-				`entity audit failed: ${err instanceof Error ? err.message : String(err)}`,
-			)
-		})
+		)
 
 		return { upserted }
 	} catch (err) {
@@ -711,11 +697,7 @@ export async function upsertRelation(params: {
 								}
 							)
 						} catch (err) {
-							if (!isTransactionUnsupported(err)) throw err
-							log.info(
-								"transactions not supported for relation writes, falling back to direct writes",
-							)
-							return await persist()
+							throw typedTransactionError(err)
 						} finally {
 							await session.endSession()
 						}
@@ -745,11 +727,7 @@ export async function upsertRelation(params: {
 		if (params.session) {
 			await audit
 		} else {
-			Promise.allSettled([audit]).catch((err) => {
-				log.warn(
-					`relation audit failed: ${err instanceof Error ? err.message : String(err)}`,
-				)
-			})
+			void bestEffort("relation-audit", () => audit)
 		}
 
 		return { upserted }
@@ -841,16 +819,15 @@ export async function setEntityLinkStatus(params: {
 	fromEntityId: string
 	toEntityId: string
 	linkType: EntityLinkType
-	scopeRef?: string
+	scopeRef: string
 	status: EntityLinkStatus
 }): Promise<boolean> {
-	const { db, prefix, agentId, scope, linkType, status } = params
+	const { db, prefix, linkType, status } = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"setEntityLinkStatus",
+		params,
+	)
 	const collection = entityLinksCollection(db, prefix)
-	const scopeRef = resolveScopeRef({
-		scope,
-		scopeRef: params.scopeRef,
-		agentId,
-	})
 	const pair = canonicalizeEntityPair(params.fromEntityId, params.toEntityId)
 	const result = await collection.updateOne(
 		{
@@ -871,33 +848,23 @@ export async function getEntityLinks(params: {
 	prefix: string
 	agentId: string
 	entityId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	status?: EntityLinkStatus
 	linkTypes?: EntityLinkType[]
 	limit?: number
 }): Promise<EntityLink[]> {
-	const {
-		db,
-		prefix,
-		agentId,
-		entityId,
-		scope,
-		scopeRef,
-		status,
-		linkTypes,
-		limit,
-	} = params
+	const { db, prefix, entityId, status, linkTypes, limit } = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"getEntityLinks",
+		params,
+	)
 	const collection = entityLinksCollection(db, prefix)
 	const filter: Document = {
 		agentId,
+		scope,
+		scopeRef,
 		$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 	if (status) {
 		filter.status = status
@@ -917,50 +884,69 @@ export async function getEntityLinks(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Find entities by name (regex search on name/aliases)
+// Find entities by exact name or alias ($search equals)
 // ---------------------------------------------------------------------------
 
+/** The Search index that serves entity exact-name and prefix lookups. */
+const ENTITY_SEARCH_INDEX = "entity_autocomplete"
+
+/**
+ * Exact entity name or alias lookup: `$search` `equals` on the `name` and
+ * `aliases` token fields, which the manifest indexes with the lowercase
+ * normalizer. The match is the full value, case-insensitive; a partial or
+ * mid-word substring does not match.
+ *
+ * The Search stage only selects candidates: owner and scope are checked again
+ * on the hydrated document before the limit. A Search failure is a typed
+ * failure, never a different lookup.
+ */
 export async function findEntitiesByName(params: {
 	db: Db
 	prefix: string
 	query: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<Entity[]> {
-	const { db, prefix, query, agentId, scope, scopeRef, limit } = params
+	const { db, prefix, limit } = params
+	const tenant: Document = requireTenantIdentity("findEntitiesByName", params)
+	const name = params.query.trim()
+	if (!name) {
+		return []
+	}
 	try {
 		const collection = entitiesCollection(db, prefix)
-
-		// Case-insensitive regex search on name and aliases
-		const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-		const regex = new RegExp(escapedQuery, "i")
-
-		const filter: Document = {
-			agentId,
-			$or: [{ name: { $regex: regex } }, { aliases: { $regex: regex } }],
-		}
-		if (scope) {
-			filter.scope = scope
-		}
-		if (scopeRef) {
-			filter.scopeRef = scopeRef
-		}
-
+		const pipeline: Document[] = [
+			{
+				$search: {
+					index: ENTITY_SEARCH_INDEX,
+					compound: {
+						should: [
+							{ equals: { path: "name", value: name } },
+							{ equals: { path: "aliases", value: name } },
+						],
+						minimumShouldMatch: 1,
+						filter: Object.entries(tenant).map(([path, value]) => ({
+							equals: { path, value },
+						})),
+					},
+				},
+			},
+			// The compound filter runs against the indexed copy, which can lag
+			// the latest write.
+			{ $match: tenant },
+			{ $sort: { updatedAt: -1 } },
+			{ $limit: limit ?? 50 },
+		]
 		const docs = await collection
-			.find(filter)
-			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
-			.sort({ updatedAt: -1 })
-			.limit(limit ?? 50)
+			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 			.toArray()
-
 		return docs as unknown as Entity[]
 	} catch (err) {
-		log.error(
-			`findEntitiesByName failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-		throw err
+		const typed = toTypedSearchError(err, "entity-lookup")
+		log.warn("findEntitiesByName $search failed", searchFailureLogFields(typed))
+		throw typed
 	}
 }
 
@@ -973,21 +959,20 @@ export async function getEntitiesByType(params: {
 	prefix: string
 	type: EntityType
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<Entity[]> {
-	const { db, prefix, type, agentId, scope, scopeRef, limit } = params
+	const { db, prefix, type, limit } = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"getEntitiesByType",
+		params,
+	)
 	try {
 		const collection = entitiesCollection(db, prefix)
 
 		const docs = await collection
-			.find({
-				agentId,
-				type,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
-			})
+			.find({ agentId, scope, scopeRef, type })
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ updatedAt: -1 })
 			.limit(limit ?? 50)
@@ -1016,8 +1001,8 @@ export async function expandGraph(params: {
 	prefix: string
 	entityId: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	maxDepth?: number
 	bidirectional?: boolean
 	maxConnections?: number
@@ -1027,14 +1012,15 @@ export async function expandGraph(params: {
 		db,
 		prefix,
 		entityId,
-		agentId,
-		scope,
-		scopeRef,
 		maxDepth,
 		bidirectional,
 		maxConnections,
 		asOf,
 	} = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"expandGraph",
+		params,
+	)
 	const graphStart = Date.now()
 	try {
 		const entCol = entitiesCollection(db, prefix)
@@ -1044,8 +1030,8 @@ export async function expandGraph(params: {
 		const rootEntity = (await entCol.findOne({
 			entityId,
 			agentId,
-			...(scope ? { scope } : {}),
-			...(scopeRef ? { scopeRef } : {}),
+			scope,
+			scopeRef,
 		})) as unknown as Entity | null
 		if (!rootEntity) {
 			return null
@@ -1054,7 +1040,7 @@ export async function expandGraph(params: {
 		const graphLookupDepth = Math.max(0, (maxDepth ?? 2) - 1)
 		const connectionLimit = maxConnections ?? 100
 		const directRelationLimit = Math.max(1, connectionLimit)
-		const relationTraversalClause = buildRelationTraversalClause(asOf)
+		const relationTraversalClause = buildRelationLifecycleClause({ asOf })
 
 		// 3. Collect all unique relations with their depths
 		// Direct relations are depth 0, transitive relations come from $graphLookup
@@ -1094,8 +1080,8 @@ export async function expandGraph(params: {
 						{
 							fromEntityId: entityId,
 							agentId,
-							...(scope ? { scope } : {}),
-							...(scopeRef ? { scopeRef } : {}),
+							scope,
+							scopeRef,
 						},
 						relationTraversalClause,
 					),
@@ -1113,8 +1099,8 @@ export async function expandGraph(params: {
 						restrictSearchWithMatch: mergeQueryClauses(
 							{
 								agentId,
-								...(scope ? { scope } : {}),
-								...(scopeRef ? { scopeRef } : {}),
+								scope,
+								scopeRef,
 							},
 							relationTraversalClause,
 						),
@@ -1128,8 +1114,8 @@ export async function expandGraph(params: {
 						{
 							toEntityId: entityId,
 							agentId,
-							...(scope ? { scope } : {}),
-							...(scopeRef ? { scopeRef } : {}),
+							scope,
+							scopeRef,
 						},
 						relationTraversalClause,
 					),
@@ -1147,8 +1133,8 @@ export async function expandGraph(params: {
 						restrictSearchWithMatch: mergeQueryClauses(
 							{
 								agentId,
-								...(scope ? { scope } : {}),
-								...(scopeRef ? { scopeRef } : {}),
+								scope,
+								scopeRef,
 							},
 							relationTraversalClause,
 						),
@@ -1170,8 +1156,8 @@ export async function expandGraph(params: {
 						{
 							fromEntityId: entityId,
 							agentId,
-							...(scope ? { scope } : {}),
-							...(scopeRef ? { scopeRef } : {}),
+							scope,
+							scopeRef,
 						},
 						relationTraversalClause,
 					),
@@ -1189,8 +1175,8 @@ export async function expandGraph(params: {
 						restrictSearchWithMatch: mergeQueryClauses(
 							{
 								agentId,
-								...(scope ? { scope } : {}),
-								...(scopeRef ? { scopeRef } : {}),
+								scope,
+								scopeRef,
 							},
 							relationTraversalClause,
 						),
@@ -1221,8 +1207,8 @@ export async function expandGraph(params: {
 				.find({
 					entityId: { $in: Array.from(connectedEntityIds) },
 					agentId,
-					...(scope ? { scope } : {}),
-					...(scopeRef ? { scopeRef } : {}),
+					scope,
+					scopeRef,
 				})
 				.toArray()
 			for (const doc of entityDocs) {
@@ -1316,25 +1302,28 @@ export async function deleteEntity(params: {
 	prefix: string
 	entityId: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<{
 	deletedEntity: boolean
 	deletedRelations: number
 	/** C-024: entity_links removed alongside the entity (from/to either side). */
 	deletedEntityLinks: number
 }> {
-	const { db, prefix, entityId, agentId } = params
+	const { db, prefix, entityId } = params
+	const tenant = requireTenantIdentity("deleteEntity", params)
 	try {
 		const entCol = entitiesCollection(db, prefix)
 		const relCol = relationsCollection(db, prefix)
 		const linkCol = entityLinksCollection(db, prefix)
 
-		// Delete entity scoped by agentId
-		const entityResult = await entCol.deleteOne({ entityId, agentId })
+		// Delete the entity inside its tenant (agent, scope, scopeRef)
+		const entityResult = await entCol.deleteOne({ entityId, ...tenant })
 
-		// Cascade delete all relations involving this entity, scoped by agentId
+		// Cascade delete the relations of this entity in the same tenant
 		const relResult = await relCol.deleteMany({
 			$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-			agentId,
+			...tenant,
 		})
 
 		// C-024: cascade delete all entity_links involving this entity too —
@@ -1343,7 +1332,7 @@ export async function deleteEntity(params: {
 		// detects. Same $or + agentId scoping as the relation cascade.
 		const linkResult = await linkCol.deleteMany({
 			$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-			agentId,
+			...tenant,
 		})
 
 		log.info(
@@ -1384,6 +1373,8 @@ export async function deleteEntityConservative(params: {
 	prefix: string
 	entityId: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	force?: boolean
 }): Promise<{
 	deletedEntity: boolean
@@ -1394,7 +1385,9 @@ export async function deleteEntityConservative(params: {
 	conflictingRelationCount?: number
 	auditRecorded: boolean
 }> {
-	const { db, prefix, entityId, agentId, force } = params
+	const { db, prefix, entityId, force } = params
+	const tenant = requireTenantIdentity("deleteEntityConservative", params)
+	const { agentId } = tenant
 	try {
 		const entCol = entitiesCollection(db, prefix)
 		const relCol = relationsCollection(db, prefix)
@@ -1402,7 +1395,7 @@ export async function deleteEntityConservative(params: {
 		// 1. Check for conflicting relations
 		const relationCount = await relCol.countDocuments({
 			$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-			agentId,
+			...tenant,
 		})
 
 		// 2. If relations exist and force is not true, block the delete
@@ -1421,7 +1414,7 @@ export async function deleteEntityConservative(params: {
 		}
 
 		// 3. Read entity doc before delete (for audit oldValue snapshot)
-		const entityDoc = await entCol.findOne({ entityId, agentId })
+		const entityDoc = await entCol.findOne({ entityId, ...tenant })
 		if (!entityDoc) {
 			log.info(
 				`deleteEntityConservative: entity=${entityId} not found for agent=${agentId}`,
@@ -1436,7 +1429,7 @@ export async function deleteEntityConservative(params: {
 		}
 
 		// 4. Proceed with delete via existing deleteEntity
-		const deleteResult = await deleteEntity({ db, prefix, entityId, agentId })
+		const deleteResult = await deleteEntity({ db, prefix, entityId, ...tenant })
 
 		// 5. Fire-and-forget audit record
 		let auditRecorded = false
@@ -1458,10 +1451,11 @@ export async function deleteEntityConservative(params: {
 				}),
 			])
 			auditRecorded = auditResult.status === "fulfilled"
+			if (auditResult.status === "rejected") {
+				recordBestEffortFailure("entity-delete-audit", auditResult.reason)
+			}
 		} catch (err) {
-			log.warn(
-				`deleteEntityConservative audit failed: ${err instanceof Error ? err.message : String(err)}`,
-			)
+			recordBestEffortFailure("entity-delete-audit", err)
 		}
 
 		log.info(
@@ -1733,29 +1727,33 @@ export async function extractAndUpsertEntities(params: {
 	if (extracted.length === 0) {
 		const durationMs = Date.now() - startMs
 		if (params.recordRun !== false) {
-			await Promise.allSettled([
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "entities",
-						status: "ok",
-						itemsProjected: 0,
-						durationMs,
-					},
-				}),
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "relations",
-						status: "ok",
-						itemsProjected: 0,
-						durationMs,
-					},
-				}),
+			await Promise.all([
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "entities",
+							status: "ok",
+							itemsProjected: 0,
+							durationMs,
+						},
+					}),
+				),
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "relations",
+							status: "ok",
+							itemsProjected: 0,
+							durationMs,
+						},
+					}),
+				),
 			])
 		}
 		return {
@@ -2063,29 +2061,33 @@ export async function extractAndUpsertEntities(params: {
 				entitiesExtracted: extracted.length,
 			})
 
-			await Promise.allSettled([
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "entities",
-						status: "ok",
-						itemsProjected: extracted.length,
-						durationMs,
-					},
-				}),
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "relations",
-						status: "ok",
-						itemsProjected: relationsCreated,
-						durationMs,
-					},
-				}),
+			await Promise.all([
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "entities",
+							status: "ok",
+							itemsProjected: extracted.length,
+							durationMs,
+						},
+					}),
+				),
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "relations",
+							status: "ok",
+							itemsProjected: relationsCreated,
+							durationMs,
+						},
+					}),
+				),
 			])
 		}
 		return {
@@ -2114,29 +2116,33 @@ export async function extractAndUpsertEntities(params: {
 				entitiesExtracted: 0,
 			})
 
-			await Promise.allSettled([
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "entities",
-						status: "failed",
-						itemsProjected: 0,
-						durationMs: Date.now() - startMs,
-					},
-				}),
-				recordProjectionRun({
-					db,
-					prefix,
-					run: {
-						agentId,
-						projectionType: "relations",
-						status: "failed",
-						itemsProjected: 0,
-						durationMs: Date.now() - startMs,
-					},
-				}),
+			await Promise.all([
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "entities",
+							status: "failed",
+							itemsProjected: 0,
+							durationMs: Date.now() - startMs,
+						},
+					}),
+				),
+				bestEffort("projection-run", () =>
+					recordProjectionRun({
+						db,
+						prefix,
+						run: {
+							agentId,
+							projectionType: "relations",
+							status: "failed",
+							itemsProjected: 0,
+							durationMs: Date.now() - startMs,
+						},
+					}),
+				),
 			])
 		}
 		if (!params.session) {
@@ -2264,13 +2270,12 @@ export async function extractAndUpsertTypedRelations(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Search entities using Atlas Search autocomplete on name/aliases.
+ * Entity prefix lookup: `$search` `autocomplete` (edgeGram) on name and
+ * aliases. One operation: a Search failure is a typed failure, never a
+ * regex or any other lookup, and no capability flag chooses a tier.
  *
- * P3.8: the request path is capability-gated — callers pass the detected
- * textSearch capability so deployments without mongot go straight to the
- * escaped $regex tier instead of paying a failed $search round trip per
- * lookup. #101 G2/R8: a runtime $search failure is a typed failure, never a
- * regex fallback.
+ * The Search stage only selects candidates: owner and scope are checked again
+ * on the hydrated document before the limit.
  */
 export async function searchEntitiesAutocomplete(params: {
 	db: Db
@@ -2280,22 +2285,11 @@ export async function searchEntitiesAutocomplete(params: {
 	scopeRef: string
 	query: string
 	limit?: number
-	/** Detected textSearch capability; false/omitted uses the regex fallback. */
-	textSearchAvailable?: boolean
 }): Promise<Entity[]> {
 	const { db, prefix, agentId, scope, scopeRef, query, limit } = params
 	const maxResults = limit ?? 10
-
-	if (params.textSearchAvailable !== true) {
-		return findEntitiesByName({
-			db,
-			prefix,
-			query,
-			agentId,
-			scope,
-			scopeRef,
-			limit: maxResults,
-		})
+	if (!query.trim()) {
+		return []
 	}
 
 	try {
@@ -2303,7 +2297,7 @@ export async function searchEntitiesAutocomplete(params: {
 		const pipeline: Document[] = [
 			{
 				$search: {
-					index: "entity_autocomplete",
+					index: ENTITY_SEARCH_INDEX,
 					compound: {
 						should: [
 							{
@@ -2319,6 +2313,8 @@ export async function searchEntitiesAutocomplete(params: {
 								},
 							},
 						],
+						// A filter alone makes `should` optional; require a match.
+						minimumShouldMatch: 1,
 						filter: [
 							{ equals: { path: "agentId", value: agentId } },
 							{ equals: { path: "scope", value: scope } },
@@ -2327,13 +2323,17 @@ export async function searchEntitiesAutocomplete(params: {
 					},
 				},
 			},
+			// The compound filter runs against the indexed copy, which can lag
+			// the latest write.
+			{ $match: { agentId, scope, scopeRef } },
 			{ $limit: maxResults },
 		]
 
-		const docs = await collection
-			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-			.toArray()
+		// #122 R1: the charged executor charges this lookup to the request
+		// ledger (one aggregation) and carries the user-search maxTimeMS.
+		const docs = await runSearchAggregateWithRetry(collection, pipeline, {
+			stage: "entity-lookup",
+		})
 		return docs as unknown as Entity[]
 	} catch (err) {
 		const typed = toTypedSearchError(err, "entity-lookup")

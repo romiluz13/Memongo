@@ -47,7 +47,6 @@ import { synthesizeProfile } from "./mongodb-profile.js"
 // Query rewriter
 import { rewriteQuery, expandSynonyms } from "./mongodb-query-rewriter.js"
 // Reranker
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
 // Retrieval planner types
 import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
 // Schema setup + collection helpers
@@ -55,7 +54,6 @@ import {
 	ensureCollections,
 	ensureSearchIndexes,
 	ensureStandardIndexes,
-	waitForSearchIndexesQueryable,
 	eventsCollection,
 	entitiesCollection,
 	episodesCollection,
@@ -91,12 +89,12 @@ import {
 } from "./test-helpers/preview-env.js"
 // Types
 import type {
-	MemorySearchResult,
 	MemorySearchRequest,
 	EvidenceCoverage,
 	MemoryProcedureStableHandle,
 	MemoryStructuredStableHandle,
 } from "./types.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -113,7 +111,6 @@ const TEST_DB = `memongo_prodready_${randomUUID().slice(0, 8)}`
 const PREFIX = "prodready_"
 const AGENT_ID = `agent-prodready-${randomUUID().slice(0, 8)}`
 const VOYAGE_API_KEY = resolvePreviewVoyageApiKey()
-const HAS_VOYAGE_KEY = VOYAGE_API_KEY.length > 0
 const HAS_ATLAS_MODEL_KEY = hasAtlasModelKey(VOYAGE_API_KEY)
 const _TELEMETRY_FLUSH_MS = 500
 const EVIDENCE_RANK: Record<EvidenceCoverage, number> = {
@@ -581,6 +578,8 @@ describeIfMongo(
 			it("extracts entities from conversation content", async () => {
 				// Extract entities from ALL events written in Phase 1
 				const allEvents = await getEventsByTimeRange({
+					scope: "agent",
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -615,6 +614,7 @@ describeIfMongo(
 
 			it("materializes day-1 episode", async () => {
 				const episode = await materializeEpisode({
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -1119,229 +1119,6 @@ describeIfMongo(
 		})
 
 		// =========================================================================
-		// PHASE 6: Reranker Robustness
-		// =========================================================================
-
-		describe("Phase 6: Reranker Robustness", () => {
-			;(HAS_VOYAGE_KEY ? describe : describe.skip)(
-				"with Voyage API key",
-				() => {
-					it("reranks valid results with Voyage API", async () => {
-						const results: MemorySearchResult[] = [
-							{
-								path: "e/1",
-								startLine: 0,
-								endLine: 0,
-								score: 0.5,
-								snippet: "Python data science machine learning numpy pandas",
-								source: "conversation",
-							},
-							{
-								path: "e/2",
-								startLine: 0,
-								endLine: 0,
-								score: 0.3,
-								snippet:
-									"Kubernetes Helm chart deployment with horizontal pod autoscaling on the Atlas cluster",
-								source: "conversation",
-							},
-							{
-								path: "e/3",
-								startLine: 0,
-								endLine: 0,
-								score: 0.8,
-								snippet:
-									"JavaScript frontend React component library for the web dashboard",
-								source: "conversation",
-							},
-							{
-								path: "e/4",
-								startLine: 0,
-								endLine: 0,
-								score: 0.6,
-								snippet:
-									"MongoDB Atlas replica set configuration for high availability and automatic failover",
-								source: "conversation",
-							},
-							{
-								path: "e/5",
-								startLine: 0,
-								endLine: 0,
-								score: 0.4,
-								snippet:
-									"CI/CD pipeline with GitHub Actions for automated testing and deployment to Kubernetes",
-								source: "conversation",
-							},
-						]
-
-						const config: RerankConfig = {
-							enabled: true,
-							model: "rerank-2.5",
-							topN: 10,
-							minScore: 0,
-							voyageApiKey: VOYAGE_API_KEY,
-							instruction:
-								"This is agent memory for a Kubernetes migration project. Prioritize deployment and infrastructure content.",
-						}
-
-						const result = await crossEncoderRerank({
-							db,
-							prefix: PREFIX,
-							agentId: AGENT_ID,
-							query: "How do we deploy to Kubernetes with Helm charts?",
-							results,
-							config,
-						})
-
-						expect(result.reranked).toBe(true)
-						expect(result.latencyMs).toBeGreaterThan(0)
-
-						// Guard: ensure loop body is not vacuous
-						expect(result.results.length).toBeGreaterThan(0)
-
-						// All reranked scores must be in [0,1]
-						for (const r of result.results) {
-							expect(r.score).toBeGreaterThanOrEqual(0)
-							expect(r.score).toBeLessThanOrEqual(1)
-						}
-
-						// Guard: ensure sort loop body is not vacuous
-						expect(result.results.length).toBeGreaterThan(1)
-
-						// Results should be sorted by score descending (reranked portion)
-						for (let i = 1; i < Math.min(5, result.results.length); i++) {
-							expect(result.results[i - 1].score).toBeGreaterThanOrEqual(
-								result.results[i].score,
-							)
-						}
-					})
-
-					it("emits rerank telemetry on success and failure", async () => {
-						await waitForTelemetry(db, PREFIX, {
-							"meta.operation": "rerank",
-							"meta.agentId": AGENT_ID,
-						})
-
-						const telCol = telemetryCollection(db, PREFIX)
-						const rerankDocs = await telCol
-							.find({ "meta.operation": "rerank", "meta.agentId": AGENT_ID })
-							.toArray()
-
-						expect(rerankDocs.length).toBeGreaterThan(0)
-					})
-				},
-			)
-
-			it("preserves input order when reranking fails or times out", async () => {
-				const results: MemorySearchResult[] = [
-					{
-						path: "e/1",
-						startLine: 0,
-						endLine: 0,
-						score: 0.9,
-						snippet: "First result about Kubernetes",
-						source: "conversation",
-					},
-					{
-						path: "e/2",
-						startLine: 0,
-						endLine: 0,
-						score: 0.7,
-						snippet: "Second result about Helm charts",
-						source: "conversation",
-					},
-					{
-						path: "e/3",
-						startLine: 0,
-						endLine: 0,
-						score: 0.5,
-						snippet: "Third result about monitoring",
-						source: "conversation",
-					},
-				]
-
-				const result = await crossEncoderRerank({
-					db,
-					prefix: PREFIX,
-					agentId: AGENT_ID,
-					query: "test query",
-					results,
-					config: {
-						enabled: true,
-						model: "rerank-2.5",
-						topN: 10,
-						minScore: 0,
-						voyageApiKey: "invalid-key-will-cause-failure",
-					},
-				})
-
-				expect(result.reranked).toBe(false)
-				// Original order preserved
-				expect(result.results[0].path).toBe("e/1")
-				expect(result.results[1].path).toBe("e/2")
-				expect(result.results[2].path).toBe("e/3")
-			})
-
-			it("filters empty snippets before sending to reranker API", async () => {
-				const results: MemorySearchResult[] = [
-					{
-						path: "e/1",
-						startLine: 0,
-						endLine: 0,
-						score: 0.8,
-						snippet:
-							"Valid result with content about Kubernetes deployment strategies",
-						source: "conversation",
-					},
-					{
-						path: "e/2",
-						startLine: 0,
-						endLine: 0,
-						score: 0.7,
-						snippet: "",
-						source: "conversation",
-					},
-					{
-						path: "e/3",
-						startLine: 0,
-						endLine: 0,
-						score: 0.6,
-						snippet: "   ",
-						source: "conversation",
-					},
-					{
-						path: "e/4",
-						startLine: 0,
-						endLine: 0,
-						score: 0.5,
-						snippet: "Another valid result about MongoDB configuration",
-						source: "conversation",
-					},
-				]
-
-				// With invalid key, will fall back — but the function should not crash
-				const result = await crossEncoderRerank({
-					db,
-					prefix: PREFIX,
-					agentId: AGENT_ID,
-					query: "deployment",
-					results,
-					config: {
-						enabled: true,
-						model: "rerank-2.5",
-						topN: 10,
-						minScore: 0,
-						voyageApiKey: "invalid-key",
-					},
-				})
-
-				// Fallback preserves all results (including empty snippets)
-				expect(result.results.length).toBe(4)
-				expect(result.reranked).toBe(false)
-			})
-		})
-
-		// =========================================================================
 		// PHASE 7: Profile Synthesis (Gap #4 continued)
 		// =========================================================================
 
@@ -1385,6 +1162,7 @@ describeIfMongo(
 			it("excludes deleted episodes from recentEpisodes", async () => {
 				const scopeRef = resolveScopeRef({ scope: "agent", agentId: AGENT_ID })
 				const deletedEpisode = await materializeEpisode({
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -1403,6 +1181,8 @@ describeIfMongo(
 
 				expect(deletedEpisode).not.toBeNull()
 				const deleted = await updateEpisodeStatus({
+					scope: "agent",
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					episodeId: deletedEpisode!.episodeId,
@@ -1771,42 +1551,6 @@ describeIfMongo(
 						config: { enabled: true, method: "llm", maxTokens: 128 },
 					}),
 				).rejects.toThrow(/not yet implemented/)
-			})
-
-			it("reranker degrades gracefully with empty API key", async () => {
-				const result = await crossEncoderRerank({
-					db,
-					prefix: PREFIX,
-					agentId: AGENT_ID,
-					query: "test",
-					results: [
-						{
-							path: "p",
-							startLine: 0,
-							endLine: 0,
-							snippet: "a",
-							score: 0.9,
-							source: "conversation",
-						},
-						{
-							path: "p2",
-							startLine: 0,
-							endLine: 0,
-							snippet: "b",
-							score: 0.8,
-							source: "conversation",
-						},
-					] as MemorySearchResult[],
-					config: {
-						enabled: true,
-						model: "rerank-2.5",
-						topN: 20,
-						minScore: 0,
-						voyageApiKey: "",
-					},
-				})
-
-				expect(result.reranked).toBe(false)
 			})
 		})
 
@@ -2863,6 +2607,8 @@ describeIfMongo(
 						await MongoDBMemoryManager.prototype.recallConversation.call(
 							manager,
 							{
+								scope: "agent",
+								scopeRef: `agent:${AGENT_ID}`,
 								sessionId,
 								roles: ["user", "assistant"],
 								limit: 10,

@@ -43,7 +43,10 @@ import {
 	projectionRunsCollection,
 } from "./mongodb-schema.js"
 import { writeStructuredMemory } from "./mongodb-structured-memory.js"
-import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
+import {
+	hasAtlasModelKey,
+	resolvePreviewMongoTestUri,
+} from "./test-helpers/preview-env.js"
 import { MAJORITY_TRANSACTION_OPTIONS } from "./mongodb-transactions.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
 import {
@@ -864,14 +867,26 @@ describe("durable memory job leases (live MongoDB)", () => {
 		const enrichment = await import("./mongodb-llm-enrichment.js")
 		const provider = {
 			name: "worker-effects-e2e",
-			chatCompletion: vi.fn(async () => ({
-				content: JSON.stringify({
-					facts: [],
-					qa_pairs: [],
-					has_personal_content: false,
-					validity: { scope: "ongoing" },
-				}),
-			})),
+			chatCompletion: vi.fn(async ({ messages }) => {
+				const systemPrompt =
+					messages.find((message) => message.role === "system")?.content ?? ""
+				if (systemPrompt.startsWith("You extract the validity time window")) {
+					return {
+						content: JSON.stringify({ validFrom: null, validTo: null }),
+					}
+				}
+				if (systemPrompt.startsWith("You detect direct contradictions")) {
+					return { content: JSON.stringify({ contradictions: [] }) }
+				}
+				return {
+					content: JSON.stringify({
+						facts: [],
+						qa_pairs: [],
+						has_personal_content: false,
+						validity: { scope: "ongoing" },
+					}),
+				}
+			}),
 		}
 		const providerSpy = vi
 			.spyOn(enrichment, "resolveEnrichmentProvider")
@@ -1683,97 +1698,103 @@ describe("durable memory job leases (live MongoDB)", () => {
 		).not.toHaveProperty("extractionJobPendingAt")
 	})
 
-	it("recovers and executes staged outbox work through the public manager factory", async () => {
-		const workspace = await mkdtemp(
-			path.join(os.tmpdir(), "memongo-manager-startup-"),
-		)
-		const agentId = `${AGENT}-factory-startup`
-		const eventId = `event-factory-startup-${randomUUID()}`
-		const db = client.db(TEST_DB)
-		await writeEvent({
-			db,
-			prefix: PREFIX,
-			event: {
-				eventId,
-				agentId,
-				role: "user",
-				body: "@alice restores #startup-recovery from the durable outbox.",
-				scope: "agent",
-				extractionJobPendingAt: new Date(),
-			},
-		})
-		const cfg = {
-			agents: { defaults: { workspace } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: TEST_URI,
-					database: TEST_DB,
-					collectionPrefix: PREFIX,
-					enableChangeStreams: false,
-					kb: { enabled: false },
-					relevance: { enabled: false },
-					episodes: { enabled: false },
+	// M2: the factory boots only when every required index is READY, and
+	// keyless mongot cannot build autoEmbed indexes, so this runs keyed only.
+	it.skipIf(!hasAtlasModelKey(process.env.VOYAGE_API_KEY))(
+		"recovers and executes staged outbox work through the public manager factory",
+		async () => {
+			const workspace = await mkdtemp(
+				path.join(os.tmpdir(), "memongo-manager-startup-"),
+			)
+			const agentId = `${AGENT}-factory-startup`
+			const eventId = `event-factory-startup-${randomUUID()}`
+			const db = client.db(TEST_DB)
+			await writeEvent({
+				db,
+				prefix: PREFIX,
+				event: {
+					eventId,
+					agentId,
+					role: "user",
+					body: "@alice restores #startup-recovery from the durable outbox.",
+					scope: "agent",
+					extractionJobPendingAt: new Date(),
 				},
-			},
-		} as unknown as MemongoConfig
-		const previousReadinessTimeout =
-			process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS
-		const previousReadinessPoll =
-			process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS
-		process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS = "1"
-		process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS = "1"
-		let manager: MongoDBMemoryManager | undefined
-		try {
-			manager = await MongoDBMemoryManager.create({
-				cfg,
-				agentId,
-				resolved: resolveMemoryBackendConfig({ cfg, agentId }),
 			})
-			// Give-up budget, not an expected runtime: this waits on a full
-			// manager startup (which now builds the vector indexes that used to
-			// fail) plus a worker round trip, while every other e2e file is
-			// hitting the same container.
-			const deadline = Date.now() + 90_000
-			let stored = await memoryJobsCollection(db, PREFIX).findOne({
-				jobId: `extraction-${eventId}`,
-				agentId,
-			})
-			while (stored?.status !== "completed" && Date.now() < deadline) {
-				await new Promise((resolve) => setTimeout(resolve, 50))
-				stored = await memoryJobsCollection(db, PREFIX).findOne({
+			const cfg = {
+				agents: { defaults: { workspace } },
+				memory: {
+					backend: "mongodb",
+					mongodb: {
+						uri: TEST_URI,
+						database: TEST_DB,
+						collectionPrefix: PREFIX,
+						enableChangeStreams: false,
+						kb: { enabled: false },
+						relevance: { enabled: false },
+						episodes: { enabled: false },
+					},
+				},
+			} as unknown as MemongoConfig
+			const previousReadinessTimeout =
+				process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS
+			const previousReadinessPoll =
+				process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS
+			process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS = "180000"
+			process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS = "1000"
+			let manager: MongoDBMemoryManager | undefined
+			try {
+				manager = await MongoDBMemoryManager.create({
+					cfg,
+					agentId,
+					resolved: resolveMemoryBackendConfig({ cfg, agentId }),
+				})
+				// Give-up budget, not an expected runtime: this waits on a full
+				// manager startup (which now builds the vector indexes that used to
+				// fail) plus a worker round trip, while every other e2e file is
+				// hitting the same container.
+				const deadline = Date.now() + 90_000
+				let stored = await memoryJobsCollection(db, PREFIX).findOne({
 					jobId: `extraction-${eventId}`,
 					agentId,
 				})
+				while (stored?.status !== "completed" && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 50))
+					stored = await memoryJobsCollection(db, PREFIX).findOne({
+						jobId: `extraction-${eventId}`,
+						agentId,
+					})
+				}
+				expect(stored).toMatchObject({
+					jobId: `extraction-${eventId}`,
+					status: "completed",
+					attempts: 1,
+				})
+				expect(
+					await eventsCollection(db, PREFIX).findOne({ eventId, agentId }),
+				).not.toHaveProperty("extractionJobPendingAt")
+			} finally {
+				if (previousReadinessTimeout === undefined) {
+					delete process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS
+				} else {
+					process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS =
+						previousReadinessTimeout
+				}
+				if (previousReadinessPoll === undefined) {
+					delete process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS
+				} else {
+					process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS =
+						previousReadinessPoll
+				}
+				await manager?.close()
+				await rm(workspace, { recursive: true, force: true })
 			}
-			expect(stored).toMatchObject({
-				jobId: `extraction-${eventId}`,
-				status: "completed",
-				attempts: 1,
-			})
-			expect(
-				await eventsCollection(db, PREFIX).findOne({ eventId, agentId }),
-			).not.toHaveProperty("extractionJobPendingAt")
-		} finally {
-			if (previousReadinessTimeout === undefined) {
-				delete process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS
-			} else {
-				process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS =
-					previousReadinessTimeout
-			}
-			if (previousReadinessPoll === undefined) {
-				delete process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS
-			} else {
-				process.env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS =
-					previousReadinessPoll
-			}
-			await manager?.close()
-			await rm(workspace, { recursive: true, force: true })
-		}
-		// Give-up budget. Manager startup now builds the vector indexes that
-		// used to fail outright, and every other e2e file is hitting the same
-		// container, so 30s no longer covers a healthy run.
-	})
+			// Give-up budget. Manager startup now builds the vector indexes that
+			// used to fail outright, and every other e2e file is hitting the same
+			// container, so 30s no longer covers a healthy run.
+		},
+		300_000,
+	)
 
 	it("replays foreground entity projection without double-counting an event", async () => {
 		const db = client.db(TEST_DB)

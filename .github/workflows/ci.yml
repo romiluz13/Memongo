@@ -23,6 +23,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # M2: the search contract has no fallback, so the source must contain
+      # none: no regex content find, no BSON text operator, no removed config
+      # key or alias, no JS fusion entry point. Fails the build with the file
+      # and line; parsing and validation regex sit on an allowlist with a reason.
+      - name: No-fallback source check
+        run: bun run check-no-fallbacks
+
       - name: Typecheck (monorepo)
         run: bun run check-types
 
@@ -66,7 +73,7 @@ jobs:
       # Keyless on purpose: tier A never embeds, and the search-barrier suite
       # expects a service without a provider key.
       mongodb:
-        image: mongodb/mongodb-atlas-local:preview
+        image: mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
         ports:
           - 27017:27017
         env:
@@ -103,20 +110,97 @@ jobs:
 
       # Skip-green guard for tier A: every gated file must have executed at
       # least one test, so a renamed file or a newly added skip cannot shrink
-      # the tier silently.
+      # the tier silently. Expected-gated cases boot the full required-index
+      # manifest through the public factory, which needs autoEmbed and so a
+      # model key; tier A is keyless, so each must be present and skipped.
       - name: Verify tier A suites ran (skip-green guard)
         run: >
           bun scripts/ci/verify-tests-ran.mjs
           --expect packages/memory-engine/test-results/junit.xml
+          --expect-gated "recovers and executes staged outbox work through the public manager factory"
           --require-suite mongodb-kb-reingest.e2e.test.ts
           --require-suite mongodb-kb-isolation.e2e.test.ts
-          --require-suite mongodb-legacy-search-isolation.e2e.test.ts
           --require-suite mongodb-vector-index-shape.e2e.test.ts
           --require-suite mongodb-rankfusion-score.e2e.test.ts
           --require-suite mongodb-projection-repair.e2e.test.ts
           --require-suite mongodb-temporal-validity.e2e.test.ts
           --require-suite mongodb-memory-jobs.e2e.test.ts
           --require-suite mongodb-search-barrier.e2e.test.ts
+
+  # M2 startup contract controls, keyless: nothing here embeds. A deployment
+  # without Search, an index boot cannot repair and a user without Search
+  # index management privileges each fail boot typed, and the built API exits
+  # 1 without binding its port. Boot repairs a missing index; keyless, the
+  # autoEmbed create is then refused typed (the keyed proof-pack job boots the
+  # full manifest). FAILED, STALE and 5280803's warn-and-serve are fake-Db
+  # controls run in the same step, since a real server cannot be made to
+  # produce those states on demand.
+  boot-control:
+    name: Startup contract controls (keyless MongoDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mongodb:
+        image: mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
+        ports:
+          - 27017:27017
+        env:
+          MONGODB_ATLAS_TELEMETRY_ENABLE: "false"
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 40s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      # Node 22 matches the API image; the control spawns apps/api/dist/server.js.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      # The same pinned image run as a bare mongod: same server version, no
+      # mongot, so Search index management is unavailable.
+      - name: Start a MongoDB without Search
+        run: >
+          docker run -d --name memongo-no-search -p 27018:27017
+          --entrypoint mongod
+          mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
+          --bind_ip_all
+
+      - name: Startup contract controls
+        working-directory: packages/memory-engine
+        env:
+          MEMONGO_TEST_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          MEMONGO_BOOT_CONTROL_NO_SEARCH_URI: mongodb://127.0.0.1:27018/?directConnection=true
+          MEMONGO_BOOT_CONTROL: "1"
+        run: >
+          bunx vitest run --no-file-parallelism --config vitest.e2e.config.ts
+          src/mongodb-boot-contract.e2e.test.ts
+          src/mongodb-boot-contract.test.ts
+          src/mongodb-boot-controls.test.ts
+
+      - name: Verify startup contract suites ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect packages/memory-engine/test-results/junit.xml
+          --require-suite mongodb-boot-contract.e2e.test.ts
+          --require-suite mongodb-boot-contract.test.ts
+          --require-suite mongodb-boot-controls.test.ts
 
   # The api-contract lane runs in its own job so paid embeddings happen only
   # here: Rom's grant is this PR job, at most 60 barrier probe embeddings per
@@ -127,7 +211,7 @@ jobs:
     timeout-minutes: 25
     services:
       mongodb:
-        image: mongodb/mongodb-atlas-local:preview
+        image: mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
         ports:
           - 27017:27017
         env:
@@ -143,15 +227,15 @@ jobs:
           --health-retries 20
           --health-start-period 40s
     steps:
-      # Zero fallbacks: without the key (a fork PR, or the secret unset) the
-      # API would silently serve search from $text, so the job fails here
-      # instead of skipping or going green on the fallback.
+      # No fallback: without the key (a fork PR, or the secret unset) the
+      # MongoDB service cannot autoEmbed and the engine refuses to start, so
+      # the job fails here with that cause instead of skipping.
       - name: Assert Voyage key is armed for the proof-pack (no fallback)
         env:
           VOYAGE_KEY_PRESENT: ${{ secrets.VOYAGE_API_KEY != '' }}
         run: |
           if [[ "${VOYAGE_KEY_PRESENT}" != "true" ]]; then
-            echo "::error::VOYAGE_API_KEY secret is empty: the MongoDB service cannot embed, so the proof-pack would run on the \$text fallback"
+            echo "::error::VOYAGE_API_KEY secret is empty: the MongoDB service cannot embed, so the engine cannot start and the proof-pack cannot run"
             exit 1
           fi
           echo "VOYAGE_API_KEY secret present on the MongoDB service container"

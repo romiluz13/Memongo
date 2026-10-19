@@ -24,7 +24,6 @@ import type {
 	BenchmarkEmbeddingQuantization,
 	BenchmarkLatencyDistribution,
 	BenchmarkRerankerConfig,
-	BenchmarkRerankerStage,
 	BenchmarkRetrievalUnit,
 	BenchmarkStorageFootprint,
 	BenchmarkTenantStorageMeasurement,
@@ -241,22 +240,8 @@ export function resolveBenchmarkEmbeddingConfig(
 	}
 }
 
-type ResolvedRerankerInput = {
-	enabled: boolean
-	model: string
-	topN: number
-}
-
-export function resolveBenchmarkRerankerConfig(
-	cfg: ResolvedRerankerInput,
-): BenchmarkRerankerConfig {
-	const stage: BenchmarkRerankerStage = cfg.enabled ? "post-fusion" : "none"
-	return {
-		model: cfg.model,
-		// Voyage SDK does not expose a version pin on rerank-2.5 today.
-		version: null,
-		stage,
-	}
+export function resolveBenchmarkRerankerConfig(): BenchmarkRerankerConfig {
+	return { model: "none", version: null, stage: "none" }
 }
 
 // ---------------------------------------------------------------------------

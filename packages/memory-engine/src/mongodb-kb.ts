@@ -25,7 +25,7 @@ import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
-	isTransactionUnsupported,
+	typedTransactionError,
 } from "./mongodb-transactions.js"
 import {
 	isErasureGateConflictError,
@@ -471,7 +471,7 @@ export async function ingestToKB(params: {
 					appliedChunks = await persistChunksAndComplete(repairExistingDocId)
 				} else if (needsTransaction && oldIdToDelete && oldDocIdToDelete) {
 					// Re-ingestion path: wrap delete-old + insert-new in withTransaction()
-					// for atomicity. Falls back to sequential on standalone topology.
+					// for atomicity.
 					const chunksCreated = await reIngestAtomically({
 						client: params.client,
 						kb,
@@ -516,7 +516,7 @@ export async function ingestToKB(params: {
 				// re-run the callback, and a failed attempt must not leave
 				// counted work); the ledger AWAITED in the SAME document
 				// transaction. reIngestAtomically is NOT called here — it manages its
-				// own session/withTransaction and standalone fallback, which
+				// own session/withTransaction, which
 				// would nest transactions (C4).
 				const owned = { agentId, scope: memoryScope, scopeRef }
 				const ownedChunkOps = chunkOps.map(({ updateOne }) => ({
@@ -712,13 +712,13 @@ export async function ingestToKB(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Atomic re-ingestion helper (withTransaction + standalone fallback)
+// Atomic re-ingestion helper (withTransaction)
 // ---------------------------------------------------------------------------
 
 /**
  * Atomically re-ingest a KB document: delete old chunks + doc, insert new doc + chunks.
- * Uses withTransaction() when client is provided. Falls back to sequential writes
- * on standalone topology (same pattern as mongodb-sync.ts).
+ * Uses withTransaction() when client is provided; a deployment without
+ * transactions fails with TransactionUnsupportedError.
  *
  * Metadata writes and the chunk bulkWrite share ONE transaction. They must not
  * be split across nested transactions: a session can have at most one open
@@ -805,18 +805,11 @@ async function reIngestAtomically(params: {
 				await session.endSession()
 			}
 		} catch (err) {
-			// Standalone or no replica set — fall through to sequential
-			if (isTransactionUnsupported(err)) {
-				log.info(
-					"transactions not supported for KB re-ingestion, falling back to direct writes",
-				)
-			} else {
-				throw err
-			}
+			throw typedTransactionError(err)
 		}
 	}
 
-	// Sequential fallback (no transaction)
+	// No client was supplied, so there is no transaction to run.
 	await performMetadataWrites()
 	const chunksCreated = await runChunkBatch(chunkOps)
 	// C2: reaching here means every chunk write landed (runChunkBatch throws
@@ -890,6 +883,12 @@ export async function ingestFilesToKB(params: {
 	assertKBAdmission(params.scope, params.admission)
 	const { paths, recursive = true, tags, category, importedBy } = params
 
+	// M2 review D2: a configured source that cannot be scanned or read is a
+	// failed input, recorded in the import's errors beside the documents that
+	// did succeed. Unsupported extensions, symlinks and unchanged content stay
+	// intentional skips.
+	const inputErrors: string[] = []
+
 	// Collect all files
 	const filePaths: string[] = []
 	for (const inputPath of paths) {
@@ -909,6 +908,7 @@ export async function ingestFilesToKB(params: {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`KB file scan failed for ${inputPath}: ${msg}`)
+			inputErrors.push(`${inputPath}: KB file scan failed: ${msg}`)
 		}
 	}
 
@@ -936,13 +936,15 @@ export async function ingestFilesToKB(params: {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`KB file read failed for ${filePath}: ${msg}`)
+			inputErrors.push(`${filePath}: KB file read failed: ${msg}`)
 		}
 	}
 
-	return ingestToKB({
+	const imported = await ingestToKB({
 		...params,
 		documents,
 	})
+	return { ...imported, errors: [...inputErrors, ...imported.errors] }
 }
 
 // ---------------------------------------------------------------------------
@@ -995,9 +997,10 @@ export async function listKBDocuments(
 }
 
 /**
- * F11: Remove a KB document and its chunks, wrapped in a transaction when possible.
- * Uses withTransaction for automatic retry of TransientTransactionError.
- * Falls back to sequential writes on standalone topologies (no replica set).
+ * F11: Remove a KB document and its chunks, wrapped in a transaction when a
+ * client is provided. Uses withTransaction for automatic retry of
+ * TransientTransactionError; a deployment without transactions fails with
+ * TransactionUnsupportedError.
  */
 export async function removeKBDocument(
 	db: Db,
@@ -1013,7 +1016,7 @@ export async function removeKBDocument(
 	const docFilter = { _id: docId, scopeRef } as Record<string, unknown>
 	const chunkFilter = { docId, scopeRef }
 
-	// Try transaction-wrapped removal (requires replica set)
+	// Transaction-wrapped removal (requires replica set)
 	if (client) {
 		try {
 			const session = client.startSession()
@@ -1042,16 +1045,11 @@ export async function removeKBDocument(
 				await session.endSession()
 			}
 		} catch (err) {
-			if (!isTransactionUnsupported(err)) {
-				throw err
-			}
-			log.info(
-				"transactions not supported for removeKBDocument, falling back to direct writes",
-			)
+			throw typedTransactionError(err)
 		}
 	}
 
-	// Standalone fallback: sequential writes without transaction
+	// No client was supplied, so there is no transaction to run.
 	const result = await kb.deleteOne(docFilter)
 	if (result.deletedCount > 0) {
 		await kbChunks.deleteMany(chunkFilter)

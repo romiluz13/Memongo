@@ -8,6 +8,7 @@ import {
 	resolveAgentWorkspaceDir,
 } from "./agent-config.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
+import { safeBootText } from "./mongodb-boot-errors.js"
 import { normalizeExtraMemoryPaths } from "./internal.js"
 import {
 	acquireSharedMongoClient,
@@ -69,6 +70,8 @@ let idleSweepTimer: NodeJS.Timeout | null = null
 export type MemorySearchManagerResult = {
 	manager: MemorySearchManager | null
 	error?: string
+	/** The original failure, so callers keep its type (MemongoBootError). */
+	cause?: unknown
 }
 
 function resolvePositiveIntEnv(name: string, fallback: number): number {
@@ -108,7 +111,9 @@ async function closeManager(manager: MemorySearchManager): Promise<void> {
 	try {
 		await manager.close?.()
 	} catch (err) {
-		log.warn(`failed to close mongodb memory manager: ${String(err)}`)
+		log.warn(
+			`failed to close mongodb memory manager: ${safeBootText(String(err))}`,
+		)
 	}
 }
 
@@ -301,9 +306,14 @@ export async function getMemorySearchManager(params: {
 	try {
 		resolved = resolveMemoryBackendConfig(params)
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
+		// A configuration refusal can carry an operator-typed value, which may
+		// be a connection string: nothing logged or returned past this point
+		// keeps a URI, host or address.
+		const message = safeBootText(
+			err instanceof Error ? err.message : String(err),
+		)
 		log.warn(`memory backend resolution failed: ${message}`)
-		return { manager: null, error: message }
+		return { manager: null, error: message, cause: err }
 	}
 
 	if (!resolved.mongodb) {
@@ -438,10 +448,12 @@ async function initializeManager(params: {
 		} else if (sharedClientAcquired && sharedClientUri) {
 			releaseSharedMongoClient(sharedClientUri)
 		}
-		const message = err instanceof Error ? err.message : String(err)
+		const message = safeBootText(
+			err instanceof Error ? err.message : String(err),
+		)
 		const error = `mongodb memory unavailable: ${message}`
 		log.warn(error)
-		return { manager: null, error }
+		return { manager: null, error, cause: err }
 	}
 }
 

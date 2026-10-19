@@ -14,9 +14,13 @@
  */
 
 import type { Db, Document } from "mongodb"
-import type { ChainTraceCollectionValue } from "@memongo/lib"
+import type { ChainTraceCollectionValue, MemoryScope } from "@memongo/lib"
 import { isChainTraceCollectionValue } from "@memongo/lib"
-import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
+import {
+	buildEventLifecycleClause,
+	buildUnexpiredClause,
+} from "./mongodb-temporal.js"
 import type {
 	ReasoningChain,
 	ReasoningChainNode,
@@ -50,6 +54,20 @@ const COLLECTION_ID_FIELDS: Record<ChainTraceCollectionValue, string> = {
 
 const DEFAULT_MAX_DEPTH = 3
 
+/**
+ * M2 T10 (G2-51): a collection outside the traversal allowlist is a caller
+ * error, not an empty chain. Direct engine callers get this typed error; the
+ * API route rejects the same names with a 400 before the engine is reached.
+ */
+export class ReasoningChainCollectionError extends Error {
+	readonly code = "CHAIN_TRACE_COLLECTION_INVALID"
+
+	constructor(readonly collection: string) {
+		super(`collection is not traversable: ${collection}`)
+		this.name = "ReasoningChainCollectionError"
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -70,12 +88,19 @@ export async function traceReasoningChain(params: {
 	db: Db
 	prefix: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	factId: string
 	collection: string
 	options?: ReasoningChainOptions
 }): Promise<ReasoningChain> {
-	const { db, prefix, agentId, factId, collection, options } = params
+	const { db, prefix, factId, collection, options } = params
+	const tenant = requireTenantIdentity("traceReasoningChain", params)
+	const { agentId } = tenant
 	const maxDepth = Math.max(0, options?.maxDepth ?? DEFAULT_MAX_DEPTH)
+	// One validity clock for the whole trace: the fact, its premises and every
+	// leaf event are judged at the same instant.
+	const asOf = new Date()
 
 	const emptyResult: ReasoningChain = {
 		factId,
@@ -88,10 +113,9 @@ export async function traceReasoningChain(params: {
 
 	// Validate collection name against the canonical traversal allowlist.
 	// The API route layer rejects names outside the allowlist with 400
-	// (WS-08 / C-015); this guard keeps the engine defensive for direct
-	// callers, returning an empty chain rather than fabricating one.
+	// (WS-08 / C-015); direct callers get the same rejection as a typed error.
 	if (!isChainTraceCollectionValue(collection)) {
-		return emptyResult
+		throw new ReasoningChainCollectionError(collection)
 	}
 	const idField = COLLECTION_ID_FIELDS[collection]
 
@@ -105,7 +129,13 @@ export async function traceReasoningChain(params: {
 		// P4.4.1 (B1): hide TTL-expired docs from the trace (starting fact and
 		// traversed premises) until the sweep removes them. Semantics-neutral
 		// for collections without expiresAt via the $exists:false branch.
-		{ $match: { [idField]: factId, agentId, ...buildUnexpiredClause() } },
+		{
+			$match: {
+				[idField]: factId,
+				...tenant,
+				...buildUnexpiredClause({ asOf }),
+			},
+		},
 		{
 			$graphLookup: {
 				from: fullCollectionName,
@@ -115,7 +145,10 @@ export async function traceReasoningChain(params: {
 				as: "premises",
 				maxDepth,
 				depthField: "hopDistance",
-				restrictSearchWithMatch: { agentId, ...buildUnexpiredClause() },
+				restrictSearchWithMatch: {
+					...tenant,
+					...buildUnexpiredClause({ asOf }),
+				},
 			},
 		},
 	]
@@ -150,14 +183,18 @@ export async function traceReasoningChain(params: {
 	)
 	const leafEventIds = [...allEventIds].filter((id) => !premiseIds.has(id))
 
-	// Phase 2: Fetch leaf events via $lookup
+	// Phase 2: Fetch leaf events via $lookup. A leaf is evidence only while its
+	// event is retained, already valid and not retracted at the trace clock
+	// (the store's full event lifecycle, as every other events read applies);
+	// a leaf outside it becomes a gap, never a body.
 	const eventsCol = db.collection(`${prefix}events`)
 	const eventDocs =
 		leafEventIds.length > 0
 			? await eventsCol
 					.find({
 						eventId: { $in: leafEventIds },
-						agentId,
+						...tenant,
+						...buildEventLifecycleClause({ asOf }),
 					})
 					.sort({ timestamp: 1 })
 					.toArray()

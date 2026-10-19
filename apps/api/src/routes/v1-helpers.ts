@@ -302,6 +302,7 @@ export function isRecallConversationValidationError(error: unknown): boolean {
 	return (
 		message.includes("invalid timestamp") ||
 		message.includes("invalid date boundary") ||
+		message === "invalid timezone" ||
 		message.includes("Invalid time zone specified") ||
 		message.includes("roles must contain only")
 	)

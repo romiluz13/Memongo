@@ -7,10 +7,7 @@
 // unchanged. Do not add new exports here — add them in the domain module and
 // re-export deliberately.
 // ---------------------------------------------------------------------------
-export type {
-	DetectedCapabilities,
-	MongoIndexBudgetCheck,
-} from "./mongodb-schema-types.js"
+export type { DetectedCapabilities } from "./mongodb-schema-types.js"
 export {
 	chunksCollection,
 	filesCollection,
@@ -49,23 +46,18 @@ export {
 	ensureCollections,
 	ensureSchemaValidation,
 } from "./mongodb-schema-validators.js"
-export {
-	ensureStandardIndexes,
-	shouldEnsureTextFallbackIndexes,
-} from "./mongodb-schema-standard-indexes.js"
+export { ensureStandardIndexes } from "./mongodb-schema-standard-indexes.js"
 export {
 	INDEX_AUTOEMBED_MODEL,
 	isSearchIndexQueryable,
 	isSearchIndexReadyWithFilterFields,
 	isEventsVectorBitemporalPrefilterReady,
 	listSearchIndexes,
-	isSearchIndexManagementAvailable,
 	isSearchIndexTypeCompatible,
 	ensureEntityAutocompleteIndex,
 	ensureEpisodeAutocompleteIndex,
 	getExpectedSearchIndexTargets,
 	buildAutoEmbedVectorDefinition,
-	waitForSearchIndexesQueryable,
 	resolveSearchIndexReadinessTiming,
 	ensureSearchIndexes,
 } from "./mongodb-schema-search-indexes.js"
@@ -74,7 +66,6 @@ export type {
 	SearchIndexTarget,
 	SearchIndexWaitResult,
 } from "./mongodb-schema-search-indexes.js"
-export { assertIndexBudget } from "./mongodb-schema-budget.js"
 export { checkKBOrphans } from "./mongodb-schema-integrity.js"
 // C-024 (WS-14): referential-integrity orphan checks beyond KB.
 export {
@@ -83,7 +74,5 @@ export {
 	checkEpisodeEventOrphans,
 	checkRelationEntityOrphans,
 } from "./mongodb-schema-integrity.js"
-export {
-	detectCapabilities,
-	waitForSearchCapabilities,
-} from "./mongodb-schema-capabilities.js"
+export { detectCapabilities } from "./mongodb-schema-capabilities.js"
+export { enforceBootContract } from "./mongodb-boot-contract.js"

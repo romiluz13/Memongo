@@ -6,13 +6,11 @@ import {
 	resetCapabilityProbes,
 } from "./mongodb-capability-registry.js"
 import {
-	assertIndexBudget,
 	ensureSearchIndexes,
 	getExpectedSearchIndexTargets,
 	isSearchIndexTypeCompatible,
 	isSearchIndexQueryable,
 	resolveSearchIndexReadinessTiming,
-	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
 import {
 	SEARCH_TEXT_ANALYZER_ENV,
@@ -20,6 +18,7 @@ import {
 	resolveSearchTextAnalyzer,
 	searchTextAnalyzerName,
 } from "./mongodb-search-ranking.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -39,7 +38,7 @@ function mockCollection(name: string): Collection {
 
 function mockDb(
 	existingCollections: string[] = [],
-	versionArray?: unknown,
+	versionArray: unknown = [8, 3, 0, 0],
 ): Db {
 	const collections = new Map<string, Collection>()
 
@@ -74,12 +73,35 @@ function mockDb(
 
 describe("ensureSearchIndexes", () => {
 	it("treats autoEmbed listSearchIndexes type as vectorSearch-compatible", () => {
-		expect(isSearchIndexTypeCompatible("autoEmbed", "vectorSearch")).toBe(true)
-		expect(isSearchIndexTypeCompatible("vectorSearch", "vectorSearch")).toBe(
-			true,
-		)
-		expect(isSearchIndexTypeCompatible("search", "vectorSearch")).toBe(false)
-		expect(isSearchIndexTypeCompatible("vectorSearch", "search")).toBe(false)
+		expect(
+			isSearchIndexTypeCompatible({ type: "autoEmbed" }, "vectorSearch"),
+		).toBe(true)
+		expect(
+			isSearchIndexTypeCompatible({ type: "vectorSearch" }, "vectorSearch"),
+		).toBe(true)
+		expect(
+			isSearchIndexTypeCompatible({ type: "search" }, "vectorSearch"),
+		).toBe(false)
+		expect(
+			isSearchIndexTypeCompatible({ type: "vectorSearch" }, "search"),
+		).toBe(false)
+	})
+
+	it("reads an untyped listing's type from its definition, and never guesses", () => {
+		const vector = { latestDefinition: { fields: [{ type: "vector" }] } }
+		const text = { latestDefinition: { mappings: { dynamic: true } } }
+		expect(isSearchIndexTypeCompatible(vector, "vectorSearch")).toBe(true)
+		expect(isSearchIndexTypeCompatible(vector, "search")).toBe(false)
+		expect(isSearchIndexTypeCompatible(text, "search")).toBe(true)
+		expect(isSearchIndexTypeCompatible(text, "vectorSearch")).toBe(false)
+		expect(isSearchIndexTypeCompatible({}, "search")).toBe(false)
+		expect(isSearchIndexTypeCompatible({}, "vectorSearch")).toBe(false)
+		expect(
+			isSearchIndexTypeCompatible(
+				{ type: "unknownKind", latestDefinition: text.latestDefinition },
+				"search",
+			),
+		).toBe(false)
 	})
 
 	it("creates text + vector search indexes for the Memongo community profile", async () => {
@@ -705,7 +727,11 @@ describe("ensureSearchIndexes", () => {
 					"automated",
 					"scalar",
 				),
-			).rejects.toBe(rejection)
+			).rejects.toMatchObject({
+				name: "MemongoBootError",
+				index: "test_chunks_vector",
+				message: expect.stringContaining("Omit quantization"),
+			})
 			expect(isCapabilityEnabled("autoembed-quantization", {})).toBe(true)
 
 			const vectorSpecs = chunks.createSearchIndex.mock.calls
@@ -761,46 +787,48 @@ describe("ensureSearchIndexes", () => {
 		const chunks = db.collection("test_chunks") as unknown as {
 			createSearchIndex: ReturnType<typeof vi.fn>
 			updateSearchIndex: ReturnType<typeof vi.fn>
-			listSearchIndexes: ReturnType<typeof vi.fn>
+			aggregate: ReturnType<typeof vi.fn>
 		}
-		chunks.listSearchIndexes.mockImplementation((name?: string) => ({
+		chunks.aggregate.mockImplementation(() => ({
 			toArray: async () =>
-				name === "test_chunks_vector"
-					? [
-							{
-								name,
-								type: "vectorSearch",
-								definition: {
-									fields: [{ type: "filter", path: "agentId" }],
-								},
-							},
-						]
-					: name === "test_chunks_text"
+				["test_chunks_vector", "test_chunks_text"].flatMap((name) =>
+					name === "test_chunks_vector"
 						? [
 								{
 									name,
-									type: "search",
+									type: "vectorSearch",
 									definition: {
-										mappings: {
-											dynamic: false,
-											fields: {
-												text: {
-													type: "string",
-													analyzer: "lucene.standard",
-												},
-												source: { type: "token" },
-												path: { type: "token" },
-												agentId: { type: "token" },
-												scope: { type: "token" },
-												scopeRef: { type: "token" },
-												status: { type: "token" },
-												updatedAt: { type: "date" },
-											},
-										},
+										fields: [{ type: "filter", path: "agentId" }],
 									},
 								},
 							]
-						: [],
+						: name === "test_chunks_text"
+							? [
+									{
+										name,
+										type: "search",
+										definition: {
+											mappings: {
+												dynamic: false,
+												fields: {
+													text: {
+														type: "string",
+														analyzer: "lucene.standard",
+													},
+													source: { type: "token" },
+													path: { type: "token" },
+													agentId: { type: "token" },
+													scope: { type: "token" },
+													scopeRef: { type: "token" },
+													status: { type: "token" },
+													updatedAt: { type: "date" },
+												},
+											},
+										},
+									},
+								]
+							: [],
+				),
 		}))
 
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -860,14 +888,13 @@ describe("ensureSearchIndexes", () => {
 			new Error("Error connecting to Search Index Management service."),
 		)
 
-		const result = await ensureSearchIndexes(
-			db,
-			"test_",
-			"atlas-local-preview",
-			"automated",
-		)
-
-		expect(result).toEqual({ text: false, vector: false })
+		await expect(
+			ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated"),
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "search-management-unavailable",
+			index: "test_chunks_text",
+		})
 		expect(chunks.createSearchIndex).toHaveBeenCalledTimes(1)
 		expect(kbChunks.createSearchIndex).not.toHaveBeenCalled()
 		expect(structured.createSearchIndex).not.toHaveBeenCalled()
@@ -974,17 +1001,26 @@ describe("search index readiness helpers", () => {
 			},
 		}))
 
-		const result = await waitForSearchIndexesQueryable(
-			db.collection("test_chunks"),
-			{
-				indexNames: ["test_chunks_text", "test_chunks_vector"],
-				timeoutMs: 50,
-				pollMs: 0,
-			},
-		)
-		expect(result.ready).toBe(true)
-		expect(result.pending).toEqual([])
-		expect(calls).toBe(2)
+		// A fake clock keeps the 50 ms deadline from racing the second poll on a
+		// loaded machine: time moves only when the test advances it.
+		vi.useFakeTimers()
+		try {
+			const waiting = waitForSearchIndexesQueryable(
+				db.collection("test_chunks"),
+				{
+					indexNames: ["test_chunks_text", "test_chunks_vector"],
+					timeoutMs: 50,
+					pollMs: 10,
+				},
+			)
+			await vi.advanceTimersByTimeAsync(10)
+			const result = await waiting
+			expect(result.ready).toBe(true)
+			expect(result.pending).toEqual([])
+			expect(calls).toBe(2)
+		} finally {
+			vi.useRealTimers()
+		}
 	})
 
 	it("reports failed indexes without waiting for the full timeout", async () => {
@@ -1063,6 +1099,10 @@ describe("search index readiness helpers", () => {
 			{
 				collectionName: "test_structured_mem",
 				indexNames: ["test_structured_mem_text", "test_structured_mem_vector"],
+			},
+			{
+				collectionName: "test_structured_mem_revisions",
+				indexNames: ["test_structured_mem_revisions_text"],
 			},
 			{
 				collectionName: "test_procedures",
@@ -1170,60 +1210,27 @@ describe("search index readiness helpers", () => {
 		}
 	})
 
-	it("resolves search index readiness timing from env with safe defaults", () => {
+	it("resolves one 180 s boot deadline by default and rejects invalid timing env (M2)", () => {
 		expect(resolveSearchIndexReadinessTiming({})).toEqual({
-			timeoutMs: 60_000,
+			timeoutMs: 180_000,
 			pollMs: 1_000,
 		})
 		expect(
 			resolveSearchIndexReadinessTiming({
-				MEMONGO_BENCHMARK_STRICT: "1",
-			}),
-		).toEqual({ timeoutMs: 180_000, pollMs: 1_000 })
-		expect(
-			resolveSearchIndexReadinessTiming({
-				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "180000",
+				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "90000",
 				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "250",
 			}),
-		).toEqual({ timeoutMs: 180_000, pollMs: 250 })
-		expect(
+		).toEqual({ timeoutMs: 90_000, pollMs: 250 })
+		expect(() =>
 			resolveSearchIndexReadinessTiming({
 				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "0",
+			}),
+		).toThrow(/MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS/)
+		expect(() =>
+			resolveSearchIndexReadinessTiming({
 				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "nope",
 			}),
-		).toEqual({ timeoutMs: 60_000, pollMs: 1_000 })
-	})
-})
-
-// ---------------------------------------------------------------------------
-// assertIndexBudget
-// ---------------------------------------------------------------------------
-
-describe("assertIndexBudget", () => {
-	it("atlas-local-preview has an unbounded search index budget", () => {
-		const result = assertIndexBudget("atlas-local-preview", 50)
-		expect(result.budget).toBe("unbounded")
-		expect(result.withinBudget).toBe(true)
-	})
-
-	it("atlas-managed has the same unbounded search index budget", () => {
-		const result = assertIndexBudget("atlas-managed", 50)
-		expect(result.budget).toBe("unbounded")
-		expect(result.withinBudget).toBe(true)
-	})
-
-	it("community-mongot has a real numeric budget sized to the fullest planned profile", () => {
-		// P3.8: budget enforcement was dead code while every profile was
-		// "unbounded". The community mongot profile gets a numeric ceiling so
-		// adding a search index becomes a deliberate act.
-		const within = assertIndexBudget("community-mongot", 17)
-		expect(typeof within.budget).toBe("number")
-		expect(within.withinBudget).toBe(true)
-		const beyond = assertIndexBudget(
-			"community-mongot",
-			(within.budget as number) + 1,
-		)
-		expect(beyond.withinBudget).toBe(false)
+		).toThrow(/MEMONGO_SEARCH_INDEX_READINESS_POLL_MS/)
 	})
 })
 
@@ -1416,7 +1423,10 @@ describe("ensureSearchIndexes text-analyzer strategy (C-029)", () => {
 			type: "string",
 			analyzer: "lucene.standard",
 		})
-		expect(structFields.key).toEqual({ type: "token" })
+		expect(structFields.key).toEqual([
+			{ type: "token" },
+			{ type: "string", analyzer: "lucene.standard" },
+		])
 	})
 
 	it("folding switches NL fields to lucene.folding and identifier-heavy fields to dual keyword+folding", async () => {

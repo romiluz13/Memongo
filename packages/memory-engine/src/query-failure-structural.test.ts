@@ -5,6 +5,7 @@ import type { Db } from "mongodb"
 import { ModuleKind, ScriptTarget, transpileModule } from "typescript"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 import { planRetrieval } from "./mongodb-retrieval-planner.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 
@@ -91,6 +92,7 @@ describe("query failure logs use structural metadata", () => {
 		await expect(
 			searchV2({} as Db, "memongo", query, "agent-1", {
 				availablePaths: new Set(["hybrid", "graph"]),
+				searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
 			}),
 		).rejects.toBe(failure.error)
 		expect(failure.messageRead).not.toHaveBeenCalled()
@@ -109,6 +111,7 @@ describe("query failure logs use structural metadata", () => {
 		vi.spyOn(console, "error").mockImplementation(() => {})
 		await searchV2({} as Db, "memongo", query, "agent-1", {
 			availablePaths: new Set(["raw-window"]),
+			searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
 		}).catch(() => {})
 		expect(failure.messageRead).not.toHaveBeenCalled()
 		expect(failure.serialized).not.toHaveBeenCalled()

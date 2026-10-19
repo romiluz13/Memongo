@@ -20,7 +20,7 @@ import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import {
 	conversationEvidenceLaneCost,
 	kbLaneCost,
-	mongoSearchTierCost,
+	nativeFusionCost,
 	structuredLaneCost,
 } from "./search-lane-cost.js"
 
@@ -130,53 +130,43 @@ describe("per-lane cost table (decision 18)", () => {
 		}
 	}
 
-	const fusionMatrix = [
-		["scoreFusion", { scoreFusion: true, rankFusion: true }],
-		["rankFusion", { scoreFusion: false, rankFusion: true }],
-		["js-merge", { scoreFusion: true, rankFusion: true }],
-		["scoreFusion", { scoreFusion: false, rankFusion: false }],
-	] as const
-	for (const [label, base] of [
-		...capabilityMatrix,
-		["neither", capabilities(false, false)] as const,
-	]) {
-		for (const [fusionMethod, fusionCaps] of fusionMatrix) {
-			const caps = { ...base, ...fusionCaps }
-			it(`kb, ${label}, ${fusionMethod} (score ${fusionCaps.scoreFusion}, rank ${fusionCaps.rankFusion}): charges exactly its reservation`, async () => {
-				const cost = kbLaneCost({
-					capabilities: caps,
+	for (const fusionMethod of ["scoreFusion", "rankFusion"] as const) {
+		it(`kb, ${fusionMethod}: charges exactly its reservation`, async () => {
+			const cost = kbLaneCost({ embeddingMode: "automated" })
+			const charged = await chargedWithin(cost, () =>
+				searchKB(zeroHits(), "rotation policy", null, {
+					maxResults: 5,
+					minScore: 0,
+					scopeRef: "agent:agent-1",
+					vectorIndexName: "t_kb_chunks_vector",
+					textIndexName: "t_kb_chunks_text",
 					embeddingMode: "automated",
 					fusionMethod,
-				})
-				const charged = await chargedWithin(cost, () =>
-					searchKB(zeroHits(), "rotation policy", null, {
-						maxResults: 5,
-						minScore: 0,
-						scopeRef: "agent:agent-1",
-						vectorIndexName: "t_kb_chunks_vector",
-						textIndexName: "t_kb_chunks_text",
-						capabilities: caps,
-						embeddingMode: "automated",
-						fusionMethod,
-					}),
-				)
-				expect(charged).toEqual(cost)
-			})
-			it(`mongoSearch tier, ${label}, ${fusionMethod} (score ${fusionCaps.scoreFusion}, rank ${fusionCaps.rankFusion}): charges exactly its reservation`, async () => {
-				const cost = mongoSearchTierCost({
-					capabilities: caps,
+				}),
+			)
+			expect(charged).toEqual(cost)
+		})
+	}
+
+	for (const fusionMethod of ["scoreFusion", "rankFusion"] as const) {
+		for (const vectorInputs of [1, 2] as const) {
+			it(`mongoSearch native fusion, ${fusionMethod}, ${vectorInputs} vector input(s): charges exactly its reservation`, async () => {
+				const cost = nativeFusionCost({
 					embeddingMode: "automated",
-					fusionMethod,
+					vectorInputs,
 				})
+				expect(cost).toEqual({ aggregations: 1, embeds: vectorInputs })
 				const charged = await chargedWithin(cost, () =>
 					mongoSearch(zeroHits(), "garden plan", null, {
 						maxResults: 5,
 						minScore: 0,
 						fusionMethod,
-						capabilities: caps,
 						vectorIndexName: "t_chunks_vector",
 						textIndexName: "t_chunks_text",
 						embeddingMode: "automated",
+						...(vectorInputs === 2
+							? { sibling: { filter: { source: "memory" }, maxResults: 3 } }
+							: {}),
 					}),
 				)
 				expect(charged).toEqual(cost)

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 import { writeFileSync } from "node:fs"
 import { MongoClient } from "mongodb"
 import { afterAll, beforeAll, expect, it, vi } from "vitest"
-import { crossEncoderRerank } from "./mongodb-reranker.js"
 import { rewriteQuery } from "./mongodb-query-rewriter.js"
 const emissions = vi.hoisted(() => ({
 	returns: [] as Array<void | Promise<void>>,
@@ -73,22 +72,6 @@ it("rejects original leaf telemetry after completed erasure while preserving res
 		"complete",
 	)
 	const gate = await readErasureGate({ db, prefix, agentId })
-	const config = {
-		enabled: false,
-		model: "rerank-2.5" as const,
-		topN: 10,
-		minScore: 0.1,
-		voyageApiKey: "",
-	}
-	const out = await crossEncoderRerank({
-		db,
-		prefix,
-		agentId,
-		admission,
-		query: "auth",
-		results: [],
-		config,
-	})
 	const rewrite = await rewriteQuery({
 		db,
 		prefix,
@@ -97,8 +80,6 @@ it("rejects original leaf telemetry after completed erasure while preserving res
 		query: "auth",
 		config: { enabled: true, method: "synonym-expansion", maxTokens: 128 },
 	})
-	expect(out.results).toEqual([])
-	expect(out.reranked).toBe(false)
 	expect(rewrite.rewrittenQuery).toContain("authentication")
 	const pending = emissions.returns.filter(
 			(p): p is Promise<void> => p !== undefined,
@@ -110,7 +91,7 @@ it("rejects original leaf telemetry after completed erasure while preserving res
 				await db
 					.collection(`${prefix}memory_telemetry`)
 					.countDocuments({ "meta.agentId": agentId }),
-			).toBe(2),
+			).toBe(1),
 		)
 	const rows = await db
 			.collection(`${prefix}memory_telemetry`)
@@ -127,12 +108,11 @@ it("rejects original leaf telemetry after completed erasure while preserving res
 				? { status: x.status, code: Reflect.get(x.reason, "code") }
 				: x,
 		),
-		out,
 		rewrite,
 	})
 	expect(rows).toEqual([])
 	expect(afterGate).toEqual(gate)
-	expect(settled).toHaveLength(2)
+	expect(settled).toHaveLength(1)
 	for (const item of settled)
 		expect(item).toMatchObject({
 			status: "rejected",
@@ -144,21 +124,6 @@ it("persists fresh admitted leaf telemetry without provider calls", async () => 
 	emissions.returns.length = 0
 	const agentId = `fresh-${randomUUID()}`,
 		admission = await captureAdmissionToken({ db, prefix, agentId })
-	const out = await crossEncoderRerank({
-		db,
-		prefix,
-		agentId,
-		admission,
-		query: "auth",
-		results: [],
-		config: {
-			enabled: false,
-			model: "rerank-2.5" as const,
-			topN: 10,
-			minScore: 0.1,
-			voyageApiKey: "",
-		},
-	})
 	const rewrite = await rewriteQuery({
 		db,
 		prefix,
@@ -173,13 +138,9 @@ it("persists fresh admitted leaf telemetry without provider calls", async () => 
 			.find({ "meta.agentId": agentId })
 			.toArray(),
 		gate = await readErasureGate({ db, prefix, agentId })
-	evidence("fresh", { rows, gate, out, rewrite })
-	expect(rows).toHaveLength(2)
-	expect(gate?.serial).toBe(2)
-	expect(rows.map((r) => r.meta.operation).sort()).toEqual([
-		"query-rewrite",
-		"rerank",
-	])
-	expect(out.reranked).toBe(false)
+	evidence("fresh", { rows, gate, rewrite })
+	expect(rows).toHaveLength(1)
+	expect(gate?.serial).toBe(1)
+	expect(rows.map((r) => r.meta.operation)).toEqual(["query-rewrite"])
 	expect(rewrite.rewritten).toBe(true)
 })

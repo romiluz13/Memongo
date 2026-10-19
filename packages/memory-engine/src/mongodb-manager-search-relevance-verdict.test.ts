@@ -1,14 +1,13 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 // RET-15 (wave 3h): every V2 answer the manager SERVES must feed the
 // relevance runtime — success, empty, constrained-empty, error-empty. The
-// non-verdict outcomes (throttle denials, legacy-fallback replacements)
+// non-verdict outcome (a throttle denial)
 // must NOT pollute the signal. These tests drive the real manager search
 // methods with a captured searchV2 module and a scripted relevance runtime,
 // asserting the verdict seams by what persistRun/recordSignal observed.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { MongoServerError } from "mongodb"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
-import { chunksCollection } from "./mongodb-schema.js"
 import type { MemorySearchResult } from "./types.js"
 import { SearchLaneError } from "./search-outcomes.js"
 import {
@@ -98,10 +97,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	(
 		await import("./test-helpers/manager-test-kit.js")
 	).queryRewriterModuleMock(),
-)
-
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
 )
 
 vi.mock("./mongodb-lane-coverage.js", async () =>
@@ -318,23 +313,21 @@ describe("manager search feeds the V2 verdict into the relevance runtime (RET-15
 		expect(relevance.persistRun).not.toHaveBeenCalled()
 	})
 
-	it("does NOT record a verdict when the legacy fallback replaces the answer", async () => {
+	it("a complete empty answer serves and records the v2 empty verdict with no re-run", async () => {
 		searchV2State.responses.push({ results: [], metadata: v2Metadata })
 		const relevance = buildRelevanceStub()
-		const legacyHit = { ...v2Hit, snippet: "legacy lane hit" }
+		const legacySearch = vi.fn(async () => [v2Hit])
 		const manager = buildMockManager({
 			relevance,
-			config: kitMongoConfig({ legacySearchFallback: true }),
-			legacySearch: vi.fn(async () => [legacyHit]),
+			legacySearch,
 		})
 
 		const served = await manager.search("legacy fallback topic")
 
-		expect(served).toEqual([legacyHit])
-		// The v2 empty answer was REPLACED by the legacy lane — the served
-		// answer is not a V2 verdict, so the runtime must not see one.
-		expect(relevance.recordSignal).not.toHaveBeenCalled()
-		expect(relevance.persistRun).not.toHaveBeenCalled()
+		expect(served).toEqual([])
+		expect(legacySearch).not.toHaveBeenCalled()
+		expect(relevance.recordSignal).toHaveBeenCalledWith([])
+		expect(relevance.persistRun).toHaveBeenCalledTimes(1)
 	})
 
 	it("M5: records the error verdict, then rethrows the searchV2 failure typed", async () => {
@@ -493,7 +486,6 @@ describe("recall-trace failure privacy through manager search paths", () => {
 	it.each([
 		"success",
 		"empty",
-		"empty-fallback",
 		"detailed",
 	])("preserves %s results without logging private trace errors", async (branch) => {
 		const privateText = "violet confidential trace CANARY90"
@@ -513,10 +505,6 @@ describe("recall-trace failure privacy through manager search paths", () => {
 		const manager = buildMockManager({
 			relevance: buildRelevanceStub(),
 			recordSearchAccess: vi.fn(),
-			config: kitMongoConfig({
-				legacySearchFallback: branch.endsWith("fallback"),
-			}),
-			legacySearch: vi.fn(async () => [v2Hit]),
 		})
 		const results =
 			branch === "detailed"
@@ -527,7 +515,7 @@ describe("recall-trace failure privacy through manager search paths", () => {
 		const traceLines = lines.filter((line) =>
 			line.includes("recall trace write failed"),
 		)
-		expect(traceLines).toHaveLength(branch === "empty-fallback" ? 2 : 1)
+		expect(traceLines).toHaveLength(1)
 		for (const line of traceLines) {
 			expect(line).not.toContain(privateText)
 			expect(line).toContain('"code":11000')
@@ -536,49 +524,13 @@ describe("recall-trace failure privacy through manager search paths", () => {
 	})
 })
 
-const fallbackAdmission = vi.hoisted(() => ({
-	decisions: [] as Array<{ ok: true } | { ok: false; retryAfterMs: number }>,
-}))
-vi.mock("./mongodb-search-admission.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("./mongodb-search-admission.js")>()
-	return {
-		...actual,
-		tryConsumeSearchAdmission: vi.fn(
-			() => fallbackAdmission.decisions.shift() ?? { ok: true },
-		),
-	}
-})
 describe("remaining original relevance admission connections", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 		searchV2State.responses.length = 0
-		fallbackAdmission.decisions.length = 0
 		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "0")
 	})
 	afterEach(() => vi.unstubAllEnvs())
-	it.each([
-		"search",
-		"detailed",
-	])("threads the original token when %s legacy fallback is denied", async (branch) => {
-		searchV2State.responses.push({ results: [], metadata: v2Metadata })
-		const relevance = buildRelevanceStub(),
-			manager = buildMockManager({
-				relevance,
-				config: kitMongoConfig({ legacySearchFallback: true }),
-			})
-		if (branch === "detailed") fallbackAdmission.decisions.push({ ok: true })
-		fallbackAdmission.decisions.push({ ok: false, retryAfterMs: 1000 })
-		if (branch === "search") await manager.search("denied fallback")
-		else await manager.searchDetailed({ query: "denied fallback" })
-		expect(captureAdmissionToken).toHaveBeenCalledTimes(1)
-		expect(relevance.persistRun).toHaveBeenCalledTimes(1)
-		expect(relevance.persistRun).toHaveBeenCalledWith(
-			expect.objectContaining({
-				admission: { kind: "admission", agentId: "agent-1", epoch: 0 },
-			}),
-		)
-	})
 	it("threads the original token through detailed unconstrained empty", async () => {
 		searchV2State.responses.push({ results: [], metadata: v2Metadata })
 		const relevance = buildRelevanceStub(),
@@ -589,34 +541,6 @@ describe("remaining original relevance admission connections", () => {
 			expect.objectContaining({
 				admission: { kind: "admission", agentId: "agent-1", epoch: 0 },
 			}),
-		)
-	})
-	it("threads supplied original admission through the actual legacy method", async () => {
-		// #101: the legacy $text tier no longer swallows a missing collection
-		// into an empty answer, so the stub supplies a queryable one.
-		vi.mocked(chunksCollection).mockReturnValue({
-			aggregate: () => ({ toArray: async () => [] }),
-		} as never)
-		const relevance = buildRelevanceStub(),
-			manager = buildMockManager({ relevance })
-		const admission = {
-			kind: "admission" as const,
-			agentId: "agent-1",
-			epoch: 17,
-		}
-		await (
-			manager as unknown as {
-				legacySearch(
-					query: string,
-					opts: undefined,
-					token: typeof admission,
-				): Promise<MemorySearchResult[]>
-			}
-		).legacySearch("legacy empty", undefined, admission)
-		expect(captureAdmissionToken).not.toHaveBeenCalled()
-		expect(relevance.persistRun).toHaveBeenCalledTimes(1)
-		expect(relevance.persistRun).toHaveBeenCalledWith(
-			expect.objectContaining({ admission }),
 		)
 	})
 })

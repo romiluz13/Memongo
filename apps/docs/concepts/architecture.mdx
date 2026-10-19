@@ -60,7 +60,8 @@ MCP client (stdio) ->  apps/mcp  ->  client SDK  -------------------------------
 
 The engine writes to MongoDB collections with automated vector indexes, text
 indexes, and TTL policies. Search goes through the supported hybrid retrieval
-pipeline and falls back only when the engine explicitly chooses to do so.
+pipeline. A lane that cannot run returns a typed failure, never a weaker
+retrieval path or an empty success.
 
 The first framework slice does not change this topology. It defines taxonomy,
 scope policy, adapter guidance, and write safety on top of the existing runtime.

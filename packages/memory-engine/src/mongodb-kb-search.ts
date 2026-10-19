@@ -1,17 +1,11 @@
 import type { Collection, Document } from "mongodb"
-import {
-	type MemoryMongoDBEmbeddingMode,
-	type MemoryMongoDBFusionMethod,
-	type MemoryMongoDBQueryEmbeddingModel,
-	createSubsystemLogger,
+import type {
+	MemoryMongoDBEmbeddingMode,
+	MemoryMongoDBFusionMethod,
+	MemoryMongoDBQueryEmbeddingModel,
 } from "@memongo/lib"
-import { mergeHybridResultsMongoDB } from "./mongodb-hybrid.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
-import {
-	consumeSearchAggregationOrThrow,
-	resolveUserSearchMaxTimeMs,
-} from "./mongodb-search-budget.js"
-import type { DetectedCapabilities } from "./mongodb-schema.js"
+import { buildUnexpiredClause, mergeQueryClauses } from "./mongodb-temporal.js"
 import {
 	buildVectorSearchStage,
 	freshnessRevalidationStages,
@@ -23,15 +17,12 @@ import {
 	type SearchExplainOptions,
 } from "./mongodb-search.js"
 import {
+	SearchLaneError,
 	type SearchStage,
 	type SearchTierOutcomeSink,
-	searchFailureLogFields,
-	searchFailureTierRow,
 	toTypedSearchError,
 } from "./search-outcomes.js"
 import type { MemorySearchResult } from "./types.js"
-
-const log = createSubsystemLogger("memory:mongodb:kb-search")
 
 // KB hybrid lane weights — the same 0.7/0.3 split the general search path
 // uses, kept as named constants so the score normalization and the pipeline
@@ -99,10 +90,13 @@ async function resolveKBChunkFilter(params: {
 		return base
 	}
 	if (!params.kbDocs) {
-		log.warn(
-			"KB filter provided but kb document collection is unavailable; ignoring filter",
-		)
-		return base
+		// A filter the caller asked for is never dropped: searching without it
+		// would return chunks the caller excluded.
+		throw new SearchLaneError({
+			lane: "kb",
+			stage: "filter",
+			reason: "internal-error",
+		})
 	}
 
 	const kbDocFilter: Document = { scopeRef: params.scopeRef }
@@ -129,6 +123,13 @@ async function resolveKBChunkFilter(params: {
 // KB Search
 // ---------------------------------------------------------------------------
 
+/**
+ * M2 decision 5: KB search is one configured native fusion over kb_chunks —
+ * `$scoreFusion` (minMaxScaler, avg) or `$rankFusion` — fixed before it runs.
+ * A healthy zero is final. An error or a budget denial is a typed throw at the
+ * fusion stage; no weaker tier (vector-only, keyword-only, JavaScript merge,
+ * `$text`) runs after any outcome.
+ */
 export async function searchKB(
 	kbChunks: Collection,
 	query: string,
@@ -138,62 +139,35 @@ export async function searchKB(
 		minScore: number
 		scopeRef: string
 		filter?: { tags?: string[]; category?: string; source?: string }
+		/** Resolves `filter` to document ids; required whenever `filter` is set. */
 		kbDocs?: Collection
 		vectorIndexName: string
 		textIndexName: string
-		capabilities: DetectedCapabilities
 		embeddingMode: MemoryMongoDBEmbeddingMode
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
 		/**
-		 * Server-side fusion preference, mirroring the general search path:
-		 * "scoreFusion" tries $scoreFusion first (MongoDB 8.3+), "rankFusion"
-		 * goes straight to $rankFusion, "js-merge" skips server fusion.
+		 * The server-side fusion to run: "scoreFusion" ($scoreFusion, MongoDB
+		 * 8.3+, the default) or "rankFusion" ($rankFusion). Any other value is
+		 * a typed failure before anything runs.
 		 */
 		fusionMethod?: MemoryMongoDBFusionMethod
-		/**
-		 * WS-11 admission control: drop the vector lane entirely (text-only
-		 * degradation) when the caller's admission check denied the autoEmbed
-		 * spend. Every $vectorSearch stage in this module is behind canVector,
-		 * so one flag removes the whole embed burn.
-		 */
-		skipVectorLane?: boolean
-		/**
-		 * #101 K7: under strict mode a failed js-merge branch fails the lane
-		 * instead of letting the surviving branch stand.
-		 */
-		strict?: boolean
 		/** #101: per-call sink for this lane's tier outcome rows. */
 		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
-	// #101 / matrix 1f: zero-hit tiers are kept (a successful empty moves to
-	// the next planned tier), but an error or a budget denial is a typed
-	// throw at its tier — nothing degrades down the waterfall after a failure.
-	const canVector =
-		opts.skipVectorLane !== true &&
-		(opts.embeddingMode === "automated"
-			? opts.capabilities.vectorSearch
-			: queryVector != null && opts.capabilities.vectorSearch)
+	const fusionMethod = opts.fusionMethod ?? "scoreFusion"
+	if (fusionMethod !== "scoreFusion" && fusionMethod !== "rankFusion") {
+		throw new SearchLaneError({
+			lane: "kb",
+			stage: "plan",
+			reason: "query-error",
+		})
+	}
+	const stage: SearchStage =
+		fusionMethod === "scoreFusion" ? "score-fusion" : "rank-fusion"
 
-	const canText = opts.capabilities.textSearch
-	const report = (stage: SearchStage, count: number): void => {
-		opts.onTierOutcome?.({
-			stage,
-			outcome: count > 0 ? "ok" : "ok-empty",
-			...(count > 0 ? {} : { reason: "zero-hits" as const }),
-			resultCount: count,
-		})
-	}
-	const emptyQuery = (stage: SearchStage): MemorySearchResult[] => {
-		opts.onTierOutcome?.({
-			stage,
-			outcome: "not-applicable",
-			reason: "empty-query",
-		})
-		return []
-	}
 	let chunkFilter: Document
 	try {
 		chunkFilter = await resolveKBChunkFilter({
@@ -202,14 +176,19 @@ export async function searchKB(
 			filter: opts.filter,
 		})
 	} catch (err) {
-		throw toTypedSearchError(err, "filter")
+		throw toTypedSearchError(err, "filter", "kb")
 	}
 	const filteredDocIds = (
 		chunkFilter as { docId?: { $in?: string[] } } | undefined
 	)?.docId?.$in
 	if (Array.isArray(filteredDocIds) && filteredDocIds.length === 0) {
 		// K1: the tag/category filter matched no document — a successful empty.
-		report("filter", 0)
+		opts.onTierOutcome?.({
+			stage: "filter",
+			outcome: "ok-empty",
+			reason: "zero-hits",
+			resultCount: 0,
+		})
 		return []
 	}
 	const numCandidates = Math.min(
@@ -217,15 +196,15 @@ export async function searchKB(
 		MONGODB_MAX_NUM_CANDIDATES,
 	)
 
-	// F12/P0.10: server-side hybrid fusion, mirroring the general search
-	// path. Fusion is a first-class option (`fusionMethod`), resolved by the
-	// manager from `mongodb.fusionMethod`.
-	const fusionMethod = opts.fusionMethod ?? "scoreFusion"
+	// `expiresAt` is not an indexed filter field of the KB vector or text index
+	// and no TTL index sweeps kb_chunks, so retention can only be enforced on
+	// the hydrated document, after the Search stage.
+	const revalidationFilter = mergeQueryClauses(
+		chunkFilter,
+		buildUnexpiredClause({ field: "expiresAt" }),
+	)
 
-	const runKbFusion = async (
-		method: "scoreFusion" | "rankFusion",
-	): Promise<MemorySearchResult[] | null> => {
-		const stage = method === "scoreFusion" ? "score-fusion" : "rank-fusion"
+	const runKbFusion = async (): Promise<MemorySearchResult[] | null> => {
 		const { compoundFilter } = splitAtlasSearchFilter(chunkFilter)
 		const vsStage = buildVectorSearchStage({
 			queryVector,
@@ -259,9 +238,16 @@ export async function searchKB(
 			// Re-validate the full chunk filter against the hydrated
 			// document — the compound filter runs against the indexed copy,
 			// which can lag the latest write.
-			...freshnessRevalidationStages(chunkFilter),
+			...freshnessRevalidationStages(revalidationFilter),
 			{ $limit: opts.maxResults * 4 },
 		]
+		const pipelines = {
+			vector: [
+				{ $vectorSearch: vsStage },
+				...freshnessRevalidationStages(revalidationFilter),
+			],
+			text: textPipeline,
+		}
 		const weights = {
 			vector: KB_FUSION_VECTOR_WEIGHT,
 			text: KB_FUSION_TEXT_WEIGHT,
@@ -270,33 +256,16 @@ export async function searchKB(
 		// officially documented normalization that yields a comparable [0,1]
 		// fused score, so the caller's minScore threshold applies directly.
 		const fusionStage =
-			method === "scoreFusion"
+			fusionMethod === "scoreFusion"
 				? {
 						$scoreFusion: {
-							input: {
-								pipelines: {
-									vector: [
-										{ $vectorSearch: vsStage },
-										...freshnessRevalidationStages(chunkFilter),
-									],
-									text: textPipeline,
-								},
-								normalization: "minMaxScaler",
-							},
+							input: { pipelines, normalization: "minMaxScaler" },
 							combination: { weights, method: "avg" },
 						},
 					}
 				: {
 						$rankFusion: {
-							input: {
-								pipelines: {
-									vector: [
-										{ $vectorSearch: vsStage },
-										...freshnessRevalidationStages(chunkFilter),
-									],
-									text: textPipeline,
-								},
-							},
+							input: { pipelines },
 							combination: { weights },
 						},
 					}
@@ -331,7 +300,7 @@ export async function searchKB(
 						artifactType: "fusionExplain",
 						summary: {
 							source: "kb",
-							method,
+							method: fusionMethod,
 							...summarizeExplain(explained),
 						},
 						...(opts.explain.deep ? { rawExplain: explained } : {}),
@@ -346,7 +315,7 @@ export async function searchKB(
 			stage,
 		})
 		const results = docs.map(toKBSearchResult)
-		if (method === "scoreFusion") {
+		if (fusionMethod === "scoreFusion") {
 			// minMaxScaler output is already [0,1] — threshold directly.
 			return results.filter((r) => r.score >= opts.minScore)
 		}
@@ -361,318 +330,25 @@ export async function searchKB(
 		)
 	}
 
-	const runFusionTier = async (
-		method: "scoreFusion" | "rankFusion",
-	): Promise<MemorySearchResult[]> => {
-		const stage = method === "scoreFusion" ? "score-fusion" : "rank-fusion"
-		let results: MemorySearchResult[] | null
-		try {
-			results = await runKbFusion(method)
-		} catch (err) {
-			throw toTypedSearchError(err, stage)
-		}
-		if (results === null) {
-			return emptyQuery(stage)
-		}
-		report(stage, results.length)
-		return results
-	}
-
-	if (canVector && canText && fusionMethod !== "js-merge") {
-		if (fusionMethod === "scoreFusion" && opts.capabilities.scoreFusion) {
-			const results = await runFusionTier("scoreFusion")
-			if (results.length > 0) {
-				return results
-			}
-		}
-		if (opts.capabilities.rankFusion) {
-			const results = await runFusionTier("rankFusion")
-			if (results.length > 0) {
-				return results
-			}
-		}
-	}
-
-	const runVectorLane = async (
-		limit: number,
-	): Promise<MemorySearchResult[] | null> => {
-		const vsStage = buildVectorSearchStage({
-			queryVector,
-			queryText: query,
-			embeddingMode: opts.embeddingMode,
-			model: opts.queryEmbeddingModel,
-			indexName: opts.vectorIndexName,
-			numCandidates,
-			limit,
-			filter: chunkFilter,
-			// Authoritative serving hydrates the full current document from
-			// mongod (the documented default); storedSource may return stale
-			// data and would defeat the post-stage freshness $match below.
-			returnStoredSource: false,
-			stage: "vector",
-		})
-
-		if (!vsStage) {
-			return null
-		}
-		const pipeline: Document[] = [
-			{ $vectorSearch: vsStage },
-			// Re-validate the full chunk filter against the hydrated
-			// document — the ANN prefilter runs against the indexed copy,
-			// which can lag the latest write.
-			...freshnessRevalidationStages(chunkFilter),
-			{ $limit: limit },
-			{
-				$project: {
-					_id: 0,
-					path: 1,
-					startLine: 1,
-					endLine: 1,
-					text: 1,
-					docId: 1,
-					// RET-11 wave-3e followup: the mapper's expiresAt carry
-					// was dead — no KB projection included the field.
-					expiresAt: 1,
-					updatedAt: 1,
-					score: { $meta: "vectorSearchScore" },
-				},
-			},
-		]
-		if (opts.explain?.enabled) {
-			try {
-				const cursor = kbChunks.aggregate(pipeline) as unknown as {
-					explain?: (verbosity?: string) => Promise<unknown>
-				}
-				if (typeof cursor.explain === "function") {
-					const explained = await cursor.explain("executionStats")
-					opts.explain.onArtifact?.({
-						artifactType: "vectorExplain",
-						summary: { source: "kb", ...summarizeExplain(explained) },
-						...(opts.explain.deep ? { rawExplain: explained } : {}),
-					})
-				}
-			} catch (err) {
-				reportExplainFailure(err, opts.onTierOutcome)
-			}
-		}
-		try {
-			const docs = await runSearchAggregateWithRetry(kbChunks, pipeline, {
-				stage: "vector",
-			})
-			return docs.map(toKBSearchResult)
-		} catch (err) {
-			throw toTypedSearchError(err, "vector")
-		}
-	}
-
-	const runTextLane = async (limit: number): Promise<MemorySearchResult[]> => {
-		const { compoundFilter } = splitAtlasSearchFilter(chunkFilter)
-		const pipeline: Document[] = [
-			{
-				$search: {
-					index: opts.textIndexName,
-					compound: {
-						must: [{ text: { query, path: "text" } }],
-						...(compoundFilter ? { filter: compoundFilter } : {}),
-					},
-					...(opts.explain?.includeScoreDetails ? { scoreDetails: true } : {}),
-				},
-			},
-			// Re-validate the full chunk filter against the hydrated
-			// document — the compound filter runs against the indexed copy,
-			// which can lag the latest write.
-			...freshnessRevalidationStages(chunkFilter),
-			{ $limit: limit },
-			{
-				$project: {
-					_id: 0,
-					path: 1,
-					startLine: 1,
-					endLine: 1,
-					text: 1,
-					docId: 1,
-					// RET-11 wave-3e followup: the mapper's expiresAt carry
-					// was dead — no KB projection included the field.
-					expiresAt: 1,
-					updatedAt: 1,
-					score: { $meta: "searchScore" },
-					...(opts.explain?.includeScoreDetails
-						? { scoreDetails: { $meta: "searchScoreDetails" } }
-						: {}),
-				},
-			},
-		]
-		if (opts.explain?.enabled) {
-			try {
-				const cursor = kbChunks.aggregate(pipeline) as unknown as {
-					explain?: (verbosity?: string) => Promise<unknown>
-				}
-				if (typeof cursor.explain === "function") {
-					const explained = await cursor.explain("executionStats")
-					opts.explain.onArtifact?.({
-						artifactType: "searchExplain",
-						summary: { source: "kb", ...summarizeExplain(explained) },
-						...(opts.explain.deep ? { rawExplain: explained } : {}),
-					})
-				}
-			} catch (err) {
-				reportExplainFailure(err, opts.onTierOutcome)
-			}
-		}
-		let docs: Document[]
-		try {
-			docs = await runSearchAggregateWithRetry(kbChunks, pipeline, {
-				stage: "keyword",
-			})
-		} catch (err) {
-			throw toTypedSearchError(err, "keyword")
-		}
-		if (opts.explain?.enabled && opts.explain.includeScoreDetails) {
-			const scoreDetailSample = docs.find(
-				(doc) => doc.scoreDetails != null,
-			)?.scoreDetails
-			if (scoreDetailSample) {
-				opts.explain.onArtifact?.({
-					artifactType: "scoreDetails",
-					summary: { source: "kb", available: true },
-					...(opts.explain.deep ? { rawExplain: scoreDetailSample } : {}),
-				})
-			}
-		}
-		return docs.map(toKBSearchResult)
-	}
-
-	if (canVector && canText && fusionMethod === "js-merge") {
-		// K7: both branches run; a failed branch is its own row and the
-		// survivor stands (the lane is partial). Nothing runs after an error.
-		const laneLimit = opts.maxResults * 4
-		const [vectorOutcome, textOutcome] = await Promise.allSettled([
-			runVectorLane(laneLimit),
-			runTextLane(laneLimit),
-		])
-		if (
-			vectorOutcome.status === "rejected" &&
-			textOutcome.status === "rejected"
-		) {
-			opts.onTierOutcome?.(
-				searchFailureTierRow(
-					"keyword",
-					toTypedSearchError(textOutcome.reason, "keyword"),
-				),
-			)
-			throw toTypedSearchError(vectorOutcome.reason, "vector")
-		}
-		const failed =
-			vectorOutcome.status === "rejected"
-				? { stage: "vector" as const, reason: vectorOutcome.reason }
-				: textOutcome.status === "rejected"
-					? { stage: "keyword" as const, reason: textOutcome.reason }
-					: null
-		if (failed) {
-			const typed = toTypedSearchError(failed.reason, failed.stage)
-			if (opts.strict) {
-				throw typed
-			}
-			log.warn("KB js-merge branch failed", {
-				stage: failed.stage,
-				...searchFailureLogFields(typed),
-			})
-			opts.onTierOutcome?.(searchFailureTierRow(failed.stage, typed))
-		}
-		const vectorHits =
-			vectorOutcome.status === "fulfilled" ? vectorOutcome.value : undefined
-		const textHits =
-			textOutcome.status === "fulfilled" ? textOutcome.value : undefined
-		if (vectorHits === null) {
-			emptyQuery("vector")
-		} else if (vectorHits) {
-			report("vector", vectorHits.length)
-		}
-		if (textHits) {
-			report("keyword", textHits.length)
-		}
-		if (vectorHits && textHits) {
-			return mergeHybridResultsMongoDB({
-				vector: vectorHits,
-				keyword: textHits,
-				maxResults: opts.maxResults,
-				vectorWeight: KB_FUSION_VECTOR_WEIGHT,
-				textWeight: KB_FUSION_TEXT_WEIGHT,
-			}).filter((result) => result.score >= opts.minScore)
-		}
-		return (vectorHits ?? textHits ?? [])
-			.filter((result) => result.score >= opts.minScore)
-			.slice(0, opts.maxResults)
-	}
-
-	// Vector tier (K6/K8): a zero hit moves on; an error stops the lane.
-	if (canVector) {
-		const hits = await runVectorLane(opts.maxResults)
-		if (hits === null) {
-			emptyQuery("vector")
-		} else {
-			const results = hits.filter((result) => result.score >= opts.minScore)
-			report("vector", results.length)
-			if (results.length > 0) {
-				return results
-			}
-		}
-	}
-
-	// Keyword tier (K9) on the kb_chunks_text Search index.
-	if (canText) {
-		const results = (await runTextLane(opts.maxResults * 4))
-			.filter((r) => r.score >= opts.minScore)
-			.slice(0, opts.maxResults)
-		report("keyword", results.length)
-		return results
-	}
-
-	// R5/K11: classic $text is the planned lexical tier only where Search is
-	// absent — idx_kbchunks_text exists by that same rule. RET-16: it is a
-	// billable aggregation carrying the user-search maxTimeMS ceiling; a
-	// refusal is a typed budget denial (K10).
-	if (!query.trim()) {
-		return emptyQuery("classic-text")
-	}
-	consumeSearchAggregationOrThrow("classic-text")
-	let docs: Document[]
+	let results: MemorySearchResult[] | null
 	try {
-		const filter: Document = { $text: { $search: query } }
-		if (chunkFilter) {
-			Object.assign(filter, chunkFilter)
-		}
-		docs = await kbChunks
-			.aggregate(
-				[
-					{ $match: filter },
-					{
-						$project: {
-							_id: 0,
-							path: 1,
-							startLine: 1,
-							endLine: 1,
-							text: 1,
-							docId: 1,
-							// RET-11 wave-3e followup: match the vector/text
-							// projections above.
-							expiresAt: 1,
-							updatedAt: 1,
-							score: { $meta: "textScore" },
-						},
-					},
-					{ $sort: { score: { $meta: "textScore" } } },
-					{ $limit: opts.maxResults },
-				],
-				{ maxTimeMS: resolveUserSearchMaxTimeMs() },
-			)
-			.toArray()
+		results = await runKbFusion()
 	} catch (err) {
-		throw toTypedSearchError(err, "classic-text")
+		throw toTypedSearchError(err, stage, "kb")
 	}
-	const results = docs
-		.map(toKBSearchResult)
-		.filter((r) => r.score >= opts.minScore)
-	report("classic-text", results.length)
+	if (results === null) {
+		opts.onTierOutcome?.({
+			stage,
+			outcome: "not-applicable",
+			reason: "empty-query",
+		})
+		return []
+	}
+	opts.onTierOutcome?.({
+		stage,
+		outcome: results.length > 0 ? "ok" : "ok-empty",
+		...(results.length > 0 ? {} : { reason: "zero-hits" as const }),
+		resultCount: results.length,
+	})
 	return results
 }

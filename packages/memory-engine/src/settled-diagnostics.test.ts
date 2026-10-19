@@ -9,6 +9,7 @@ import { buildContextBundle } from "./mongodb-context-bundle.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 
 import { settledFailureMeta } from "./query-diagnostics.js"
+import { SearchLaneError } from "./search-outcomes.js"
 
 const QUERY = "violet launch detail SECRETTAIL"
 
@@ -61,10 +62,28 @@ function assertPrivate(lines: string[], privateText: string) {
 	}
 }
 
+async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+	try {
+		await promise
+	} catch (error) {
+		return error
+	}
+	throw new Error("expected the call to reject")
+}
+
+function assertTypedAndPrivate(error: unknown, privateText: string) {
+	expect(error).toBeInstanceOf(SearchLaneError)
+	const typed = error as SearchLaneError
+	expect(typed.message).not.toContain(privateText)
+	expect(typed.message).not.toContain("SECRETTAIL")
+	expect(typed.reason).toBeTypeOf("string")
+	expect(typed.stage).toBeTypeOf("string")
+}
+
 afterEach(() => vi.restoreAllMocks())
 
 describe("settled diagnostic privacy with real modules and driver errors", () => {
-	it("keeps bundle response semantics while protecting all three settled helpers", async () => {
+	it("rejects a bundle whose every section fails with a typed error and protected logs", async () => {
 		const error = new MongoServerError({
 			ok: 0,
 			errmsg: `bad regex ${QUERY}`,
@@ -72,30 +91,26 @@ describe("settled diagnostic privacy with real modules and driver errors", () =>
 			codeName: "BadValue",
 		})
 		const lines = captureLogs()
-		const bundle = await buildContextBundle({
-			db: failingDb(error),
-			prefix: "test_",
-			agentId: "agent-1",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			request: {
-				query: QUERY,
-				discoveryKind: "topic-brief",
-				includeDiscoveryProjection: true,
-			},
-			search: async () => {
-				throw error
-			},
-		})
+		const rejection = await rejectionOf(
+			buildContextBundle({
+				db: failingDb(error),
+				prefix: "test_",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				request: {
+					query: QUERY,
+					discoveryKind: "topic-brief",
+					includeDiscoveryProjection: true,
+				},
+				search: async () => {
+					throw error
+				},
+			}),
+		)
+		assertTypedAndPrivate(rejection, QUERY)
 		assertPrivate(lines, QUERY)
-		expect(bundle.query).toBe(QUERY)
-		expect(bundle.metadata.partial).toBe(true)
-		expect(bundle.metadata.pathsExecuted).toEqual([
-			"active-slate",
-			"discovery-projection",
-		])
 		const warnings = lines.filter((line) => line.includes(" query failed"))
-		expect(warnings).toHaveLength(10)
 		for (const subsystem of [
 			"buildContextBundle:",
 			"buildDiscoveryProjection:",
@@ -116,12 +131,13 @@ describe("settled diagnostic privacy with real modules and driver errors", () =>
 			const line = warnings.find((line) =>
 				line.includes(`${label} query failed`),
 			)
-			expect(line).toContain(`"queryLength":${QUERY.length}`)
-			expect(line).toContain(`"queryDigest":"${digest}"`)
+			expect(line, label).toContain(`"queryLength":${QUERY.length}`)
+			expect(line, label).toContain(`"queryDigest":"${digest}"`)
 		}
 		for (const line of warnings.filter(
 			(line) =>
 				line.includes("hydrateActiveSlate:") ||
+				line.includes("active-slate query failed") ||
 				line.includes("recent-events query failed"),
 		)) {
 			expect(line).not.toContain("queryDigest")
@@ -129,24 +145,27 @@ describe("settled diagnostic privacy with real modules and driver errors", () =>
 		}
 	})
 
-	it("logs an arbitrary search closure without serializing string identifiers", async () => {
+	it("types an arbitrary search closure failure without serializing string identifiers", async () => {
 		const error = Object.assign(new Error(QUERY), {
 			code: `SECRET-${QUERY}`,
 			codeName: QUERY,
 			name: QUERY,
 		})
 		const lines = captureLogs()
-		await buildContextBundle({
-			db: failingDb(new Error("unavailable")),
-			prefix: "test_",
-			agentId: "agent-1",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			request: { query: QUERY },
-			search: async () => {
-				throw error
-			},
-		})
+		const rejection = await rejectionOf(
+			buildContextBundle({
+				db: failingDb(new Error("unavailable")),
+				prefix: "test_",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				request: { query: QUERY },
+				search: async () => {
+					throw error
+				},
+			}),
+		)
+		assertTypedAndPrivate(rejection, QUERY)
 		assertPrivate(lines, QUERY)
 		const line = lines.find((line) =>
 			line.includes("query-evidence query failed"),
@@ -160,26 +179,29 @@ describe("settled diagnostic privacy with real modules and driver errors", () =>
 		"topic-brief",
 		"what-changed",
 		"contradiction-report",
-	] as const)("protects direct %s discovery failures", async (kind) => {
+	] as const)("rejects direct %s discovery when every section fails", async (kind) => {
 		const error = new MongoServerError({
 			errmsg: `bad ${QUERY}`,
 			code: 2,
 			codeName: "BadValue",
 		})
 		const lines = captureLogs()
-		const projection = await buildDiscoveryProjection({
-			db: failingDb(error),
-			prefix: "test_",
-			agentId: "agent-1",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			kind,
-			query: QUERY,
-		})
+		const rejection = await rejectionOf(
+			buildDiscoveryProjection({
+				db: failingDb(error),
+				prefix: "test_",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				kind,
+				query: QUERY,
+			}),
+		)
+		assertTypedAndPrivate(rejection, QUERY)
 		assertPrivate(lines, QUERY)
-		expect(projection.query).toBe(QUERY)
-		expect(projection.metadata.partial).toBe(true)
-		for (const line of lines.filter((line) => line.includes(" query failed"))) {
+		const warnings = lines.filter((line) => line.includes(" query failed"))
+		expect(warnings.length).toBeGreaterThan(0)
+		for (const line of warnings) {
 			expect(line).toContain('"code":2')
 			expect(line).toContain('"queryDigest":')
 		}
@@ -187,17 +209,21 @@ describe("settled diagnostic privacy with real modules and driver errors", () =>
 
 	it("keeps query-free discovery warnings structural", async () => {
 		const lines = captureLogs()
-		const projection = await buildDiscoveryProjection({
-			db: failingDb(new MongoServerError({ errmsg: QUERY, code: 2 })),
-			prefix: "test_",
-			agentId: "agent-1",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			kind: "what-changed",
-		})
+		const rejection = await rejectionOf(
+			buildDiscoveryProjection({
+				db: failingDb(new MongoServerError({ errmsg: QUERY, code: 2 })),
+				prefix: "test_",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				kind: "what-changed",
+			}),
+		)
+		assertTypedAndPrivate(rejection, QUERY)
 		assertPrivate(lines, QUERY)
-		expect(projection.query).toBeUndefined()
-		for (const line of lines.filter((line) => line.includes(" query failed"))) {
+		const warnings = lines.filter((line) => line.includes(" query failed"))
+		expect(warnings.length).toBeGreaterThan(0)
+		for (const line of warnings) {
 			expect(line).toContain('"code":2')
 			expect(line).not.toContain("queryDigest")
 		}
@@ -246,48 +272,51 @@ describe("settled failure structural metadata", () => {
 		expect(settledFailureMeta({ code: 0 })).toEqual({ code: 0 })
 	})
 
-	it("preserves degradation when a search closure throws a string", async () => {
+	it("types a search closure that throws a string without logging it", async () => {
 		const lines = captureLogs()
-		const bundle = await buildContextBundle({
-			db: failingDb(new Error("unavailable")),
-			prefix: "test_",
-			agentId: "agent-1",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			request: { query: QUERY },
-			search: async () => {
-				throw QUERY
-			},
-		})
+		const rejection = await rejectionOf(
+			buildContextBundle({
+				db: failingDb(new Error("unavailable")),
+				prefix: "test_",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				request: { query: QUERY },
+				search: async () => {
+					throw QUERY
+				},
+			}),
+		)
+		assertTypedAndPrivate(rejection, QUERY)
 		assertPrivate(lines, QUERY)
-		expect(bundle.metadata.partial).toBe(true)
 		expect(
 			lines.find((line) => line.includes("query-evidence query failed")),
 		).toContain("queryDigest")
 	})
 
-	it("preserves the full bundle query on an over-length failed request", async () => {
+	it("keeps the full bundle query digest on an over-length failed request", async () => {
 		const query = "word ".repeat(200000).trim()
 		const error = new MongoServerError({ errmsg: query.toUpperCase(), code: 2 })
 		const lines = captureLogs()
-		const bundle = await buildContextBundle({
-			db: failingDb(error),
-			prefix: "test_",
-			agentId: "agent-1",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			request: {
-				query,
-				includeDiscoveryProjection: true,
-				discoveryKind: "topic-brief",
-			},
-			search: async () => {
-				throw error
-			},
-		})
+		const rejection = await rejectionOf(
+			buildContextBundle({
+				db: failingDb(error),
+				prefix: "test_",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				request: {
+					query,
+					includeDiscoveryProjection: true,
+					discoveryKind: "topic-brief",
+				},
+				search: async () => {
+					throw error
+				},
+			}),
+		)
+		expect(rejection).toBeInstanceOf(SearchLaneError)
 		assertPrivate(lines, query.toUpperCase())
-		expect(bundle.query).toBe(query)
-		expect(bundle.metadata.partial).toBe(true)
 		const digest = createHash("sha256").update(query).digest("hex").slice(0, 12)
 		expect(
 			lines.find((line) => line.includes("query-evidence query failed")),

@@ -3,7 +3,13 @@ import type {
 	SearchOutcomeSummary,
 } from "@memongo/memory-bridge"
 import type { Context } from "hono"
-import { apiErrorJson, internalError } from "./errors.js"
+import {
+	apiErrorJson,
+	type CommitFields,
+	commitFieldsFromError,
+	internalError,
+	jsonError,
+} from "./errors.js"
 
 /**
  * #101 / decision 16, resolution R3: the one HTTP mapping of a search call's
@@ -12,7 +18,10 @@ import { apiErrorJson, internalError } from "./errors.js"
  * 503 SEARCH_LANES_UNAVAILABLE when every failure is a retryable
  * unavailability, 503 SEARCH_BUDGET_EXHAUSTED when every failure is a budget
  * denial, and otherwise 500 SEARCH_LANES_FAILED (500 > unavailable > budget).
- * Explain rows are diagnostics and never change the status (R4).
+ * Explain rows are diagnostics and never change the status (R4). A budget
+ * 503 raised by an admission-bucket denial carries `Retry-After`, computed
+ * from the denial's `retryAfterMs`; a per-request ledger denial has no
+ * retry hint, so it carries none.
  */
 export type SearchFailureCode =
 	| "SEARCH_LANES_UNAVAILABLE"
@@ -27,6 +36,8 @@ const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set([
 	"lane-unavailable",
 	"index-missing",
 	"index-not-ready",
+	"index-stale",
+	"index-unavailable",
 	"query-timeout",
 	"dependency-unavailable",
 ])
@@ -156,6 +167,8 @@ export function searchFailureResponse(
 	c: Context,
 	mapping: Exclude<SearchHttpMapping, { status: 200 }>,
 	outcomes: SearchOutcomeSummary,
+	retryAfterMs?: number,
+	commit?: CommitFields,
 ) {
 	const requestId = c.get("requestId") ?? "no-request-id"
 	console.error(
@@ -168,20 +181,57 @@ export function searchFailureResponse(
 			path: c.req.path,
 		}),
 	)
+	if (
+		mapping.code === "SEARCH_BUDGET_EXHAUSTED" &&
+		typeof retryAfterMs === "number" &&
+		Number.isFinite(retryAfterMs) &&
+		retryAfterMs > 0
+	) {
+		c.header("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1000))))
+	}
 	return c.json(
 		{
-			...apiErrorJson(mapping.code, `search failed (request id: ${requestId})`),
+			...apiErrorJson(
+				mapping.code,
+				`search failed (request id: ${requestId})`,
+				commit,
+			),
 			outcomes: boundSearchOutcomes({ ...outcomes, status: "failed" }),
 		},
 		mapping.status,
 	)
 }
 
+export const RERANK_UNSUPPORTED_MESSAGE =
+	"rerank is not supported: native $rerank (Atlas only) is not implemented yet"
+
+function isRerankUnsupportedError(err: unknown): boolean {
+	return (
+		err instanceof Error &&
+		err.name === "SearchLaneError" &&
+		(err as Error & { reason?: unknown }).reason === "rerank-unsupported"
+	)
+}
+
+// Engine error classes do not cross every bridge/runtime boundary reliably,
+// so match the stable error name (as routes/v1-helpers.ts does).
+function isErasureInProgressError(err: unknown): boolean {
+	return err instanceof Error && err.name === "ErasureGateConflictError"
+}
+
 /**
- * The catch-block mapping: a typed search failure goes through the same
- * table; any other error keeps the generic internal error envelope.
+ * M2 review R8: the catch-block mapping for a route that is not a search
+ * route but runs engine Search underneath (/consolidate, /probes/vector). A
+ * recognized typed Search failure (lane failure, index-unavailable,
+ * index-stale, budget denial) goes through the same table and body as the
+ * search routes, with its outcome row and `Retry-After` where the denial
+ * carries one. Any other error keeps the generic internal error envelope
+ * under the route's own code: an unexpected failure is never labeled as a
+ * Search failure and never leaks its message. M2 review D3: a failure that
+ * arrives after the operation committed work keeps its status and body and
+ * also carries the operation's commit state (see `commitFieldsFromError`).
  */
-export function searchErrorResponse(
+export function searchFailureOrInternalError(
 	c: Context,
 	err: unknown,
 	fallbackCode: string,
@@ -191,5 +241,42 @@ export function searchErrorResponse(
 	if (!outcomes || mapping.status === 200) {
 		return internalError(c, err, fallbackCode)
 	}
-	return searchFailureResponse(c, mapping, outcomes)
+	const retryAfterMs =
+		err instanceof Error && err.name === "SearchBudgetDeniedError"
+			? (err as Error & { retryAfterMs?: unknown }).retryAfterMs
+			: undefined
+	return searchFailureResponse(
+		c,
+		mapping,
+		outcomes,
+		typeof retryAfterMs === "number" ? retryAfterMs : undefined,
+		commitFieldsFromError(err),
+	)
+}
+
+/**
+ * The catch-block mapping for a search route: a typed search failure goes
+ * through the same table; any other error keeps the generic internal error
+ * envelope. A rerank demand is the caller's request, not a lane failure: 400
+ * RERANK_UNSUPPORTED. An erasure in progress refuses the read (M2 T13, review
+ * F2): 409 ERASURE_IN_PROGRESS, never an empty answer and never an internal
+ * error.
+ */
+export function searchErrorResponse(
+	c: Context,
+	err: unknown,
+	fallbackCode: string,
+) {
+	if (isRerankUnsupportedError(err)) {
+		return jsonError(c, 400, "RERANK_UNSUPPORTED", RERANK_UNSUPPORTED_MESSAGE)
+	}
+	if (isErasureInProgressError(err)) {
+		return jsonError(
+			c,
+			409,
+			"ERASURE_IN_PROGRESS",
+			"read refused: an erasure is in progress for this agent",
+		)
+	}
+	return searchFailureOrInternalError(c, err, fallbackCode)
 }

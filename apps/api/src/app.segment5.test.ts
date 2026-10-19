@@ -379,7 +379,7 @@ describe("createApp", () => {
 						preview: "Assistant: Phoenix ships on Friday.",
 					},
 					score: 0.91,
-					matchType: "semantic",
+					matchType: "hybrid",
 				},
 			],
 			metadata: {
@@ -391,7 +391,7 @@ describe("createApp", () => {
 					"startTime:2026-04-08T00:00:00.000Z",
 					"endTime:2026-04-08T23:59:59.999Z",
 				],
-				searchMethod: "semantic",
+				searchMethod: "hybrid",
 				durationMs: 12,
 			},
 		})
@@ -401,6 +401,8 @@ describe("createApp", () => {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				agentId: "agent-42",
+				scope: "agent",
+				scopeRef: "agent:agent-42",
 				query: "phoenix",
 				sessionId: "session-9",
 				roles: ["assistant"],
@@ -425,7 +427,7 @@ describe("createApp", () => {
 						preview: "Assistant: Phoenix ships on Friday.",
 					},
 					score: 0.91,
-					matchType: "semantic",
+					matchType: "hybrid",
 				},
 			],
 			metadata: {
@@ -437,14 +439,14 @@ describe("createApp", () => {
 					"startTime:2026-04-08T00:00:00.000Z",
 					"endTime:2026-04-08T23:59:59.999Z",
 				],
-				searchMethod: "semantic",
+				searchMethod: "hybrid",
 				durationMs: 12,
 			},
 		})
 		expect(bridgeMocks.memongoBridgeRecallConversation).toHaveBeenCalledWith({
 			agentId: "agent-42",
-			scope: undefined,
-			scopeRef: undefined,
+			scope: "agent",
+			scopeRef: "agent:agent-42",
 			query: "phoenix",
 			sessionId: "session-9",
 			roles: ["assistant"],

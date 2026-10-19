@@ -8,20 +8,21 @@ import {
 	mergeRankedResultSets,
 	MongoDBMemoryManager,
 	scorePreferenceGroundingSignalBoost,
-	searchV2,
+	searchV2 as searchV2Core,
 } from "./mongodb-manager.js"
-import { crossEncoderRerank } from "./mongodb-reranker.js"
+import { withHealthyCapabilities } from "./test-helpers/search-capabilities.js"
 import type { MemorySearchResult } from "./types.js"
 import { SearchLaneError } from "./search-outcomes.js"
 import {
 	mocked,
-	testOperationRunContext,
 	fakeDb,
 	fakePrefix,
 	captureManagerPrototype,
+	rawWindowEventsCollection,
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
+const searchV2 = withHealthyCapabilities(searchV2Core)
 
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
@@ -65,10 +66,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	).queryRewriterModuleMock(),
 )
 
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
-)
-
 vi.mock("./mongodb-lane-coverage.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).laneCoverageModuleMock(),
 )
@@ -91,7 +88,6 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-const { getEventsByTimeRange } = await import("./mongodb-events.js")
 const { planRetrieval, resolveTimeRangePreset, extractTemporalWindow } =
 	await import("./mongodb-retrieval-planner.js")
 const { searchEpisodes } = await import("./mongodb-episodes.js")
@@ -108,6 +104,11 @@ const {
 	kbChunksCollection,
 } = await import("./mongodb-schema.js")
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
+// M2 T6: raw-window candidates come from its $search aggregate.
+const seedRawWindow = (events: object[]) =>
+	mocked(eventsCollection).mockReturnValue(
+		rawWindowEventsCollection(events) as never,
+	)
 
 describe("conversation evidence query detection", () => {
 	it("routes advice and recommendation queries through conversation evidence", () => {
@@ -442,11 +443,6 @@ describe("getActiveSourcesForStatus", () => {
 describe("searchV2", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-			results,
-			reranked: false,
-			latencyMs: 0,
-		}))
 	})
 
 	it("uses retrieval planner and executes paths, returning results + metadata", async () => {
@@ -548,10 +544,14 @@ describe("searchV2", () => {
 
 		let rawWindowStarted = false
 		let rawWindowStartedBeforeEpisodicResolved = false
-		mocked(getEventsByTimeRange).mockImplementation(async () => {
-			rawWindowStarted = true
-			return []
-		})
+		mocked(eventsCollection).mockReturnValue({
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					rawWindowStarted = true
+					return []
+				}),
+			})),
+		} as never)
 		mocked(searchEpisodes).mockImplementation(async () => {
 			for (let i = 0; i < 20 && !rawWindowStarted; i++) {
 				await new Promise((resolve) => setTimeout(resolve, 5))
@@ -579,7 +579,7 @@ describe("searchV2", () => {
 		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
 
 		// Raw-window succeeds
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				eventId: "e-1",
 				body: "recent event",
@@ -636,14 +636,13 @@ describe("searchV2", () => {
 		)
 	})
 
-	it("surfaces a whole-path failure at the actual seam: onPathFailure + laneOutcomes (RET-13)", async () => {
+	it("surfaces a whole-path failure at the actual seam: laneOutcomes (RET-13)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
 			reasoning: "episodic keywords",
 		})
 		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
-		const laneFailures: Array<{ lane: string; error: unknown }> = []
 
 		const result = await searchV2(
 			fakeDb,
@@ -652,7 +651,6 @@ describe("searchV2", () => {
 			"agent-1",
 			{
 				availablePaths: new Set(["episodic"]),
-				onPathFailure: (lane, error) => laneFailures.push({ lane, error }),
 				searchOptions: { allowHybridBackstop: false },
 			},
 		)
@@ -661,12 +659,6 @@ describe("searchV2", () => {
 		expect(result.results).toHaveLength(0)
 		expect(result.metadata.pathsExecuted).toContain("episodic")
 		expect(result.metadata.resultsByPath.episodic).toBeUndefined()
-		expect(laneFailures).toHaveLength(1)
-		expect(laneFailures[0].lane).toBe("episodic")
-		expect(laneFailures[0].error).toBeInstanceOf(SearchLaneError)
-		expect((laneFailures[0].error as Error).cause).toEqual(
-			new Error("episodic broke"),
-		)
 		expect(
 			result.metadata.laneOutcomes?.filter((row) => row.lane === "episodic"),
 		).toEqual([
@@ -715,10 +707,10 @@ describe("searchV2", () => {
 		}
 	})
 
-	it("degrades only the failing KB sub-lanes and keeps sibling paths contributing (RET-13)", async () => {
+	it("degrades only the failing KB lane and keeps sibling paths contributing (RET-13)", async () => {
 		// The KB chunks collection rejects every aggregate: the real searchKB
-		// waterfall (not mocked here) must surface each failed stage at its
-		// seam while the sibling episodic path still contributes.
+		// (not mocked here) must surface its failed fusion stage at its seam
+		// while the sibling episodic path still contributes.
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["kb", "episodic"],
 			confidence: "medium",
@@ -745,7 +737,6 @@ describe("searchV2", () => {
 				updatedAt: new Date(),
 			},
 		])
-		const laneFailures: string[] = []
 
 		const result = await searchV2(
 			fakeDb,
@@ -754,15 +745,13 @@ describe("searchV2", () => {
 			"agent-1",
 			{
 				availablePaths: new Set(["kb", "episodic"]),
-				onPathFailure: (lane) => laneFailures.push(lane),
 				searchOptions: { allowHybridBackstop: false },
 			},
 		)
 
-		// K4/V4: the first KB tier error stops the lane — no weaker tier runs
-		// after it — and is reported once at its tier; the sibling episodic
-		// path keeps its results and the request is partial.
-		expect(laneFailures).toEqual(["kb"])
+		// K4/V4: the KB fusion error stops the lane — no weaker tier exists
+		// to run after it — and is reported once at its stage; the sibling
+		// episodic path keeps its results and the request is partial.
 		expect(result.metadata.pathsExecuted).toEqual(
 			expect.arrayContaining(["kb", "episodic"]),
 		)
@@ -773,7 +762,7 @@ describe("searchV2", () => {
 		).toEqual([
 			{
 				lane: "kb",
-				stage: "rank-fusion",
+				stage: "score-fusion",
 				outcome: "failed",
 				reason: "internal-error",
 			},
@@ -781,7 +770,7 @@ describe("searchV2", () => {
 		expect(result.metadata.outcomeStatus).toBe("partial")
 	})
 
-	it("fails loudly in benchmark strict mode when a KB waterfall stage fails (RET-13)", async () => {
+	it("fails loudly in benchmark strict mode when the KB fusion fails (RET-13)", async () => {
 		const previous = process.env.MEMONGO_BENCHMARK_STRICT
 		process.env.MEMONGO_BENCHMARK_STRICT = "1"
 		try {
@@ -820,7 +809,7 @@ describe("searchV2", () => {
 		}
 	})
 
-	it("threads the textSearch capability into the episodic lane lookup (P3.8)", async () => {
+	it("T7: the episodic lane runs the same Search lookup whatever the textSearch capability reports", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
@@ -828,47 +817,31 @@ describe("searchV2", () => {
 		})
 		mocked(searchEpisodes).mockResolvedValue([])
 
-		await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
-			availablePaths: new Set(["episodic"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				capabilities: {
-					vectorSearch: false,
-					textSearch: true,
-					scoreFusion: false,
-					rankFusion: false,
-					storedSource: false,
-					vectorIndexMethod: false,
+		for (const textSearch of [true, false]) {
+			mocked(searchEpisodes).mockClear()
+			await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
+				availablePaths: new Set(["episodic"]),
+				searchOptions: {
+					allowHybridBackstop: false,
+					capabilities: {
+						vectorSearch: false,
+						textSearch,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: false,
+						vectorIndexMethod: false,
+					},
 				},
-			},
-		})
+			})
 
-		expect(searchEpisodes).toHaveBeenCalledWith(
-			expect.objectContaining({ textSearchAvailable: true }),
-		)
-
-		mocked(searchEpisodes).mockClear()
-		await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
-			availablePaths: new Set(["episodic"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				capabilities: {
-					vectorSearch: false,
-					textSearch: false,
-					scoreFusion: false,
-					rankFusion: false,
-					storedSource: false,
-					vectorIndexMethod: false,
-				},
-			},
-		})
-
-		expect(searchEpisodes).toHaveBeenCalledWith(
-			expect.objectContaining({ textSearchAvailable: false }),
-		)
+			expect(searchEpisodes).toHaveBeenCalledOnce()
+			expect(mocked(searchEpisodes).mock.calls[0][0]).not.toHaveProperty(
+				"textSearchAvailable",
+			)
+		}
 	})
 
-	it("threads the textSearch capability into the graph lane entity lookup (P3.8)", async () => {
+	it("T7: the graph lane entity lookup is not gated by the textSearch capability", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["graph"],
 			confidence: "high",
@@ -876,28 +849,32 @@ describe("searchV2", () => {
 		})
 		mocked(searchEntitiesAutocomplete).mockResolvedValue([])
 
-		await searchV2(fakeDb, fakePrefix, "what does Alice work on", "agent-1", {
-			availablePaths: new Set(["graph"]),
-			knownEntityNames: ["Alice"],
-			searchOptions: {
-				allowHybridBackstop: false,
-				capabilities: {
-					vectorSearch: false,
-					textSearch: true,
-					scoreFusion: false,
-					rankFusion: false,
-					storedSource: false,
-					vectorIndexMethod: false,
+		for (const textSearch of [true, false]) {
+			mocked(searchEntitiesAutocomplete).mockClear()
+			await searchV2(fakeDb, fakePrefix, "what does Alice work on", "agent-1", {
+				availablePaths: new Set(["graph"]),
+				knownEntityNames: ["Alice"],
+				searchOptions: {
+					allowHybridBackstop: false,
+					capabilities: {
+						vectorSearch: false,
+						textSearch,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: false,
+						vectorIndexMethod: false,
+					},
 				},
-			},
-		})
+			})
 
-		expect(searchEntitiesAutocomplete).toHaveBeenCalledWith(
-			expect.objectContaining({ textSearchAvailable: true }),
-		)
+			expect(searchEntitiesAutocomplete).toHaveBeenCalled()
+			expect(
+				mocked(searchEntitiesAutocomplete).mock.calls[0][0],
+			).not.toHaveProperty("textSearchAvailable")
+		}
 	})
 
-	it("applies maxTimeMS to the user-driven conversation-evidence $search pipeline (P3.8)", async () => {
+	it("applies maxTimeMS to the user-driven conversation-evidence $rankFusion pipeline (P3.8)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -918,10 +895,10 @@ describe("searchV2", () => {
 				searchOptions: {
 					allowHybridBackstop: false,
 					capabilities: {
-						vectorSearch: false,
+						vectorSearch: true,
 						textSearch: true,
 						scoreFusion: false,
-						rankFusion: false,
+						rankFusion: true,
 						storedSource: false,
 						vectorIndexMethod: false,
 					},
@@ -930,7 +907,7 @@ describe("searchV2", () => {
 		)
 
 		// The conversation-evidence lane matches "did we" and runs a direct
-		// $search aggregate that bypasses runSearchAggregateWithRetry.
+		// $rankFusion aggregate that bypasses runSearchAggregateWithRetry.
 		expect(aggregate.mock.calls.length).toBeGreaterThan(0)
 		for (const call of aggregate.mock.calls) {
 			const options = call[1] as { maxTimeMS?: number } | undefined
@@ -946,7 +923,7 @@ describe("searchV2", () => {
 			reasoning: "conversation scope requested",
 		})
 
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				eventId: "evt-recent",
 				body: "I will keep concise updates and track the Phoenix deploy checklist.",
@@ -1178,7 +1155,7 @@ describe("searchV2", () => {
 		const recentTimestamp = new Date("2024-03-14T00:00:00Z")
 		const oldTimestamp = new Date("2023-01-01T00:00:00Z")
 
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				_id: "evt-old",
 				eventId: "evt-old",
@@ -1225,73 +1202,6 @@ describe("searchV2", () => {
 		expect(result.results.length).toBeGreaterThan(0)
 	})
 
-	it("records a failed reranker provider attempt in the supplied benchmark context", async () => {
-		mocked(planRetrieval).mockReturnValue({
-			paths: ["raw-window"],
-			confidence: "high",
-			reasoning: "direct evidence",
-		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
-			{
-				_id: "evt-1",
-				eventId: "evt-1",
-				body: "first matching memory",
-				role: "user",
-				timestamp: new Date("2026-01-01T00:00:00Z"),
-				agentId: "agent-1",
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-				sessionId: "session-1",
-				channel: "default",
-			},
-			{
-				_id: "evt-2",
-				eventId: "evt-2",
-				body: "second matching memory",
-				role: "user",
-				timestamp: new Date("2026-01-02T00:00:00Z"),
-				agentId: "agent-1",
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-				sessionId: "session-2",
-				channel: "default",
-			},
-		])
-		mocked(crossEncoderRerank).mockImplementation(
-			async ({ results, onProviderCall }) => {
-				onProviderCall?.("attempted")
-				onProviderCall?.("failed")
-				return { results, reranked: false, latencyMs: 1 }
-			},
-		)
-		const runContext = testOperationRunContext("rerank-failure")
-
-		await searchV2(fakeDb, fakePrefix, "matching memory", "agent-1", {
-			availablePaths: new Set(["raw-window"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				rerankConfig: {
-					enabled: true,
-					model: "rerank-2.5",
-					topN: 10,
-					minScore: 0,
-					voyageApiKey: "test-key",
-				},
-				operationRunContext: runContext,
-			},
-		})
-
-		expect(runContext.accounting.snapshot().operations).toContainEqual({
-			operation: "rerank",
-			observability: "measured",
-			attempted: 1,
-			succeeded: 0,
-			failed: 1,
-			provider: "voyage",
-			model: "rerank-2.5",
-		})
-	})
-
 	it("uses MongoDB Search temporal coverage lane for temporal questions", async () => {
 		const previousMode = process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
 		process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = "enabled"
@@ -1301,22 +1211,7 @@ describe("searchV2", () => {
 				confidence: "high",
 				reasoning: "temporal coverage query",
 			})
-			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
-				const reranked = [...results].toReversed()
-				return {
-					results: reranked,
-					reranked: true,
-					latencyMs: 1,
-					partitions: {
-						reranked,
-						emptySnippet: [],
-						overflow: [],
-						below: [],
-					},
-				}
-			})
-
-			mocked(getEventsByTimeRange).mockResolvedValue([
+			const direct = [
 				{
 					_id: "evt-direct",
 					eventId: "evt-direct",
@@ -1329,30 +1224,39 @@ describe("searchV2", () => {
 					sessionId: "answer_f4ea84fb_1",
 					channel: "default",
 				},
-			])
+			]
 
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([
-					{
-						eventId: "evt-history",
-						body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
-						sessionId: "answer_f4ea84fb_2",
-						timestamp: new Date("2023-01-11T10:24:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.8,
-					},
-					{
-						eventId: "evt-science",
-						body: "I went to the Science Museum with a friend who is a chemistry professor.",
-						sessionId: "answer_f4ea84fb_3",
-						timestamp: new Date("2022-10-22T18:38:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.7,
-					},
-				]),
-			})
+			// Raw-window's $search (a window `range` with gte) answers with the
+			// direct event; the temporal lane and its session expansion with
+			// the museum events.
+			const aggregate = vi.fn((pipeline: Array<Record<string, any>>) => ({
+				toArray: vi.fn(async () =>
+					pipeline[0]?.$search?.compound?.filter?.some(
+						(clause: Record<string, any>) => clause.range?.gte,
+					)
+						? direct
+						: [
+								{
+									eventId: "evt-history",
+									body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
+									sessionId: "answer_f4ea84fb_2",
+									timestamp: new Date("2023-01-11T10:24:00Z"),
+									scope: "agent",
+									scopeRef: "agent:agent-1",
+									score: 0.8,
+								},
+								{
+									eventId: "evt-science",
+									body: "I went to the Science Museum with a friend who is a chemistry professor.",
+									sessionId: "answer_f4ea84fb_3",
+									timestamp: new Date("2022-10-22T18:38:00Z"),
+									scope: "agent",
+									scopeRef: "agent:agent-1",
+									score: 0.7,
+								},
+							],
+				),
+			}))
 			const find = vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([
 					{
@@ -1390,19 +1294,29 @@ describe("searchV2", () => {
 					searchOptions: {
 						allowHybridBackstop: false,
 						questionDate,
-						rerankConfig: {
-							enabled: true,
-							model: "rerank-2.5-lite",
-							topN: 10,
-							minScore: 0,
-							voyageApiKey: "test-key",
-						},
 					},
 				},
 			)
 
 			expect(aggregate).toHaveBeenCalled()
-			expect(find).toHaveBeenCalledOnce()
+			// M2 T6: the session expansion selects through $search too.
+			expect(find).not.toHaveBeenCalled()
+			const expansion = aggregate.mock.calls
+				.map((call) => call[0] as Record<string, any>[])
+				.find((candidate) =>
+					candidate[0]?.$search?.compound?.filter?.some(
+						(clause: Record<string, any>) => clause.in?.path === "sessionId",
+					),
+				)
+			expect(expansion?.[0]?.$search?.compound?.filter).toContainEqual({
+				in: {
+					path: "sessionId",
+					value: expect.arrayContaining([
+						"answer_f4ea84fb_2",
+						"answer_f4ea84fb_3",
+					]),
+				},
+			})
 			const pipeline = aggregate.mock.calls
 				.map((call) => call[0] as Record<string, any>[])
 				.find(
@@ -1426,15 +1340,6 @@ describe("searchV2", () => {
 				path: "timestamp",
 				origin: questionDate,
 			})
-			expect(crossEncoderRerank).toHaveBeenCalledOnce()
-			const rerankInput = mocked(crossEncoderRerank).mock.calls[0]?.[0] as
-				| { results: MemorySearchResult[] }
-				| undefined
-			expect(
-				rerankInput?.results.some(
-					(entry) => entry.provenance?.temporalTimeline === true,
-				),
-			).toBe(false)
 			const timeline = result.results.find(
 				(entry) => entry.provenance?.temporalTimeline === true,
 			)
@@ -1456,254 +1361,5 @@ describe("searchV2", () => {
 				process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = previousMode
 			}
 		}
-	})
-
-	it("boosts user-authored compatibility evidence for recommendation memory queries", async () => {
-		const previousMode = process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
-		process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = "enabled"
-		try {
-			mocked(planRetrieval).mockReturnValue({
-				paths: ["raw-window"],
-				confidence: "high",
-				reasoning: "recommendation memory query",
-			})
-			mocked(getEventsByTimeRange).mockResolvedValue([
-				{
-					_id: "evt-seed",
-					eventId: "evt-seed",
-					body: "Photography setup context for Sony A7R IV accessories.",
-					role: "user",
-					timestamp: new Date("2023-05-30T10:00:00Z"),
-					agentId: "agent-1",
-					scope: "agent",
-					scopeRef: "agent:agent-1",
-					sessionId: "photo-session",
-					channel: "default",
-				},
-			])
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([
-					{
-						eventId: "evt-user-distractor",
-						body: "What are good external battery packs for my Sony A7R IV?",
-						role: "user",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:01:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.9,
-					},
-					{
-						eventId: "evt-user-compatible",
-						body: "I'm looking to upgrade my camera flash. Can you recommend options compatible with my Sony A7R IV?",
-						role: "user",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:02:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.8,
-					},
-					{
-						eventId: "evt-assistant-recommendation",
-						body: "The Godox V1 comes with a soft case, but a padded pouch would complement your photography setup.",
-						role: "assistant",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:03:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.7,
-					},
-				]),
-			})
-			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
-				const reranked = results
-					.map((entry) => ({
-						...entry,
-						score:
-							entry.path === "events/evt-assistant-recommendation"
-								? 0.63
-								: entry.path === "events/evt-user-compatible"
-									? 0.57
-									: 0.52,
-					}))
-					.toSorted((left, right) => right.score - left.score)
-				return {
-					results: reranked,
-					reranked: true,
-					latencyMs: 1,
-					partitions: {
-						reranked,
-						emptySnippet: [],
-						overflow: [],
-						below: [],
-					},
-				}
-			})
-			mocked(eventsCollection).mockReturnValue({ aggregate } as never)
-
-			const result = await searchV2(
-				fakeDb,
-				fakePrefix,
-				"Can you suggest accessories that complement my photography setup?",
-				"agent-1",
-				{
-					availablePaths: new Set(["raw-window"]),
-					searchOptions: {
-						allowHybridBackstop: false,
-						capabilities: {
-							vectorSearch: false,
-							textSearch: true,
-							scoreFusion: false,
-							rankFusion: false,
-							storedSource: false,
-							vectorIndexMethod: false,
-						},
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						rerankConfig: {
-							enabled: true,
-							model: "rerank-2.5-lite",
-							topN: 10,
-							minScore: 0,
-							voyageApiKey: "test-key",
-							// P3.7: isolate the preference-evidence behavior under test
-							// from the orthogonal post-CE recency/access boost.
-							recencyBoost: 0,
-							accessBoost: 0,
-						},
-					},
-				},
-			)
-
-			expect(crossEncoderRerank).toHaveBeenCalledOnce()
-			expect(result.results[0]?.path).toBe("events/evt-user-compatible")
-			expect(result.results[0]?.provenance?.eventRole).toBe("user")
-		} finally {
-			if (previousMode === undefined) {
-				delete process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
-			} else {
-				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = previousMode
-			}
-		}
-	})
-
-	it("keeps CE-ranked results ahead of unreranked overflow through the composed pipeline (RET-08)", async () => {
-		mocked(planRetrieval).mockReturnValue({
-			paths: ["raw-window"],
-			confidence: "high",
-			reasoning: "overflow displacement probe",
-		})
-		const makeEvent = (
-			eventId: string,
-			body: string,
-			sessionId: string,
-			hour: number,
-		) => ({
-			_id: eventId,
-			eventId,
-			body,
-			role: "user" as const,
-			timestamp: new Date(`2023-06-04T${String(hour).padStart(2, "0")}:00:00Z`),
-			agentId: "agent-1",
-			scope: "agent" as const,
-			scopeRef: "agent:agent-1",
-			sessionId,
-			channel: "default",
-		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
-			makeEvent(
-				"evt-ce-a",
-				"espresso machine calibration notes alpha",
-				"session-a",
-				10,
-			),
-			makeEvent(
-				"evt-ce-b",
-				"espresso machine calibration notes bravo",
-				"session-b",
-				9,
-			),
-			makeEvent(
-				"evt-overflow-c",
-				"espresso machine calibration notes charlie",
-				"session-c",
-				8,
-			),
-			makeEvent(
-				"evt-overflow-d",
-				"espresso machine calibration notes delta",
-				"session-d",
-				7,
-			),
-		])
-		// The mock cross-encoder scores only the top-2 (topN) candidates,
-		// weakly (.2/.1); the overflow pair keeps its higher retrieval scores.
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
-			const isCeRanked = (path: string) =>
-				path === "events/evt-ce-a" || path === "events/evt-ce-b"
-			const reranked = results
-				.filter((entry) => isCeRanked(entry.path))
-				.map((entry) => ({
-					...entry,
-					score: entry.path === "events/evt-ce-a" ? 0.2 : 0.1,
-				}))
-				.toSorted((left, right) => right.score - left.score)
-			const overflow = results.filter((entry) => !isCeRanked(entry.path))
-			return {
-				results: [...reranked, ...overflow],
-				reranked: true,
-				latencyMs: 1,
-				partitions: {
-					reranked,
-					emptySnippet: [],
-					overflow,
-					below: [],
-				},
-			}
-		})
-
-		const result = await searchV2(
-			fakeDb,
-			fakePrefix,
-			"espresso machine calibration",
-			"agent-1",
-			{
-				availablePaths: new Set(["raw-window"]),
-				searchOptions: {
-					allowHybridBackstop: false,
-					rerankConfig: {
-						enabled: true,
-						model: "rerank-2.5-lite",
-						topN: 2,
-						minScore: 0,
-						voyageApiKey: "test-key",
-						// Isolate the partition-ordering behavior under test
-						// from the orthogonal post-CE recency/access boost.
-						recencyBoost: 0,
-						accessBoost: 0,
-					},
-				},
-			},
-		)
-
-		expect(crossEncoderRerank).toHaveBeenCalledOnce()
-		const rerankInput = mocked(crossEncoderRerank).mock.calls[0]?.[0] as
-			| { results: MemorySearchResult[] }
-			| undefined
-		expect(rerankInput?.results).toHaveLength(4)
-		expect(result.metadata.reranked).toBe(true)
-		// Audit proof, end to end: CE-scored .2/.1 stay ahead of untouched
-		// overflow even though the overflow items keep higher retrieval
-		// scores. Pre-RET-08 the post-rerank score sorts displaced the
-		// CE-ranked pair behind the overflow pair.
-		expect(result.results.map((entry) => entry.path)).toEqual([
-			"events/evt-ce-a",
-			"events/evt-ce-b",
-			"events/evt-overflow-c",
-			"events/evt-overflow-d",
-		])
-		expect(result.results[2]?.score).toBeGreaterThan(
-			result.results[0]?.score ?? 0,
-		)
 	})
 })

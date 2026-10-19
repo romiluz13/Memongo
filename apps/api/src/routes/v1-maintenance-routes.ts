@@ -7,6 +7,10 @@ import {
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
 import {
+	searchErrorResponse,
+	searchFailureOrInternalError,
+} from "../lib/search-outcomes.js"
+import {
 	chainTraceCollectionSchema,
 	validateWithSchema,
 } from "../lib/validation.js"
@@ -49,11 +53,23 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 				"collection must be structured_mem|entities|relations|procedures|entity_links",
 			)
 		}
+		const scope = await readScope(c)
+		const scopeRef = await readScopeRef(c)
+		if (!scope || !scopeRef) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"scope and scopeRef are required",
+			)
+		}
 		try {
 			const chain = await memongoBridgeTraceChain({
 				agentId: await readAgentId(c),
 				factId,
 				collection: parsedCollection.value,
+				scope,
+				scopeRef,
 				maxDepth: typeof body.maxDepth === "number" ? body.maxDepth : undefined,
 			})
 			return c.json(chain)
@@ -73,7 +89,7 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(report)
 		} catch (err) {
-			return internalError(c, err, "NOVELTY_SCAN_FAILED")
+			return searchErrorResponse(c, err, "NOVELTY_SCAN_FAILED")
 		}
 	})
 
@@ -109,7 +125,7 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(result)
 		} catch (err) {
-			return internalError(c, err, "CONSOLIDATE_FAILED")
+			return searchFailureOrInternalError(c, err, "CONSOLIDATE_FAILED")
 		}
 	})
 

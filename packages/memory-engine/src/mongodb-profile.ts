@@ -8,6 +8,8 @@ import {
 } from "./mongodb-schema.js"
 import {
 	buildCurrentValidityClause,
+	buildEventLifecycleClause,
+	buildRelationLifecycleClause,
 	buildUnexpiredClause,
 	mergeQueryClauses,
 } from "./mongodb-temporal.js"
@@ -137,6 +139,9 @@ export async function synthesizeProfile(params: {
 	// every guard evaluates against the same moment.
 	const asOf = new Date()
 	const activitySince = new Date(asOf.getTime() - activityWindowMs)
+	// M2 T13: a relation count is the live edges of the entity today, and the
+	// activity window counts only live events.
+	const relationLifecycle = buildRelationLifecycleClause({ asOf })
 
 	try {
 		// Run all 4 queries concurrently; a source failure rejects the whole
@@ -213,6 +218,7 @@ export async function synthesizeProfile(params: {
 												$match: {
 													$expr: { $eq: ["$fromEntityId", "$$eid"] },
 													...scopeFilter,
+													...relationLifecycle,
 												},
 											},
 											{ $count: "cnt" },
@@ -230,6 +236,7 @@ export async function synthesizeProfile(params: {
 												$match: {
 													$expr: { $eq: ["$toEntityId", "$$eid"] },
 													...scopeFilter,
+													...relationLifecycle,
 												},
 											},
 											{ $count: "cnt" },
@@ -270,12 +277,11 @@ export async function synthesizeProfile(params: {
 				eventsCollection(db, prefix)
 					.aggregate([
 						{
-							// P4.4.1 (B1): hide TTL-expired docs until the sweep removes
-							// them — the same read-side guard the other events readers
-							// apply.
+							// The full event lifecycle (TTL, invalidation, not-yet-valid):
+							// the same read-side guard the other events readers apply.
 							$match: mergeQueryClauses(
 								scopeFilter,
-								buildUnexpiredClause({ asOf }),
+								buildEventLifecycleClause({ asOf }),
 								{ timestamp: { $gte: activitySince } },
 							),
 						},

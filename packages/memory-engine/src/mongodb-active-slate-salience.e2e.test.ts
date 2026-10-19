@@ -56,7 +56,7 @@ beforeAll(async () => {
 	vi.stubEnv("MEMONGO_TELEMETRY_ENABLED", "false")
 	await client.connect()
 	await ensureCollections(db, prefix)
-	await ensureStandardIndexes(db, prefix, { textFallbackIndexes: false })
+	await ensureStandardIndexes(db, prefix)
 	await structured.insertMany([
 		row("old", "old-blocker", "critical", 100_000),
 		...Array.from({ length: 8 }, (_, index) =>

@@ -69,11 +69,7 @@ import {
 	type Entity,
 	type RelationType,
 } from "./mongodb-graph.js"
-import {
-	normalizeSearchResults,
-	rrfScore,
-	type SearchMethod,
-} from "./mongodb-hybrid.js"
+import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import { updateLaneCoverage, getLaneCoverage } from "./mongodb-lane-coverage.js"
 import {
@@ -98,10 +94,6 @@ import {
 	retryFailedMemoryJob,
 	updateMemoryJob,
 } from "./mongodb-memory-jobs.js"
-import {
-	isTransactionUnsupported,
-	MAJORITY_TRANSACTION_OPTIONS,
-} from "./mongodb-transactions.js"
 import {
 	getRecallTrace,
 	listRecallTraces,
@@ -162,25 +154,26 @@ import {
 	enrichSessionsWithLLM,
 	extractSessionEnrichment,
 } from "./mongodb-llm-enrichment.js"
-import {
-	resolveDecompositionMode,
-	decomposeQuery,
-	mergeMultiQueryResults,
-} from "./mongodb-query-decomposition.js"
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
+import { resolveDecompositionMode } from "./mongodb-query-decomposition.js"
 import {
 	planRetrieval,
 	type RetrievalPath,
 	type RetrievalPlan,
 	resolveTimeRangePreset,
 } from "./mongodb-retrieval-planner.js"
+import {
+	type DeploymentFacts,
+	capabilitiesFromActiveHealth,
+	deploymentFactsOf,
+	runWithIndexHealth,
+} from "./mongodb-index-health.js"
+import type { RequiredSearchIndex } from "./mongodb-required-index-manifest.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	kbCollection,
 	chunksCollection,
 	detectCapabilities,
 	ensureCollections,
-	ensureSearchIndexes,
 	ensureStandardIndexes,
 	eventsCollection,
 	entitiesCollection,
@@ -188,18 +181,15 @@ import {
 	episodesCollection,
 	memoryEvidenceCollection,
 	filesCollection,
-	getExpectedSearchIndexTargets,
+	enforceBootContract,
 	INDEX_AUTOEMBED_MODEL,
 	isEventsVectorBitemporalPrefilterReady,
-	isSearchIndexManagementAvailable,
-	shouldEnsureTextFallbackIndexes,
 	kbChunksCollection,
 	metaCollection,
 	proceduresCollection,
 	relevanceRunsCollection,
 	resolveSearchIndexReadinessTiming,
 	structuredMemCollection,
-	waitForSearchIndexesQueryable,
 	sessionChunksCollection,
 } from "./mongodb-schema.js"
 import {
@@ -210,12 +200,12 @@ import { resolveScopeIdentity, resolveScopeRef } from "./mongodb-scope.js"
 import {
 	buildVectorSearchStage,
 	MONGODB_MAX_NUM_CANDIDATES,
-	mongoSearch,
 	vectorSearch,
 } from "./mongodb-search.js"
 import {
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
+	openSearchBudget,
 	resolveSearchBudgetLimits,
 	resolveUserSearchMaxTimeMs,
 	runWithSearchBudget,
@@ -228,10 +218,15 @@ import {
 	applyCapabilityProbeResult,
 	mongodbDeploymentIdentity,
 } from "./mongodb-capability-registry.js"
+import {
+	type BootPreflightReport,
+	runBootPreflight,
+} from "./mongodb-boot-preflight.js"
+import { MemongoBootError, describeDriverError } from "./mongodb-boot-errors.js"
+import { recordBestEffortFailure } from "./best-effort.js"
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
-	SearchTraceEvent,
 } from "./mongodb-search.js"
 import type {
 	StructuredMemoryEntry,
@@ -295,7 +290,6 @@ import type {
 	MemoryActorRole,
 	ClaimedMemoryJob,
 	ResolvedSearchConfig,
-	SearchLaneOutcome,
 } from "./types.js"
 import type { SearchOutcomeSummary } from "./search-outcomes.js"
 
@@ -351,7 +345,6 @@ import { MongoDBManagerSearchOps } from "./mongodb-manager-search.js"
 export {
 	MAX_SEARCH_MAX_RESULTS,
 	MAX_SEARCH_QUERY_LENGTH,
-	applyRecencyAccessBoostAfterRerank,
 	clampSearchMaxResults,
 	clampSearchQuery,
 	deduplicateSearchResults,
@@ -399,29 +392,6 @@ export type {
 } from "./mongodb-quarantine-review.js"
 
 const log = createSubsystemLogger("memory:mongodb")
-
-function isStrictSearchReadinessMode(): boolean {
-	return (
-		process.env.MEMONGO_BENCHMARK_STRICT === "1" ||
-		process.env.MEMONGO_STRICT_SEARCH_INDEX_READY === "1"
-	)
-}
-
-function redactMongoURI(uri: string): string {
-	try {
-		const parsed = new URL(uri)
-		if (parsed.password) {
-			parsed.password = "***"
-		}
-		if (parsed.username) {
-			parsed.username = parsed.username.slice(0, 2) + "***"
-		}
-		return parsed.toString()
-	} catch {
-		// If URL parsing fails, do a simple regex-based redaction
-		return uri.replace(/\/\/([^:]+):([^@]+)@/, "//***:***@")
-	}
-}
 
 // ---------------------------------------------------------------------------
 // MongoDBMemoryManager — implements MemorySearchManager for MongoDB backend
@@ -493,11 +463,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private readonly workspaceScopeRef: string
 	private readonly extraMemoryPaths: string[]
 	/**
-	 * Serving capabilities detected at manager creation (B2a: public so the
-	 * bridge can expose them to deploy targets without a type-guard cast;
-	 * readonly — they are recomputed on construction, never mutated).
+	 * M2 decision 8: what this deployment guarantees for this boot (fusion
+	 * stage availability, storedSource, capability gates). Never index health:
+	 * health is read per request from the manifest's live status.
 	 */
-	readonly capabilities: DetectedCapabilities
+	readonly deploymentFacts: DeploymentFacts
+	/** The required-index manifest (intended definitions) the startup contract verified. */
+	readonly requiredManifest: readonly RequiredSearchIndex[]
 	private nativeBitemporalVectorPrefilter: boolean
 	private nativeBitemporalPrefilterCheckedAt = Date.now()
 	private readonly config: ResolvedMemoryBackendConfig
@@ -543,7 +515,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		agentId: string
 		workspaceDir: string
 		extraMemoryPaths?: string[]
-		capabilities: DetectedCapabilities
+		deploymentFacts: DeploymentFacts
+		requiredManifest: readonly RequiredSearchIndex[]
 		nativeBitemporalVectorPrefilter: boolean
 		config: ResolvedMemoryBackendConfig
 		relevance?: MongoDBRelevanceRuntime | null
@@ -567,7 +540,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			workspaceDir: params.workspaceDir,
 		})
 		this.extraMemoryPaths = params.extraMemoryPaths ?? []
-		this.capabilities = params.capabilities
+		this.deploymentFacts = params.deploymentFacts
+		this.requiredManifest = params.requiredManifest
 		this.nativeBitemporalVectorPrefilter =
 			params.nativeBitemporalVectorPrefilter
 		this.config = params.config
@@ -600,7 +574,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId)
-		const safeUri = redactMongoURI(mongoCfg.uri)
 		// B10: credential-free deployment identity (hosts + database + appName,
 		// never userinfo) so capability probe outcomes are scoped to this
 		// deployment only. Never log this key material.
@@ -611,28 +584,33 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		let client: MongoClient
 		let ownsClient = true
 		if (params.client) {
-			log.info(
-				`using shared MongoDB client: ${safeUri} (db=${mongoCfg.database})`,
-			)
+			log.info("using shared MongoDB client")
 			client = params.client
 			ownsClient = false
 		} else {
-			// Connect to MongoDB with a timeout to avoid hanging
-			log.info(`connecting to MongoDB: ${safeUri} (db=${mongoCfg.database})`)
+			// Connect to MongoDB with a timeout to avoid hanging. Nothing here
+			// prints the URI, a host or the database name.
+			log.info("connecting to MongoDB")
 			client = new MongoClient(mongoCfg.uri, buildMongoClientOptions(mongoCfg))
 			try {
 				await client.connect()
 				// Verify the connection actually works with a ping
 				await client.db("admin").command({ ping: 1 })
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+				const cause = describeDriverError(err)
+				log.warn(`failed to connect to MongoDB (${cause})`)
 				try {
 					await client.close()
 				} catch {
 					// Ignore close errors during failed connect
 				}
-				throw new Error(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+				throw new MemongoBootError(
+					{
+						code: "server-unreachable",
+						requirement: "a reachable MongoDB deployment",
+					},
+					`MongoDB is unreachable (${cause})`,
+				)
 			}
 		}
 
@@ -643,196 +621,96 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		// failure anywhere unwinds everything acquired so far (see catch).
 		let managerRef: MongoDBMemoryManager | null = null
 		try {
-			// Ensure collections + schema validation + standard indexes
+			// Ensure collections (knowledge_base/kbDocs included) + schema
+			// validation, then the M2 startup contract.
 			await ensureCollections(db, prefix)
 
-			const chunksCollectionName = chunksCollection(db, prefix).collectionName
-			const searchIndexManagementAvailable =
-				await isSearchIndexManagementAvailable(db, chunksCollectionName)
+			// Guardrail 1: verify query embedding model dimensions match the
+			// autoEmbed index model dimensions.
+			assertQueryModelDimensionsMatch(mongoCfg.queryEmbeddingModel)
 
-			// Detect concrete serving readiness. Fusion capability is server-version
-			// based, while Search capabilities require named queryable indexes.
+			// M2 startup contract: MongoDB 8.3+, Search index management
+			// privileges, and every required-index manifest entry READY and
+			// serving its definition within one total deadline. Boot creates or
+			// updates manifest indexes and never drops one. Every failure is a
+			// MemongoBootError; nothing is served on a failed contract.
+			const readinessTiming = resolveSearchIndexReadinessTiming()
+			const bootContract = await enforceBootContract(db, {
+				prefix,
+				quantization: mongoCfg.quantization,
+				deployment: capabilityDeployment,
+				mode: "repair",
+				deadlineMs: readinessTiming.timeoutMs,
+				pollMs: readinessTiming.pollMs,
+				// Guardrail 2: refuse to proceed when the autoEmbed index model
+				// changed and existing documents would be re-embedded
+				// server-side. Runs before any repair write.
+				beforeRepair: () =>
+					refuseToStrandExistingDocuments(
+						db,
+						prefix,
+						mongoCfg.deploymentProfile,
+						INDEX_AUTOEMBED_MODEL,
+					),
+			})
+
+			const chunksCollectionName = chunksCollection(db, prefix).collectionName
 			// #101 R2: the structured and procedure $search tiers run only when
 			// their own text index is queryable, not merely when chunks_text is.
-			const textTierCollections = searchIndexManagementAvailable
-				? [`${prefix}structured_mem`, `${prefix}procedures`]
-				: []
 			let capabilities = await detectCapabilities(
 				db,
 				chunksCollectionName,
 				capabilityDeployment,
-				textTierCollections,
+				[`${prefix}structured_mem`, `${prefix}procedures`],
 			)
-			log.info(`capabilities: ${JSON.stringify(capabilities)}`)
-			let nativeBitemporalVectorPrefilter = false
-
-			// Guardrail 1: verify query embedding model dimensions match the
-			// autoEmbed index model dimensions. Prevents silent $vectorSearch
-			// recall failure when query and index models produce different-
-			// dimension vectors.
-			assertQueryModelDimensionsMatch(mongoCfg.queryEmbeddingModel)
-
-			// Guardrail 2: refuse to proceed when the autoEmbed index model
-			// changed and existing documents would be re-embedded server-side.
-			// Prevents expensive, surprising full re-embed on accidental model
-			// changes.
-			if (searchIndexManagementAvailable) {
-				await refuseToStrandExistingDocuments(
-					db,
-					prefix,
-					mongoCfg.deploymentProfile,
-					INDEX_AUTOEMBED_MODEL,
-				)
-			}
-
-			// Only bootstrap Search indexes when the deployment can talk to Search
-			// Index Management at all. This keeps runtime startup responsive on
-			// clusters that support fusion stages but do not expose mongot.
-			if (searchIndexManagementAvailable) {
-				const ensuredSearchIndexes = await ensureSearchIndexes(
-					db,
-					prefix,
-					mongoCfg.deploymentProfile,
-					mongoCfg.embeddingMode,
-					mongoCfg.quantization,
-					mongoCfg.numDimensions,
+			capabilities = {
+				...capabilities,
+				capabilityGates: applyCapabilityProbeResult(
+					capabilities.capabilityGates ?? {},
+					"autoembed-quantization",
 					capabilityDeployment,
+				),
+			}
+			// Boot detection feeds deployment facts only. Index health is read per
+			// request from the manifest's live status, never from this probe.
+			const deploymentFacts = deploymentFactsOf(capabilities)
+			const requiredManifest = bootContract.manifest
+			log.info(`deployment facts: ${JSON.stringify(deploymentFacts)}`)
+			// The events vector index serves validAt/invalidAt filters once the
+			// contract passes; native prefiltering also needs null-compatible
+			// event data. A metadata read error fails boot (no swallow).
+			const nativeBitemporalVectorPrefilter =
+				await isEventsVectorBitemporalPrefilterReady(
+					eventsCollection(db, prefix),
+					`${prefix}events_vector`,
 				)
-				// Apply recorded capability overrides to the detected state.
-				capabilities = {
-					...capabilities,
-					capabilityGates: applyCapabilityProbeResult(
-						capabilities.capabilityGates ?? {},
-						"autoembed-quantization",
-						capabilityDeployment,
-					),
-				}
-				if (
-					ensuredSearchIndexes.text ||
-					ensuredSearchIndexes.vector ||
-					!capabilities.textSearch ||
-					!capabilities.vectorSearch
-				) {
-					const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
-						resolveSearchIndexReadinessTiming()
-					const readinessResults = await Promise.all(
-						getExpectedSearchIndexTargets(
-							prefix,
-							mongoCfg.deploymentProfile,
-						).map(async (target) => {
-							try {
-								const readiness = await waitForSearchIndexesQueryable(
-									db.collection(target.collectionName),
-									{
-										indexNames: target.indexNames,
-										timeoutMs: readinessTimeoutMs,
-										pollMs: readinessPollMs,
-									},
-								)
-								return {
-									collectionName: target.collectionName,
-									...readiness,
-								}
-							} catch (err) {
-								const message = err instanceof Error ? err.message : String(err)
-								return {
-									collectionName: target.collectionName,
-									ready: false,
-									indexes: [],
-									pending: target.indexNames,
-									failed: [],
-									lastError: message,
-								}
-							}
-						}),
-					)
-					const stalled = readinessResults.filter((result) => !result.ready)
-					const eventsVectorIndexes =
-						readinessResults.find(
-							(result) => result.collectionName === `${prefix}events`,
-						)?.indexes ?? []
-					try {
-						nativeBitemporalVectorPrefilter =
-							await isEventsVectorBitemporalPrefilterReady(
-								eventsCollection(db, prefix),
-								`${prefix}events_vector`,
-								eventsVectorIndexes,
-							)
-						if (!nativeBitemporalVectorPrefilter) {
-							log.warn(
-								"native event bitemporal prefiltering remains disabled until the exact index definition and event representation are ready",
-							)
-						}
-					} catch (err) {
-						log.warn(
-							`could not verify native event bitemporal prefilter readiness: ${String(err)}`,
-						)
-					}
-					if (stalled.length > 0) {
-						const summary = stalled
-							.map((result) => {
-								const pending = result.pending.join(",") || "none"
-								const failed = result.failed.join(",") || "none"
-								const lastError = result.lastError
-									? ` lastError=${result.lastError}`
-									: ""
-								return `${result.collectionName} pending=[${pending}] failed=[${failed}]${lastError}`
-							})
-							.join("; ")
-						const readinessMessage = `search indexes not fully queryable after bootstrap wait: ${summary}`
-						if (isStrictSearchReadinessMode()) {
-							throw new Error(readinessMessage)
-						}
-						log.warn(readinessMessage)
-					}
-					capabilities = await detectCapabilities(
-						db,
-						chunksCollectionName,
-						capabilityDeployment,
-						textTierCollections,
-					)
-				}
-			} else {
+			if (!nativeBitemporalVectorPrefilter) {
 				log.info(
-					"search index management unavailable; skipping search index bootstrap",
+					"native event bitemporal prefiltering is off: the events vector index or the event representation does not support it",
 				)
 			}
 			await ensureStandardIndexes(db, prefix, {
 				memoryTtlDays: mongoCfg.memoryTtlDays,
 				episodesRetentionDays: mongoCfg.episodesRetentionDays,
 				relevanceRetentionDays: mongoCfg.relevance.retention.days,
-				// BSON $text indexes are retained whenever named serving text indexes
-				// are not queryable. Management API availability alone does not prove
-				// that $search can serve traffic.
-				textFallbackIndexes: shouldEnsureTextFallbackIndexes(capabilities),
 			})
-			if (
-				isStrictSearchReadinessMode() &&
-				(!capabilities.textSearch || !capabilities.vectorSearch)
-			) {
-				throw new Error(
-					`MongoDB Search/vector capabilities are required in strict mode but named serving indexes are not queryable: ${JSON.stringify(capabilities)}`,
-				)
-			}
-			if (
-				isStrictSearchReadinessMode() &&
-				capabilities.vectorSearch &&
-				!nativeBitemporalVectorPrefilter
-			) {
-				throw new Error(
-					"events vector index is not ready with validAt/invalidAt filters and null-compatible data",
-				)
-			}
-
 			let relevance: MongoDBRelevanceRuntime | null = null
 			try {
 				if (mongoCfg.relevance.enabled) {
+					// The explain profile follows which indexes the startup
+					// contract requires and verified, not live health.
+					const requires = (name: string): boolean =>
+						requiredManifest.some((entry) => entry.name === name)
 					relevance = new MongoDBRelevanceRuntime(
 						db,
 						prefix,
 						params.agentId,
 						mongoCfg,
-						capabilities,
+						{
+							...deploymentFacts,
+							vectorSearch: requires(`${prefix}chunks_vector`),
+							textSearch: requires(`${prefix}chunks_text`),
+						},
 					)
 				}
 			} catch (err) {
@@ -850,7 +728,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					workspaceDir,
 					params.extraPaths,
 				),
-				capabilities,
+				deploymentFacts,
+				requiredManifest,
 				nativeBitemporalVectorPrefilter,
 				config: params.resolved,
 				relevance,
@@ -871,8 +750,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			try {
 				await manager.sync({ reason: "startup" })
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(`initial memory sync failed: ${msg}`)
+				recordBestEffortFailure("startup-sync", err)
 			}
 			try {
 				const repaired = await manager.repairEventProjections()
@@ -882,9 +760,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					)
 				}
 			} catch (err) {
-				log.warn(
-					`startup projection repair failed; remaining canonical events will be retried on restart: ${String(err)}`,
-				)
+				recordBestEffortFailure("startup-projection-repair", err)
 			}
 			manager.startMemoryJobWorker()
 
@@ -923,29 +799,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					},
 					mongoCfg.changeStreamDebounceMs,
 				)
-				let started = await csWatcher.start(persistedResumeToken ?? undefined)
-				if (!started && persistedResumeToken) {
-					log.warn(
-						"change stream resume failed with persisted token; retrying from latest position",
-					)
-					started = await csWatcher.start()
-					if (started) {
-						await manager.clearPersistedChangeStreamResumeToken()
-					}
-				}
-				if (started) {
-					manager.changeStreamWatcher = csWatcher
-					log.info("change stream watcher enabled for cross-instance sync")
-				} else {
-					log.info(
-						"change streams not available — falling back to file watcher only",
-					)
-				}
+				// start() throws ChangeStreamUnavailableError when the stream
+				// cannot open; the factory unwinds and rethrows it. There is no
+				// file-watcher-only fallback and no silent restart from "latest".
+				await csWatcher.start(persistedResumeToken ?? undefined)
+				manager.changeStreamWatcher = csWatcher
+				log.info("change stream watcher enabled for cross-instance sync")
 			}
 
 			log.info(
 				`ready: profile=${mongoCfg.deploymentProfile} embedding=${mongoCfg.embeddingMode} ` +
-					`fusion=${mongoCfg.fusionMethod} caps=${JSON.stringify(capabilities)}`,
+					`fusion=${mongoCfg.fusionMethod} facts=${JSON.stringify(deploymentFacts)}`,
 			)
 
 			return manager
@@ -1090,22 +954,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return searchOpsOf(this).setLastSearchMode(mode, details)
 	}
 
-	private async legacySearch(
-		query: string,
-		opts?: {
-			maxResults?: number
-			minScore?: number
-			sessionKey?: string
-			scope?: MemoryScope
-			scopeRef?: string
-			kbRestricted?: boolean
-		},
-		admission?: AdmissionToken,
-		onOutcome?: (row: SearchLaneOutcome) => void,
-	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).legacySearch(query, opts, admission, onOutcome)
-	}
-
 	async search(
 		query: string,
 		opts?: {
@@ -1136,7 +984,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).search(query, opts, operationRunContext)
+		return this.runIndexHealthRequest(() =>
+			searchOpsOf(this).search(query, opts, operationRunContext),
+		)
 	}
 
 	private async executeSearchUncoalesced(params: {
@@ -1159,7 +1009,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		request: MemorySearchRequest,
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResponse> {
-		return searchOpsOf(this).searchDetailed(request, operationRunContext)
+		return this.runIndexHealthRequest(() =>
+			searchOpsOf(this).searchDetailed(request, operationRunContext),
+		)
 	}
 
 	async relevanceExplain(params: {
@@ -1172,7 +1024,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		questionDate?: Date
 		kbRestricted?: boolean
 	}): Promise<RelevanceExplainResult> {
-		return relevanceOpsOf(this).relevanceExplain(params)
+		return this.runIndexHealthRequest(() =>
+			relevanceOpsOf(this).relevanceExplain(params),
+		)
 	}
 
 	async relevanceReport(params?: {
@@ -1275,47 +1129,15 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
 			/**
-			 * WS-12 (C-019): receives the degradation marker when admission
-			 * control dropped the KB vector lane. Sink-not-state.
-			 */
-			onDegradation?: (degradation: MemorySearchDegradation) => void
-			/**
 			 * #101: receives this call's outcome summary ({status, lanes})
 			 * exactly once. Sink-not-state; rows are value-free enums.
 			 */
 			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).searchKB(query, opts)
-	}
-
-	// ---------------------------------------------------------------------------
-	// Score normalization: detect which search method was used for legacy search
-	// ---------------------------------------------------------------------------
-
-	private detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod {
-		return searchOpsOf(this).detectSearchMethod(mongoCfg)
-	}
-
-	/**
-	 * Resolve which search method actually produced these results, from the
-	 * trace mongoSearch emits, falling back to the configuration guess only
-	 * when nothing succeeded.
-	 *
-	 * This picks the normalizer, so guessing wrong corrupts ranking rather than
-	 * just mislabeling. mongoSearch degrades through hybrid → vector → keyword
-	 * → $text, and the last two return raw BM25/textScore values on an
-	 * unbounded scale. Calling those "hybrid" sends them to the [0,1] clamp,
-	 * which pins every lexical hit above ~1 to exactly 1.0 — sorting degraded
-	 * results above genuine cosine hits from the KB and structured lanes, whose
-	 * scores are normalized honestly. normalizeBM25Score exists precisely for
-	 * this case; it was simply never reached.
-	 */
-	private resolveObservedSearchMethod(
-		traceEvents: SearchTraceEvent[],
-		mongoCfg: ResolvedMongoDBConfig,
-	): SearchMethod {
-		return searchOpsOf(this).resolveObservedSearchMethod(traceEvents, mongoCfg)
+		return this.runIndexHealthRequest(() =>
+			searchOpsOf(this).searchKB(query, opts),
+		)
 	}
 
 	// ---------------------------------------------------------------------------
@@ -1423,10 +1245,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return syncOpsOf(this).persistChangeStreamResumeToken(token)
 	}
 
-	private async clearPersistedChangeStreamResumeToken(): Promise<void> {
-		return syncOpsOf(this).clearPersistedChangeStreamResumeToken()
-	}
-
 	private async maybeAutoRefreshKB(): Promise<void> {
 		return syncOpsOf(this).maybeAutoRefreshKB()
 	}
@@ -1459,12 +1277,69 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return adminOpsOf(this).probeVectorAvailability()
 	}
 
+	/**
+	 * M2 /ready: one read-only pass of the startup contract against the live
+	 * deployment (version, privileges, every manifest index READY and serving
+	 * its definition). Never writes and never waits.
+	 */
+	async checkRequiredIndexManifest(): Promise<BootPreflightReport> {
+		const mongoCfg = this.config.mongodb
+		return runBootPreflight(this.db, {
+			prefix: this.prefix,
+			quantization: mongoCfg?.quantization,
+			...(mongoCfg
+				? {
+						deployment: mongodbDeploymentIdentity(
+							mongoCfg.uri,
+							mongoCfg.database,
+						),
+					}
+				: {}),
+		})
+	}
+
 	// ---------------------------------------------------------------------------
-	// C-016: search-lane failure hook (runtime capability re-verification)
+	// M2 decision 8: request-local index health
 	// ---------------------------------------------------------------------------
 
-	noteSearchLaneFailure(path: string, error: unknown): void {
-		adminOpsOf(this).noteSearchLaneFailure(path, error)
+	/**
+	 * Run one top-level request or job inside a request-local index-health
+	 * scope. The scope reads the manifest indexes' live status lazily, once per
+	 * collection, and nested passes share it; a later request reads again and
+	 * recovers on a healthy check.
+	 */
+	runIndexHealthRequest<T>(fn: () => Promise<T>): Promise<T> {
+		return runWithIndexHealth(
+			{
+				db: this.db,
+				prefix: this.prefix,
+				manifest: this.requiredManifest,
+				facts: this.deploymentFacts,
+			},
+			fn,
+		)
+	}
+
+	/**
+	 * #122 R1: run one top-level retrieval request (discovery, the context
+	 * bundle, novelty) inside its index-health scope and one search ledger
+	 * with the configured limits. Sibling sections and nested searchV2 passes
+	 * share both, and searchV2 still takes its admission token on the ledger.
+	 * A caller that already holds a ledger joins it.
+	 */
+	runRetrievalRequest<T>(fn: () => Promise<T>): Promise<T> {
+		return this.runIndexHealthRequest(() => {
+			if (hasActiveSearchBudget()) return fn()
+			return openSearchBudget(
+				resolveSearchBudgetLimits(this.config.mongodb?.searchBudget),
+				{ admitted: false },
+			).run(fn)
+		})
+	}
+
+	/** This request's capability view, derived from its index-health snapshot. */
+	requestCapabilities(): Promise<DetectedCapabilities> {
+		return this.runIndexHealthRequest(() => capabilitiesFromActiveHealth())
 	}
 
 	private probeEmbeddingModeSupportsVector(): boolean {
@@ -1591,8 +1466,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return adminOpsOf(this).deleteAllForAgent(params)
 	}
 
-	/** C-004: list this agent's quarantine review queue, oldest first. */
-	async listQuarantined(params?: {
+	/** C-004: list one tenant's quarantine review queue, oldest first. */
+	async listQuarantined(params: {
+		scope: MemoryScope
+		scopeRef: string
 		status?: import("./mongodb-quarantine-review.js").QuarantineStatus
 		limit?: number
 	}) {
@@ -1649,25 +1526,33 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			maxItems?: number
 		} = {},
 	): Promise<MemoryActiveSlate> {
-		return lifecycleOpsOf(this).hydrateActiveSlate(params)
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).hydrateActiveSlate(params),
+		)
 	}
 
 	async buildDiscoveryProjection(
 		request: MemoryDiscoveryProjectionRequest,
 	): Promise<MemoryDiscoveryProjection> {
-		return lifecycleOpsOf(this).buildDiscoveryProjection(request)
+		return this.runRetrievalRequest(() =>
+			lifecycleOpsOf(this).buildDiscoveryProjection(request),
+		)
 	}
 
 	async buildContextBundle(
 		request: MemoryContextBundleRequest = {},
 	): Promise<MemoryContextBundle> {
-		return lifecycleOpsOf(this).buildContextBundle(request)
+		return this.runRetrievalRequest(() =>
+			lifecycleOpsOf(this).buildContextBundle(request),
+		)
 	}
 
 	async recallConversation(
 		request: Omit<ConversationRecallRequest, "agentId">,
 	): Promise<ConversationRecallResponse> {
-		return lifecycleOpsOf(this).recallConversation(request)
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).recallConversation(request),
+		)
 	}
 
 	private async refreshNativeBitemporalVectorPrefilter(): Promise<boolean> {
@@ -1681,6 +1566,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}) {
 		return lifecycleOpsOf(this).traceChain(params)
@@ -1691,7 +1578,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		scope?: string
 		scopeRef?: string
 	}) {
-		return lifecycleOpsOf(this).scanNovelty(params)
+		return this.runRetrievalRequest(() =>
+			lifecycleOpsOf(this).scanNovelty(params),
+		)
 	}
 
 	async consolidate(params?: {
@@ -1702,7 +1591,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		scope?: MemoryScope
 		scopeRef?: string
 	}) {
-		return lifecycleOpsOf(this).consolidate(params)
+		// #122 R2: the run's Search probes check this request's index-health
+		// snapshot; the run opens its own consolidation ledger.
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).consolidate(params),
+		)
 	}
 
 	async listRecallTraces(params?: { limit?: number }) {
@@ -1744,10 +1637,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private async runClaimedBackgroundExtractionJob(
 		job: ClaimedMemoryJob,
 		prefetchedLlmFacts?: string[],
+		prefetchedEffects?: Parameters<
+			MongoDBManagerHost["runClaimedBackgroundExtractionJob"]
+		>[2],
 	): Promise<void> {
 		return jobsOpsOf(this).runClaimedBackgroundExtractionJob(
 			job,
 			prefetchedLlmFacts,
+			prefetchedEffects,
 		)
 	}
 

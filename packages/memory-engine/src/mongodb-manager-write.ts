@@ -47,6 +47,7 @@ import {
 import { QueryCacheInvalidationCoalescer } from "./mongodb-query-cache-invalidation.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { recordBestEffortFailure } from "./best-effort.js"
 import { chunksCollection, eventsCollection } from "./mongodb-schema.js"
 import {
 	annotateUncertainCommit,
@@ -57,7 +58,10 @@ import {
 	type SearchBarrierResult,
 } from "./mongodb-search-barrier.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
-import { resolveWriteExpiresAt } from "./mongodb-temporal.js"
+import {
+	buildEventLifecycleClause,
+	resolveWriteExpiresAt,
+} from "./mongodb-temporal.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import {
 	type AdmissionToken,
@@ -1116,7 +1120,7 @@ export class MongoDBManagerWriteOps {
 						run: projectionRun,
 						session,
 					}),
-			}).catch(() => {})
+			}).catch((err) => recordBestEffortFailure("projection-run-record", err))
 			if (projected.chunkCreated) {
 				this.host.chunkCount += 1
 				// C-017: a newly projected chunk is embedded server-side
@@ -1845,7 +1849,7 @@ export class MongoDBManagerWriteOps {
 							run: projectionRun,
 							session,
 						}),
-				}).catch(() => {})
+				}).catch((err) => recordBestEffortFailure("projection-run-record", err))
 				let createdChunkCount = 0
 				for (const [position, item] of written.entries()) {
 					const chunkCreated = chunkResults[position]?.chunkCreated ?? false
@@ -2106,28 +2110,28 @@ export class MongoDBManagerWriteOps {
 		// Tenant isolation: a scope-restricted caller may only extract from an event
 		// within its authorized scope/scopeRef. Enforce ownership SYNCHRONOUSLY here,
 		// before scheduling — the deterministic `extraction-${eventId}` job is often
-		// pre-created by the write path, so a scope check inside the background job
 		// would dedup away and never run.
-		if (params.scope !== undefined || params.scopeRef !== undefined) {
-			const owned = await eventsCollection(
-				this.host.db,
-				this.host.prefix,
-			).findOne(
-				{
-					eventId,
-					agentId: this.host.agentId,
-					...(params.scope !== undefined ? { scope: params.scope } : {}),
-					...(params.scopeRef !== undefined
-						? { scopeRef: params.scopeRef }
-						: {}),
-				},
-				{ projection: { _id: 1 } },
-			)
-			if (!owned) {
-				const err = new Error(`event not found: ${eventId}`)
-				err.name = "EventNotInScopeError"
-				throw err
-			}
+		// M2 T13: the check runs for every caller and applies the event
+		// lifecycle, so an expired, invalidated or not-yet-valid event is never
+		// scheduled for extraction. A caller that names no scope is confined to
+		// the agent's own event; the job takes the event's tenant from the row.
+		const owned = await eventsCollection(
+			this.host.db,
+			this.host.prefix,
+		).findOne(
+			{
+				eventId,
+				agentId: this.host.agentId,
+				...(params.scope !== undefined ? { scope: params.scope } : {}),
+				...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
+				...buildEventLifecycleClause(),
+			},
+			{ projection: { _id: 1 } },
+		)
+		if (!owned) {
+			const err = new Error(`event not found: ${eventId}`)
+			err.name = "EventNotInScopeError"
+			throw err
 		}
 		return this.host.scheduleBackgroundExtraction(
 			eventId,

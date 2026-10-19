@@ -15,8 +15,7 @@ import { memoryScopeEnum } from "./openapi-schemas.js"
 /**
  * WS-12 (C-019): degradation marker on search responses. Present exactly
  * when the answer is degraded rather than authoritative, so a throttled
- * search never reads as "no memories found" and a skipped KB vector lane
- * never reads as authoritative ranking.
+ * search never reads as "no memories found".
  */
 const searchDegradationSchema = {
 	type: "object",
@@ -29,9 +28,9 @@ const searchDegradationSchema = {
 		},
 		scope: {
 			type: "string",
-			enum: ["denied", "legacy-fallback-skipped", "vector-lane-skipped"],
+			enum: ["denied"],
 			description:
-				"Which surface was degraded: the whole query was denied before any lane ran, the optional legacy re-run of an empty v2 verdict was denied, or the KB vector lane was skipped (text-lane results stand with degraded ranking).",
+				"Which surface was degraded: the whole query was denied before any lane ran, so the empty results are not a retrieval verdict.",
 		},
 		retryAfterMs: {
 			type: "number",
@@ -46,14 +45,14 @@ const searchDegradationSchema = {
  * #101 / decision 16: the value-free outcome vocabulary of a search call
  * (enum values only; no query, body or provider text).
  */
-const searchOutcomeStatusSchema = {
+export const searchOutcomeStatusSchema = {
 	type: "string",
 	enum: ["complete", "partial", "failed"],
 	description:
 		"complete: no lane failed or was budget-denied. partial: some lanes failed or were denied and the rest answered (200, even with zero results). failed: no required lane answered (served as a non-2xx).",
 }
 
-const searchLaneOutcomeSchema = {
+export const searchLaneOutcomeSchema = {
 	type: "object",
 	required: ["lane", "stage", "outcome"],
 	properties: {
@@ -65,7 +64,7 @@ const searchLaneOutcomeSchema = {
 		stage: {
 			type: "string",
 			description:
-				"Stage inside the lane (e.g. lane, vector, atlas-search, classic-text, score-fusion, reservation, explain). Explain rows are diagnostics and never change the status.",
+				"Stage inside the lane (e.g. lane, index-health, vector, atlas-search, classic-text, score-fusion, reservation, explain). An index-health row is an admission-time metadata check, reported separately from retrieval work; its reason is index-stale or index-unavailable. Explain rows are diagnostics and never change the status.",
 		},
 		outcome: {
 			type: "string",
@@ -85,10 +84,13 @@ const searchLaneOutcomeSchema = {
 				"lane-unavailable",
 				"index-missing",
 				"index-not-ready",
+				"index-stale",
+				"index-unavailable",
 				"query-timeout",
 				"dependency-unavailable",
 				"query-error",
 				"internal-error",
+				"rerank-unsupported",
 				"budget-aggregations",
 				"budget-embeds",
 				"budget-deadline",
@@ -103,7 +105,7 @@ const searchLaneOutcomeSchema = {
 	},
 }
 
-const searchOutcomesSchema = {
+export const searchOutcomesSchema = {
 	type: "object",
 	required: ["status", "lanes"],
 	properties: {
@@ -111,22 +113,64 @@ const searchOutcomesSchema = {
 		lanes: { type: "array", items: searchLaneOutcomeSchema },
 	},
 	description:
-		"#101: this call's outcome summary. Absent on a throttled call, which carries `degradation` instead.",
+		"#101: this call's outcome summary. A throttled search is a failed call (503 SEARCH_BUDGET_EXHAUSTED) whose body carries it with a budget-denied row.",
 }
 
 /**
  * #101 / resolution R3: the non-2xx search failures. The body is the ApiError
  * envelope plus `outcomes` (status "failed" and every row).
  */
-const searchFailureResponses = {
+const RERANKED_DESCRIPTION =
+	"Always false: there is no reranker. The HTTP reranker was removed and native $rerank (Atlas only) is not implemented yet."
+
+export const searchFailureResponses = {
+	"409": {
+		description:
+			"ERASURE_IN_PROGRESS: an erasure is in progress for the agent, so the read is refused rather than answered with an empty result. For /v1/search-kb this also covers an erasure that began while the search ran: its chunks are never returned. Retry after the erasure finishes.",
+	},
 	"500": {
 		description:
 			"SEARCH_LANES_FAILED: every required lane failed and at least one failure is a defect (query-error or internal-error); this wins over the 503 codes. The body adds `outcomes` (status failed, every row). Other unexpected failures keep their route's internal error code.",
 	},
 	"503": {
 		description:
-			"SEARCH_LANES_UNAVAILABLE: every required lane failed with a retryable reason (lane-unavailable, index-missing, index-not-ready, query-timeout, dependency-unavailable); it wins over budget. SEARCH_BUDGET_EXHAUSTED: every failure is a search budget denial. The body adds `outcomes` (status failed, every row). SERVICE_UNAVAILABLE: the database is unreachable.",
+			"SEARCH_LANES_UNAVAILABLE: every required lane failed with a retryable reason (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable); it wins over budget. SEARCH_BUDGET_EXHAUSTED: every failure is a search budget denial; an admission-bucket denial also sets the Retry-After header (whole seconds, from the denial's retry hint), and a per-request budget denial sets none. The body adds `outcomes` (status failed, every row). SERVICE_UNAVAILABLE: the database is unreachable.",
+		headers: {
+			"Retry-After": {
+				description:
+					"Seconds until the admission bucket refills. Set only on SEARCH_BUDGET_EXHAUSTED responses caused by an admission-bucket denial.",
+				schema: { type: "integer", minimum: 1 },
+			},
+		},
 	},
+}
+
+/**
+ * M2 review R8: the same typed Search failures for a route that is not a
+ * search route but runs engine Search underneath. `routeCode` is the route's
+ * own generic code for every other failure.
+ */
+export function nonSearchFailureResponses(
+	routeCode: string,
+	options: { reportsCommitState?: boolean } = {},
+) {
+	// M2 review D3: a route whose operation can fail after it committed work
+	// (consolidation) says its error body carries the commit state.
+	const commitNote500 = options.reportsCommitState
+		? " An operation that had already committed work (a consolidation run that committed candidates before a later Search failure) keeps this status and code and adds error.commitState (none, committed or unknown) and error.commit (the run's identity and the work known to be committed) to the body; a body without error.commitState makes no commit claim."
+		: ""
+	const commitNote503 = options.reportsCommitState
+		? " An operation that had already committed work keeps this status and code and adds error.commitState and error.commit to the body, as on 500."
+		: ""
+	return {
+		"500": {
+			description: `SEARCH_LANES_FAILED: the search this operation runs failed with a defect (query-error or internal-error). The body adds \`outcomes\` (status failed, the failing row). Other unexpected failures return ${routeCode}.${commitNote500}`,
+		},
+		"503": {
+			description: `SEARCH_LANES_UNAVAILABLE: the search this operation runs could not run (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable). SEARCH_BUDGET_EXHAUSTED: a search budget denial; an admission-bucket denial also sets the Retry-After header. The body adds \`outcomes\`. SERVICE_UNAVAILABLE: the database is unreachable.${commitNote503}`,
+			headers: searchFailureResponses["503"].headers,
+		},
+	} as const
 }
 
 export const searchPaths = {
@@ -348,6 +392,11 @@ export const searchPaths = {
 											},
 										},
 										needExactEvidence: { type: "boolean" },
+										rerank: {
+											type: "boolean",
+											description:
+												"A demand for a rerank stage. M2 has none: true is rejected with 400 RERANK_UNSUPPORTED (rerank-unsupported); false is accepted. Native $rerank (Atlas only) is not implemented yet.",
+										},
 										allowConstraintRelaxation: {
 											type: "boolean",
 											description:
@@ -356,17 +405,13 @@ export const searchPaths = {
 										numCandidates: { type: "number" },
 										fusionMethod: {
 											type: "string",
-											enum: ["scoreFusion", "rankFusion", "js-merge"],
+											enum: ["scoreFusion", "rankFusion"],
 										},
 										hybridMode: {
 											type: "string",
 											enum: ["hybrid", "vector-only"],
 										},
 										allowHybridBackstop: { type: "boolean" },
-										lexicalPrefilter: {
-											type: "string",
-											enum: ["disabled", "experimental"],
-										},
 									},
 								},
 								maxResults: {
@@ -499,7 +544,6 @@ export const searchPaths = {
 													fusionMethod: { type: "string" },
 													hybridMode: { type: "string" },
 													allowHybridBackstop: { type: "boolean" },
-													lexicalPrefilter: { type: "string" },
 												},
 											},
 											passes: {
@@ -524,6 +568,7 @@ export const searchPaths = {
 														},
 														reranked: {
 															type: "boolean",
+															description: RERANKED_DESCRIPTION,
 														},
 														correctionApplied: {
 															type: "string",
@@ -562,7 +607,10 @@ export const searchPaths = {
 												additionalProperties: { type: "number" },
 											},
 											queryRewritten: { type: "boolean" },
-											reranked: { type: "boolean" },
+											reranked: {
+												type: "boolean",
+												description: RERANKED_DESCRIPTION,
+											},
 											noDirectEvidenceReason: { type: "string" },
 											constraintRelaxations: {
 												type: "array",
@@ -616,6 +664,10 @@ export const searchPaths = {
 						},
 					},
 				},
+				"400": {
+					description:
+						"VALIDATION_ERROR: a malformed request. RERANK_UNSUPPORTED: searchConfig.rerank was true; there is no reranker, so the request fails instead of returning unreranked results.",
+				},
 				...searchFailureResponses,
 			},
 		},
@@ -629,6 +681,7 @@ export const searchPaths = {
 					"application/json": {
 						schema: {
 							type: "object",
+							required: ["scope", "scopeRef"],
 							properties: {
 								agentId: { type: "string" },
 								scope: {
@@ -638,12 +691,12 @@ export const searchPaths = {
 								scopeRef: {
 									type: "string",
 									description:
-										"Optional scope reference used for tenant isolation.",
+										"Scope reference of the tenant whose conversation is recalled. Required: a recall without scope and scopeRef is refused rather than widened to the agent.",
 								},
 								query: {
 									type: "string",
 									description:
-										"Semantic recall query. Omit for filter-only conversation recall.",
+										"Recall query, run as one hybrid ($rankFusion) lane. Omit for a filter-only chronological listing.",
 								},
 								sessionId: {
 									type: "string",
@@ -730,7 +783,7 @@ export const searchPaths = {
 												score: { type: "number" },
 												matchType: {
 													type: "string",
-													enum: ["filter", "semantic", "hybrid"],
+													enum: ["filter", "hybrid"],
 												},
 											},
 										},
@@ -752,18 +805,9 @@ export const searchPaths = {
 											},
 											searchMethod: {
 												type: "string",
-												enum: ["standard", "semantic", "hybrid"],
+												enum: ["standard", "hybrid"],
 											},
 											durationMs: { type: "number" },
-											throttled: {
-												type: "object",
-												required: ["retryAfterMs"],
-												properties: {
-													retryAfterMs: { type: "number" },
-												},
-												description:
-													"WS-11: set when admission control denied the semantic recall pass — the empty results are throttling, not a retrieval verdict.",
-											},
 										},
 									},
 								},
@@ -771,6 +815,11 @@ export const searchPaths = {
 						},
 					},
 				},
+				"400": {
+					description:
+						"VALIDATION_ERROR: invalid input, including an invalid timezone (never replaced by UTC).",
+				},
+				...searchFailureResponses,
 			},
 		},
 	},
@@ -909,7 +958,7 @@ export const searchPaths = {
 								},
 								fusionMethod: {
 									type: "string",
-									enum: ["scoreFusion", "rankFusion", "js-merge"],
+									enum: ["scoreFusion", "rankFusion"],
 									description: "Server-side fusion preference for the KB lane.",
 								},
 							},
@@ -920,7 +969,7 @@ export const searchPaths = {
 			responses: {
 				"200": {
 					description:
-						"KB results (with degradation marker when the vector lane was skipped). A partial answer is a 200 with outcomes.status partial, even with zero results.",
+						"KB results. A partial answer is a 200 with outcomes.status partial, even with zero results.",
 					content: {
 						"application/json": {
 							schema: {
@@ -930,7 +979,6 @@ export const searchPaths = {
 										type: "array",
 										items: { type: "object" },
 									},
-									degradation: searchDegradationSchema,
 									outcomes: searchOutcomesSchema,
 								},
 							},

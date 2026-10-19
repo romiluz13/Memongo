@@ -44,6 +44,7 @@ import {
 	type Entity,
 	type Relation,
 } from "./mongodb-graph.js"
+import type { EntityExtractor } from "./mongodb-entity-extractor.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
@@ -661,6 +662,8 @@ describe("mongodb-graph", () => {
 			})
 
 			await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "root-1",
@@ -696,6 +699,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -730,6 +735,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -768,6 +775,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -797,6 +806,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-nonexistent",
@@ -830,6 +841,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -941,17 +954,16 @@ describe("mongodb-graph", () => {
 			})
 
 			it("sets confidenceSource to learned for high-confidence LLM entities", async () => {
-				const llmFn = vi
-					.fn()
-					.mockResolvedValue(
-						JSON.stringify([
-							{ name: "MongoDB", type: "system", confidence: 0.9 },
-						]),
-					)
-				const { LLMEntityExtractor } = await import(
-					"./mongodb-entity-extractor.js"
-				)
-				const llmExtractor = new LLMEntityExtractor(llmFn, 5000)
+				const llmExtractor: EntityExtractor = {
+					extract: async () => [
+						{
+							name: "MongoDB",
+							type: "system",
+							confidence: 0.9,
+							extractionMethod: "llm",
+						},
+					],
+				}
 
 				const entitiesCol = createMockCollection()
 				const relationsCol = createMockCollection()
@@ -1093,7 +1105,6 @@ describe("mongodb-graph", () => {
 					scope: "agent",
 					scopeRef: "agent:agent-1",
 					query: "New York",
-					textSearchAvailable: true,
 				})
 
 				expect(results).toHaveLength(1)
@@ -1133,7 +1144,6 @@ describe("mongodb-graph", () => {
 					scope: "agent",
 					scopeRef: "agent:agent-1",
 					query: "test",
-					textSearchAvailable: true,
 				})
 
 				const pipeline = (entCol.aggregate as ReturnType<typeof vi.fn>).mock
@@ -1141,52 +1151,6 @@ describe("mongodb-graph", () => {
 				const limitStage = pipeline.find((s: Document) => "$limit" in s)
 				expect(limitStage).toBeDefined()
 				expect(limitStage?.$limit).toBe(10)
-			})
-
-			it("uses the escaped $regex path without attempting $search when textSearch capability is off (P3.8)", async () => {
-				const findResult = {
-					sort: vi.fn().mockReturnValue({
-						limit: vi.fn().mockReturnValue({
-							toArray: vi.fn().mockResolvedValue([
-								{
-									entityId: "ent-1",
-									name: "C++ (beta) notes",
-									type: "concept",
-									agentId: "agent-1",
-									scope: "agent",
-									updatedAt: new Date(),
-								},
-							]),
-						}),
-					}),
-				}
-				const entCol = createMockCollection({
-					find: vi.fn().mockReturnValue(findResult),
-				})
-				const db = createMockDb({
-					[`${PREFIX}entities`]: entCol,
-				})
-
-				const results = await searchEntitiesAutocomplete({
-					db,
-					prefix: PREFIX,
-					agentId: "agent-1",
-					scope: "agent",
-					scopeRef: "agent:agent-1",
-					query: "C++ (beta)",
-					textSearchAvailable: false,
-				})
-
-				// No wasted $search round trip when mongot is known-absent
-				expect(entCol.aggregate).not.toHaveBeenCalled()
-				expect(results).toHaveLength(1)
-
-				// The regex fallback must stay escaped — metacharacters in the query
-				// cannot become regex operators.
-				const [filter] = (entCol.find as ReturnType<typeof vi.fn>).mock.calls[0]
-				const nameClause = filter.$or?.[0]?.name?.$regex as RegExp
-				expect(nameClause).toBeInstanceOf(RegExp)
-				expect(nameClause.source).toBe("C\\+\\+ \\(beta\\)")
 			})
 
 			it("G2: a $search runtime failure throws typed and never falls back to $regex", async () => {
@@ -1214,7 +1178,6 @@ describe("mongodb-graph", () => {
 					scope: "agent",
 					scopeRef: "agent:agent-1",
 					query: "fallback",
-					textSearchAvailable: true,
 				}).catch((err: unknown) => err)
 
 				expect(entCol.aggregate).toHaveBeenCalledOnce()

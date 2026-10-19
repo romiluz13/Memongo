@@ -175,13 +175,32 @@ describe("checkChunkEventOrphans (C-024)", () => {
 		// Only events/-prefixed paths participate — the chunk has no direct
 		// eventId field, the reference lives in the path suffix.
 		expect(chunksCol.find).toHaveBeenCalledWith(
-			{ path: /^events\// },
+			{ path: { $gte: "events/", $lt: "events0" } },
 			{ projection: { path: 1 } },
 		)
 		expect(eventsCol.find).toHaveBeenCalledWith(
 			{ eventId: { $in: ["ev-1", "ev-2"] } },
 			{ projection: { eventId: 1 } },
 		)
+	})
+
+	it("filters the chunk path by a prefix range, never a RegExp", async () => {
+		const chunksCol = findCol([])
+		const eventsCol = findCol([])
+
+		await checkChunkEventOrphans(chunksCol, eventsCol)
+
+		const filter = vi.mocked(chunksCol.find).mock.calls[0]?.[0] as {
+			path: unknown
+		}
+		expect(filter.path).not.toBeInstanceOf(RegExp)
+		expect(JSON.stringify(filter)).not.toContain("$regex")
+		const inRange = (path: string) => path >= "events/" && path < "events0"
+		expect(inRange("events/ev-1")).toBe(true)
+		expect(inRange("events/")).toBe(true)
+		expect(inRange("events0")).toBe(false)
+		expect(inRange("event/ev-1")).toBe(false)
+		expect(inRange("eventsX/ev-1")).toBe(false)
 	})
 
 	it("returns zero orphans when every chunk's event exists", async () => {
@@ -209,7 +228,7 @@ describe("checkChunkEventOrphans (C-024)", () => {
 		await checkChunkEventOrphans(chunksCol, eventsCol, "agent-1")
 
 		expect(chunksCol.find).toHaveBeenCalledWith(
-			{ path: /^events\//, agentId: "agent-1" },
+			{ path: { $gte: "events/", $lt: "events0" }, agentId: "agent-1" },
 			{ projection: { path: 1 } },
 		)
 		expect(eventsCol.find).toHaveBeenCalledWith(

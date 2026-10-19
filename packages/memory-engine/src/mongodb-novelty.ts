@@ -15,7 +15,7 @@
  * The autoEmbed index generates embeddings server-side from the `body` field.
  * We use `query: { text }` (not `queryVector`) to match this index type.
  *
- * CRITICAL: Graceful degradation when mongot is unavailable.
+ * A failed scan throws; the consolidator and the novelty-scan route report it.
  *
  * @module mongodb-novelty
  */
@@ -24,6 +24,16 @@ import type { Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { NoveltyEvent, NoveltyOptions, NoveltyReport } from "./types.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
+import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
+import {
+	searchWorkDenialReason,
+	tryReserveSearchBudget,
+} from "./mongodb-search-budget.js"
+import { buildEventLifecycleClause } from "./mongodb-temporal.js"
+import {
+	SearchBudgetDeniedError,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 export type { NoveltyEvent, NoveltyReport, NoveltyOptions }
 
@@ -78,8 +88,9 @@ export function computeCentroid(embeddings: number[][]): number[] {
  * neighbors are dissimilar (isolated in embedding space) score highest.
  *
  * Returns events ranked by novelty descending (most novel first).
- * Gracefully degrades when mongot/Atlas Vector Search is unavailable:
- * returns `{ events: [], scannedCount: 0, error: "mongot_unavailable" }`.
+ * A `$vectorSearch` failure (mongot or Atlas Vector Search unavailable, a
+ * missing index, a timeout) throws a typed SearchLaneError. It is never an
+ * empty report: an empty `events` list means nothing was found to score.
  */
 export async function scanNovelty(params: {
 	db: Db
@@ -115,10 +126,12 @@ export async function scanNovelty(params: {
 		}
 	}
 
-	// 2. Fetch candidate events with body text
+	// 2. Fetch candidate events with body text. An expired, invalidated or
+	// not-yet-valid event is not an observation to score (M2 T13).
 	const eventsCol = db.collection(`${prefix}events`)
+	const lifecycle = buildEventLifecycleClause()
 	const recentEvents = await eventsCol
-		.find(filter)
+		.find({ ...filter, ...lifecycle })
 		.sort({ timestamp: -1 })
 		.limit(MAX_CANDIDATES)
 		.project({ _id: 1, eventId: 1, body: 1, role: 1, timestamp: 1 })
@@ -147,6 +160,23 @@ export async function scanNovelty(params: {
 		}
 	}
 
+	// #122 R2: the probes never run against an events vector index observed
+	// unhealthy in this request's snapshot.
+	await assertCollectionIndexesHealthy(["events"], undefined, ["vectorSearch"])
+	// #122 R1: reserve every probe before the first one runs. A ledger without
+	// room is a typed denial and no probe runs; outside a ledger the
+	// reservation charges nothing.
+	const probes = tryReserveSearchBudget({
+		aggregations: candidates.length,
+		embeds: candidates.length,
+	})
+	if (!probes) {
+		throw new SearchBudgetDeniedError({
+			stage: "reservation",
+			reason: "budget-reservation",
+		})
+	}
+
 	try {
 		// 4. For each candidate, run k-NN to find its nearest neighbors
 		const scoredEvents: NoveltyEvent[] = []
@@ -158,6 +188,15 @@ export async function scanNovelty(params: {
 			// Request kNeighbors + 1 to account for self being returned
 			const searchLimit = kNeighbors + 1
 			const numCandidates = Math.max(searchLimit * 20, 100)
+
+			// One probe embeds the body server-side: charged to the scan's
+			// reservation (a no-op when the scan runs outside a ledger).
+			if (!probes.tryConsumeWork({ aggregations: 1, embeds: 1 })) {
+				throw new SearchBudgetDeniedError({
+					stage: "vector",
+					reason: searchWorkDenialReason({ aggregations: 1, embeds: 1 }),
+				})
+			}
 
 			const pipeline: Document[] = [
 				{
@@ -171,6 +210,9 @@ export async function scanNovelty(params: {
 						filter: vsFilter,
 					},
 				},
+				// `expiresAt` is not a filter field of the events vector index, so
+				// the neighbors' lifecycle is re-checked on the hydrated document.
+				{ $match: lifecycle },
 				{
 					$project: {
 						_id: 1,
@@ -231,13 +273,10 @@ export async function scanNovelty(params: {
 			agentId,
 		}
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		log.warn(`novelty scan failed (mongot likely unavailable): ${msg}`)
-		return {
-			events: [],
-			scannedCount: 0,
-			error: "mongot_unavailable",
-			agentId,
-		}
+		const typed = toTypedSearchError(err, "vector")
+		log.warn(`novelty scan failed: ${typed.message}`)
+		throw typed
+	} finally {
+		probes.release()
 	}
 }

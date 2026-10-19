@@ -46,8 +46,12 @@ import type {
 	MemongoSearchInput,
 	MemongoSearchKBResponse,
 	MemongoSearchLaneOutcome,
+	MemongoCommitDetail,
+	MemongoCommitState,
 	MemongoSearchOutcomes,
+	MemongoSyncCommit,
 	MemongoSearchResponse,
+	MemongoSectionFailure,
 	SearchConfig,
 	MemongoStatsResponse,
 	MemongoStatusResponse,
@@ -86,25 +90,123 @@ function parseErrorEnvelope(body: string): {
 	code?: string
 	message?: string
 	outcomes?: MemongoSearchOutcomes
+	commitState?: MemongoCommitState
+	commit?: MemongoCommitDetail
 } {
 	try {
 		const parsed = JSON.parse(body) as {
-			error?: { code?: unknown; message?: unknown }
+			error?: {
+				code?: unknown
+				message?: unknown
+				commitState?: unknown
+				commit?: unknown
+			}
 			outcomes?: unknown
 		}
 		const err = parsed?.error
 		if (err && typeof err === "object") {
 			const outcomes = parseSearchOutcomes(parsed.outcomes)
+			const commitState =
+				typeof err.commitState === "string" &&
+				COMMIT_STATES.has(err.commitState)
+					? (err.commitState as MemongoCommitState)
+					: undefined
+			const commit = commitState ? parseCommitDetail(err.commit) : undefined
 			return {
 				code: typeof err.code === "string" ? err.code : undefined,
 				message: typeof err.message === "string" ? err.message : undefined,
 				...(outcomes ? { outcomes } : {}),
+				...(commitState ? { commitState } : {}),
+				...(commit ? { commit } : {}),
 			}
 		}
 	} catch {
 		// Not a JSON envelope — fall through with empty fields.
 	}
 	return {}
+}
+
+const COMMIT_STATES: ReadonlySet<string> = new Set([
+	"none",
+	"committed",
+	"unknown",
+])
+const RUN_ID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function commitCounts<K extends string>(
+	source: unknown,
+	keys: readonly K[],
+): Record<K, number> | undefined {
+	if (!source || typeof source !== "object") {
+		return undefined
+	}
+	const out = {} as Record<K, number>
+	for (const key of keys) {
+		const value = (source as Record<string, unknown>)[key]
+		if (
+			typeof value !== "number" ||
+			!Number.isSafeInteger(value) ||
+			value < 0
+		) {
+			return undefined
+		}
+		out[key] = value
+	}
+	return out
+}
+
+/**
+ * M2 review D3: accept a failed operation's `commit` detail only in its
+ * documented shape, rebuilt from the documented fields. A malformed detail is
+ * dropped, never partially trusted.
+ */
+function parseCommitDetail(value: unknown): MemongoCommitDetail | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined
+	}
+	const record = value as Record<string, unknown>
+	if (record.operation === "consolidate") {
+		const work = commitCounts(record, [
+			"eventsProcessed",
+			"factsPromoted",
+			"factsInferred",
+			"factsMerged",
+			"factsPruned",
+		] as const)
+		if (
+			typeof record.runId !== "string" ||
+			!RUN_ID_PATTERN.test(record.runId) ||
+			!work
+		) {
+			return undefined
+		}
+		return { operation: "consolidate", runId: record.runId, ...work }
+	}
+	if (record.operation === "sync") {
+		const fileSync = record.fileSync as Record<string, unknown> | undefined
+		const failed = commitCounts(fileSync, ["filesFailed"] as const)
+		if (!failed || typeof fileSync?.enumerationComplete !== "boolean") {
+			return undefined
+		}
+		const detail: MemongoSyncCommit = {
+			operation: "sync",
+			fileSync: {
+				filesFailed: failed.filesFailed,
+				enumerationComplete: fileSync.enumerationComplete,
+			},
+		}
+		if (record.kbImport === undefined) {
+			return detail
+		}
+		const kbImport = commitCounts(record.kbImport, [
+			"documentsProcessed",
+			"chunksCreated",
+			"skipped",
+		] as const)
+		return kbImport ? { ...detail, kbImport } : undefined
+	}
+	return undefined
 }
 
 const SEARCH_OUTCOME_STATUSES = new Set(["complete", "partial", "failed"])
@@ -148,6 +250,13 @@ export class MemongoClientError extends Error {
 	readonly apiMessage?: string
 	/** #101: outcome summary of a failed search (503/500 search failure bodies). */
 	readonly outcomes?: MemongoSearchOutcomes
+	/**
+	 * M2 review D3: what the failed operation had already committed. Absent
+	 * when the API made no claim, which is not the same as `none`.
+	 */
+	readonly commitState?: MemongoCommitState
+	/** M2 review D3: the bounded detail of the work known to be committed. */
+	readonly commit?: MemongoCommitDetail
 
 	constructor(status: number, body: string, message?: string) {
 		const envelope = parseErrorEnvelope(body)
@@ -169,6 +278,8 @@ export class MemongoClientError extends Error {
 		this.code = envelope.code
 		this.apiMessage = envelope.message
 		this.outcomes = envelope.outcomes
+		this.commitState = envelope.commitState
+		this.commit = envelope.commit
 	}
 }
 
@@ -447,6 +558,7 @@ export type MemongoSearchPass = {
 	pathsExecuted: string[]
 	resultCount: number
 	queryRewritten: boolean
+	/** Always false: there is no reranker. */
 	reranked: boolean
 	correctionApplied?: string
 }
@@ -472,10 +584,9 @@ export type MemongoSearchDetailedMetadata = {
 		needExactEvidence: boolean
 		allowConstraintRelaxation: boolean
 		numCandidates: number
-		fusionMethod: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod: "scoreFusion" | "rankFusion"
 		hybridMode: "hybrid" | "vector-only"
 		allowHybridBackstop: boolean
-		lexicalPrefilter: "disabled" | "experimental"
 	}
 	passes: MemongoSearchPass[]
 	queriesTried: string[]
@@ -490,6 +601,7 @@ export type MemongoSearchDetailedMetadata = {
 	pathsExecuted: string[]
 	resultsByPath: Record<string, number>
 	queryRewritten: boolean
+	/** Always false: there is no reranker. */
 	reranked: boolean
 	noDirectEvidenceReason?: string
 	constraintRelaxations?: Array<{ constraint: string; action: string }>
@@ -547,6 +659,8 @@ export type MemongoActiveSlateResponse = {
 		maxItems: number
 		truncated: boolean
 		partial: boolean
+		/** M2 T8: typed rows for the lanes that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
 		countsByKind: Record<string, number>
 		sourceCounts: Record<string, number>
 	}
@@ -599,6 +713,8 @@ export type MemongoDiscoveryProjectionResponse = {
 	}>
 	metadata: {
 		partial: boolean
+		/** M2 T8: typed rows for the sections that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
 		evidenceCount: number
 		sourceCounts: Record<string, number>
 		timeRange?: {
@@ -660,6 +776,13 @@ export type MemongoContextBundleResponse = {
 		tokenBudget: number
 		estimatedTokensUsed: number
 		partial: boolean
+		/** M2 T8: typed rows for the sections that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
+		/** X-09: the query-evidence search lane outcomes. */
+		laneOutcomes?: MemongoSearchLaneOutcome[]
+		outcomeStatus?: MemongoSearchOutcomes["status"]
+		/** Set when admission control denied the query-evidence search. */
+		throttled?: { retryAfterMs: number }
 		truncated: boolean
 		pathsExecuted: string[]
 		trustSummary?: {
@@ -686,11 +809,32 @@ export type MemongoContextBundleResponse = {
 	degradation?: MemongoDegradation
 }
 
+/** One unreadable `state()` section with its typed reason (M2 T10, X-03). */
+export type MemongoStateFailure = {
+	section: "profile" | "blocks" | "bundle"
+	reason:
+		| "lane-unavailable"
+		| "index-missing"
+		| "index-not-ready"
+		| "index-stale"
+		| "index-unavailable"
+		| "query-timeout"
+		| "dependency-unavailable"
+		| "query-error"
+		| "internal-error"
+		| "erasure-in-progress"
+}
+
+/**
+ * A section that could not be read is absent and named in `failures`; it is
+ * never an empty object that reads as a healthy empty section.
+ */
 export type MemongoStateResponse = {
-	profile: MemongoProfileResponse
-	blocks: MemongoMemoryBlocksResponse
-	bundle: MemongoContextBundleResponse
-	partial?: boolean
+	profile?: MemongoProfileResponse
+	blocks?: MemongoMemoryBlocksResponse
+	bundle?: MemongoContextBundleResponse
+	partial?: true
+	failures?: MemongoStateFailure[]
 }
 
 /** Metadata shell for a silent-mode empty `searchDetailed` response. */
@@ -899,7 +1043,7 @@ export class MemongoClient {
 		minScore?: number
 		filter?: { tags?: string[]; category?: string; source?: string }
 		/** Server-side fusion preference for the KB lane (P0.10). */
-		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod?: "scoreFusion" | "rankFusion"
 	}): Promise<MemongoSearchKBResponse> {
 		return this._silently<MemongoSearchKBResponse>({ results: [] }, () =>
 			apiPost(this._opts, "/v1/search-kb", {
@@ -916,7 +1060,7 @@ export class MemongoClient {
 	}
 
 	async recallConversation(
-		input: MemongoConversationRecallInput = {},
+		input: MemongoConversationRecallInput,
 	): Promise<MemongoConversationRecallResponse> {
 		return this._silently<MemongoConversationRecallResponse>(
 			{
@@ -1330,16 +1474,20 @@ export class MemongoClient {
 	 * every stage so a review surface can show decided history alongside the
 	 * pending queue.
 	 */
-	async listQuarantined(input?: {
+	async listQuarantined(input: {
+		scope: MemongoScope
+		scopeRef: string
 		agentId?: string
 		status?: MemongoQuarantineStatus
 		limit?: number
 	}): Promise<MemongoQuarantinedMemory[]> {
 		return apiGet(
 			this._opts,
-			`/v1/admin/quarantine${q(input?.agentId, {
-				status: input?.status,
-				limit: input?.limit,
+			`/v1/admin/quarantine${q(input.agentId, {
+				scope: input.scope,
+				scopeRef: input.scopeRef,
+				status: input.status,
+				limit: input.limit,
 			})}`,
 		)
 	}
@@ -1554,6 +1702,8 @@ export class MemongoClient {
 		return apiPost(this._opts, "/v1/chain-trace", {
 			factId: input.factId,
 			collection: input.collection,
+			scope: input.scope,
+			scopeRef: input.scopeRef,
 			agentId: input.agentId,
 			maxDepth: input.maxDepth,
 		})

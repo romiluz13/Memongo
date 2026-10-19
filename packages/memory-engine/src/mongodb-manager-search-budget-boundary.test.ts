@@ -123,10 +123,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	).queryRewriterModuleMock(),
 )
 
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
-)
-
 vi.mock("./mongodb-lane-coverage.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).laneCoverageModuleMock(),
 )
@@ -250,6 +246,13 @@ describe("searchDetailed request budget boundary (RET-16)", () => {
 			retries: { aggregations: 0, embeds: 0 },
 			equivalentSkips: 0,
 			exhausted: false,
+			// M2 decision 8: metadata status reads ride beside the retrieval
+			// counts. The empty test manifest reads nothing.
+			indexHealth: {
+				metadataReads: 0,
+				failedMetadataReads: 0,
+				indexesChecked: 0,
+			},
 		})
 		// RET-13 / #101 E1 merge seam: every pass's lane outcome survives
 		// into the response metadata, in attempt order, tagged with its pass.

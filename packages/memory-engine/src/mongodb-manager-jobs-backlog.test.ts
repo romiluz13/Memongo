@@ -119,7 +119,7 @@ describe("countPendingMemoryJobs (the gauge read)", () => {
 		])
 	})
 
-	it("degrades to 0 when the count fails (the gauge cannot break the drain)", async () => {
+	it("throws when the count fails: a failed read is never an empty queue", async () => {
 		const fakeDb = {
 			collection: () => ({
 				countDocuments: async () => {
@@ -127,11 +127,12 @@ describe("countPendingMemoryJobs (the gauge read)", () => {
 				},
 			}),
 		} as unknown as Db
-		const depth = await countPendingMemoryJobs({
-			db: fakeDb,
-			prefix: "t_",
-			agentId: "agent-a",
-		})
-		expect(depth).toBe(0)
+		await expect(
+			countPendingMemoryJobs({
+				db: fakeDb,
+				prefix: "t_",
+				agentId: "agent-a",
+			}),
+		).rejects.toThrow("connection lost")
 	})
 })

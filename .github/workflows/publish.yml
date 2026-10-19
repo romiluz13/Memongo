@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mongodb:
-        image: mongodb/mongodb-atlas-local:preview
+        image: mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
         ports:
           - 27017:27017
         env:
@@ -64,7 +64,6 @@ jobs:
           --expect packages/memory-engine/test-results/junit.xml
           --require-suite mongodb-kb-reingest.e2e.test.ts
           --require-suite mongodb-kb-isolation.e2e.test.ts
-          --require-suite mongodb-legacy-search-isolation.e2e.test.ts
           --require-suite mongodb-vector-index-shape.e2e.test.ts
           --require-suite mongodb-rankfusion-score.e2e.test.ts
           --require-suite mongodb-projection-repair.e2e.test.ts

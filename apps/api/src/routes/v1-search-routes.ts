@@ -73,7 +73,12 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			// #101 R3: a failed call is a non-2xx, never an empty answer.
 			const mapping = mapSearchOutcomes(outcomes)
 			if (outcomes && mapping.status !== 200) {
-				return searchFailureResponse(c, mapping, outcomes)
+				return searchFailureResponse(
+					c,
+					mapping,
+					outcomes,
+					degradation?.retryAfterMs,
+				)
 			}
 			// WS-12 (C-019): throttling is served as throttling — the
 			// degradation marker rides the 200 so a degraded answer never
@@ -114,35 +119,41 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			filter = parsedFilter.value
 		}
+		// M2 decision 9: KB search runs one configured native fusion. An unknown
+		// value, and the removed js-merge, is rejected instead of ignored.
+		let fusionMethod: "scoreFusion" | "rankFusion" | undefined
+		if (body.fusionMethod !== undefined) {
+			if (
+				body.fusionMethod !== "scoreFusion" &&
+				body.fusionMethod !== "rankFusion"
+			) {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					"fusionMethod must be scoreFusion or rankFusion",
+				)
+			}
+			fusionMethod = body.fusionMethod
+		}
 		try {
-			const { results, degradation, outcomes } =
-				await memongoBridgeSearchKBWithDegradation({
-					query,
-					agentId: await readAgentId(c),
-					scope: await readScope(c),
-					sessionKey: await readSessionCoordinate(c),
-					scopeRef: await readScopeRef(c),
-					maxResults: readLimit(body),
-					minScore:
-						typeof body.minScore === "number" ? body.minScore : undefined,
-					filter,
-					fusionMethod:
-						body.fusionMethod === "scoreFusion" ||
-						body.fusionMethod === "rankFusion" ||
-						body.fusionMethod === "js-merge"
-							? body.fusionMethod
-							: undefined,
-				})
+			const { results, outcomes } = await memongoBridgeSearchKBWithDegradation({
+				query,
+				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				sessionKey: await readSessionCoordinate(c),
+				scopeRef: await readScopeRef(c),
+				maxResults: readLimit(body),
+				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
+				filter,
+				fusionMethod,
+			})
 			const mapping = mapSearchOutcomes(outcomes)
 			if (outcomes && mapping.status !== 200) {
 				return searchFailureResponse(c, mapping, outcomes)
 			}
-			// WS-12 (C-019): a dropped vector lane means the text-lane results
-			// stand with degraded ranking — the marker says which, so degraded
-			// ranking never reads as authoritative.
 			return c.json({
 				results,
-				...(degradation ? { degradation } : {}),
 				...(outcomes ? { outcomes: boundSearchOutcomes(outcomes) } : {}),
 			})
 		} catch (err) {
@@ -167,6 +178,16 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 		}
 		const scopeError = await readScopeInputError(c)
 		if (scopeError) return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		const scope = await readScope(c)
+		const scopeRef = await readScopeRef(c)
+		if (!scope || !scopeRef) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"scope and scopeRef are required",
+			)
+		}
 		for (const field of [
 			"query",
 			"startTime",
@@ -196,8 +217,8 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 		try {
 			const result = await memongoBridgeRecallConversation({
 				agentId: await readAgentId(c),
-				scope: await readScope(c),
-				scopeRef: await readScopeRef(c),
+				scope,
+				scopeRef,
 				query: typeof body.query === "string" ? body.query : undefined,
 				sessionId: await readSessionCoordinate(c),
 				roles,
@@ -218,7 +239,9 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			if (isRecallConversationValidationError(err)) {
 				return jsonError(c, 400, "VALIDATION_ERROR", message)
 			}
-			return internalError(c, err, "RECALL_CONVERSATION_FAILED")
+			// M2: recall with a query is one typed lane; its failure or budget
+			// denial maps through the shared search status table.
+			return searchErrorResponse(c, err, "RECALL_CONVERSATION_FAILED")
 		}
 	})
 
@@ -371,7 +394,12 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 				: undefined
 			const mapping = mapSearchOutcomes(outcomes)
 			if (outcomes && mapping.status !== 200) {
-				return searchFailureResponse(c, mapping, outcomes)
+				return searchFailureResponse(
+					c,
+					mapping,
+					outcomes,
+					result.metadata.throttled?.retryAfterMs,
+				)
 			}
 			return c.json(
 				laneOutcomes

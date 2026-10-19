@@ -286,9 +286,10 @@ describe("searchStructuredMemory tiers (#101 matrix 1d)", () => {
 describe("detectCapabilities per-index availability (#101 R2)", () => {
 	function dbWith(byCollection: Record<string, Document[] | Error>): Db {
 		return {
-			admin: () => ({ command: async () => ({ versionArray: [8, 2, 0, 0] }) }),
+			admin: () => ({ command: async () => ({ versionArray: [8, 3, 0, 0] }) }),
 			collection: (name: string) => ({
-				listSearchIndexes: () => ({
+				collectionName: name,
+				aggregate: () => ({
 					toArray: async () => {
 						const out = byCollection[name] ?? []
 						if (out instanceof Error) throw out
@@ -326,14 +327,19 @@ describe("detectCapabilities per-index availability (#101 R2)", () => {
 		expect(caps.queryableSearchIndexes).toEqual(["test_structured_mem_text"])
 	})
 
-	it("leaves an index unlisted when its availability cannot be read", async () => {
-		const caps = await detectCapabilities(
-			dbWith({ test_structured_mem: new Error("search unavailable") }),
-			"test_chunks",
-			undefined,
-			["test_structured_mem"],
-		)
-		expect(caps.queryableSearchIndexes).toEqual([])
+	it("fails typed when an index's availability cannot be read (M2)", async () => {
+		await expect(
+			detectCapabilities(
+				dbWith({ test_structured_mem: new Error("search unavailable") }),
+				"test_chunks",
+				undefined,
+				["test_structured_mem"],
+			),
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "search-management-unavailable",
+			collection: "test_structured_mem",
+		})
 	})
 
 	it("leaves per-index availability unknown when no text-tier collection is named", async () => {

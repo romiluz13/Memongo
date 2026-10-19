@@ -1,4 +1,3 @@
-import { settledFailureMeta } from "./query-diagnostics.js"
 import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import {
@@ -7,6 +6,7 @@ import {
 	parseResultRole,
 } from "./memory-derivation.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
+import { searchDiscoveryCandidates } from "./mongodb-discovery-search.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { synthesizeProfile, type ProfileSynthesis } from "./mongodb-profile.js"
 import { resolveTimeRangePreset } from "./mongodb-retrieval-planner.js"
@@ -18,6 +18,16 @@ import {
 	type AdmissionToken,
 } from "./mongodb-write-fence.js"
 import { buildEventLifecycleClause } from "./mongodb-temporal.js"
+import type {
+	SearchLaneOutcome,
+	SearchOutcomeStatus,
+} from "./search-outcomes.js"
+import {
+	SectionFailureCollector,
+	nestSectionFailures,
+	sectionFailuresFromLaneOutcomes,
+	type SectionFailure,
+} from "./section-failures.js"
 import type {
 	MemoryContextBundle,
 	MemoryContextBundleRequest,
@@ -61,6 +71,12 @@ type SearchBundleResult = {
 	results: MemorySearchResult[]
 	pathsExecuted: string[]
 	trustSummary?: MemorySearchTrustSummary
+	/** X-09: the search's lane rows, status and throttle marker, kept verbatim. */
+	laneOutcomes?: SearchLaneOutcome[]
+	outcomeStatus?: SearchOutcomeStatus
+	throttled?: { retryAfterMs: number }
+	/** Rows for optional enrichment (context expansion) that failed. */
+	failures?: SectionFailure[]
 }
 
 type CandidateSection = {
@@ -114,26 +130,6 @@ function clampCount(
 		return defaultValue
 	}
 	return Math.max(1, Math.min(maxValue, Math.floor(value ?? 0)))
-}
-
-function buildQueryRegex(query?: string): RegExp | undefined {
-	const normalized = query?.trim()
-	if (!normalized) {
-		return undefined
-	}
-	const parts = Array.from(
-		new Set(
-			normalized
-				.split(/\s+/)
-				.map((part) => part.trim())
-				.filter(Boolean)
-				.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-		),
-	).slice(0, 8)
-	if (parts.length === 0) {
-		return undefined
-	}
-	return new RegExp(parts.join("|"), "i")
 }
 
 function getSourceEventIds(doc: {
@@ -380,20 +376,18 @@ function materializeSection(
 	}
 }
 
-async function settled<T>(
-	label: string,
-	fn: () => Promise<T>,
-	query?: string,
-): Promise<{ value: T | null; failed: boolean }> {
-	try {
-		return { value: await fn(), failed: false }
-	} catch (error) {
-		log.warn(
-			`buildContextBundle: ${label} query failed`,
-			settledFailureMeta(error, query),
-		)
-		return { value: null, failed: true }
-	}
+const EPISODE_SUMMARY_PROJECTION: Document = {
+	episodeId: 1,
+	title: 1,
+	summary: 1,
+	shortTermSummary: 1,
+	mediumTermSummary: 1,
+	longTermSummary: 1,
+	topics: 1,
+	timeRange: 1,
+	scope: 1,
+	scopeRef: 1,
+	sourceEventIds: 1,
 }
 
 async function loadEpisodeSummary(params: {
@@ -406,46 +400,38 @@ async function loadEpisodeSummary(params: {
 	timeRange?: MemorySearchTimeRange
 }): Promise<EpisodeSummaryDoc | null> {
 	const { db, prefix, agentId, scope, scopeRef, query, timeRange } = params
-	const regex = buildQueryRegex(query)
-	const filter: Document = {
-		agentId,
-		scope,
-		scopeRef,
-		status: { $ne: "deleted" },
-	}
-	if (regex) {
-		filter.$or = [
-			{ title: regex },
-			{ summary: regex },
-			{ shortTermSummary: regex },
-			{ mediumTermSummary: regex },
-			{ longTermSummary: regex },
-			{ topics: regex },
-		]
-	}
+	const tenant = { agentId, scope, scopeRef }
 	const resolvedTimeRange = resolveTimeRange(timeRange)
-	if (resolvedTimeRange) {
-		filter["timeRange.end"] = { $gte: resolvedTimeRange.start }
-		filter["timeRange.start"] = { $lte: resolvedTimeRange.end }
+	const windowFilter: Document = resolvedTimeRange
+		? {
+				"timeRange.end": { $gte: resolvedTimeRange.start },
+				"timeRange.start": { $lte: resolvedTimeRange.end },
+			}
+		: {}
+	const sort: Record<string, 1 | -1> = { "timeRange.end": -1, updatedAt: -1 }
+	if (!query) {
+		return episodesCollection(db, prefix)
+			.find({ ...tenant, status: { $ne: "deleted" }, ...windowFilter })
+			.sort(sort)
+			.limit(1)
+			.project(EPISODE_SUMMARY_PROJECTION)
+			.next() as Promise<EpisodeSummaryDoc | null>
 	}
-	return episodesCollection(db, prefix)
-		.find(filter)
-		.sort({ "timeRange.end": -1, updatedAt: -1 })
-		.limit(1)
-		.project({
-			episodeId: 1,
-			title: 1,
-			summary: 1,
-			shortTermSummary: 1,
-			mediumTermSummary: 1,
-			longTermSummary: 1,
-			topics: 1,
-			timeRange: 1,
-			scope: 1,
-			scopeRef: 1,
-			sourceEventIds: 1,
-		})
-		.next() as Promise<EpisodeSummaryDoc | null>
+	const [match] = await searchDiscoveryCandidates({
+		collection: episodesCollection(db, prefix),
+		indexName: "episode_autocomplete",
+		healthCollection: "episodes",
+		lane: "episodic",
+		query,
+		textPaths: ["title", "summary", "topics"],
+		tenant,
+		mustNot: [{ equals: { path: "status", value: "deleted" } }],
+		recheck: { ...tenant, status: { $ne: "deleted" }, ...windowFilter },
+		sort,
+		limit: 1,
+		project: EPISODE_SUMMARY_PROJECTION,
+	})
+	return (match as EpisodeSummaryDoc | undefined) ?? null
 }
 
 function isExplicitEvidence(result: MemorySearchResult): boolean {
@@ -735,24 +721,33 @@ export async function buildContextBundle(params: {
 	const recentEventScopeRef = recentEventIdentity.scopeRef
 
 	const pathsExecuted = new Set<string>()
-	let partial = false
+	const collector = new SectionFailureCollector({
+		log,
+		operation: "buildContextBundle",
+		query,
+	})
 
 	const [activeSlateResult, searchResult, summaryResult, recentEventsResult] =
 		await Promise.all([
-			settled("active-slate", () =>
-				hydrateActiveSlate({
-					admission: params.admission,
-					db,
-					prefix,
-					agentId,
-					scope,
-					scopeRef,
-					maxItems: maxActiveItems,
-				}),
+			collector.settle(
+				"active-slate",
+				"lane",
+				() =>
+					hydrateActiveSlate({
+						admission: params.admission,
+						db,
+						prefix,
+						agentId,
+						scope,
+						scopeRef,
+						maxItems: maxActiveItems,
+					}),
+				{ queryless: true },
 			),
 			query && params.search
-				? settled(
+				? collector.settle(
 						"query-evidence",
+						"lane",
 						() =>
 							params.search?.({
 								query,
@@ -761,52 +756,47 @@ export async function buildContextBundle(params: {
 								maxResults: maxEvidenceItems,
 								sessionId,
 							}) ?? Promise.resolve({ results: [], pathsExecuted: [] }),
-						query,
 					)
-				: Promise.resolve({ value: null, failed: false }),
-			settled(
-				"episode-summary",
-				() =>
-					loadEpisodeSummary({
-						db,
-						prefix,
-						agentId,
-						scope,
-						scopeRef,
-						query,
-						timeRange: request.timeRange,
-					}),
-				query,
+				: Promise.resolve(undefined),
+			collector.settle("episode-summary", "lane", () =>
+				loadEpisodeSummary({
+					db,
+					prefix,
+					agentId,
+					scope,
+					scopeRef,
+					query,
+					timeRange: request.timeRange,
+				}),
 			),
-			settled("recent-events", () =>
-				eventsCollection(db, prefix)
-					.find({
-						agentId,
-						scope: recentEventScope,
-						scopeRef: recentEventScopeRef,
-						// RET-10: same event lifecycle guard the events search lanes
-						// apply — an expired, invalidated, or not-yet-valid
-						// event must not re-enter context through hydration.
-						...buildEventLifecycleClause(),
-					})
-					.sort({ timestamp: -1 })
-					.limit(maxRecentEvents)
-					.project({
-						eventId: 1,
-						role: 1,
-						body: 1,
-						timestamp: 1,
-						scope: 1,
-						scopeRef: 1,
-					})
-					.toArray(),
+			collector.settle(
+				"recent-events",
+				"lane",
+				() =>
+					eventsCollection(db, prefix)
+						.find({
+							agentId,
+							scope: recentEventScope,
+							scopeRef: recentEventScopeRef,
+							// RET-10: same event lifecycle guard the events search lanes
+							// apply — an expired, invalidated, or not-yet-valid
+							// event must not re-enter context through hydration.
+							...buildEventLifecycleClause(),
+						})
+						.sort({ timestamp: -1 })
+						.limit(maxRecentEvents)
+						.project({
+							eventId: 1,
+							role: 1,
+							body: 1,
+							timestamp: 1,
+							scope: 1,
+							scopeRef: 1,
+						})
+						.toArray(),
+				{ queryless: true },
 			),
 		])
-
-	partial ||= activeSlateResult.failed
-	partial ||= searchResult.failed
-	partial ||= summaryResult.failed
-	partial ||= recentEventsResult.failed
 
 	const candidates: CandidateSection[] = []
 
@@ -835,17 +825,36 @@ export async function buildContextBundle(params: {
 			})),
 			partial: activeSlateResult.value.metadata.partial,
 		})
-		partial ||= activeSlateResult.value.metadata.partial
+		collector.adopt(
+			nestSectionFailures(
+				"active-slate",
+				activeSlateResult.value.metadata.failures,
+			),
+		)
 	}
 
-	if (searchResult.value) {
-		for (const path of searchResult.value.pathsExecuted) {
+	if (searchResult?.value) {
+		const evidence = searchResult.value
+		for (const path of evidence.pathsExecuted) {
 			pathsExecuted.add(path)
 		}
-		if (searchResult.value.results.length > 0) {
-			const evidenceSections = buildQueryEvidenceSections(searchResult.value)
-			candidates.push(...evidenceSections)
+		if (evidence.results.length > 0) {
+			candidates.push(...buildQueryEvidenceSections(evidence))
 		}
+		const evidenceFailures = sectionFailuresFromLaneOutcomes({
+			section: "query-evidence",
+			laneOutcomes: evidence.laneOutcomes,
+			outcomeStatus: evidence.outcomeStatus,
+			throttled: evidence.throttled,
+		})
+		if (evidence.throttled || evidence.outcomeStatus === "failed") {
+			for (const row of evidenceFailures) collector.failRow(row)
+		} else {
+			collector.adopt(evidenceFailures)
+		}
+		collector.adopt(
+			nestSectionFailures("query-evidence", evidence.failures ?? []),
+		)
 	}
 
 	if (summaryResult.value) {
@@ -873,8 +882,9 @@ export async function buildContextBundle(params: {
 			: query
 				? "topic-brief"
 				: "what-changed"
-		const projectionResult = await settled(
+		const projectionResult = await collector.settle(
 			"discovery-projection",
+			"lane",
 			() =>
 				buildDiscoveryProjection({
 					admission: params.admission,
@@ -888,11 +898,15 @@ export async function buildContextBundle(params: {
 					maxItems: maxEvidenceItems,
 					timeRange: request.timeRange,
 				}),
-			query,
 		)
-		partial ||= projectionResult.failed
 		if (projectionResult.value) {
 			pathsExecuted.add("discovery-projection")
+			collector.adopt(
+				nestSectionFailures(
+					"discovery-projection",
+					projectionResult.value.metadata.failures,
+				),
+			)
 			const section = buildDiscoverySection(projectionResult.value)
 			if (section) {
 				candidates.push(section)
@@ -901,20 +915,23 @@ export async function buildContextBundle(params: {
 	}
 
 	if (request.includeProfile || isWakeUp) {
-		const profileResult = await settled("profile", () =>
-			synthesizeProfile({
-				admission: params.admission,
-				db,
-				prefix,
-				agentId,
-				scope,
-				scopeRef,
-				maxPerType: isWakeUp ? 3 : 4,
-				maxEntities: isWakeUp ? 0 : 2,
-				maxEpisodes: isWakeUp ? 0 : 2,
-			}),
+		const profileResult = await collector.settle(
+			"profile",
+			"lane",
+			() =>
+				synthesizeProfile({
+					admission: params.admission,
+					db,
+					prefix,
+					agentId,
+					scope,
+					scopeRef,
+					maxPerType: isWakeUp ? 3 : 4,
+					maxEntities: isWakeUp ? 0 : 2,
+					maxEpisodes: isWakeUp ? 0 : 2,
+				}),
+			{ queryless: true },
 		)
-		partial ||= profileResult.failed
 		if (profileResult.value) {
 			pathsExecuted.add("profile")
 			const section = buildProfileSection(profileResult.value)
@@ -923,6 +940,8 @@ export async function buildContextBundle(params: {
 			}
 		}
 	}
+
+	collector.throwIfAllFailed()
 
 	const sections: MemoryContextBundleSection[] = []
 	const renderedParts: string[] = []
@@ -953,7 +972,6 @@ export async function buildContextBundle(params: {
 			}),
 		)
 		truncated ||= section.truncated
-		partial ||= section.partial
 	}
 
 	const rendered = renderedParts.join("\n\n")
@@ -988,11 +1006,21 @@ export async function buildContextBundle(params: {
 		metadata: {
 			tokenBudget,
 			estimatedTokensUsed,
-			partial,
+			partial: collector.failures.length > 0,
+			failures: collector.failures,
 			truncated,
 			pathsExecuted: Array.from(pathsExecuted),
-			...(searchResult.value?.trustSummary
+			...(searchResult?.value?.trustSummary
 				? { trustSummary: searchResult.value.trustSummary }
+				: {}),
+			...(searchResult?.value?.laneOutcomes?.length
+				? { laneOutcomes: searchResult.value.laneOutcomes }
+				: {}),
+			...(searchResult?.value?.outcomeStatus
+				? { outcomeStatus: searchResult.value.outcomeStatus }
+				: {}),
+			...(searchResult?.value?.throttled
+				? { throttled: searchResult.value.throttled }
 				: {}),
 			sectionsIncluded: sections.map((section) => section.kind),
 		},

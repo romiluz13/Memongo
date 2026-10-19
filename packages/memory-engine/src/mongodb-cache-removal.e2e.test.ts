@@ -197,16 +197,7 @@ describe("result-cache removal (live MongoDB, disposable database)", () => {
 				method: "synonym-expansion",
 				maxTokens: 128,
 			})
-			expect(mongo.reranking).toMatchObject({
-				enabled: false,
-				model: "rerank-2.5",
-				topN: 20,
-				minScore: 0.01,
-				recencyBoost: 0.2,
-				accessBoost: 0.2,
-				temporalProximityBoost: 0.1,
-			})
-			expect(mongo.reranking.instruction).toBeUndefined()
+			expect(mongo.reranking).toEqual({ temporalProximityBoost: 0.1 })
 			expect(mongo.sources.conversation.enabled).toBe(false)
 			expect(mongo.sources.reference.enabled).toBe(true)
 			expect(mongo.sources.structured.enabled).toBe(false)

@@ -1,0 +1,404 @@
+import type { Db } from "mongodb"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { consolidateMemory } from "./mongodb-consolidator.js"
+import { EnrichmentConfigError } from "./mongodb-llm-enrichment.js"
+import {
+	getSearchBudgetSnapshot,
+	openSearchBudget,
+} from "./mongodb-search-budget.js"
+import { SearchLaneError } from "./search-outcomes.js"
+import { runWithIndexHealth } from "./mongodb-index-health.js"
+import { createIndexHealthSource } from "./test-helpers/index-health-source.js"
+import { matchesFilter } from "./test-helpers/stateful-mongo-fake.js"
+
+const seams = vi.hoisted(() => ({
+	provider: vi.fn((): unknown => null),
+}))
+
+vi.mock("./mongodb-llm-enrichment.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-llm-enrichment.js")>()),
+	isExtractionLlmDisabled: () => false,
+	resolveEnrichmentProvider: seams.provider,
+}))
+
+function fixture(aggregate: () => Promise<unknown[]>) {
+	const events = {
+		find: vi.fn(),
+		aggregate: vi.fn(() => ({ toArray: aggregate })),
+	}
+	const runs = {
+		findOneAndUpdate: vi.fn(async () => ({ status: "running" })),
+		updateOne: vi.fn(async () => ({ matchedCount: 1 })),
+	}
+	const gate = { agentId: "agent-1", epoch: 0, state: "open", serial: 0 }
+	const meta = {
+		findOneAndUpdate: vi.fn(async () => ({ ...gate })),
+		findOne: vi.fn(async () => ({ ...gate })),
+		updateOne: vi.fn(async () => {
+			gate.serial += 1
+			return { matchedCount: 1, modifiedCount: 1 }
+		}),
+	}
+	const collection = vi.fn((name: string) => {
+		if (name === "test_meta") return meta
+		if (name === "test_events") return events
+		if (name === "test_consolidation_runs") return runs
+		throw new Error(`Unexpected collection: ${name}`)
+	})
+	const session = {
+		inTransaction: () => false,
+		withTransaction: async (fn: () => Promise<unknown>) => fn(),
+		endSession: async () => {},
+	}
+	const db = {
+		collection,
+		client: { startSession: () => session },
+	} as unknown as Db
+	return { db, events, runs }
+}
+
+const from = new Date("2026-03-01T00:00:00Z")
+const to = new Date("2026-03-31T00:00:00Z")
+
+beforeEach(() => {
+	vi.clearAllMocks()
+	seams.provider.mockReturnValue(null)
+})
+
+describe("consolidator entity filter selects its batch through Atlas Search", () => {
+	it("emits one $search with the batch window in compound.filter and one phrase per entity in should", async () => {
+		const f = fixture(async () => [])
+		await consolidateMemory({
+			db: f.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: {
+				entitySet: ["Acme", "Berlin"],
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timeRange: { from, to },
+				maxEvents: 7,
+			},
+		})
+
+		expect(f.events.find).not.toHaveBeenCalled()
+		expect(f.events.aggregate).toHaveBeenCalledOnce()
+		const pipeline = (
+			f.events.aggregate.mock.calls[0] as unknown as [unknown[]]
+		)[0]
+		expect(pipeline).toEqual([
+			{
+				$search: {
+					index: "test_events_text",
+					compound: {
+						filter: [
+							{ equals: { path: "agentId", value: "agent-1" } },
+							{ equals: { path: "scope", value: "agent" } },
+							{ equals: { path: "scopeRef", value: "agent:agent-1" } },
+							{ range: { path: "timestamp", gte: from, lte: to } },
+						],
+						should: [
+							{ phrase: { query: "Acme", path: "body" } },
+							{ phrase: { query: "Berlin", path: "body" } },
+						],
+						minimumShouldMatch: 1,
+					},
+				},
+			},
+			{
+				$match: {
+					agentId: "agent-1",
+					dreamerProcessedAt: { $exists: false },
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					timestamp: { $gte: from, $lte: to },
+					$and: expect.arrayContaining([
+						{
+							$or: [
+								{ expiresAt: { $exists: false } },
+								{ expiresAt: { $gt: expect.any(Date) } },
+							],
+						},
+					]),
+				},
+			},
+			{ $sort: { timestamp: -1 } },
+			{ $limit: 7 },
+		])
+	})
+
+	it("sends a multi-word entity as one phrase, never split into per-word terms", async () => {
+		const f = fixture(async () => [])
+		await consolidateMemory({
+			db: f.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { entitySet: ["Acme Corp", "Berlin"] },
+		})
+		const pipeline = (
+			f.events.aggregate.mock.calls[0] as unknown as [
+				Array<{
+					$search: {
+						compound: {
+							should: Array<{ phrase: { query: string } }>
+							minimumShouldMatch: number
+							must?: unknown
+						}
+					}
+				}>,
+			]
+		)[0]
+		const { compound } = pipeline[0].$search
+		expect(compound.should.map((clause) => clause.phrase.query)).toEqual([
+			"Acme Corp",
+			"Berlin",
+		])
+		expect(compound.minimumShouldMatch).toBe(1)
+		expect(compound).not.toHaveProperty("must")
+		expect(JSON.stringify(compound)).not.toContain('"text"')
+	})
+
+	it("keeps the window to agentId alone when no scope or time range is given", async () => {
+		const f = fixture(async () => [])
+		await consolidateMemory({
+			db: f.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { entitySet: ["Acme"] },
+		})
+		const pipeline = (
+			f.events.aggregate.mock.calls[0] as unknown as [
+				Array<{ $search: { compound: { filter: unknown[] } } }>,
+			]
+		)[0]
+		expect(pipeline[0].$search.compound.filter).toEqual([
+			{ equals: { path: "agentId", value: "agent-1" } },
+		])
+	})
+
+	it("uses the newest-unprocessed find, not Search, without an entity set", async () => {
+		const cursor = {
+			sort: vi.fn(),
+			limit: vi.fn(),
+			toArray: vi.fn(async () => []),
+		}
+		cursor.sort.mockReturnValue(cursor)
+		cursor.limit.mockReturnValue(cursor)
+		const f = fixture(async () => [])
+		f.events.find.mockReturnValue(cursor)
+		await consolidateMemory({
+			db: f.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { maxEvents: 3 },
+		})
+		expect(f.events.aggregate).not.toHaveBeenCalled()
+		expect(f.events.find).toHaveBeenCalledOnce()
+	})
+
+	describe("the batch is live events only (M2 T13)", () => {
+		const DAY = 86_400_000
+		const live = { agentId: "agent-1", timestamp: new Date() }
+		const dead = {
+			expired: { ...live, expiresAt: new Date(Date.now() - DAY) },
+			invalidated: { ...live, invalidAt: new Date(Date.now() - DAY) },
+			notYetValid: { ...live, validAt: new Date(Date.now() + DAY) },
+		}
+
+		function expectLiveOnly(filter: Record<string, unknown>) {
+			expect(matchesFilter(live, filter)).toBe(true)
+			expect(matchesFilter({ ...live, invalidAt: null }, filter)).toBe(true)
+			for (const doc of Object.values(dead)) {
+				expect(matchesFilter(doc, filter)).toBe(false)
+			}
+			expect(
+				matchesFilter({ ...live, dreamerProcessedAt: new Date() }, filter),
+			).toBe(false)
+		}
+
+		it("the newest-unprocessed find carries the event lifecycle", async () => {
+			const cursor = {
+				sort: vi.fn(),
+				limit: vi.fn(),
+				toArray: vi.fn(async () => []),
+			}
+			cursor.sort.mockReturnValue(cursor)
+			cursor.limit.mockReturnValue(cursor)
+			const f = fixture(async () => [])
+			f.events.find.mockReturnValue(cursor)
+			await consolidateMemory({
+				db: f.db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { maxEvents: 3 },
+			})
+			expectLiveOnly(
+				(
+					f.events.find.mock.calls[0] as unknown as [Record<string, unknown>]
+				)[0],
+			)
+		})
+
+		it("the Search-selected entity batch re-checks the event lifecycle on the hydrated document", async () => {
+			const f = fixture(async () => [])
+			await consolidateMemory({
+				db: f.db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { entitySet: ["Acme"] },
+			})
+			const pipeline = (
+				f.events.aggregate.mock.calls[0] as unknown as [
+					Array<{ $match?: Record<string, unknown> }>,
+				]
+			)[0]
+			expectLiveOnly(pipeline[1].$match as Record<string, unknown>)
+		})
+	})
+
+	it("a STALE events text index in the run's snapshot fails the run typed and never runs the $search (#122 R2)", async () => {
+		const f = fixture(async () => [])
+		const health = createIndexHealthSource({
+			prefix: "test_",
+			patch: { events_text: { status: "STALE" } },
+		})
+
+		await expect(
+			runWithIndexHealth(health, () =>
+				consolidateMemory({
+					db: f.db,
+					prefix: "test_",
+					agentId: "agent-1",
+					options: { entitySet: ["Acme"] },
+				}),
+			),
+		).rejects.toMatchObject({
+			name: "SearchLaneError",
+			stage: "index-health",
+			reason: "index-stale",
+		})
+		expect(f.events.aggregate).not.toHaveBeenCalled()
+		const terminal = f.runs.updateOne.mock.calls
+			.map((call) => (call as unknown as [unknown, { $set?: unknown }])[1].$set)
+			.filter(Boolean)
+		expect(terminal).toEqual([expect.objectContaining({ status: "failed" })])
+	})
+
+	it("fails the run with a typed Search error, never an empty batch, when the $search stage fails", async () => {
+		const failure = new Error("mongot unavailable")
+		const f = fixture(async () => {
+			throw failure
+		})
+		const outcome = consolidateMemory({
+			db: f.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { entitySet: ["Acme"] },
+		})
+		await expect(outcome).rejects.toBeInstanceOf(SearchLaneError)
+		await expect(outcome).rejects.toMatchObject({ stage: "atlas-search" })
+		const terminal = f.runs.updateOne.mock.calls
+			.map((call) => (call as unknown as [unknown, { $set?: unknown }])[1].$set)
+			.filter(Boolean)
+		expect(terminal).toEqual([
+			expect.objectContaining({
+				status: "failed",
+				error: expect.stringContaining("atlas-search"),
+			}),
+		])
+		expect(terminal).not.toContainEqual(
+			expect.objectContaining({ status: "completed" }),
+		)
+	})
+})
+
+describe("consolidation runs on one search ledger", () => {
+	it("charges the entity search to the run ledger and records its snapshot on the run row", async () => {
+		const f = fixture(async () => [])
+		await consolidateMemory({
+			db: f.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { entitySet: ["Acme"], maxEvents: 5 },
+		})
+		const update = (
+			f.runs.updateOne.mock.calls[0] as unknown as [
+				unknown,
+				{ $set: { status: string; searchBudget: Record<string, unknown> } },
+			]
+		)[1].$set
+		expect(update.status).toBe("completed")
+		expect(update.searchBudget).toMatchObject({
+			accounting: "engine-query-work",
+			aggregations: 1,
+			embeds: 0,
+			maxAggregations: 205,
+			maxEmbeds: 205,
+		})
+	})
+
+	it("joins an enclosing job ledger instead of opening a second one", async () => {
+		const f = fixture(async () => [])
+		const jobLedger = openSearchBudget({ maxAggregations: 50, maxEmbeds: 50 })
+		let inside: unknown
+		await jobLedger.run(async () => {
+			await consolidateMemory({
+				db: f.db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { entitySet: ["Acme"] },
+			})
+			inside = getSearchBudgetSnapshot()
+		})
+		const update = (
+			f.runs.updateOne.mock.calls[0] as unknown as [
+				unknown,
+				{
+					$set: {
+						searchBudget: { aggregations: number; maxAggregations: number }
+					}
+				},
+			]
+		)[1].$set
+		expect(update.searchBudget.maxAggregations).toBe(50)
+		expect(update.searchBudget.aggregations).toBe(1)
+		expect(jobLedger.snapshot()).toEqual(inside)
+		expect(jobLedger.snapshot().aggregations).toBe(1)
+	})
+
+	it("denies entity-search work past the ledger limit with a typed budget error", async () => {
+		const f = fixture(async () => [])
+		const jobLedger = openSearchBudget({ maxAggregations: 0, maxEmbeds: 0 })
+		await expect(
+			jobLedger.run(() =>
+				consolidateMemory({
+					db: f.db,
+					prefix: "test_",
+					agentId: "agent-1",
+					options: { entitySet: ["Acme"] },
+				}),
+			),
+		).rejects.toMatchObject({ stage: "atlas-search" })
+		expect(f.events.aggregate).not.toHaveBeenCalled()
+	})
+})
+
+describe("consolidator provider resolution", () => {
+	it("throws the typed config error before any run is claimed when a configured provider cannot be resolved", async () => {
+		seams.provider.mockImplementation(() => {
+			throw new EnrichmentConfigError("MEMONGO_ENRICHMENT_MODEL is missing")
+		})
+		const f = fixture(async () => [])
+		await expect(
+			consolidateMemory({
+				db: f.db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { entitySet: ["Acme"] },
+			}),
+		).rejects.toBeInstanceOf(EnrichmentConfigError)
+		expect(f.runs.findOneAndUpdate).not.toHaveBeenCalled()
+		expect(f.runs.updateOne).not.toHaveBeenCalled()
+		expect(f.events.aggregate).not.toHaveBeenCalled()
+	})
+})

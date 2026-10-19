@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto"
-import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
-import { settledFailureMeta } from "./query-diagnostics.js"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import type { MemoryScope } from "@memongo/lib"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 import type { StructuredMemoryEntry } from "./mongodb-structured-memory.js"
 
 /**
@@ -14,11 +16,10 @@ import type { StructuredMemoryEntry } from "./mongodb-structured-memory.js"
  *   - induction: probable generalizations across the given facts
  *
  * Both return raw candidates only; the caller is responsible for scope tagging,
- * dedup, and promotion policy. Every path degrades to an empty result rather
- * than throwing, so a missing/misbehaving LLM never breaks a consolidation run.
+ * dedup, and promotion policy. A provider or parse failure throws (the
+ * provider's own typed error, or EnrichmentParseError); an empty list means the
+ * model reasoned and found nothing, never that reasoning failed.
  */
-
-const log = createSubsystemLogger("memory:mongodb:consolidation-reasoning")
 
 // A single reasoned fact derived from existing memories.
 export type ReasonedFact = {
@@ -69,16 +70,18 @@ function parseReasonedFacts(
 			.replace(/\n?```\s*$/i, "")
 		parsed = JSON.parse(stripped)
 	} catch {
-		log.warn("consolidation reasoning JSON parse failed", {
-			kind,
-			preview: content.slice(0, 200),
-		})
-		return []
+		throw new EnrichmentParseError(`consolidation ${kind} JSON parse failed`)
 	}
 
-	if (!parsed || typeof parsed !== "object") return []
-	const rawFacts = (parsed as Record<string, unknown>).facts
-	if (!Array.isArray(rawFacts)) return []
+	const rawFacts =
+		parsed && typeof parsed === "object"
+			? (parsed as Record<string, unknown>).facts
+			: undefined
+	if (!Array.isArray(rawFacts)) {
+		throw new EnrichmentParseError(
+			`consolidation ${kind} response has no facts list`,
+		)
+	}
 
 	const result: ReasonedFact[] = []
 	for (const entry of rawFacts) {
@@ -111,30 +114,20 @@ async function reasonOverMemories(params: {
 		return []
 	}
 
-	let content: string
-	try {
-		const response = await params.provider.chatCompletion({
-			model: params.model,
-			messages: [
-				{ role: "system", content: params.systemPrompt },
-				{
-					role: "user",
-					content: `Known facts:\n${facts.map((f) => `- ${f}`).join("\n")}`,
-				},
-			],
-			responseFormat: { type: "json_object" },
-			maxTokens: MAX_TOKENS,
-		})
-		content = response.content
-	} catch (err) {
-		log.warn("consolidation reasoning LLM call failed", {
-			kind: params.kind,
-			...settledFailureMeta(err),
-		})
-		return []
-	}
+	const response = await params.provider.chatCompletion({
+		model: params.model,
+		messages: [
+			{ role: "system", content: params.systemPrompt },
+			{
+				role: "user",
+				content: `Known facts:\n${facts.map((f) => `- ${f}`).join("\n")}`,
+			},
+		],
+		responseFormat: { type: "json_object" },
+		maxTokens: MAX_TOKENS,
+	})
 
-	return parseReasonedFacts(content, params.kind)
+	return parseReasonedFacts(response.content, params.kind)
 }
 
 export async function deduceFactsFromMemories(params: {

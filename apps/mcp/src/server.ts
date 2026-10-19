@@ -5,7 +5,7 @@ import {
 	CallToolRequestSchema,
 	ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
-import { MemongoClient } from "@memongo/client"
+import { MemongoClient, MemongoClientError } from "@memongo/client"
 import type {
 	MemongoProcedureLifecyclePatch,
 	MemongoProcedureStableHandle,
@@ -103,6 +103,22 @@ function readScopeArg(
 		return scope
 	}
 	throw new Error("scope must be session|user|agent|workspace|tenant|global")
+}
+
+/**
+ * M2 T13: tenant-confined reads take the full tenant identity from the tool
+ * arguments; an absent part is a tool error, never a read across every scope.
+ */
+function readTenantArgs(args: Record<string, unknown>): {
+	scope: MemoryScopeValue
+	scopeRef: string
+} {
+	const scope = readScopeArg(args)
+	const scopeRef = typeof args.scopeRef === "string" ? args.scopeRef.trim() : ""
+	if (!scope || !scopeRef) {
+		throw new Error("scope and scopeRef are required")
+	}
+	return { scope, scopeRef }
 }
 
 /**
@@ -351,21 +367,52 @@ function readKbFilterArg(args: Record<string, unknown>):
 	}
 }
 
+class McpArgumentError extends Error {
+	readonly code = "VALIDATION_ERROR"
+}
+
 function readFusionMethodArg(
 	args: Record<string, unknown>,
-): "scoreFusion" | "rankFusion" | "js-merge" | undefined {
+): "scoreFusion" | "rankFusion" | undefined {
 	const fusionMethod = args.fusionMethod
 	if (fusionMethod === undefined) {
 		return undefined
 	}
-	if (
-		fusionMethod === "scoreFusion" ||
-		fusionMethod === "rankFusion" ||
-		fusionMethod === "js-merge"
-	) {
+	if (fusionMethod === "scoreFusion" || fusionMethod === "rankFusion") {
 		return fusionMethod
 	}
-	throw new Error("fusionMethod must be scoreFusion|rankFusion|js-merge")
+	throw new McpArgumentError("fusionMethod must be scoreFusion|rankFusion")
+}
+
+function readSearchConfigArg(
+	args: Record<string, unknown>,
+): Parameters<MemongoMcpClient["searchDetailed"]>[0]["searchConfig"] {
+	const searchConfig = args.searchConfig
+	if (searchConfig !== null && typeof searchConfig === "object") {
+		readFusionMethodArg(searchConfig as Record<string, unknown>)
+	}
+	return searchConfig as Parameters<
+		MemongoMcpClient["searchDetailed"]
+	>[0]["searchConfig"]
+}
+
+function toolErrorPayload(err: unknown) {
+	const message = err instanceof Error ? err.message : String(err)
+	if (err instanceof MemongoClientError) {
+		return {
+			error: message,
+			status: err.status,
+			...(err.code ? { code: err.code } : {}),
+			...(err.outcomes ? { outcomes: err.outcomes } : {}),
+			// M2 review D3: what the failed operation had already committed.
+			...(err.commitState ? { commitState: err.commitState } : {}),
+			...(err.commit ? { commit: err.commit } : {}),
+		}
+	}
+	if (err instanceof McpArgumentError) {
+		return { error: message, code: err.code }
+	}
+	return { error: message }
 }
 
 function jsonResult(payload: unknown, isError = false) {
@@ -672,8 +719,7 @@ export async function handleToolCall(
 			const out = await memongo.recallConversation({
 				query: typeof args.query === "string" ? args.query : undefined,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope: readScopeArg(args),
-				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
+				...readTenantArgs(args),
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
 				roles,
@@ -831,6 +877,7 @@ export async function handleToolCall(
 			const out = await memongo.traceChain({
 				factId: args.factId,
 				collection: readChainCollectionArg(args),
+				...readTenantArgs(args),
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				maxDepth: typeof args.maxDepth === "number" ? args.maxDepth : undefined,
 			})
@@ -912,9 +959,7 @@ export async function handleToolCall(
 					typeof args.maxPasses === "number" ? args.maxPasses : undefined,
 				returnPlan:
 					typeof args.returnPlan === "boolean" ? args.returnPlan : undefined,
-				searchConfig: args.searchConfig as Parameters<
-					MemongoMcpClient["searchDetailed"]
-				>[0]["searchConfig"],
+				searchConfig: readSearchConfigArg(args),
 			})
 			return jsonMemoryResult(out)
 		}
@@ -1028,6 +1073,7 @@ export async function handleToolCall(
 				)
 			}
 			const out = await memongo.listQuarantined({
+				...readTenantArgs(args),
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				status:
 					args.status === "pending-review" ||
@@ -1261,8 +1307,7 @@ export async function handleToolCall(
 		}
 		throw new Error(`unknown tool: ${name}`)
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
-		return jsonResult({ error: message }, true)
+		return jsonResult(toolErrorPayload(err), true)
 	}
 }
 

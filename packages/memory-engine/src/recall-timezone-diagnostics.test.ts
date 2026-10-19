@@ -2,7 +2,8 @@ import type { Collection, Db, Document } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }))
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		warn,
 		info: vi.fn(),
@@ -26,6 +27,7 @@ async function recall(timezone?: string) {
 		prefix: "test_",
 		request: {
 			agentId: "a1",
+			...TENANT,
 			timezone,
 			startTime: "2026-04-08",
 			endTime: "2026-04-08",
@@ -35,22 +37,19 @@ async function recall(timezone?: string) {
 	return { response, filter: find.mock.calls[0]?.[0] as Document | undefined }
 }
 
+const TENANT = { scope: "agent", scopeRef: "agent:a1" } as const
+
 describe("invalid recall timezone diagnostics", () => {
 	beforeEach(() => vi.clearAllMocks())
 	it.each([
 		"Mars/Olympus",
 		`private-timezone-marker-${"x".repeat(100_000)}`,
-	])("omits caller text and retains UTC fallback (case %#)", async (timezone) => {
-		const { response, filter } = await recall(timezone)
-		expect(warn).toHaveBeenCalledExactlyOnceWith(
-			"invalid conversation recall timezone, falling back to UTC",
-		)
-		expect(JSON.stringify(warn.mock.calls)).not.toContain(timezone)
-		expect(filter?.timestamp).toEqual({
-			$gte: new Date("2026-04-08T00:00:00Z"),
-			$lte: new Date("2026-04-08T23:59:59.999Z"),
-		})
-		expect(response.metadata.searchMethod).toBe("standard")
+	])("rejects an invalid timezone with a constant message and no read (case %#)", async (timezone) => {
+		const failure = await recall(timezone).catch((error: unknown) => error)
+		expect(failure).toBeInstanceOf(Error)
+		expect((failure as Error).message).toBe("invalid timezone")
+		expect(warn).not.toHaveBeenCalled()
+		expect(vi.mocked(eventsCollection)().find).not.toHaveBeenCalled()
 	})
 	it.each([
 		undefined,

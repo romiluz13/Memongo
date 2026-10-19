@@ -149,6 +149,8 @@ describe("getUnconsolidatedEvents", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		const result = await getUnconsolidatedEvents({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -157,6 +159,8 @@ describe("getUnconsolidatedEvents", () => {
 		expect(result).toHaveLength(1)
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			consolidatedAt: { $exists: false },
 			// P4.4.1: expired events are hidden until the TTL sweep runs.
 			$or: [
@@ -207,6 +211,8 @@ describe("getUnconsolidatedEvents", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		await getUnconsolidatedEvents({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -247,6 +253,8 @@ describe("getSessionEventsWithBound", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		await getSessionEventsWithBound({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -267,6 +275,8 @@ describe("getSessionEventsWithBound", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		await getSessionEventsWithBound({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -286,6 +296,8 @@ describe("getSessionEventsWithBound", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		await getSessionEventsWithBound({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -319,6 +331,8 @@ describe("getSessionEventsWithBound", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		const result = await getSessionEventsWithBound({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -362,6 +376,8 @@ describe("getSessionEventsWithBound", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		const result = await getSessionEventsWithBound({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -386,6 +402,8 @@ describe("getSessionEventsWithBound", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		await getSessionEventsWithBound({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-99",
@@ -521,6 +539,8 @@ describe("event TTL expiration (P4.4.1)", () => {
 		const start = new Date("2026-08-01T00:00:00.000Z")
 		const end = new Date("2026-08-03T00:00:00.000Z")
 		await getEventsByTimeRange({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -544,6 +564,8 @@ describe("event TTL expiration (P4.4.1)", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		await getUnconsolidatedEvents({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",

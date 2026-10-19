@@ -12,11 +12,14 @@ Run from repo root:
 
 ```bash
 bun install
+bun run check-no-fallbacks
 bun run check-types
 bun run lint
 bun run build
 bun run test
 ```
+
+`check-no-fallbacks` scans the source for the paths the search contract removed: BSON `$regex` and `RegExp` values in content finds, `$text`, removed configuration keys and aliases, and JavaScript fusion entry points. Each exception is an entry with a file and a reason in `scripts/ci/check-no-fallbacks.ts`.
 
 ### 2. `api-contract`
 
@@ -39,7 +42,7 @@ This lane verifies built `dist` entrypoints, tarball contents, workspace-depende
 
 ### 4. `live-core`
 
-Use a real MongoDB stack for the core live path.
+Use a real MongoDB stack for the core live path. Before running it, run `bun run --filter @memongo/api preflight` with the same environment. It must exit 0; a non-zero exit names each unmet boot requirement (MongoDB 8.3 or later, Search, Automated Embedding, the required indexes). See the [deployment contract](self-host.md#deployment-contract).
 
 Managed Atlas cloud is the control lane for serious benchmark and release validation:
 

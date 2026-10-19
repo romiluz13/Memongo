@@ -8,10 +8,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const search = vi.fn()
 const searchKB = vi.fn()
+const requestCapabilities = vi.fn()
 
 vi.mock("@memongo/memory-engine", () => ({
 	getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
-		manager: { agentId, search, searchKB },
+		manager: { agentId, search, searchKB, requestCapabilities },
 		error: null,
 	})),
 	closeAllMemorySearchManagers: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock("./memory-config.js", () => ({
 
 import type { SearchOutcomeSummary } from "./memongo-bridge.js"
 import {
+	memongoBridgeCapabilities,
 	memongoBridgeSearchKBWithDegradation,
 	memongoBridgeSearchWithDegradation,
 } from "./memongo-bridge.js"
@@ -69,6 +71,7 @@ const FAILED: SearchOutcomeSummary = {
 beforeEach(() => {
 	search.mockReset()
 	searchKB.mockReset()
+	requestCapabilities.mockReset()
 })
 
 describe("bridge search outcome passthrough (#101)", () => {
@@ -148,7 +151,7 @@ describe("bridge search outcome passthrough (#101)", () => {
 		expect(fast.outcomes).toEqual(FAILED)
 	})
 
-	it("returns the KB summary alongside a vector-lane-skipped marker", async () => {
+	it("returns the KB partial summary with its hits and no degradation marker", async () => {
 		const kbPartial: SearchOutcomeSummary = {
 			status: "partial",
 			lanes: [
@@ -163,11 +166,6 @@ describe("bridge search outcome passthrough (#101)", () => {
 		}
 		const hit = { path: "kb/a", score: 1 }
 		searchKB.mockImplementation(async (_q: string, opts: Sinks) => {
-			opts.onDegradation?.({
-				kind: "throttled",
-				scope: "vector-lane-skipped",
-				retryAfterMs: 50,
-			})
 			opts.onOutcomes?.(kbPartial)
 			return [hit]
 		})
@@ -176,11 +174,6 @@ describe("bridge search outcome passthrough (#101)", () => {
 
 		expect(out).toEqual({
 			results: [hit],
-			degradation: {
-				kind: "throttled",
-				scope: "vector-lane-skipped",
-				retryAfterMs: 50,
-			},
 			outcomes: kbPartial,
 		})
 	})
@@ -199,5 +192,101 @@ describe("bridge search outcome passthrough (#101)", () => {
 		await expect(
 			memongoBridgeSearchKBWithDegradation({ query: "q" }),
 		).rejects.toBe(typed)
+	})
+})
+
+// M2 decision 8: both index-health reasons cross the bridge unchanged, as
+// rows on a partial answer and as the typed rethrow on a failed one.
+describe("bridge carries the index-health reasons (M2)", () => {
+	const STALE_ROW = {
+		lane: "structured",
+		stage: "index-health",
+		outcome: "failed",
+		reason: "index-stale",
+	} as const
+
+	it("returns an index-health row beside a healthy sibling as a partial summary", async () => {
+		const partial: SearchOutcomeSummary = {
+			status: "partial",
+			lanes: [
+				STALE_ROW,
+				{
+					lane: "episodic",
+					stage: "lane",
+					outcome: "ok-empty",
+					reason: "zero-hits",
+				},
+			],
+		}
+		search.mockImplementation(async (_q: string, opts: Sinks) => {
+			opts.onOutcomes?.(partial)
+			return []
+		})
+
+		const out = await memongoBridgeSearchWithDegradation({ query: "q" })
+
+		expect(out).toEqual({ results: [], outcomes: partial })
+	})
+
+	it.each([
+		"index-stale",
+		"index-unavailable",
+	] as const)("rethrows the typed %s failure of a KB search, never an empty answer", async (reason) => {
+		const typed = Object.assign(new Error("search kb failed at index-health"), {
+			name: "SearchLaneError",
+			lane: "kb",
+			stage: "index-health",
+			reason,
+		})
+		searchKB.mockImplementation(async () => {
+			throw typed
+		})
+
+		await expect(
+			memongoBridgeSearchKBWithDegradation({ query: "q" }),
+		).rejects.toBe(typed)
+	})
+
+	it("rethrows the typed index-unavailable failure of a search", async () => {
+		const typed = Object.assign(new Error("search failed at index-health"), {
+			name: "SearchLaneError",
+			stage: "index-health",
+			reason: "index-unavailable",
+		})
+		search.mockImplementation(async () => {
+			throw typed
+		})
+
+		await expect(
+			memongoBridgeSearchWithDegradation({ query: "q" }),
+		).rejects.toBe(typed)
+	})
+})
+
+describe("memongoBridgeCapabilities reads the live request view (M2)", () => {
+	it("returns the manager's per-request capabilities, read on each call", async () => {
+		requestCapabilities
+			.mockResolvedValueOnce({ vectorSearch: false, textSearch: true })
+			.mockResolvedValueOnce({ vectorSearch: true, textSearch: true })
+
+		const during = await memongoBridgeCapabilities({ agentId: "a" })
+		const after = await memongoBridgeCapabilities({ agentId: "a" })
+
+		expect(during).toEqual({ vectorSearch: false, textSearch: true })
+		expect(after).toEqual({ vectorSearch: true, textSearch: true })
+		expect(requestCapabilities).toHaveBeenCalledTimes(2)
+	})
+
+	it("propagates a typed failure instead of returning a capability view", async () => {
+		const typed = Object.assign(new Error("index health failed"), {
+			name: "SearchLaneError",
+			stage: "index-health",
+			reason: "index-unavailable",
+		})
+		requestCapabilities.mockRejectedValue(typed)
+
+		await expect(memongoBridgeCapabilities({ agentId: "a" })).rejects.toBe(
+			typed,
+		)
 	})
 })

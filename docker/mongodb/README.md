@@ -21,7 +21,7 @@ VOYAGE_API_KEY=al-your-atlas-model-api-key ./docker/mongodb/start-preview.sh
 ./docker/mongodb/start-preview.sh stop
 ```
 
-This uses `mongodb/mongodb-atlas-local:preview`, a floating tag. Record the resolved image digest with deployment validation results. The container includes:
+This uses `mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014`, the preview image pinned by digest (the same pin as `docker/docker-compose.yml` and CI). Memongo's startup contract requires MongoDB 8.3 or later, so the older `8.2.6` override is gone; change the digest deliberately and in every file at once. The container includes:
 
 - mongod (single-node replica set)
 - mongot (community search engine)
@@ -61,11 +61,15 @@ startup commands do not perform a retained-data upgrade.
 
 ### Three Deployment Tiers
 
-| Tier           | Description                       | Transactions | Vector Search | Text Search | Auto-Embedding  |
-| -------------- | --------------------------------- | :----------: | :-----------: | :---------: | :-------------: |
-| **standalone** | Single mongod, simplest setup     |      No      |      No       | $text only  |       No        |
-| **replicaset** | Single-node replica set with auth |     Yes      |      No       | $text only  |       No        |
-| **fullstack**  | mongod + mongot (search engine)   |     Yes      |      Yes      |   $search   | Yes (Voyage AI) |
+| Tier           | Description                       | Transactions | Vector Search | Text Search | Auto-Embedding  | Memongo boots |
+| -------------- | --------------------------------- | :----------: | :-----------: | :---------: | :-------------: | :-----------: |
+| **standalone** | Single mongod, simplest setup     |      No      |      No       |    None     |       No        |      No       |
+| **replicaset** | Single-node replica set with auth |     Yes      |      No       |    None     |       No        |      No       |
+| **fullstack**  | mongod + mongot (search engine)   |     Yes      |      Yes      |   $search   | Yes (Voyage AI) |      Yes      |
+
+Memongo requires MongoDB 8.3 or later with Search and Automated Embedding, and
+it refuses to start without them. The `standalone` and `replicaset` tiers stay
+for testing MongoDB itself; Memongo does not run against them.
 
 ## Quick Start
 
@@ -80,10 +84,10 @@ startup commands do not perform a retained-data upgrade.
 # Full stack (recommended) - transactions + vector search + auto-embedding
 ./docker/mongodb/start.sh fullstack
 
-# Replica set only - transactions + $text search
+# Replica set only - transactions, no Search (Memongo refuses to start against it)
 ./docker/mongodb/start.sh replicaset
 
-# Standalone - simplest, no transactions or search
+# Standalone - no transactions, no Search (Memongo refuses to start against it)
 ./docker/mongodb/start.sh standalone
 
 # Stop all services
@@ -219,7 +223,7 @@ starts, and the supervisor panics on its health check.
 ```bash
 # 1. Read the persisted name (start a standalone mongod on the volume)
 docker run --rm -d --name rs-probe -v mongodb_memongo_preview_data:/data/db \
-  -p 27021:27017 --entrypoint mongod mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z \
+  -p 27021:27017 --entrypoint mongod mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014 \
   --dbpath /data/db --bind_ip_all
 mongosh "mongodb://127.0.0.1:27021/?directConnection=true" --quiet \
   --eval 'db.getSiblingDB("local").system.replset.findOne()._id'
@@ -230,7 +234,7 @@ docker run -d --name memongo-preview --hostname <THAT_NAME> -p 27019:27017 \
   -e VOYAGE_API_KEY=al-... -e MONGODB_ATLAS_TELEMETRY_ENABLE=false \
   -v mongodb_memongo_preview_data:/data/db \
   -v mongodb_memongo_preview_config:/data/configdb \
-  mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
+  mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
 ```
 
 Alternatively, discard the volume (`start-preview.sh clean`) and let the new

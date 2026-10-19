@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { ClientSession, Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import { bestEffort } from "./best-effort.js"
 import { isDuplicateKeyError } from "./internal.js"
 import {
 	getEventsByTimeRange,
@@ -14,8 +15,8 @@ import {
 	ErasureGateConflictError,
 	withFencedWrite,
 } from "./mongodb-write-fence.js"
-import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
-import { resolveScopeRef } from "./mongodb-scope.js"
+import { runSearchAggregateWithRetry } from "./mongodb-search.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	type SearchTierOutcomeSink,
 	searchFailureLogFields,
@@ -80,40 +81,6 @@ export type EpisodeSummarizer = (
 	events: Array<{ role: string; body: string; timestamp: Date }>,
 	type?: EpisodeType,
 ) => Promise<EpisodeSummarizerResult>
-
-const EPISODE_QUERY_STOPWORDS = new Set([
-	"a",
-	"an",
-	"and",
-	"for",
-	"happened",
-	"how",
-	"in",
-	"is",
-	"of",
-	"on",
-	"or",
-	"summarize",
-	"the",
-	"to",
-	"what",
-])
-
-function buildEpisodeSearchRegex(query: string): RegExp {
-	const normalized = query.trim()
-	const terms = normalized
-		.toLowerCase()
-		.split(/\s+/)
-		.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
-		.filter((token) => token.length >= 3 && !EPISODE_QUERY_STOPWORDS.has(token))
-	const escapedTerms = Array.from(new Set(terms))
-		.slice(0, 8)
-		.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-	if (escapedTerms.length === 0) {
-		return new RegExp(normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
-	}
-	return new RegExp(escapedTerms.join("|"), "i")
-}
 
 function buildEpisodeSummarizerInput(
 	events: Array<{ role: string; body: string; timestamp: Date }>,
@@ -293,6 +260,15 @@ async function recordEpisodeProjectionRun(params: {
 	})
 }
 
+/** The projection-run row is bookkeeping: a failed write is logged and counted. */
+async function recordEpisodeProjectionRunBestEffort(
+	params: Parameters<typeof recordEpisodeProjectionRun>[0],
+): Promise<void> {
+	await bestEffort("episode-projection-run", () =>
+		recordEpisodeProjectionRun(params),
+	)
+}
+
 // ---------------------------------------------------------------------------
 // Materialize episode from raw events
 // ---------------------------------------------------------------------------
@@ -304,8 +280,8 @@ export async function materializeEpisode(params: {
 	agentId: string
 	type: EpisodeType
 	timeRange: { start: Date; end: Date }
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	summarizer: EpisodeSummarizer
 	/**
 	 * Pre-selected events for this episode. When provided, the time-range
@@ -321,7 +297,11 @@ export async function materializeEpisode(params: {
 		timestamp: Date
 	}>
 }): Promise<Episode | null> {
-	const { db, prefix, agentId, type, timeRange, scope, summarizer } = params
+	const { db, prefix, agentId, type, timeRange, summarizer } = params
+	const { scope, scopeRef } = requireTenantIdentity(
+		"materializeEpisode",
+		params,
+	)
 	const startMs = Date.now()
 	if (
 		params.admission &&
@@ -330,12 +310,6 @@ export async function materializeEpisode(params: {
 	)
 		throw new ErasureGateConflictError(agentId)
 	try {
-		const resolvedScope = scope ?? "agent"
-		const scopeRef = resolveScopeRef({
-			scope: resolvedScope,
-			scopeRef: params.scopeRef,
-			agentId,
-		})
 		// 1. Read raw events for the time range — unless the caller already
 		//    selected the exact event set (auto-trigger path).
 		const events =
@@ -346,7 +320,7 @@ export async function materializeEpisode(params: {
 				agentId,
 				start: timeRange.start,
 				end: timeRange.end,
-				scope: resolvedScope,
+				scope,
 				scopeRef,
 			}))
 
@@ -355,7 +329,7 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${events.length} events in range for agent=${agentId}`,
 			)
-			await recordEpisodeProjectionRun({
+			await recordEpisodeProjectionRunBestEffort({
 				db,
 				prefix,
 				admission: params.admission,
@@ -366,7 +340,7 @@ export async function materializeEpisode(params: {
 					itemsProjected: 0,
 					durationMs: Date.now() - startMs,
 				},
-			}).catch(() => {})
+			})
 			return null
 		}
 
@@ -382,7 +356,7 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${summarizerInput.length} conversational events in range for agent=${agentId}`,
 			)
-			await recordEpisodeProjectionRun({
+			await recordEpisodeProjectionRunBestEffort({
 				db,
 				prefix,
 				admission: params.admission,
@@ -393,7 +367,7 @@ export async function materializeEpisode(params: {
 					itemsProjected: 0,
 					durationMs: Date.now() - startMs,
 				},
-			}).catch(() => {})
+			})
 			return null
 		}
 		const {
@@ -426,7 +400,7 @@ export async function materializeEpisode(params: {
 			title,
 			summary,
 			agentId,
-			scope: resolvedScope,
+			scope,
 			scopeRef,
 			timeRange: { start: timeRange.start, end: timeRange.end },
 			sourceEventCount: events.length,
@@ -467,7 +441,7 @@ export async function materializeEpisode(params: {
 		const identityFilter = {
 			agentId,
 			type,
-			scope: resolvedScope,
+			scope,
 			scopeRef,
 			sourceEventsHash,
 		}
@@ -528,7 +502,7 @@ export async function materializeEpisode(params: {
 					db,
 					prefix,
 					agentId,
-					scope: resolvedScope,
+					scope,
 					scopeRef,
 					cap,
 				}
@@ -555,7 +529,7 @@ export async function materializeEpisode(params: {
 			title,
 			summary,
 			agentId,
-			scope: resolvedScope,
+			scope,
 			scopeRef,
 			timeRange: { start: timeRange.start, end: timeRange.end },
 			sourceEventCount: events.length,
@@ -567,7 +541,7 @@ export async function materializeEpisode(params: {
 		log.info(
 			`episode materialized: ${episodeId} type=${type} events=${events.length} agent=${agentId}`,
 		)
-		await recordEpisodeProjectionRun({
+		await recordEpisodeProjectionRunBestEffort({
 			db,
 			prefix,
 			admission: params.admission,
@@ -578,10 +552,10 @@ export async function materializeEpisode(params: {
 				itemsProjected: 1,
 				durationMs: Date.now() - startMs,
 			},
-		}).catch(() => {})
+		})
 		return episode
 	} catch (err) {
-		await recordEpisodeProjectionRun({
+		await recordEpisodeProjectionRunBestEffort({
 			db,
 			prefix,
 			admission: params.admission,
@@ -592,7 +566,7 @@ export async function materializeEpisode(params: {
 				itemsProjected: 0,
 				durationMs: Date.now() - startMs,
 			},
-		}).catch(() => {})
+		})
 		log.error(
 			`materializeEpisode failed: ${err instanceof Error ? err.message : String(err)}`,
 		)
@@ -611,29 +585,24 @@ export async function getEpisodesByTimeRange(params: {
 	start: Date
 	end: Date
 	type?: EpisodeType
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<Episode[]> {
-	const { db, prefix, agentId, start, end, type, scope, scopeRef } = params
+	const { db, prefix, start, end, type } = params
+	const tenant = requireTenantIdentity("getEpisodesByTimeRange", params)
 	try {
 		const col = episodesCollection(db, prefix)
 
 		// Overlap condition: episode.timeRange.start <= query.end AND episode.timeRange.end >= query.start
 		// Status filter: $ne "deleted" matches docs where field is absent OR any value other than "deleted"
 		const filter: Document = {
-			agentId,
+			...tenant,
 			"timeRange.start": { $lte: end },
 			"timeRange.end": { $gte: start },
 			status: { $ne: "deleted" },
 		}
 		if (type) {
 			filter.type = type
-		}
-		if (scope) {
-			filter.scope = scope
-		}
-		if (scopeRef) {
-			filter.scopeRef = scopeRef
 		}
 
 		// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
@@ -661,21 +630,20 @@ export async function getEpisodesByType(params: {
 	prefix: string
 	agentId: string
 	type: EpisodeType
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<Episode[]> {
-	const { db, prefix, agentId, type, scope, scopeRef, limit } = params
+	const { db, prefix, type, limit } = params
+	const tenant = requireTenantIdentity("getEpisodesByType", params)
 	try {
 		const col = episodesCollection(db, prefix)
 
 		const docs = await col
 			.find({
-				agentId,
+				...tenant,
 				type,
 				status: { $ne: "deleted" },
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
 			})
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ updatedAt: -1 })
@@ -692,43 +660,43 @@ export async function getEpisodesByType(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Search episodes by regex on summary/title
+// Search episodes ($search text on title and summary)
 // ---------------------------------------------------------------------------
 
+/**
+ * Episode search: one `$search` `text` query over the analyzed `title` and
+ * `summary` fields of the episode Search index. A document matches when it
+ * shares an analyzed term with the query; a substring or a near-spelling does
+ * not match.
+ *
+ * The Search stage only selects candidates: owner, scope, status and the time
+ * window are checked again on the hydrated document before the limit. A
+ * Search failure is a typed failure, never a different lookup.
+ */
 export async function searchEpisodes(params: {
 	db: Db
 	prefix: string
 	query: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	timeRange?: { start: Date; end: Date }
 	limit?: number
-	/**
-	 * P3.8: detected textSearch capability. When true, lookup routes through
-	 * the episode_autocomplete $search index; when false/omitted (no mongot),
-	 * the escaped $regex tier runs as the planned lookup instead of paying a
-	 * failed $search round trip per lookup.
-	 */
-	textSearchAvailable?: boolean
 	/** #101: per-call sink for this lane's tier outcome rows. */
 	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<Episode[]> {
-	const { db, prefix, query, agentId, scope, scopeRef, timeRange, limit } =
-		params
-	const report = (
-		stage: "atlas-search" | "episode-search",
-		count: number,
-	): void => {
+	const { db, prefix, query, timeRange, limit } = params
+	const tenant: Document = requireTenantIdentity("searchEpisodes", params)
+	const report = (count: number): void => {
 		params.onTierOutcome?.({
-			stage,
+			stage: "atlas-search",
 			outcome: count > 0 ? "ok" : "ok-empty",
 			...(count > 0 ? {} : { reason: "zero-hits" as const }),
 			resultCount: count,
 		})
 	}
 
-	// Guard: empty/whitespace-only query would produce a match-all regex
+	// Guard: an empty or whitespace-only query has nothing to search for.
 	if (!query.trim()) {
 		params.onTierOutcome?.({
 			stage: "episode-search",
@@ -740,88 +708,39 @@ export async function searchEpisodes(params: {
 
 	const col = episodesCollection(db, prefix)
 
-	// P3.8: serve episode lookup from the purpose-built episode_autocomplete
-	// search index when mongot is present; the unanchored case-insensitive
-	// $regex below is the planned tier only where textSearch is absent.
-	// #101 G1/R8: a $search error is a typed failure, never a regex fallback.
-	if (params.textSearchAvailable === true) {
-		try {
-			const searchFilters: Document[] = [
-				{ equals: { path: "agentId", value: agentId } },
-			]
-			if (scope) {
-				searchFilters.push({ equals: { path: "scope", value: scope } })
-			}
-			if (scopeRef) {
-				searchFilters.push({ equals: { path: "scopeRef", value: scopeRef } })
-			}
-			const postMatch: Document = { status: { $ne: "deleted" } }
-			if (timeRange) {
-				postMatch["timeRange.start"] = { $lte: timeRange.end }
-				postMatch["timeRange.end"] = { $gte: timeRange.start }
-			}
-			const pipeline: Document[] = [
-				{
-					$search: {
-						index: "episode_autocomplete",
-						compound: {
-							should: [
-								{ autocomplete: { query, path: "title" } },
-								{ autocomplete: { query, path: "summary" } },
-							],
-							filter: searchFilters,
-						},
+	try {
+		const current: Document = { ...tenant, status: { $ne: "deleted" } }
+		if (timeRange) {
+			current["timeRange.start"] = { $lte: timeRange.end }
+			current["timeRange.end"] = { $gte: timeRange.start }
+		}
+		const pipeline: Document[] = [
+			{
+				$search: {
+					index: "episode_autocomplete",
+					compound: {
+						must: [{ text: { query, path: ["title", "summary"] } }],
+						filter: Object.entries(tenant).map(([path, value]) => ({
+							equals: { path, value },
+						})),
 					},
 				},
-				{ $match: postMatch },
-				{ $limit: limit ?? 50 },
-			]
-			const docs = await col
-				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-				.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-				.toArray()
-			report("atlas-search", docs.length)
-			return docs as unknown as Episode[]
-		} catch (err) {
-			const typed = toTypedSearchError(err, "atlas-search")
-			log.warn("searchEpisodes $search failed", searchFailureLogFields(typed))
-			throw typed
-		}
-	}
-
-	try {
-		// Use a keyword-aware regex so summary-style queries can reopen episodes
-		// without requiring the full prompt to appear verbatim.
-		const regex = buildEpisodeSearchRegex(query)
-
-		const filter: Document = {
-			agentId,
-			status: { $ne: "deleted" },
-			$or: [{ title: { $regex: regex } }, { summary: { $regex: regex } }],
-		}
-		if (scope) {
-			filter.scope = scope
-		}
-		if (scopeRef) {
-			filter.scopeRef = scopeRef
-		}
-		if (timeRange) {
-			filter["timeRange.start"] = { $lte: timeRange.end }
-			filter["timeRange.end"] = { $gte: timeRange.start }
-		}
-
-		const docs = await col
-			.find(filter)
-			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
-			.sort({ updatedAt: -1 })
-			.limit(limit ?? 50)
-			.toArray()
-
-		report("episode-search", docs.length)
+			},
+			// The compound filter runs against the indexed copy, which can lag
+			// the latest write.
+			{ $match: current },
+			{ $limit: limit ?? 50 },
+		]
+		// #122 R1: the charged executor charges this search to the request
+		// ledger (one aggregation) and carries the user-search maxTimeMS.
+		const docs = await runSearchAggregateWithRetry(col, pipeline, {
+			stage: "atlas-search",
+		})
+		report(docs.length)
 		return docs as unknown as Episode[]
 	} catch (err) {
-		const typed = toTypedSearchError(err, "episode-search")
-		log.error("searchEpisodes failed", searchFailureLogFields(typed))
+		const typed = toTypedSearchError(err, "atlas-search")
+		log.warn("searchEpisodes $search failed", searchFailureLogFields(typed))
 		throw typed
 	}
 }
@@ -835,13 +754,16 @@ export async function updateEpisodeStatus(params: {
 	prefix: string
 	episodeId: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	status: EpisodeStatus
 }): Promise<boolean> {
-	const { db, prefix, episodeId, agentId, status } = params
+	const { db, prefix, episodeId, status } = params
+	const tenant = requireTenantIdentity("updateEpisodeStatus", params)
 	try {
 		const col = episodesCollection(db, prefix)
 		const result = await col.updateOne(
-			{ episodeId, agentId },
+			{ episodeId, ...tenant },
 			{ $set: { status, updatedAt: new Date() } },
 		)
 		return result.matchedCount > 0
@@ -862,10 +784,13 @@ export async function getEpisodesByIds(params: {
 	prefix: string
 	episodeIds: string[]
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	/** @deprecated searchV2 owns ids-only projection; this reopen helper always returns full episodes. */
 	projection?: "full" | "ids-only"
 }): Promise<Episode[]> {
-	const { db, prefix, episodeIds, agentId } = params
+	const { db, prefix, episodeIds } = params
+	const tenant = requireTenantIdentity("getEpisodesByIds", params)
 	if (episodeIds.length === 0) {
 		return []
 	}
@@ -874,7 +799,7 @@ export async function getEpisodesByIds(params: {
 		const docs = await col
 			.find({
 				episodeId: { $in: episodeIds },
-				agentId,
+				...tenant,
 				status: { $ne: "deleted" },
 			})
 			.toArray()
@@ -908,15 +833,14 @@ async function hasRecentEpisodeWrite(params: {
 	prefix: string
 	agentId: string
 	since: Date
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<boolean> {
+	const tenant = requireTenantIdentity("hasRecentEpisodeWrite", params)
 	const recent = await episodesCollection(params.db, params.prefix)
 		.find({
-			agentId: params.agentId,
+			...tenant,
 			status: { $ne: "deleted" },
-			...(params.scope ? { scope: params.scope } : {}),
-			...(params.scopeRef ? { scopeRef: params.scopeRef } : {}),
 			// updatedAt is set on both insert and re-materialization, so this
 			// measures episode write recency rather than source-event recency.
 			updatedAt: { $gte: params.since },
@@ -944,22 +868,19 @@ const autoEpisodeNegativeMemo = new Map<string, number>()
 function autoEpisodeNegativeMemoKey(params: {
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): string {
-	return [
-		params.prefix,
-		params.agentId,
-		params.scope ?? "",
-		params.scopeRef ?? "",
-	].join("|")
+	return [params.prefix, params.agentId, params.scope, params.scopeRef].join(
+		"|",
+	)
 }
 
 function hasFreshNegativeMemo(params: {
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	now?: number
 }): boolean {
 	const memoizedAt = autoEpisodeNegativeMemo.get(
@@ -973,8 +894,8 @@ function hasFreshNegativeMemo(params: {
 function rememberNegativeMemo(params: {
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	now?: number
 }): void {
 	autoEpisodeNegativeMemo.set(
@@ -1012,8 +933,8 @@ export async function checkAutoEpisodeTriggers(params: {
 	prefix: string
 	agentId: string
 	summarizer: EpisodeSummarizer
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	sessionGapMinutes?: number
 	maxEventsWithoutEpisode?: number
 	rateLimitMinutes?: number
@@ -1024,13 +945,16 @@ export async function checkAutoEpisodeTriggers(params: {
 		prefix,
 		agentId,
 		summarizer,
-		scope,
-		scopeRef,
 		sessionGapMinutes = 30,
 		maxEventsWithoutEpisode = 50,
 		rateLimitMinutes = 60,
 		force = false,
 	} = params
+
+	const { scope, scopeRef } = requireTenantIdentity(
+		"checkAutoEpisodeTriggers",
+		params,
+	)
 
 	if (
 		params.admission &&
@@ -1052,8 +976,8 @@ export async function checkAutoEpisodeTriggers(params: {
 				prefix,
 				agentId,
 				since: rateLimitWindow,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
+				scope,
+				scopeRef,
 			})
 			if (rateLimited) {
 				return { triggered: false, reason: "rate_limited" }

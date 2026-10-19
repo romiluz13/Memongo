@@ -8,9 +8,16 @@ import {
 	computeOverallV2Health,
 	getV2Status,
 } from "./mongodb-manager.js"
+import { runWithIndexHealth } from "./mongodb-index-health.js"
 import { MongoDBManagerAdminOps } from "./mongodb-manager-admin.js"
 import { resolveMemoryJobBacklogAlertThreshold } from "./mongodb-manager-jobs.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
+import { buildRequiredIndexManifest } from "./mongodb-required-index-manifest.js"
+import {
+	type FakeSearchIndex,
+	createFakeSearchDb,
+	readyIndex,
+} from "./test-helpers/fake-search-db.js"
 import { fakeDb, fakePrefix } from "./test-helpers/manager-test-kit.js"
 
 const { mocked } = vi
@@ -18,10 +25,6 @@ const { mocked } = vi
 vi.mock("./mongodb-schema-collections.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./mongodb-schema-collections.js")>()),
 	costLedgerCollection: vi.fn(),
-}))
-
-vi.mock("./mongodb-schema-capabilities.js", () => ({
-	probeSearchLaneReadiness: vi.fn(),
 }))
 
 vi.mock("./mongodb-events.js", async () =>
@@ -88,10 +91,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	).queryRewriterModuleMock(),
 )
 
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
-)
-
 vi.mock("./mongodb-lane-coverage.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).laneCoverageModuleMock(),
 )
@@ -133,9 +132,6 @@ const {
 	checkChunkEventOrphans,
 	checkEpisodeEventOrphans,
 } = await import("./mongodb-schema-integrity.js")
-const { probeSearchLaneReadiness } = await import(
-	"./mongodb-schema-capabilities.js"
-)
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 
 const { costLedgerCollection } = await import("./mongodb-schema-collections.js")
@@ -758,28 +754,68 @@ describe("getV2Status", () => {
 		})
 	})
 })
-
 // ---------------------------------------------------------------------------
-// C-016: runtime capability re-verification — live probes + status surface
+// C-016 + M2 decision 8: live index health — probes and status surface
 // ---------------------------------------------------------------------------
 
-describe("MongoDBManagerAdminOps — live probes and status surface (C-016)", () => {
+describe("MongoDBManagerAdminOps — live index health probes and status surface (C-016, M2)", () => {
+	const PREFIX = "test_"
+	const MANIFEST = buildRequiredIndexManifest({
+		prefix: PREFIX,
+		serverVersionArray: [8, 3, 0, 0],
+		env: {} as NodeJS.ProcessEnv,
+	})
+	const CHUNKS = `${PREFIX}chunks`
+	const CHUNKS_VECTOR = `${PREFIX}chunks_vector`
+	const CHUNKS_TEXT = `${PREFIX}chunks_text`
+	const FACTS = {
+		scoreFusion: true,
+		rankFusion: true,
+		storedSource: false,
+		vectorIndexMethod: false,
+	}
+
 	type FakeHostOverrides = {
-		capabilities?: { vectorSearch: boolean; textSearch: boolean }
 		embeddingMode?: string
 		deploymentProfile?: string
 		changeStreamWatcher?: { liveness: unknown } | null
+		listError?: (collection: string) => Error | undefined
 	}
 
-	function buildHost(overrides: FakeHostOverrides = {}): MongoDBManagerHost {
-		return {
-			db: fakeDb,
-			prefix: fakePrefix,
+	function healthyIndexes(): Record<string, FakeSearchIndex[]> {
+		const byCollection: Record<string, FakeSearchIndex[]> = {}
+		for (const entry of MANIFEST) {
+			byCollection[entry.collectionName] = [
+				...(byCollection[entry.collectionName] ?? []),
+				readyIndex(entry.name, entry.type, entry.definition),
+			]
+		}
+		return byCollection
+	}
+
+	function setStatus(
+		indexes: Record<string, FakeSearchIndex[]>,
+		name: string,
+		patch: Partial<FakeSearchIndex>,
+	) {
+		for (const list of Object.values(indexes)) {
+			for (const index of list) {
+				if (index.name === name) Object.assign(index, patch)
+			}
+		}
+	}
+
+	function build(overrides: FakeHostOverrides = {}) {
+		const fake = createFakeSearchDb({
+			indexes: healthyIndexes(),
+			listError: overrides.listError,
+		})
+		const host = {
+			db: fake.db,
+			prefix: PREFIX,
 			agentId: "agent-1",
-			capabilities: overrides.capabilities ?? {
-				vectorSearch: true,
-				textSearch: true,
-			},
+			deploymentFacts: FACTS,
+			requiredManifest: MANIFEST,
 			config: {
 				mongodb: {
 					embeddingMode: overrides.embeddingMode ?? "automated",
@@ -788,7 +824,26 @@ describe("MongoDBManagerAdminOps — live probes and status surface (C-016)", ()
 				},
 			},
 			changeStreamWatcher: overrides.changeStreamWatcher ?? null,
-		} as unknown as MongoDBManagerHost
+		} as unknown as MongoDBManagerHost & {
+			runIndexHealthRequest: <T>(fn: () => Promise<T>) => Promise<T>
+			requestCapabilities: () => Promise<unknown>
+		}
+		host.runIndexHealthRequest = (fn) =>
+			runWithIndexHealth(
+				{
+					db: fake.db,
+					prefix: PREFIX,
+					manifest: MANIFEST,
+					facts: FACTS,
+				},
+				fn,
+			)
+		const listReads = () =>
+			fake.calls.filter(
+				(call) =>
+					call.op === "aggregate" && "$listSearchIndexes" in call.pipeline[0],
+			)
+		return { ops: new MongoDBManagerAdminOps(host), host, ...fake, listReads }
 	}
 
 	beforeEach(() => {
@@ -810,98 +865,125 @@ describe("MongoDBManagerAdminOps — live probes and status surface (C-016)", ()
 		mocked(getLatestProjectionRun).mockResolvedValue(null)
 		mocked(getLaneCoverage).mockResolvedValue(null)
 		mocked(chunksCollection).mockReturnValue({
-			collectionName: "test_chunks",
+			collectionName: CHUNKS,
 		} as unknown as import("mongodb").Collection<import("mongodb").Document>)
-		// Default live-probe outcome: both lanes healthy.
-		mocked(probeSearchLaneReadiness).mockResolvedValue({
-			vectorSearch: true,
-			textSearch: true,
-		})
 	})
 
-	it("probeVectorAvailability answers from a live index-status round trip, not the boot snapshot", async () => {
-		// Boot snapshot says vector is up; the live probe says mongot died.
-		mocked(probeSearchLaneReadiness).mockResolvedValue({
-			vectorSearch: false,
-			textSearch: true,
-		})
-		const ops = new MongoDBManagerAdminOps(
-			buildHost({ capabilities: { vectorSearch: true, textSearch: true } }),
-		)
+	it("probeVectorAvailability answers from a live index-status read and recovers on the next call", async () => {
+		const { ops, indexes } = build()
+		setStatus(indexes, CHUNKS_VECTOR, { status: "STALE" })
 
 		await expect(ops.probeVectorAvailability()).resolves.toBe(false)
-		expect(probeSearchLaneReadiness).toHaveBeenCalledWith(fakeDb, "test_chunks")
-	})
 
-	it("probeVectorAvailability returns true when the live probe finds the index queryable", async () => {
-		const ops = new MongoDBManagerAdminOps(buildHost())
+		setStatus(indexes, CHUNKS_VECTOR, { status: "READY" })
 		await expect(ops.probeVectorAvailability()).resolves.toBe(true)
-		expect(probeSearchLaneReadiness).toHaveBeenCalledTimes(1)
 	})
 
-	it("probeVectorAvailability skips the live probe when the embedding mode cannot serve vector", async () => {
-		const ops = new MongoDBManagerAdminOps(
-			buildHost({ embeddingMode: "manual" }),
-		)
+	it("probeVectorAvailability skips the index read when the embedding mode cannot serve vector", async () => {
+		const { ops, listReads } = build({ embeddingMode: "manual" })
 
 		await expect(ops.probeVectorAvailability()).resolves.toBe(false)
-		expect(probeSearchLaneReadiness).not.toHaveBeenCalled()
+		expect(listReads()).toHaveLength(0)
 	})
 
-	it("probeEmbeddingAvailability reports live vector-index readiness in automated mode", async () => {
-		mocked(probeSearchLaneReadiness).mockResolvedValue({
-			vectorSearch: false,
-			textSearch: true,
+	it("probeVectorAvailability throws a typed index-unavailable when the metadata read fails", async () => {
+		const { ops } = build({
+			listError: (collection) =>
+				collection === CHUNKS ? new Error("mongot unreachable") : undefined,
 		})
-		const ops = new MongoDBManagerAdminOps(buildHost())
+
+		await expect(ops.probeVectorAvailability()).rejects.toMatchObject({
+			name: "SearchLaneError",
+			stage: "index-health",
+			reason: "index-unavailable",
+		})
+	})
+
+	it("probeEmbeddingAvailability reports live vector-index health in automated mode", async () => {
+		const { ops, indexes } = build()
+		setStatus(indexes, CHUNKS_VECTOR, { status: "BUILDING", queryable: false })
 
 		await expect(ops.probeEmbeddingAvailability()).resolves.toEqual({
 			ok: false,
 			error: "vector search index is not queryable (live probe)",
 		})
 
-		mocked(probeSearchLaneReadiness).mockResolvedValue({
-			vectorSearch: true,
-			textSearch: true,
-		})
+		setStatus(indexes, CHUNKS_VECTOR, { status: "READY", queryable: true })
 		await expect(ops.probeEmbeddingAvailability()).resolves.toEqual({
 			ok: true,
 		})
 	})
 
-	it("noteSearchLaneFailure re-polls readiness (throttled) and surfaces the failure in getDetailedStatus", async () => {
-		let resolveProbe!: (value: {
-			vectorSearch: boolean
-			textSearch: boolean
-		}) => void
-		mocked(probeSearchLaneReadiness).mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					resolveProbe = resolve
-				}),
-		)
-		const ops = new MongoDBManagerAdminOps(buildHost())
-
-		ops.noteSearchLaneFailure("hybrid", new Error("mongot down"))
-		ops.noteSearchLaneFailure("vector", new Error("mongot still down"))
-
-		// Throttled: one re-poll in flight, the second note only records.
-		expect(probeSearchLaneReadiness).toHaveBeenCalledTimes(1)
-
-		resolveProbe({ vectorSearch: false, textSearch: true })
-		await new Promise((resolve) => setImmediate(resolve))
+	it("getDetailedStatus reports each required index live, with the typed reason of an unhealthy one", async () => {
+		const { ops, indexes } = build()
+		setStatus(indexes, CHUNKS_TEXT, { status: "STALE" })
 
 		const status = await ops.getDetailedStatus()
+
 		expect(status.searchLanes).toMatchObject({
-			vectorSearch: false,
-			textSearch: true,
-			lastFailure: {
-				path: "vector",
-				error: "mongot still down",
-			},
+			vectorSearch: true,
+			textSearch: false,
 		})
 		expect(status.searchLanes?.probedAt).toBeInstanceOf(Date)
+		expect(status.searchLanes?.indexes).toHaveLength(MANIFEST.length)
+		expect(
+			status.searchLanes?.indexes.find((index) => index.index === CHUNKS_TEXT),
+		).toEqual({
+			index: CHUNKS_TEXT,
+			collection: CHUNKS,
+			healthy: false,
+			reason: "index-stale",
+			cause: "stale",
+		})
+		expect(
+			status.searchLanes?.indexes.find(
+				(index) => index.index === CHUNKS_VECTOR,
+			),
+		).toMatchObject({ healthy: true })
 		expect(status.changeStream).toBeNull()
+		expect(status.searchLanes).not.toHaveProperty("lastFailure")
+	})
+
+	it("getDetailedStatus recovers on the next call once the index is healthy again", async () => {
+		const { ops, indexes } = build()
+		setStatus(indexes, CHUNKS_TEXT, { status: "STALE" })
+		const during = await ops.getDetailedStatus()
+		setStatus(indexes, CHUNKS_TEXT, { status: "READY" })
+		const after = await ops.getDetailedStatus()
+
+		expect(during.searchLanes?.textSearch).toBe(false)
+		expect(after.searchLanes?.textSearch).toBe(true)
+		expect(after.searchLanes?.indexes.every((index) => index.healthy)).toBe(
+			true,
+		)
+	})
+
+	it("getDetailedStatus reports a failed metadata read per index, never as a healthy lane", async () => {
+		const { ops } = build({
+			listError: (collection) =>
+				collection === CHUNKS ? new Error("mongot unreachable") : undefined,
+		})
+
+		const status = await ops.getDetailedStatus()
+
+		expect(status.searchLanes?.vectorSearch).toBe(false)
+		expect(status.searchLanes?.textSearch).toBe(false)
+		expect(
+			status.searchLanes?.indexes.filter(
+				(index) => index.collection === CHUNKS,
+			),
+		).toEqual([
+			expect.objectContaining({
+				healthy: false,
+				reason: "index-unavailable",
+				cause: "metadata-read-failed",
+			}),
+			expect.objectContaining({
+				healthy: false,
+				reason: "index-unavailable",
+				cause: "metadata-read-failed",
+			}),
+		])
 	})
 
 	it("getDetailedStatus surfaces change-stream watcher liveness", async () => {
@@ -911,29 +993,50 @@ describe("MongoDBManagerAdminOps — live probes and status surface (C-016)", ()
 			reopenAttempts: 3,
 			nextReopenDelayMs: 8000,
 		}
-		const ops = new MongoDBManagerAdminOps(
-			buildHost({ changeStreamWatcher: { liveness } }),
-		)
+		const { ops } = build({ changeStreamWatcher: { liveness } })
 
 		const status = await ops.getDetailedStatus()
 		expect(status.changeStream).toEqual(liveness)
 	})
 
-	it("getDetailedStatus falls back to the boot snapshot before any probe has run", async () => {
-		mocked(probeSearchLaneReadiness).mockResolvedValue({
-			vectorSearch: false,
-			textSearch: false,
+	it("status() reports deployment facts and no boot-snapshot capabilities or search modes", () => {
+		const { host } = build()
+		Object.assign(host, {
+			files: 0,
+			chunks: 0,
+			dirty: false,
+			workspaceDir: "/w",
+			fileCount: 0,
+			chunkCount: 0,
+			relevance: null,
+			config: {
+				mongodb: {
+					deploymentProfile: "atlas-local-preview",
+					embeddingMode: "automated",
+					fusionMethod: "scoreFusion",
+					kb: { enabled: false },
+					collectionPrefix: PREFIX,
+					database: "memongo_test",
+					quantization: "none",
+					relevance: { enabled: false },
+				},
+			},
 		})
-		const ops = new MongoDBManagerAdminOps(
-			buildHost({ capabilities: { vectorSearch: true, textSearch: false } }),
-		)
+		Object.assign(host, {
+			probeEmbeddingModeSupportsVector: () => true,
+		})
 
-		const status = await ops.getDetailedStatus()
-		expect(status.searchLanes).toEqual({
-			vectorSearch: true, // boot snapshot — no probe ran yet
-			textSearch: false,
-			lastFailure: null,
-		})
-		expect(status.searchLanes?.probedAt).toBeUndefined()
+		const status = new MongoDBManagerAdminOps(host).status()
+
+		expect(status.custom).toMatchObject({ deploymentFacts: FACTS })
+		expect(status.custom).not.toHaveProperty("capabilities")
+		expect(status.custom).not.toHaveProperty("searchModes")
+	})
+
+	it("no manager surface keeps a live-capability snapshot of the boot probe", () => {
+		const { ops } = build()
+		expect(ops).not.toHaveProperty("noteSearchLaneFailure")
+		expect(ops).not.toHaveProperty("searchLaneHealth")
+		expect(ops).not.toHaveProperty("lastSearchLaneFailure")
 	})
 })

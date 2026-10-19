@@ -3,6 +3,9 @@ import { describe, it, expect, vi } from "vitest"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { mocked } from "./test-helpers/manager-test-kit.js"
 
+// M2 T13: every tenant locator names its tenant.
+const TENANT_QUERY = "scope=agent&scopeRef=agent%3Aagent-1"
+
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
 )
@@ -43,10 +46,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	(
 		await import("./test-helpers/manager-test-kit.js")
 	).queryRewriterModuleMock(),
-)
-
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
 )
 
 vi.mock("./mongodb-lane-coverage.js", async () =>
@@ -131,19 +130,22 @@ describe("MongoDBMemoryManager conversation recall", () => {
 				db: {} as import("mongodb").Db,
 				prefix: "test_",
 				agentId: "agent-1",
-				capabilities: {
-					vectorSearch: true,
-					textSearch: true,
+				deploymentFacts: {
 					rankFusion: true,
 					storedSource: false,
 					vectorIndexMethod: false,
 					scoreFusion: false,
 				},
+				requiredManifest: [],
 				nativeBitemporalVectorPrefilter: true,
 			},
 		) as MongoDBMemoryManager
 
-		await manager.recallConversation({ query: "deployment" })
+		await manager.recallConversation({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			query: "deployment",
+		})
 
 		expect(recallConversation).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -177,26 +179,70 @@ describe("MongoDBMemoryManager conversation recall", () => {
 				db: {} as import("mongodb").Db,
 				prefix: "test_",
 				agentId: "agent-1",
-				capabilities: {
-					vectorSearch: true,
-					textSearch: true,
+				deploymentFacts: {
 					rankFusion: true,
 					storedSource: false,
 					vectorIndexMethod: false,
 					scoreFusion: false,
 				},
+				requiredManifest: [],
 				nativeBitemporalVectorPrefilter: false,
 				nativeBitemporalPrefilterCheckedAt: 0,
 			},
 		) as MongoDBMemoryManager
 
-		await manager.recallConversation({ query: "deployment" })
+		await manager.recallConversation({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			query: "deployment",
+		})
 
 		expect(recallConversation).toHaveBeenCalledWith(
 			expect.objectContaining({
 				nativeBitemporalVectorPrefilter: true,
 			}),
 		)
+	})
+
+	it("propagates a failed bitemporal prefilter readiness probe instead of disabling the prefilter (G4-77)", async () => {
+		const { recallConversation } = await import(
+			"./mongodb-conversation-recall.js"
+		)
+		const { eventsCollection, isEventsVectorBitemporalPrefilterReady } =
+			await import("./mongodb-schema.js")
+		mocked(recallConversation).mockClear()
+		mocked(isEventsVectorBitemporalPrefilterReady).mockRejectedValue(
+			new Error("$listSearchIndexes failed on test_events"),
+		)
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+				deploymentFacts: {
+					rankFusion: true,
+					storedSource: false,
+					vectorIndexMethod: false,
+					scoreFusion: false,
+				},
+				requiredManifest: [],
+				nativeBitemporalVectorPrefilter: true,
+				nativeBitemporalPrefilterCheckedAt: 0,
+			},
+		) as MongoDBMemoryManager
+
+		await expect(
+			manager.recallConversation({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				query: "deployment",
+			}),
+		).rejects.toThrow("$listSearchIndexes failed on test_events")
+		expect(recallConversation).not.toHaveBeenCalled()
 	})
 })
 
@@ -217,7 +263,7 @@ describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		const result = await ops.readFile({
-			relPath: "structured:preference:editor-theme",
+			relPath: `structured:preference:editor-theme?${TENANT_QUERY}`,
 		})
 
 		expect(result.text).toBe("")
@@ -250,7 +296,7 @@ describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
 
 		const result = await ops.readCanonicalEvent(
 			"evt-expired",
-			"event:evt-expired",
+			`event:evt-expired?${TENANT_QUERY}`,
 		)
 
 		expect(result.text).toBe("")
@@ -291,7 +337,7 @@ describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		await ops.readEpisodeLocator({
-			rawPath: "episode:ep-1?expand=events",
+			rawPath: `episode:ep-1?expand=events&${TENANT_QUERY}`,
 			episodeId: "ep-1",
 			expandEvents: true,
 		})
@@ -544,7 +590,7 @@ describe("MongoDBManagerReadOps relation locator (C-025)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		const result = await ops.readFile({
-			relPath: "relation:ent-1-ent-2-works_on",
+			relPath: `relation:ent-1-ent-2-works_on?${TENANT_QUERY}`,
 		})
 
 		expect(findRelationByLocatorId).toHaveBeenCalledWith(
@@ -570,7 +616,7 @@ describe("MongoDBManagerReadOps relation locator (C-025)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		const result = await ops.readFile({
-			relPath: "relation:ent-1-ent-2?type=works_on&scope=agent",
+			relPath: `relation:ent-1-ent-2?type=works_on&${TENANT_QUERY}`,
 		})
 
 		expect(findRelationByLocatorId).toHaveBeenCalledWith(
@@ -578,6 +624,7 @@ describe("MongoDBManagerReadOps relation locator (C-025)", () => {
 				relationId: "ent-1-ent-2",
 				type: "works_on",
 				scope: "agent",
+				scopeRef: "agent:agent-1",
 			}),
 		)
 		// Miss renders as an empty conversation read, not an error.

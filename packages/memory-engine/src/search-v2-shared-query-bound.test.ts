@@ -8,10 +8,6 @@ vi.mock("./mongodb-lane-coverage.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./mongodb-lane-coverage.js")>()),
 	getLaneCoverage: vi.fn().mockResolvedValue(null),
 }))
-vi.mock("./mongodb-events.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("./mongodb-events.js")>()),
-	getEventsByTimeRange: vi.fn(),
-}))
 vi.mock("./mongodb-schema.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./mongodb-schema.js")>()),
 	chunksCollection: vi.fn(() => ({})),
@@ -36,17 +32,20 @@ vi.mock("./mongodb-search-lanes.js", async (importOriginal) => {
 	return {
 		...actual,
 		extractRawWindowQueryTerms: vi.fn(actual.extractRawWindowQueryTerms),
+		searchRawWindowEvents: vi.fn(),
 	}
 })
 
-import { getEventsByTimeRange } from "./mongodb-events.js"
 import { emptyLaneCoverage } from "./mongodb-lane-coverage.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import { expandSynonyms } from "./mongodb-query-rewriter.js"
 import { planRetrieval } from "./mongodb-retrieval-planner.js"
 import { mongoSearch } from "./mongodb-search.js"
 import { searchStructuredMemory } from "./mongodb-structured-memory.js"
-import { extractRawWindowQueryTerms } from "./mongodb-search-lanes.js"
+import {
+	extractRawWindowQueryTerms,
+	searchRawWindowEvents,
+} from "./mongodb-search-lanes.js"
 import { MAX_SEARCH_QUERY_LENGTH } from "./mongodb-search-ranking.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
@@ -61,9 +60,14 @@ import {
 	tryConsumeSearchAggregation,
 } from "./mongodb-search-budget.js"
 
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
+
 const prefix = `${"alpha ".repeat(333)}al`
 const longQuery = `${prefix} yesterday TAILMARK`
-const context = { availablePaths: new Set<"raw-window">(["raw-window"]) }
+const context = {
+	availablePaths: new Set<"raw-window">(["raw-window"]),
+	searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
+}
 
 describe("shared-budget search input bounds", () => {
 	beforeEach(() => {
@@ -71,7 +75,8 @@ describe("shared-budget search input bounds", () => {
 		vi.mocked(getLaneCoverage).mockResolvedValue(null)
 		vi.stubEnv("MEMONGO_SEARCH_ADMISSION_RPM", "1")
 		resetSearchAdmissionForTests(Date.now())
-		vi.mocked(getEventsByTimeRange).mockImplementation(async () => {
+		// M2 T6: the raw-window $search charges one aggregation.
+		vi.mocked(searchRawWindowEvents).mockImplementation(async () => {
 			expect(tryConsumeSearchAggregation()).toBe(true)
 			return []
 		})
@@ -117,7 +122,7 @@ describe("shared-budget search input bounds", () => {
 			() => searchV2({} as Db, "test_", longQuery, "a1", context),
 		)
 		expect(value.metadata.throttled).toBeUndefined()
-		expect(getEventsByTimeRange).toHaveBeenCalledTimes(1)
+		expect(searchRawWindowEvents).toHaveBeenCalledTimes(1)
 		expect(
 			vi
 				.mocked(emitTelemetry)
@@ -162,6 +167,7 @@ describe("shared-budget search input bounds", () => {
 			admission: { kind: "admission", agentId: "a1", epoch: 19 },
 			availablePaths: new Set(["structured", "hybrid"]),
 			searchOptions: {
+				capabilities: HEALTHY_TEST_CAPABILITIES,
 				queryRewriteConfig: {
 					enabled: true,
 					method: "synonym-expansion",
@@ -216,13 +222,7 @@ describe("shared-budget search input bounds", () => {
 			admission: { kind: "admission", agentId: "a1", epoch: 19 },
 			availablePaths: new Set(["structured"]),
 			searchOptions: {
-				rerankConfig: {
-					enabled: true,
-					model: "rerank-2.5",
-					topN: 10,
-					minScore: 0.1,
-					voyageApiKey: "mock-key",
-				},
+				capabilities: HEALTHY_TEST_CAPABILITIES,
 				queryRewriteConfig: {
 					enabled,
 					method: "synonym-expansion",
@@ -230,15 +230,11 @@ describe("shared-budget search input bounds", () => {
 				},
 			},
 		})
-		expect(emitTelemetry).toHaveBeenCalledWith(
-			expect.any(Object),
-			"test_",
-			expect.objectContaining({
-				meta: { agentId: "a1", operation: "rerank" },
-				rerankSkipped: "no-results",
-			}),
-			{ admission: { kind: "admission", agentId: "a1", epoch: 19 } },
-		)
+		expect(
+			vi
+				.mocked(emitTelemetry)
+				.mock.calls.filter((call) => call[2].meta.operation === "rerank"),
+		).toHaveLength(0)
 		expect(vi.mocked(searchStructuredMemory).mock.lastCall?.[1]).toBe(
 			enabled ? expandSynonyms(query) : query,
 		)

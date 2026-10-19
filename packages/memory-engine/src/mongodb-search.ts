@@ -6,7 +6,7 @@ import {
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
-import { mergeHybridResultsMongoDB, rrfScore } from "./mongodb-hybrid.js"
+import { rrfScore } from "./mongodb-hybrid.js"
 import { resolveChunkProvenance } from "./memory-derivation.js"
 import {
 	consumeSearchAggregationOrThrow,
@@ -24,7 +24,6 @@ import type {
 } from "./types.js"
 import {
 	classifySearchError,
-	SearchBudgetDeniedError,
 	SearchLaneError,
 	type SearchStage,
 	type SearchTierOutcomeSink,
@@ -50,19 +49,6 @@ export type SearchExplainOptions = {
 	deep?: boolean
 	includeScoreDetails?: boolean
 	onArtifact?: (artifact: SearchExplainTraceArtifact) => void
-}
-
-export type SearchTraceEvent = {
-	event: "method"
-	method:
-		| "scoreFusion"
-		| "rankFusion"
-		| "js-merge"
-		| "vector"
-		| "keyword"
-		| "$text"
-	ok: boolean
-	message?: string
 }
 
 /**
@@ -306,7 +292,7 @@ function toSearchResult(
 		score,
 		snippet: typeof doc.text === "string" ? doc.text.slice(0, 700) : "",
 		// B5: the full chunk text rides alongside the 700-char display
-		// preview so the reranker and the reader see whole turns.
+		// preview so the reader sees whole turns.
 		text:
 			typeof doc.text === "string"
 				? doc.text.slice(0, MAX_RESULT_TEXT_CHARS)
@@ -374,10 +360,9 @@ function filterByScore(
  *
  * Raw RRF output is thus not a relevance score and shares no scale with vector
  * or lexical scores. Comparing it against a caller minScore of 0.1 made this
- * function return [] for every query, which silently demoted every hybrid
- * search to the JS-merge fallback below. `mergeHybridResultsMongoDB` already
- * divides by this same ceiling; doing it here too is what makes the two paths
- * interchangeable, which a fallback has to be.
+ * function return [] for every query. A document ranked first in every input
+ * of a second fused sub-lane can exceed this one-lane ceiling; the clamp to 1
+ * keeps the server's order.
  */
 /**
  * Rescale raw `$scoreFusion` output into the same [0,1] space, then apply the
@@ -672,7 +657,7 @@ export const MONGODB_MAX_NUM_CANDIDATES = 10_000
  * B5: bound for the full-text field carried on `MemorySearchResult`.
  * Chunks are whole turns and LongMemEval assistant turns run to thousands
  * of characters (median 429, p99 3,495, max observed 76,560), so a 700-char
- * snippet preview hides answers from both the reranker and the reader. This
+ * snippet preview hides answers from the reader. This
  * cap covers every realistic turn while keeping pathological documents from
  * blowing the answer prompt.
  */
@@ -718,6 +703,9 @@ export function buildVectorSearchStage(input: {
 	returnStoredSource?: boolean
 	/** #101: the stage a refused embed is reported at. */
 	stage?: SearchStage
+	/** The caller charges the embed with its aggregation itself, once, for
+	 *  every vector input of one fused aggregate. */
+	callerCharges?: boolean
 }): Document | null {
 	const limit = normalizeVectorSearchLimit(input.limit)
 	const base: Document = {
@@ -752,11 +740,13 @@ export function buildVectorSearchStage(input: {
 		// query text"). Decision 18: the embed and the aggregation that runs
 		// it are charged together, so a refused aggregation never strands a
 		// spent embed; the pipeline's first attempt claims the prepaid half.
-		consumeSearchWorkOrThrow(input.stage ?? "vector", {
-			aggregations: 1,
-			embeds: 1,
-		})
-		prepaidVectorStages.add(base)
+		if (!input.callerCharges) {
+			consumeSearchWorkOrThrow(input.stage ?? "vector", {
+				aggregations: 1,
+				embeds: 1,
+			})
+			prepaidVectorStages.add(base)
+		}
 		base.query = { text: input.queryText }
 		base.model = input.model ?? INDEX_AUTOEMBED_MODEL
 		base.path = input.textFieldPath ?? "text"
@@ -882,169 +872,143 @@ export async function vectorSearch(
 }
 
 // ---------------------------------------------------------------------------
-// Keyword Search (native $search)
+// Native fusion: one aggregate, `$scoreFusion` (MongoDB 8.3+) or `$rankFusion`
+// (MongoDB 8.0+). There is no weaker operation to fall to; a failure is typed.
 // ---------------------------------------------------------------------------
 
-export async function keywordSearch(
-	collection: Collection,
-	query: string,
-	opts: {
-		maxResults: number
-		minScore: number
-		sessionKey?: string
-		filter?: Document
-		indexName: string
-		explain?: SearchExplainOptions
-		onTierOutcome?: SearchTierOutcomeSink
-	},
-): Promise<MemorySearchResult[]> {
-	const sourceFilter = resolveLegacySourceFilter(opts.sessionKey)
-	const mergedFilter = mergeFilters(
-		sourceFilter ? ({ source: sourceFilter } as Document) : undefined,
-		opts.filter,
-	)
-	const { compoundFilter } = splitAtlasSearchFilter(mergedFilter)
-
-	const pipeline: Document[] = [
-		{
-			$search: {
-				index: opts.indexName,
-				compound: buildTextSearchCompound(query, compoundFilter),
-				...(opts.explain?.includeScoreDetails ? { scoreDetails: true } : {}),
-			},
-		},
-		...freshnessRevalidationStages(mergedFilter),
-		{ $limit: opts.maxResults * 4 },
-		{
-			$project: {
-				_id: 0,
-				path: 1,
-				startLine: 1,
-				endLine: 1,
-				text: 1,
-				source: 1,
-				sessionId: 1,
-				sourceEventIds: 1,
-				updatedAt: 1,
-				timestamp: 1,
-				scope: 1,
-				scopeRef: 1,
-				canonicalId: 1,
-				unit: 1,
-				provenance: 1,
-				// RET-11 wave-3e followup: expiresAt was carried by the mapper
-				// since wave 3d but never projected, so the carry was dead on
-				// every live vector/keyword/fusion path. RET-09: role
-				// (new chunks), confidence and sourceReliability (evidence
-				// chunks) feed the provenance classifier.
-				expiresAt: 1,
-				role: 1,
-				confidence: 1,
-				sourceReliability: 1,
-				"metadata.sourceEventIds": 1,
-				score: { $meta: "searchScore" },
-				...(opts.explain?.includeScoreDetails
-					? { scoreDetails: { $meta: "searchScoreDetails" } }
-					: {}),
-			},
-		},
-	]
-
-	if (opts.explain?.enabled) {
-		const explained = await captureAggregateExplain(
-			collection,
-			pipeline,
-			opts.onTierOutcome,
-		)
-		if (explained) {
-			opts.explain.onArtifact?.({
-				artifactType: "searchExplain",
-				summary: summarizeExplain(explained),
-				...(opts.explain.deep ? { rawExplain: explained } : {}),
-			})
-		}
-	}
-
-	const docs = await runSearchAggregateWithRetry(collection, pipeline, {
-		stage: "keyword",
-	})
-	if (opts.explain?.enabled && opts.explain.includeScoreDetails) {
-		const scoreDetailSample = docs.find(
-			(doc) => doc.scoreDetails != null,
-		)?.scoreDetails
-		if (scoreDetailSample) {
-			opts.explain.onArtifact?.({
-				artifactType: "scoreDetails",
-				summary: { available: true },
-				...(opts.explain.deep ? { rawExplain: scoreDetailSample } : {}),
-			})
-		}
-	}
-	const results = docs
-		.map((doc) => toSearchResult(doc, "memory"))
-		.slice(0, opts.maxResults)
-	return filterByScore(results, opts.minScore)
+/**
+ * A second sub-lane fused into the same aggregate. It brings its own filter
+ * and its own cap, so two sub-lanes whose filters cannot merge still cost one
+ * aggregation, never two.
+ */
+export type FusionSibling = {
+	filter: Document
+	maxResults: number
 }
 
-// ---------------------------------------------------------------------------
-// Hybrid Search with $scoreFusion (MongoDB 8.3+)
-// ---------------------------------------------------------------------------
+type FusionSearchOpts = {
+	maxResults: number
+	minScore: number
+	sessionKey?: string
+	filter?: Document
+	vectorIndexName: string
+	textIndexName: string
+	vectorWeight: number
+	textWeight: number
+	embeddingMode?: MemoryMongoDBEmbeddingMode
+	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
+	numCandidates?: number
+	explain?: SearchExplainOptions
+	onTierOutcome?: SearchTierOutcomeSink
+	sibling?: FusionSibling
+}
 
-export async function hybridSearchScoreFusion(
+export type NativeFusionMethod = "scoreFusion" | "rankFusion"
+
+const FUSION_STAGE = {
+	scoreFusion: "score-fusion",
+	rankFusion: "rank-fusion",
+} as const
+
+async function chunkFusionSearch(
+	kind: NativeFusionMethod,
 	collection: Collection,
 	query: string,
 	queryVector: number[] | null,
-	opts: {
-		maxResults: number
-		minScore: number
-		sessionKey?: string
-		filter?: Document
-		vectorIndexName: string
-		textIndexName: string
-		vectorWeight: number
-		textWeight: number
-		embeddingMode?: MemoryMongoDBEmbeddingMode
-		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
-		numCandidates?: number
-		explain?: SearchExplainOptions
-		onTierOutcome?: SearchTierOutcomeSink
-	},
+	opts: FusionSearchOpts,
 ): Promise<MemorySearchResult[]> {
+	const stage = FUSION_STAGE[kind]
 	const sourceFilter: Document = {}
 	const source = resolveLegacySourceFilter(opts.sessionKey)
 	if (source) {
 		sourceFilter.source = source
 	}
-	const mergedFilter = mergeFilters(
-		Object.keys(sourceFilter).length > 0 ? sourceFilter : undefined,
-		opts.filter,
-	)
-	const { compoundFilter } = splitAtlasSearchFilter(mergedFilter)
-
-	const vsStage = buildVectorSearchStage({
-		queryVector,
-		queryText: query,
-		embeddingMode: opts.embeddingMode ?? "automated",
-		model: opts.queryEmbeddingModel,
-		indexName: opts.vectorIndexName,
-		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
-		limit: opts.maxResults * 4,
-		filter: mergedFilter,
-		// Authoritative results always hydrate the full current document from
-		// mongod (the documented default lookup); storedSource reads the
-		// indexed copy, which may return stale data.
-		returnStoredSource: false,
-		stage: "score-fusion",
-	})
-
-	if (!vsStage) {
-		opts.onTierOutcome?.({
-			stage: "score-fusion",
-			outcome: "not-applicable",
-			reason: "empty-query",
+	const sessionSourceFilter =
+		Object.keys(sourceFilter).length > 0 ? sourceFilter : undefined
+	const primaryFilter = mergeFilters(sessionSourceFilter, opts.filter)
+	const subLanes: Array<{
+		vectorName: string
+		textName: string
+		filter: Document | undefined
+		maxResults: number
+	}> = [
+		{
+			vectorName: "vector",
+			textName: "text",
+			filter: primaryFilter,
+			maxResults: opts.maxResults,
+		},
+	]
+	if (opts.sibling) {
+		subLanes.push({
+			vectorName: "bridgeVector",
+			textName: "bridgeText",
+			filter: mergeFilters(sessionSourceFilter, opts.sibling.filter),
+			maxResults: opts.sibling.maxResults,
 		})
-		return []
 	}
+
+	const vectorStages: Document[] = []
+	for (const subLane of subLanes) {
+		const vsStage = buildVectorSearchStage({
+			queryVector,
+			queryText: query,
+			embeddingMode: opts.embeddingMode ?? "automated",
+			model: opts.queryEmbeddingModel,
+			indexName: opts.vectorIndexName,
+			numCandidates:
+				opts.numCandidates ?? Math.max(subLane.maxResults * 20, 100),
+			limit: subLane.maxResults * 4,
+			filter: subLane.filter,
+			// Authoritative results always hydrate the full current document from
+			// mongod (the documented default lookup); storedSource reads the
+			// indexed copy, which may return stale data.
+			returnStoredSource: false,
+			stage,
+			callerCharges: true,
+		})
+		if (!vsStage) {
+			opts.onTierOutcome?.({
+				stage,
+				outcome: "not-applicable",
+				reason: "empty-query",
+			})
+			return []
+		}
+		vectorStages.push(vsStage)
+	}
+
+	// Decision 18: one fused aggregate is one aggregation plus every embedded
+	// vector input, charged together so a refusal never strands a spent embed.
+	// The first stage carries the prepaid aggregation the executor claims.
+	consumeSearchWorkOrThrow(stage, {
+		aggregations: 1,
+		embeds: vectorStages.length,
+	})
+	const [firstVectorStage] = vectorStages
+	if (firstVectorStage) prepaidVectorStages.add(firstVectorStage)
+
+	const pipelines: Record<string, Document[]> = {}
+	const weights: Record<string, number> = {}
+	subLanes.forEach((subLane, index) => {
+		const { compoundFilter } = splitAtlasSearchFilter(subLane.filter)
+		pipelines[subLane.vectorName] = [
+			{ $vectorSearch: vectorStages[index] },
+			...freshnessRevalidationStages(subLane.filter),
+		]
+		pipelines[subLane.textName] = [
+			{
+				$search: {
+					index: opts.textIndexName,
+					compound: buildTextSearchCompound(query, compoundFilter),
+				},
+			},
+			...freshnessRevalidationStages(subLane.filter),
+			{ $limit: subLane.maxResults * 4 },
+		]
+		weights[subLane.vectorName] = opts.vectorWeight
+		weights[subLane.textName] = opts.textWeight
+	})
 
 	// The primary score comes from `$meta: "score"`, the only output shape the
 	// fusion docs guarantee. `scoreDetails` is an unstable audit artifact
@@ -1052,39 +1016,26 @@ export async function hybridSearchScoreFusion(
 	// requested only when explain asks for it — never on the hot path, and
 	// never as the score source.
 	const includeScoreDetails = opts.explain?.includeScoreDetails === true
+	const scoreDetails = includeScoreDetails ? { scoreDetails: true } : {}
+	const fusionStage: Document =
+		kind === "scoreFusion"
+			? {
+					$scoreFusion: {
+						input: { pipelines, normalization: "sigmoid" },
+						combination: { weights, method: "avg" },
+						...scoreDetails,
+					},
+				}
+			: {
+					$rankFusion: {
+						input: { pipelines },
+						combination: { weights },
+						...scoreDetails,
+					},
+				}
 	const pipeline: Document[] = [
-		{
-			$scoreFusion: {
-				input: {
-					pipelines: {
-						vector: [
-							{ $vectorSearch: vsStage },
-							...freshnessRevalidationStages(mergedFilter),
-						],
-						text: [
-							{
-								$search: {
-									index: opts.textIndexName,
-									compound: buildTextSearchCompound(query, compoundFilter),
-								},
-							},
-							...freshnessRevalidationStages(mergedFilter),
-							{ $limit: opts.maxResults * 4 },
-						],
-					},
-					normalization: "sigmoid",
-				},
-				combination: {
-					weights: {
-						vector: opts.vectorWeight,
-						text: opts.textWeight,
-					},
-					method: "avg",
-				},
-				...(includeScoreDetails ? { scoreDetails: true } : {}),
-			},
-		},
-		{ $limit: opts.maxResults },
+		fusionStage,
+		{ $limit: subLanes.reduce((sum, subLane) => sum + subLane.maxResults, 0) },
 		...(includeScoreDetails
 			? [{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } }]
 			: []),
@@ -1107,9 +1058,9 @@ export async function hybridSearchScoreFusion(
 				provenance: 1,
 				// RET-11 wave-3e followup: expiresAt was carried by the mapper
 				// since wave 3d but never projected, so the carry was dead on
-				// every live vector/keyword/fusion path. RET-09: role
-				// (new chunks), confidence and sourceReliability (evidence
-				// chunks) feed the provenance classifier.
+				// every live vector/fusion path. RET-09: role (new chunks),
+				// confidence and sourceReliability (evidence chunks) feed the
+				// provenance classifier.
 				expiresAt: 1,
 				role: 1,
 				confidence: 1,
@@ -1130,204 +1081,51 @@ export async function hybridSearchScoreFusion(
 		if (explained) {
 			opts.explain.onArtifact?.({
 				artifactType: "fusionExplain",
-				summary: { method: "scoreFusion", ...summarizeExplain(explained) },
+				summary: { method: kind, ...summarizeExplain(explained) },
 				...(opts.explain.deep ? { rawExplain: explained } : {}),
 			})
 		}
 	}
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline, {
-		stage: "score-fusion",
+		stage,
 	})
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
-	return normalizeAndFilterScoreFusionResults(
-		results,
-		opts.minScore,
-		opts.vectorWeight,
-		opts.textWeight,
-	)
+	return kind === "scoreFusion"
+		? normalizeAndFilterScoreFusionResults(
+				results,
+				opts.minScore,
+				opts.vectorWeight,
+				opts.textWeight,
+			)
+		: normalizeAndFilterRankFusionResults(
+				results,
+				opts.minScore,
+				opts.vectorWeight,
+				opts.textWeight,
+			)
 }
 
-// ---------------------------------------------------------------------------
-// Hybrid Search with $rankFusion (MongoDB 8.0+)
-// ---------------------------------------------------------------------------
-
-export async function hybridSearchRankFusion(
+export function hybridSearchScoreFusion(
 	collection: Collection,
 	query: string,
 	queryVector: number[] | null,
-	opts: {
-		maxResults: number
-		minScore: number
-		sessionKey?: string
-		filter?: Document
-		vectorIndexName: string
-		textIndexName: string
-		vectorWeight: number
-		textWeight: number
-		embeddingMode?: MemoryMongoDBEmbeddingMode
-		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
-		numCandidates?: number
-		explain?: SearchExplainOptions
-		onTierOutcome?: SearchTierOutcomeSink
-	},
+	opts: FusionSearchOpts,
 ): Promise<MemorySearchResult[]> {
-	const sourceFilter: Document = {}
-	const source = resolveLegacySourceFilter(opts.sessionKey)
-	if (source) {
-		sourceFilter.source = source
-	}
-	const mergedFilter = mergeFilters(
-		Object.keys(sourceFilter).length > 0 ? sourceFilter : undefined,
-		opts.filter,
-	)
-	const { compoundFilter } = splitAtlasSearchFilter(mergedFilter)
+	return chunkFusionSearch("scoreFusion", collection, query, queryVector, opts)
+}
 
-	const vsStage = buildVectorSearchStage({
-		queryVector,
-		queryText: query,
-		embeddingMode: opts.embeddingMode ?? "automated",
-		model: opts.queryEmbeddingModel,
-		indexName: opts.vectorIndexName,
-		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
-		limit: opts.maxResults * 4,
-		filter: mergedFilter,
-		// Authoritative results always hydrate the full current document from
-		// mongod (the documented default lookup); storedSource reads the
-		// indexed copy, which may return stale data.
-		returnStoredSource: false,
-		stage: "rank-fusion",
-	})
-
-	if (!vsStage) {
-		opts.onTierOutcome?.({
-			stage: "rank-fusion",
-			outcome: "not-applicable",
-			reason: "empty-query",
-		})
-		return []
-	}
-
-	// Same score-source contract as the $scoreFusion lane above: `$meta:
-	// "score"` is the guaranteed shape; `scoreDetails` is explain-only.
-	const includeScoreDetails = opts.explain?.includeScoreDetails === true
-	const pipeline: Document[] = [
-		{
-			$rankFusion: {
-				input: {
-					pipelines: {
-						vector: [
-							{ $vectorSearch: vsStage },
-							...freshnessRevalidationStages(mergedFilter),
-						],
-						text: [
-							{
-								$search: {
-									index: opts.textIndexName,
-									compound: buildTextSearchCompound(query, compoundFilter),
-								},
-							},
-							...freshnessRevalidationStages(mergedFilter),
-							{ $limit: opts.maxResults * 4 },
-						],
-					},
-				},
-				combination: {
-					weights: {
-						vector: opts.vectorWeight,
-						text: opts.textWeight,
-					},
-				},
-				...(includeScoreDetails ? { scoreDetails: true } : {}),
-			},
-		},
-		{ $limit: opts.maxResults },
-		...(includeScoreDetails
-			? [{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } }]
-			: []),
-		{
-			$project: {
-				_id: 0,
-				path: 1,
-				startLine: 1,
-				endLine: 1,
-				text: 1,
-				source: 1,
-				sessionId: 1,
-				sourceEventIds: 1,
-				updatedAt: 1,
-				timestamp: 1,
-				scope: 1,
-				scopeRef: 1,
-				canonicalId: 1,
-				unit: 1,
-				provenance: 1,
-				// RET-11 wave-3e followup: expiresAt was carried by the mapper
-				// since wave 3d but never projected, so the carry was dead on
-				// every live vector/keyword/fusion path. RET-09: role
-				// (new chunks), confidence and sourceReliability (evidence
-				// chunks) feed the provenance classifier.
-				expiresAt: 1,
-				role: 1,
-				confidence: 1,
-				sourceReliability: 1,
-				"metadata.sourceEventIds": 1,
-				score: { $meta: "score" },
-				...(includeScoreDetails ? { scoreDetails: 1 } : {}),
-			},
-		},
-	]
-
-	if (opts.explain?.enabled) {
-		const explained = await captureAggregateExplain(
-			collection,
-			pipeline,
-			opts.onTierOutcome,
-		)
-		if (explained) {
-			opts.explain.onArtifact?.({
-				artifactType: "fusionExplain",
-				summary: { method: "rankFusion", ...summarizeExplain(explained) },
-				...(opts.explain.deep ? { rawExplain: explained } : {}),
-			})
-		}
-	}
-
-	const docs = await runSearchAggregateWithRetry(collection, pipeline, {
-		stage: "rank-fusion",
-	})
-	const results = docs.map((doc) => toSearchResult(doc, "memory"))
-	return normalizeAndFilterRankFusionResults(
-		results,
-		opts.minScore,
-		opts.vectorWeight,
-		opts.textWeight,
-	)
+export function hybridSearchRankFusion(
+	collection: Collection,
+	query: string,
+	queryVector: number[] | null,
+	opts: FusionSearchOpts,
+): Promise<MemorySearchResult[]> {
+	return chunkFusionSearch("rankFusion", collection, query, queryVector, opts)
 }
 
 // ---------------------------------------------------------------------------
-// JS fallback merge (for Community without mongot)
-// ---------------------------------------------------------------------------
-
-export function hybridSearchJSFallback(
-	vectorResults: MemorySearchResult[],
-	keywordResults: MemorySearchResult[],
-	opts: { maxResults: number; vectorWeight: number; textWeight: number },
-): MemorySearchResult[] {
-	// Use our RRF-based merge instead of upstream's broken weighted-average merge.
-	// RRF does not penalize results appearing in only one list and handles
-	// incompatible score scales (cosine [0,1] vs BM25 [0,inf)) naturally.
-	return mergeHybridResultsMongoDB({
-		vector: vectorResults,
-		keyword: keywordResults,
-		maxResults: opts.maxResults,
-		vectorWeight: opts.vectorWeight,
-		textWeight: opts.textWeight,
-	})
-}
-
-// ---------------------------------------------------------------------------
-// Main search dispatcher
+// Main search entry: the configured fusion method is the one operation.
 // ---------------------------------------------------------------------------
 
 export async function mongoSearch(
@@ -1340,7 +1138,6 @@ export async function mongoSearch(
 		numCandidates?: number
 		sessionKey?: string
 		fusionMethod: MemoryMongoDBFusionMethod
-		capabilities: DetectedCapabilities
 		filter?: Document
 		vectorIndexName: string
 		textIndexName: string
@@ -1349,185 +1146,57 @@ export async function mongoSearch(
 		embeddingMode?: MemoryMongoDBEmbeddingMode
 		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		explain?: SearchExplainOptions
-		onTrace?: (event: SearchTraceEvent) => void
+		/** A second sub-lane fused into this same aggregate. */
+		sibling?: FusionSibling
 		/** #101: per-call sink for this lane's tier outcomes. */
 		onTierOutcome?: SearchTierOutcomeSink
 	},
 ): Promise<MemorySearchResult[]> {
-	const vectorWeight = opts.vectorWeight ?? 0.7
-	const textWeight = opts.textWeight ?? 0.3
-	const embeddingMode = opts.embeddingMode ?? "automated"
-	const canVector =
-		embeddingMode === "automated" && opts.capabilities.vectorSearch
-	const searchOpts = { ...opts, vectorWeight, textWeight, embeddingMode }
-
-	// #101 / decision 16: the lane runs exactly ONE tier, chosen up front from
-	// the deployment's capabilities and the fusion preference. A successful
-	// empty answer ends the lane (P3.2 "empty ≠ error"); an error or a budget
-	// denial is a typed throw at the failing stage and never escalates to a
-	// weaker tier.
-	const runTier = async (
-		method: SearchTraceEvent["method"],
-		stage: SearchStage,
-		run: () => Promise<MemorySearchResult[]>,
-	): Promise<MemorySearchResult[]> => {
-		try {
-			const results = await run()
-			opts.onTrace?.({
-				event: "method",
-				method,
-				ok: results.length > 0,
-				...(results.length > 0 ? {} : { message: "empty results" }),
-			})
-			opts.onTierOutcome?.({
-				stage,
-				outcome: results.length > 0 ? "ok" : "ok-empty",
-				...(results.length > 0 ? {} : { reason: "zero-hits" as const }),
-				resultCount: results.length,
-			})
-			return results
-		} catch (err) {
-			const typed =
-				err instanceof SearchLaneError && err.stage !== stage
-					? new SearchLaneError({
-							stage,
-							reason: err.reason,
-							cause: err.cause ?? err,
-						})
-					: toTypedSearchError(err, stage)
-			opts.onTrace?.({
-				event: "method",
-				method,
-				ok: false,
-				message: typed.message,
-			})
-			throw typed
-		}
-	}
-
-	if (canVector && opts.capabilities.textSearch) {
-		if (opts.fusionMethod === "scoreFusion" && opts.capabilities.scoreFusion) {
-			return runTier("scoreFusion", "score-fusion", () =>
-				hybridSearchScoreFusion(collection, query, queryVector, searchOpts),
-			)
-		}
-		if (opts.fusionMethod !== "js-merge" && opts.capabilities.rankFusion) {
-			return runTier("rankFusion", "rank-fusion", () =>
-				hybridSearchRankFusion(collection, query, queryVector, searchOpts),
-			)
-		}
-		return runTier("js-merge", "js-merge", async () => {
-			const [vResults, kResults] = await Promise.all([
-				vectorSearch(collection, queryVector, {
-					...searchOpts,
-					indexName: opts.vectorIndexName,
-					queryText: query,
-				}).catch((error: unknown) => {
-					// S11: a refused vector embed is the vector stage's own
-					// budget-denied row; the keyword branch's results stand.
-					if (!(error instanceof SearchBudgetDeniedError)) throw error
-					opts.onTrace?.({
-						event: "method",
-						method: "vector",
-						ok: false,
-						message: "embedding budget exhausted",
-					})
-					opts.onTierOutcome?.({
-						stage: "vector",
-						outcome: "budget-denied",
-						reason: error.reason,
-					})
-					return [] as MemorySearchResult[]
-				}),
-				keywordSearch(collection, query, {
-					...searchOpts,
-					indexName: opts.textIndexName,
-				}),
-			])
-			return hybridSearchJSFallback(vResults, kResults, {
-				maxResults: opts.maxResults,
-				vectorWeight,
-				textWeight,
-			})
+	const kind = opts.fusionMethod
+	if (kind !== "scoreFusion" && kind !== "rankFusion") {
+		throw new SearchLaneError({
+			stage: "request",
+			reason: "query-error",
+			cause: new Error(
+				`fusionMethod "${String(kind)}" is not a native fusion operation; use "scoreFusion" or "rankFusion"`,
+			),
 		})
 	}
-
-	if (canVector) {
-		return runTier("vector", "vector", () =>
-			vectorSearch(collection, queryVector, {
-				...searchOpts,
-				indexName: opts.vectorIndexName,
-				queryText: query,
-			}),
-		)
+	const stage = FUSION_STAGE[kind]
+	const searchOpts = {
+		...opts,
+		vectorWeight: opts.vectorWeight ?? 0.7,
+		textWeight: opts.textWeight ?? 0.3,
 	}
 
-	if (opts.capabilities.textSearch) {
-		return runTier("keyword", "keyword", () =>
-			keywordSearch(collection, query, {
-				...searchOpts,
-				indexName: opts.textIndexName,
-			}),
+	// #101 / decision 16: the lane runs exactly ONE operation. A successful
+	// empty answer ends the lane (P3.2 "empty ≠ error"); an error or a budget
+	// denial is a typed throw at the failing stage and is never answered with
+	// a weaker operation.
+	try {
+		const results = await chunkFusionSearch(
+			kind,
+			collection,
+			query,
+			queryVector,
+			searchOpts,
 		)
+		opts.onTierOutcome?.({
+			stage,
+			outcome: results.length > 0 ? "ok" : "ok-empty",
+			...(results.length > 0 ? {} : { reason: "zero-hits" as const }),
+			resultCount: results.length,
+		})
+		return results
+	} catch (err) {
+		const typed =
+			err instanceof SearchLaneError && err.stage !== stage
+				? new SearchLaneError({
+						stage,
+						reason: err.reason,
+						cause: err.cause ?? err,
+					})
+				: toTypedSearchError(err, stage)
+		throw typed
 	}
-
-	// R5: classic $text is the planned lexical tier ONLY on deployments with
-	// neither Search lane — exactly where its BSON text index is created
-	// (shouldEnsureTextFallbackIndexes). It is never reached after a failure.
-	return runTier("$text", "classic-text", () =>
-		classicTextSearch(collection, query, opts),
-	)
-}
-
-async function classicTextSearch(
-	collection: Collection,
-	query: string,
-	opts: {
-		maxResults: number
-		minScore: number
-		sessionKey?: string
-		filter?: Document
-	},
-): Promise<MemorySearchResult[]> {
-	// P3.2: the $text aggregate bypasses runSearchAggregateWithRetry, so it
-	// consumes the budget directly.
-	consumeSearchAggregationOrThrow("classic-text")
-	const sourceFilter = resolveLegacySourceFilter(opts.sessionKey)
-	const filter = mergeFilters(
-		{ $text: { $search: query } } as Document,
-		sourceFilter ? ({ source: sourceFilter } as Document) : undefined,
-		opts.filter,
-	) ?? { $text: { $search: query } }
-	const docs = await collection
-		.aggregate(
-			[
-				{ $match: filter },
-				{
-					$project: {
-						_id: 0,
-						path: 1,
-						startLine: 1,
-						endLine: 1,
-						text: 1,
-						source: 1,
-						// RET-11 wave-3e followup + RET-09: see the vector
-						// projection above — the $text tier must carry the
-						// same provenance/expiry surface.
-						expiresAt: 1,
-						role: 1,
-						confidence: 1,
-						sourceReliability: 1,
-						score: { $meta: "textScore" },
-					},
-				},
-				{ $sort: { score: { $meta: "textScore" } } },
-				{ $limit: opts.maxResults },
-			],
-			// P3.8: user-driven pipelines carry a maxTimeMS ceiling.
-			{ maxTimeMS: resolveUserSearchMaxTimeMs() },
-		)
-		.toArray()
-	return docs
-		.map((doc: Document) => toSearchResult(doc, "memory"))
-		.filter((r: MemorySearchResult) => r.score >= opts.minScore)
 }

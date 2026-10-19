@@ -1,7 +1,10 @@
 import type { Db, Document } from "mongodb"
 import { describe, expect, it, vi } from "vitest"
 
-import { traceReasoningChain } from "./mongodb-reasoning-chain.js"
+import {
+	ReasoningChainCollectionError,
+	traceReasoningChain,
+} from "./mongodb-reasoning-chain.js"
 
 const PREFIX = "test_"
 const AGENT_ID = "agent-1"
@@ -32,17 +35,24 @@ function createMockDb(config: {
 }
 
 describe("traceReasoningChain", () => {
-	it("returns empty chain for unknown collection", async () => {
+	it("rejects a non-allowlisted collection with a typed error instead of an empty complete chain", async () => {
 		const db = createMockDb({})
-		const result = await traceReasoningChain({
+		const error = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
 			factId: "fact-1",
 			collection: "invalid_collection",
+		}).catch((reason: unknown) => reason)
+		expect(error).toBeInstanceOf(ReasoningChainCollectionError)
+		expect(error).toMatchObject({
+			name: "ReasoningChainCollectionError",
+			code: "CHAIN_TRACE_COLLECTION_INVALID",
+			collection: "invalid_collection",
 		})
-		expect(result.nodes).toEqual([])
-		expect(result.chainComplete).toBe(true)
+		expect(db.collection).not.toHaveBeenCalled()
 	})
 
 	it("returns empty chain when fact not found", async () => {
@@ -50,6 +60,8 @@ describe("traceReasoningChain", () => {
 			aggregateResults: { [`${PREFIX}structured_mem`]: [] },
 		})
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -95,6 +107,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -136,6 +150,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -179,6 +195,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -218,6 +236,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -243,6 +263,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -293,6 +315,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -331,6 +355,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -368,6 +394,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -406,6 +434,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -424,6 +454,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,

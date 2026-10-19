@@ -5,6 +5,7 @@ import {
 	createSubsystemLogger,
 	retryAsync,
 } from "@memongo/lib"
+import { bestEffort } from "./best-effort.js"
 import {
 	EVENT_IDENTITY_READ_OPTIONS,
 	type EventMetadataWriteOptions,
@@ -13,6 +14,7 @@ import {
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import {
 	captureAdmissionToken,
@@ -22,7 +24,6 @@ import {
 	isErasureGateConflictError,
 	type AdmissionToken,
 } from "./mongodb-write-fence.js"
-import { settledFailureMeta } from "./query-diagnostics.js"
 
 const log = createSubsystemLogger("memory:mongodb:events")
 const DURABLE_EVENT_WRITE_CONCERN = {
@@ -669,41 +670,6 @@ function carriesWriteConcernError(err: unknown): boolean {
 	return viaSelf != null
 }
 
-/**
- * W09 reconciliation read: which of the given eventIds are majority-visible
- * in the events collection. Presence confirms durability and cannot roll
- * back. Absence only means durability is unconfirmed at read time: an earlier
- * attempt may still majority-commit, so retry requires the same logical-write
- * identity (idempotency key or caller-pinned eventId).
- */
-export async function findExistingEventIds(params: {
-	db: Db
-	prefix: string
-	eventIds: string[]
-}): Promise<Set<string>> {
-	const { db, prefix, eventIds } = params
-	if (eventIds.length === 0) {
-		return new Set()
-	}
-	const docs = await eventsCollection(db, prefix)
-		.find(
-			{ eventId: { $in: eventIds } },
-			{
-				projection: { _id: 0, eventId: 1 },
-				readConcern: { level: "majority" },
-			},
-		)
-		.toArray()
-	const existing = new Set<string>()
-	for (const doc of docs) {
-		const eventId = (doc as { eventId?: string }).eventId
-		if (typeof eventId === "string") {
-			existing.add(eventId)
-		}
-	}
-	return existing
-}
-
 export async function findExistingEventsForReplay(params: {
 	collection: Collection
 	eventIds: string[]
@@ -1069,23 +1035,18 @@ export async function getEventsByTimeRange(params: {
 	agentId: string
 	start: Date
 	end: Date
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, start, end, scope, scopeRef, limit } = params
+	const { db, prefix, start, end, limit } = params
+	const tenant = requireTenantIdentity("getEventsByTimeRange", params)
 	const collection = eventsCollection(db, prefix)
 	const filter: Document = {
-		agentId,
+		...tenant,
 		timestamp: { $gte: start, $lte: end },
 		// P4.4.1: hide expired docs until the TTL sweep removes them.
 		...buildUnexpiredClause(),
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 
 	return (await collection
@@ -1101,13 +1062,16 @@ export async function getEventsBySession(params: {
 	prefix: string
 	agentId: string
 	sessionId: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, sessionId, limit } = params
+	const { db, prefix, sessionId, limit } = params
+	const tenant = requireTenantIdentity("getEventsBySession", params)
 	const collection = eventsCollection(db, prefix)
 	return (await collection
 		.find({
-			agentId,
+			...tenant,
 			sessionId,
 			// P4.4.1: hide expired docs until the TTL sweep removes them.
 			...buildUnexpiredClause(),
@@ -1209,23 +1173,18 @@ export async function getUnconsolidatedEvents(params: {
 	db: Db
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, scope, scopeRef, limit } = params
+	const { db, prefix, limit } = params
+	const tenant = requireTenantIdentity("getUnconsolidatedEvents", params)
 	const collection = eventsCollection(db, prefix)
 	const filter: Document = {
-		agentId,
+		...tenant,
 		consolidatedAt: { $exists: false },
 		// P4.4.1: hide expired docs until the TTL sweep removes them.
 		...buildUnexpiredClause(),
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 
 	return (await collection
@@ -1246,23 +1205,18 @@ export async function getSessionEventsWithBound(params: {
 	agentId: string
 	sessionId: string
 	bound?: number
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, sessionId, scope, scopeRef } = params
+	const { db, prefix, sessionId } = params
+	const tenant = requireTenantIdentity("getSessionEventsWithBound", params)
 	const effectiveBound = Math.max(1, params.bound ?? 50)
 	const collection = eventsCollection(db, prefix)
 	const filter: Document = {
-		agentId,
+		...tenant,
 		sessionId,
 		// P4.4.1: hide expired docs until the TTL sweep removes them.
 		...buildUnexpiredClause(),
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 
 	const events = (await collection
@@ -1326,16 +1280,13 @@ export async function projectChunksFromEvents(params: {
 			itemsProjected: chunksCreated,
 			durationMs: Date.now() - startMs,
 		}
-		await withFencedWrite({
-			db,
-			prefix,
-			token: admission,
-			fn: (session) => recordProjectionRun({ db, prefix, run, session }),
-		}).catch((diagnosticErr) =>
-			log.warn(
-				"projection repair failed-run record was not written",
-				settledFailureMeta(diagnosticErr),
-			),
+		await bestEffort("projection-repair-failed-run-record", () =>
+			withFencedWrite({
+				db,
+				prefix,
+				token: admission,
+				fn: (session) => recordProjectionRun({ db, prefix, run, session }),
+			}),
 		)
 		const msg = err instanceof Error ? err.message : String(err)
 		log.warn(
@@ -1350,16 +1301,13 @@ export async function projectChunksFromEvents(params: {
 		itemsProjected: chunksCreated,
 		durationMs: Date.now() - startMs,
 	}
-	await withFencedWrite({
-		db,
-		prefix,
-		token: admission,
-		fn: (session) => recordProjectionRun({ db, prefix, run, session }),
-	}).catch((err) =>
-		log.warn(
-			"projection repair run record was not written",
-			settledFailureMeta(err),
-		),
+	await bestEffort("projection-repair-run-record", () =>
+		withFencedWrite({
+			db,
+			prefix,
+			token: admission,
+			fn: (session) => recordProjectionRun({ db, prefix, run, session }),
+		}),
 	)
 	log.info(
 		`projected ${chunksCreated} chunks from ${events.length} events for agent=${agentId}`,
@@ -1523,17 +1471,19 @@ export async function projectEventChunksBatch(params: {
 	}))
 	const chunksCreated = results.filter((r) => r.chunkCreated).length
 	if (params.recordRun !== false) {
-		await recordProjectionRun({
-			db,
-			prefix,
-			run: {
-				agentId: events[0].agentId,
-				projectionType: "chunks",
-				status: failedIndexes.size > 0 || !markerSet ? "failed" : "ok",
-				itemsProjected: chunksCreated,
-				durationMs: Date.now() - startMs,
-			},
-		}).catch(() => {})
+		await bestEffort("chunk-projection-run", () =>
+			recordProjectionRun({
+				db,
+				prefix,
+				run: {
+					agentId: events[0].agentId,
+					projectionType: "chunks",
+					status: failedIndexes.size > 0 || !markerSet ? "failed" : "ok",
+					itemsProjected: chunksCreated,
+					durationMs: Date.now() - startMs,
+				},
+			}),
+		)
 	}
 	return results
 }
@@ -1634,17 +1584,19 @@ export async function projectEventChunk(params: {
 		)
 	}
 	if (params.recordRun !== false) {
-		await recordProjectionRun({
-			db,
-			prefix,
-			run: {
-				agentId: event.agentId,
-				projectionType: "chunks",
-				status: markerSet ? "ok" : "failed",
-				itemsProjected: result.upsertedCount > 0 ? 1 : 0,
-				durationMs: Date.now() - startMs,
-			},
-		}).catch(() => {})
+		await bestEffort("chunk-projection-run", () =>
+			recordProjectionRun({
+				db,
+				prefix,
+				run: {
+					agentId: event.agentId,
+					projectionType: "chunks",
+					status: markerSet ? "ok" : "failed",
+					itemsProjected: result.upsertedCount > 0 ? 1 : 0,
+					durationMs: Date.now() - startMs,
+				},
+			}),
+		)
 	}
 	return { chunkCreated: result.upsertedCount > 0 }
 }

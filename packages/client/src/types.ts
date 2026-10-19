@@ -82,19 +82,26 @@ export type SearchConfig = {
 	timeRange?: { preset?: string; start?: string; end?: string }
 	needExactEvidence?: boolean
 	/**
+	 * A demand for a rerank stage. There is no reranker yet: `true` fails with
+	 * 400 RERANK_UNSUPPORTED (rerank-unsupported); `false` is accepted. Native
+	 * `$rerank` (Atlas only) is not implemented yet.
+	 */
+	rerank?: boolean
+	/**
 	 * Opt-in for the executor's constraint-relaxation fallback (RET-01).
 	 * Default false: explicit constraints (timeRange, needExactEvidence)
 	 * stay hard and an empty constrained answer stays empty.
 	 */
 	allowConstraintRelaxation?: boolean
 	numCandidates?: number
-	fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+	fusionMethod?: "scoreFusion" | "rankFusion"
 	hybridMode?: "hybrid" | "vector-only"
 	allowHybridBackstop?: boolean
-	lexicalPrefilter?: "disabled" | "experimental"
 }
 
 export type MemongoConversationRecallInput = {
+	scope: MemongoScope
+	scopeRef: string
 	query?: string
 	sessionId?: string
 	roles?: Array<"user" | "assistant" | "system" | "tool">
@@ -105,8 +112,6 @@ export type MemongoConversationRecallInput = {
 	includeToolMessages?: boolean
 	limit?: number
 	agentId?: string
-	scope?: MemongoScope
-	scopeRef?: string
 }
 
 export type MemongoConversationImportInput = {
@@ -341,6 +346,8 @@ export type MemongoDiscoveryProjectionInput = {
 export type MemongoTraceChainInput = {
 	factId: string
 	collection: string
+	scope: MemongoScope
+	scopeRef: string
 	agentId?: string
 	maxDepth?: number
 }
@@ -474,7 +481,19 @@ export type MemongoStatusResponse = {
 		lastError?: string
 		lastProvider?: string
 	}
-	custom?: Record<string, unknown>
+	custom?: Record<string, unknown> & { rerank?: MemongoRerankStatus }
+}
+
+/**
+ * Rerank support reported by status. There is no reranker: the engine does not
+ * implement native `$rerank` (Atlas only) yet and the server is not probed.
+ */
+export type MemongoRerankStatus = {
+	nativeRerank: { engineSupport: boolean; serverSupport: boolean | "unknown" }
+	lane: {
+		outcome: MemongoSearchLaneOutcomeStatus
+		reason: MemongoSearchOutcomeReason
+	}
 }
 
 export type MemongoConversationRecallCitation = {
@@ -489,7 +508,7 @@ export type MemongoConversationRecallCitation = {
 export type MemongoConversationRecallResult = {
 	citation: MemongoConversationRecallCitation
 	score?: number
-	matchType: "filter" | "semantic" | "hybrid"
+	matchType: "filter" | "hybrid"
 }
 
 export type MemongoConversationRecallResponse = {
@@ -498,10 +517,8 @@ export type MemongoConversationRecallResponse = {
 		totalMatched: number
 		queryUsed?: string
 		filtersApplied: string[]
-		searchMethod: "standard" | "semantic" | "hybrid"
+		searchMethod: "standard" | "hybrid"
 		durationMs: number
-		/** Set when admission control denied the semantic pass — empties are throttling, not a verdict. */
-		throttled?: { retryAfterMs: number }
 	}
 	/** Present in silent mode when the call was swallowed (auth/throttle/unavailable). */
 	degradation?: MemongoDegradation
@@ -836,7 +853,6 @@ export type MemongoNoveltyResponse = {
 		nearestNeighborDistance: number
 	}>
 	scannedCount: number
-	error?: string
 	agentId: string
 }
 
@@ -965,10 +981,13 @@ export type MemongoSearchOutcomeReason =
 	| "lane-unavailable"
 	| "index-missing"
 	| "index-not-ready"
+	| "index-stale"
+	| "index-unavailable"
 	| "query-timeout"
 	| "dependency-unavailable"
 	| "query-error"
 	| "internal-error"
+	| "rerank-unsupported"
 	| "budget-aggregations"
 	| "budget-embeds"
 	| "budget-deadline"
@@ -988,11 +1007,65 @@ export type MemongoSearchLaneOutcome = {
 /** #101: complete (no failure), partial (some lanes failed) or failed (non-2xx). */
 export type MemongoSearchOutcomeStatus = "complete" | "partial" | "failed"
 
+/**
+ * M2 T8 (#117): one typed row per failed section of an active slate, a
+ * discovery projection or a context bundle. Enum values only. A section that
+ * failed is a row here, never an empty section; nested rows read `parent:child`.
+ */
+export type MemongoSectionFailure = {
+	section: string
+	stage: string
+	outcome: "failed" | "budget-denied"
+	reason: MemongoSearchOutcomeReason
+}
+
 /** #101: a search call's outcome summary. */
 export type MemongoSearchOutcomes = {
 	status: MemongoSearchOutcomeStatus
 	lanes: MemongoSearchLaneOutcome[]
 }
+
+/**
+ * M2 review D3: what a failed operation had already committed.
+ * - `none`: the operation knows none of its data writes committed. A
+ *   consolidation run's own run-record row is not counted; `commit.runId` names it.
+ * - `committed`: known committed effects, listed in the detail; the operation
+ *   as a whole did not complete.
+ * - `unknown`: an uncertain commit outcome. Neither committed nor rolled back
+ *   is claimed, and the detail lists only what is known to be committed.
+ * An error without a state makes no claim; it is not a statement that nothing
+ * committed.
+ */
+export type MemongoCommitState = "none" | "committed" | "unknown"
+
+/** A failed `sync` whose file-sync phase ran to the end before the KB refresh failed. */
+export type MemongoSyncCommit = {
+	operation: "sync"
+	/** What the file-sync phase left undone: failed files, an incomplete enumeration. */
+	fileSync: { filesFailed: number; enumerationComplete: boolean }
+	/**
+	 * The KB import's acknowledged counts. Present only when the import
+	 * produced them; absent means not known, never zero.
+	 */
+	kbImport?: {
+		documentsProcessed: number
+		chunksCreated: number
+		skipped: number
+	}
+}
+
+/** A failed consolidation run: its identity and the work it acknowledged before it failed. */
+export type MemongoConsolidateCommit = {
+	operation: "consolidate"
+	runId: string
+	eventsProcessed: number
+	factsPromoted: number
+	factsInferred: number
+	factsMerged: number
+	factsPruned: number
+}
+
+export type MemongoCommitDetail = MemongoSyncCommit | MemongoConsolidateCommit
 
 export type MemongoSearchKBResponse = {
 	results: Array<{

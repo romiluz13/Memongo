@@ -48,10 +48,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	).queryRewriterModuleMock(),
 )
 
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
-)
-
 vi.mock("./mongodb-lane-coverage.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).laneCoverageModuleMock(),
 )
@@ -1056,12 +1052,17 @@ describe("MongoDBMemoryManager background extraction", () => {
 				.mockResolvedValueOnce(true)
 				.mockResolvedValue(false)
 			let resolveEventDoc: ((doc: unknown) => void) | undefined
-			const findOne = vi.fn(
-				() =>
-					new Promise((resolve) => {
-						resolveEventDoc = resolve
-					}),
-			)
+			// The first read is extractEvent's ownership check; the second is the
+			// worker's event read, which the test holds open.
+			const findOne = vi
+				.fn()
+				.mockResolvedValueOnce({ _id: "owned" })
+				.mockImplementation(
+					() =>
+						new Promise((resolve) => {
+							resolveEventDoc = resolve
+						}),
+				)
 			mocked(eventsCollection).mockReturnValue({
 				findOne,
 			} as unknown as import("mongodb").Collection)
@@ -1085,7 +1086,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 
 			await manager.extractEvent({ eventId: "evt-fenced" })
 			await vi.waitFor(() => {
-				expect(findOne).toHaveBeenCalled()
+				expect(findOne).toHaveBeenCalledTimes(2)
 			})
 			await vi.advanceTimersByTimeAsync(20_001)
 			expect(renewMemoryJobLease).toHaveBeenCalledWith(

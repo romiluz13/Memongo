@@ -1,6 +1,7 @@
 # docker-compose.yml - Memongo one-command setup
-# Uses mongodb/mongodb-atlas-local (floating preview tag; the image line
-# with auto-embedding support — plain mongo/mongo:7 does NOT work).
+# Uses mongodb/mongodb-atlas-local, pinned by digest (the preview image line
+# with auto-embedding support — plain mongo/mongo:7 does NOT work). M2: the
+# startup contract requires MongoDB 8.3+; update the digest deliberately.
 #
 # Usage:
 #   docker compose -f docker/docker-compose.yml up -d
@@ -19,8 +20,7 @@
 
 services:
   mongodb:
-    # Record the resolved image digest when validating a deployment.
-    image: mongodb/mongodb-atlas-local:preview
+    image: mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
     container_name: memongo-preview
     # Pin the hostname: the atlas-local image derives the replica-set name
     # (and member host) from the container hostname. Without a pin, Docker

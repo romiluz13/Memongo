@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // `vi.mock` is hoisted above `const` declarations at module scope, so we
 // use `vi.hoisted` to declare the spy in the same phase.
 const { warnSpy } = vi.hoisted(() => ({ warnSpy: vi.fn() }))
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		info: vi.fn(),
 		warn: warnSpy,
@@ -20,12 +21,10 @@ vi.mock("./mongodb-schema.js", () => ({
 }))
 
 import { recallConversation } from "./mongodb-conversation-recall.js"
-import {
-	DEFAULT_SEARCH_ADMISSION_BURST,
-	resetSearchAdmissionForTests,
-	tryConsumeSearchAdmission,
-} from "./mongodb-search-admission.js"
+import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { eventsCollection } from "./mongodb-schema.js"
+
+const TENANT = { scope: "agent", scopeRef: "agent:agent-1" } as const
 
 function mockDb(): Db {
 	return {} as Db
@@ -138,6 +137,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				sessionId: "sess-1",
 				startTime: "2026-04-08",
 				endTime: "2026-04-11",
@@ -149,6 +149,7 @@ describe("recallConversation", () => {
 
 		expect(col.find).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			...TENANT,
 			sessionId: "sess-1",
 			role: { $ne: "tool" },
 			timestamp: {
@@ -211,6 +212,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				roles: ["tool"],
 				includeToolMessages: false,
 			},
@@ -240,6 +242,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				startTime: "2026-04-08",
 				endTime: "2026-04-08",
 				timezone: "America/New_York",
@@ -249,6 +252,7 @@ describe("recallConversation", () => {
 
 		expect(col.find).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			...TENANT,
 			role: { $ne: "tool" },
 			timestamp: {
 				$gte: new Date("2026-04-08T04:00:00.000Z"),
@@ -257,71 +261,6 @@ describe("recallConversation", () => {
 			$and: expectedBitemporalAnd(new Date("2026-04-12T00:00:00.000Z")),
 			$or: expectedUnexpiredOr(),
 		})
-	})
-
-	it("uses semantic recall when vector search is available", async () => {
-		const resultDoc = {
-			eventId: "evt-2",
-			agentId: "agent-1",
-			role: "user",
-			body: "The Phoenix launch moved to Friday.",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			timestamp: new Date("2026-04-09T10:30:00.000Z"),
-			score: 0.92,
-		}
-		const col = makeAggregateCollection({ results: [resultDoc] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const response = await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: {
-				agentId: "agent-1",
-				query: "phoenix launch",
-				startTime: "2026-04-01",
-				limit: 999,
-			},
-			queryEmbeddingModel: "voyage-4-large",
-			capabilities: {
-				vectorSearch: true,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-		})
-
-		expect(col.aggregate).toHaveBeenCalledOnce()
-		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
-		expect(pipeline[0]?.$vectorSearch).toEqual({
-			index: "mem_events_vector",
-			query: { text: "phoenix launch" },
-			model: "voyage-4-large",
-			path: "body",
-			filter: {
-				agentId: { $eq: "agent-1" },
-				role: { $ne: "tool" },
-				timestamp: {
-					$gte: new Date("2026-04-01T00:00:00.000Z"),
-					$lte: expect.any(Date),
-				},
-			},
-			// Issue #41: vector stage over-fetches effectiveLimit*4 (=800) so the
-			// post-stage bi-temporal $match cannot starve results, and numCandidates
-			// scales to the over-fetched limit (20×800=16000, capped at the Atlas
-			// ceiling of 10000) to preserve the ANN-recall baseline.
-			numCandidates: 10000,
-			limit: 800,
-		})
-		expect(response.metadata.searchMethod).toBe("semantic")
-		expect(response.results[0]).toEqual(
-			expect.objectContaining({
-				matchType: "semantic",
-				score: 0.92,
-			}),
-		)
 	})
 
 	it("uses rankFusion for hybrid recall when text and vector search are available", async () => {
@@ -346,16 +285,9 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "deployment timeline",
 				sessionId: "sess-7",
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 
@@ -412,15 +344,8 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "deployment telemetry",
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 
@@ -455,44 +380,6 @@ describe("recallConversation", () => {
 		expect(vectorContribution).toBeCloseTo(0.5 * (1 / (60 + 1)), 10)
 	})
 
-	it("falls back to escaped regex filtering when semantic search is unavailable", async () => {
-		const col = makeFindCollection({ results: [] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const response = await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: {
-				agentId: "agent-1",
-				query: "phoenix+launch?",
-			},
-			capabilities: {
-				vectorSearch: false,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-		})
-
-		expect(col.find).toHaveBeenCalledWith(
-			expect.objectContaining({
-				agentId: "agent-1",
-				role: { $ne: "tool" },
-				body: { $regex: /phoenix\+launch\?/i },
-				timestamp: {
-					$lte: expect.any(Date),
-				},
-				$and: expect.arrayContaining([
-					expect.objectContaining({ $and: expect.any(Array) }),
-				]),
-			}),
-		)
-		expect(response.metadata.searchMethod).toBe("standard")
-		expect(response.metadata.queryUsed).toBe("phoenix+launch?")
-	})
-
 	it("returns empty results with clean metadata when no events match", async () => {
 		const col = makeFindCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
@@ -502,6 +389,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 			},
 		})
 
@@ -542,6 +430,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				limit: 1,
 			},
 		})
@@ -559,6 +448,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				roles: ["user"],
 				includeToolMessages: true,
 			},
@@ -578,34 +468,6 @@ describe("recallConversation", () => {
 		)
 	})
 
-	it("falls back to UTC boundaries when the timezone is invalid", async () => {
-		const col = makeFindCollection({ results: [] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: {
-				agentId: "agent-1",
-				startTime: "2026-04-08",
-				endTime: "2026-04-08",
-				timezone: "Mars/Olympus",
-				asOf: new Date("2026-04-12T00:00:00.000Z"),
-			},
-		})
-
-		expect(col.find).toHaveBeenCalledWith({
-			agentId: "agent-1",
-			role: { $ne: "tool" },
-			timestamp: {
-				$gte: new Date("2026-04-08T00:00:00.000Z"),
-				$lte: new Date("2026-04-08T23:59:59.999Z"),
-			},
-			$and: expectedBitemporalAnd(new Date("2026-04-12T00:00:00.000Z")),
-			$or: expectedUnexpiredOr(),
-		})
-	})
-
 	it("returns empty results without touching the database when startTime is after endTime", async () => {
 		const col = makeFindCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
@@ -615,6 +477,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				startTime: "2026-04-10T12:00:00.000Z",
 				endTime: "2026-04-09T12:00:00.000Z",
 			},
@@ -647,6 +510,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 			},
 		})
 
@@ -695,15 +559,7 @@ describe("recallConversation", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "anything" },
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
+			request: { agentId: "agent-1", ...TENANT, query: "anything" },
 		})
 
 		const malformedWarns = warnSpy.mock.calls.filter((c: unknown[]) =>
@@ -733,15 +589,7 @@ describe("recallConversation", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "anything" },
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
+			request: { agentId: "agent-1", ...TENANT, query: "anything" },
 		})
 
 		const malformedWarns = warnSpy.mock.calls.filter((c: unknown[]) =>
@@ -757,180 +605,6 @@ describe("recallConversation", () => {
 	// retrieval paths. Without these, the audit claim is undefended.
 	// =========================================================================
 
-	it("bi-temporal safety: semanticRecall pipeline includes $match(bitemporal) after $vectorSearch", async () => {
-		const col = makeAggregateCollection({ results: [] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const asOf = new Date("2026-05-12T10:00:00.000Z")
-		await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: {
-				agentId: "agent-1",
-				query: "semantic query",
-				asOf,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-		})
-
-		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
-		// stage 0 = $vectorSearch, stage 1 = $match(full request predicate,
-		// revalidated post-stage), stage 2 = $match(bitemporal)
-		expect(pipeline[0]?.$vectorSearch).toBeDefined()
-		// The post-stage revalidation reapplies the SAME resolved filter the
-		// $vectorSearch prefilter used (owner/scope/session/role/time).
-		expect(pipeline[1]).toEqual({
-			$match: (pipeline[0]?.$vectorSearch as { filter?: Document }).filter,
-		})
-		expect(pipeline[2]?.$match).toEqual({
-			$and: [
-				{
-					$or: [{ validAt: { $exists: false } }, { validAt: { $lte: asOf } }],
-				},
-				{
-					$or: [
-						{ invalidAt: { $exists: false } },
-						{ invalidAt: null },
-						{ invalidAt: { $gt: asOf } },
-					],
-				},
-			],
-		})
-	})
-
-	it("recall overfetch (issue #41): semanticRecall $vectorSearch fetches MORE than the final limit so the bitemporal $match cannot starve results", async () => {
-		const col = makeAggregateCollection({ results: [] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const limit = 5
-		await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: {
-				agentId: "agent-1",
-				query: "semantic query",
-				asOf: new Date("2026-05-12T10:00:00.000Z"),
-				limit,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-		})
-
-		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
-		const vectorStage = pipeline[0]?.$vectorSearch as {
-			limit?: number
-			numCandidates?: number
-		}
-		const vectorLimit = vectorStage?.limit
-		// The vector stage must over-fetch beyond the requested limit so that
-		// invalid-at-asOf docs trimmed by the later $match cannot leave fewer
-		// than `limit` valid results.
-		expect(vectorLimit).toBeGreaterThan(limit)
-		// numCandidates must scale with the OVER-FETCHED limit (>= it, and at
-		// least 20× per the ANN baseline) and never exceed the Atlas ceiling.
-		expect(vectorStage?.numCandidates).toBeGreaterThanOrEqual(
-			vectorLimit as number,
-		)
-		expect(vectorStage?.numCandidates).toBeGreaterThanOrEqual(
-			(vectorLimit as number) * 20 > 10000
-				? 10000
-				: (vectorLimit as number) * 20,
-		)
-		expect(vectorStage?.numCandidates).toBeLessThanOrEqual(10000)
-		// The terminal $limit still enforces the requested result count.
-		const limitStage = pipeline.find(
-			(s) => typeof (s as { $limit?: number }).$limit === "number",
-		) as { $limit?: number } | undefined
-		expect(limitStage?.$limit).toBe(limit)
-	})
-
-	it("uses native bitemporal prefiltering when the serving events index is verified and still revalidates validity post-stage", async () => {
-		const col = makeAggregateCollection({ results: [] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const asOf = new Date("2026-05-12T10:00:00.000Z")
-		const limit = 5
-		await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: {
-				agentId: "agent-1",
-				scope: "tenant",
-				scopeRef: "tenant:acme",
-				sessionId: "session-1",
-				roles: ["assistant"],
-				query: "semantic query",
-				startTime: "2026-05-01T00:00:00.000Z",
-				endTime: "2026-05-11T23:59:59.999Z",
-				asOf,
-				limit,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-			nativeBitemporalVectorPrefilter: true,
-		})
-
-		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
-		const vectorStage = pipeline[0]?.$vectorSearch as {
-			filter?: Document
-			limit?: number
-			numCandidates?: number
-		}
-		expect(vectorStage.limit).toBe(limit)
-		expect(vectorStage.numCandidates).toBe(200)
-		expect(vectorStage.filter).toEqual(
-			expect.objectContaining({
-				agentId: { $eq: "agent-1" },
-				scope: { $eq: "tenant" },
-				scopeRef: { $eq: "tenant:acme" },
-				sessionId: { $eq: "session-1" },
-				role: { $in: ["assistant"] },
-				timestamp: {
-					$gte: new Date("2026-05-01T00:00:00.000Z"),
-					$lte: new Date("2026-05-11T23:59:59.999Z"),
-				},
-			}),
-		)
-		expect(vectorStage.filter?.$and).toEqual([
-			{
-				$or: [{ validAt: { $exists: false } }, { validAt: { $lte: asOf } }],
-			},
-			{
-				$or: [{ invalidAt: { $exists: false } }, { invalidAt: { $gt: asOf } }],
-			},
-		])
-		// The canonical bi-temporal post-$match is unconditional — the
-		// native prefilter runs against the indexed copy, which can lag the
-		// latest write. The P4.4.1 unexpired $match (expiresAt) is still
-		// present.
-		expect(
-			pipeline.some(
-				(stage) =>
-					stage.$match !== undefined &&
-					JSON.stringify(stage.$match).includes("validAt"),
-			),
-		).toBe(true)
-	})
-
 	it("recall overfetch (issue #41): hybridRecall $rankFusion vector inner lane over-fetches beyond the final limit", async () => {
 		const col = makeAggregateCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
@@ -941,17 +615,10 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "hybrid query",
 				asOf: new Date("2026-05-12T10:00:00.000Z"),
 				limit,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 
@@ -977,17 +644,10 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "hybrid query",
 				asOf,
 				limit: 5,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 			nativeBitemporalVectorPrefilter: true,
 		})
@@ -1036,67 +696,6 @@ describe("recallConversation", () => {
 	// fake timers; hard-filter content is asserted with actual request values.
 	// =========================================================================
 
-	it("expiry clock: semantic recall checks expiresAt at wall-now and validity at asOf", async () => {
-		const col = makeAggregateCollection({ results: [] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const asOf = new Date("2026-05-12T10:00:00.000Z")
-		const callStart = new Date()
-		await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: {
-				agentId: "agent-1",
-				scope: "tenant",
-				scopeRef: "tenant:acme",
-				sessionId: "session-1",
-				roles: ["assistant"],
-				query: "semantic query",
-				startTime: "2026-05-01T00:00:00.000Z",
-				endTime: "2026-05-11T23:59:59.999Z",
-				asOf,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-		})
-		const callEnd = new Date()
-
-		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
-		expect(pipeline[0]?.$vectorSearch).toBeDefined()
-		// Post-stage revalidation carries the actual request predicate values
-		// (owner/scope/session/role/time), not merely the prefilter object.
-		expect(pipeline[1]?.$match).toEqual(
-			expect.objectContaining({
-				agentId: { $eq: "agent-1" },
-				scope: { $eq: "tenant" },
-				scopeRef: { $eq: "tenant:acme" },
-				sessionId: { $eq: "session-1" },
-				role: { $in: ["assistant"] },
-				timestamp: {
-					$gte: new Date("2026-05-01T00:00:00.000Z"),
-					$lte: new Date("2026-05-11T23:59:59.999Z"),
-				},
-			}),
-		)
-		// Validity stays historical: bitemporal $match at asOf.
-		expect(pipeline[2]?.$match).toEqual(expectedBitemporalAnd(asOf)[0])
-		// Retention is current: expiresAt is checked against wall-now (inside
-		// the captured [callStart, callEnd] window), never at asOf.
-		const expiryStage = pipeline[3]?.$match as Document | undefined
-		const expiryDate = (expiryStage?.$or as Document[] | undefined)?.[1]
-			?.expiresAt?.$gt as Date | undefined
-		expect(expiryDate).toBeInstanceOf(Date)
-		expect(expiryDate?.getTime()).toBeGreaterThanOrEqual(callStart.getTime())
-		expect(expiryDate?.getTime()).toBeLessThanOrEqual(callEnd.getTime())
-		expect(expiryDate?.getTime()).not.toBe(asOf.getTime())
-	})
-
 	it("expiry clock: hybrid recall checks expiresAt at wall-now and validity at asOf", async () => {
 		const col = makeAggregateCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
@@ -1117,14 +716,6 @@ describe("recallConversation", () => {
 				endTime: "2026-05-11T23:59:59.999Z",
 				asOf,
 				limit: 5,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 		const callEnd = new Date()
@@ -1170,16 +761,9 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "hybrid query",
 				asOf,
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 
@@ -1239,16 +823,9 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "how many doctor's appointments in March",
 				asOf: new Date("2026-05-12T00:00:00.000Z"),
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 
@@ -1296,15 +873,8 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "deployment timeline for the service",
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 
@@ -1331,16 +901,9 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "what did we decide last week",
 				asOf: new Date("2026-05-12T00:00:00.000Z"),
-			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 
@@ -1461,7 +1024,7 @@ describe("recallConversation", () => {
 		const response = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", asOf, limit: 10 },
+			request: { agentId: "agent-1", ...TENANT, asOf, limit: 10 },
 		})
 
 		expect(response.results).toHaveLength(1)
@@ -1485,47 +1048,11 @@ describe("recallConversation TTL expiration (P4.4.1)", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", sessionId: "sess-1" },
+			request: { agentId: "agent-1", ...TENANT, sessionId: "sess-1" },
 		})
 
 		const filter = vi.mocked(col.find).mock.calls[0]?.[0] as Document
 		expect(filter.$or).toEqual(expectedUnexpiredOr())
-	})
-
-	it("semantic recall adds a post-$vectorSearch unexpired $match and keeps expiresAt out of the vector prefilter", async () => {
-		const col = makeAggregateCollection({ results: [] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: { agentId: "agent-1", query: "launch" },
-			capabilities: {
-				vectorSearch: true,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-		})
-
-		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
-		expect(pipeline[0]?.$vectorSearch).toBeDefined()
-		// The serving vector index does not declare expiresAt as a filter
-		// field, so the exclusion must NOT live in the $vectorSearch prefilter.
-		expect(
-			JSON.stringify(
-				(pipeline[0]?.$vectorSearch as { filter?: Document }).filter ?? {},
-			),
-		).not.toContain("expiresAt")
-		const matchStages = pipeline.filter((stage) => stage.$match !== undefined)
-		expect(matchStages.length).toBeGreaterThan(0)
-		expect(
-			matchStages.some((stage) =>
-				JSON.stringify(stage.$match).includes("expiresAt"),
-			),
-		).toBe(true)
 	})
 
 	it("hybrid recall excludes expired docs after $rankFusion", async () => {
@@ -1535,15 +1062,7 @@ describe("recallConversation TTL expiration (P4.4.1)", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "launch" },
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
+			request: { agentId: "agent-1", ...TENANT, query: "launch" },
 		})
 
 		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
@@ -1598,51 +1117,6 @@ describe("recallConversation search admission (WS-11)", () => {
 		resetSearchAdmissionForTests(Date.now())
 	})
 
-	function exhaustBucket(): void {
-		for (let i = 0; i < DEFAULT_SEARCH_ADMISSION_BURST; i++) {
-			tryConsumeSearchAdmission(Date.now())
-		}
-	}
-
-	it("denial never runs a vector stage and degrades to the text lane with the throttled marker", async () => {
-		exhaustBucket()
-		const textDoc = {
-			eventId: "evt-1",
-			sessionId: "sess-1",
-			role: "user",
-			body: "deploy runbook lives in ops wiki",
-			timestamp: new Date("2026-08-01T00:00:00.000Z"),
-		}
-		const col = makeFindCollection({ results: [textDoc] })
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const response = await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: { agentId: "agent-1", query: "deploy runbook", limit: 10 },
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-		})
-
-		// The vector stages (hybrid AND semantic fallback) never fired: no
-		// aggregate pipeline ran at all — only the standard find lane.
-		expect(col.aggregate).not.toHaveBeenCalled()
-		// The text lane still answers, so a throttle degrades ranking, not
-		// completeness.
-		expect(response.results.length).toBeGreaterThan(0)
-		expect(response.metadata.searchMethod).toBe("standard")
-		// The distinct outcome: throttled marker + retry hint, which a
-		// healthy empty recall never carries.
-		expect(response.metadata.throttled).toBeDefined()
-		expect(response.metadata.throttled?.retryAfterMs).toBeGreaterThan(0)
-	})
-
 	it("an admitted querying recall runs the hybrid lane and carries no throttle marker", async () => {
 		resetSearchAdmissionForTests(Date.now())
 		const col = makeAggregateCollection({
@@ -1661,87 +1135,15 @@ describe("recallConversation search admission (WS-11)", () => {
 		const response = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "deploy runbook", limit: 10 },
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
+			request: {
+				agentId: "agent-1",
+				...TENANT,
+				query: "deploy runbook",
+				limit: 10,
 			},
 		})
 
 		expect(col.aggregate).toHaveBeenCalled()
 		expect(response.metadata.searchMethod).toBe("hybrid")
-		expect(response.metadata.throttled).toBeUndefined()
-	})
-
-	it("reports hybrid and semantic lane failures via onLaneFailure and still answers from the standard lane (RET-13)", async () => {
-		resetSearchAdmissionForTests(Date.now())
-		const laneFailures: Array<{ lane: string; error: unknown }> = []
-		const hybridError = new Error("rankFusion exploded")
-		const semanticError = new Error("vectorSearch exploded")
-		const aggregateCalls: Document[][] = []
-
-		const standardDoc = {
-			eventId: "evt-std",
-			agentId: "agent-1",
-			sessionId: "sess-1",
-			role: "assistant",
-			body: "Standard lane keeps answering when ranking lanes fail.",
-			scope: "agent",
-			scopeRef: "agent:agent-1",
-			timestamp: new Date("2026-08-02T00:00:00.000Z"),
-		}
-
-		const limit = vi.fn((value?: number) => ({
-			toArray: vi.fn(async () => [standardDoc].slice(0, value ?? 1)),
-		}))
-		const col = {
-			find: vi.fn(() => ({ sort: vi.fn(() => ({ limit })) })),
-			// Every aggregate attempt rejects: hybrid first, then the
-			// semantic fallback.
-			aggregate: vi.fn((pipeline: Document[]) => {
-				aggregateCalls.push(pipeline)
-				const stage = pipeline[0] ?? {}
-				const isSemantic = "$vectorSearch" in stage
-				return {
-					toArray: vi.fn(async () => {
-						throw isSemantic ? semanticError : hybridError
-					}),
-				}
-			}),
-		} as unknown as Collection
-		vi.mocked(eventsCollection).mockReturnValue(col)
-
-		const response = await recallConversation({
-			db: mockDb(),
-			prefix: "mem_",
-			request: { agentId: "agent-1", query: "deploy runbook", limit: 10 },
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-			onLaneFailure: (lane, error) => laneFailures.push({ lane, error }),
-		})
-
-		// Both ranking lanes attempted and failed...
-		expect(aggregateCalls.length).toBe(2)
-		// ...each failure surfaced through the callback with the original
-		// error object, in attempt order.
-		expect(laneFailures).toEqual([
-			{ lane: "recall:hybrid", error: hybridError },
-			{ lane: "recall:semantic", error: semanticError },
-		])
-		// ...and the recall still answered from the standard find lane
-		// instead of erroring out.
-		expect(col.find).toHaveBeenCalled()
-		expect(response.metadata.searchMethod).toBe("standard")
-		expect(response.results.length).toBeGreaterThan(0)
 	})
 })

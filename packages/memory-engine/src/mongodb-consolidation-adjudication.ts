@@ -1,6 +1,5 @@
 import type { Db } from "mongodb"
-import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
-import { settledFailureMeta } from "./query-diagnostics.js"
+import type { MemoryScope } from "@memongo/lib"
 import {
 	detectContradictions,
 	invalidateContradictedFacts,
@@ -9,12 +8,11 @@ import {
 	type PreparedContradictionInvalidation,
 } from "./mongodb-contradiction.js"
 import type { AdmissionToken } from "./mongodb-erasure-epoch.js"
+import { withFencedWrite } from "./mongodb-write-fence.js"
 import {
-	isErasureGateConflictError,
-	isMalformedGateError,
-	withFencedWrite,
-} from "./mongodb-write-fence.js"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 
@@ -32,14 +30,12 @@ import { buildUnexpiredClause } from "./mongodb-temporal.js"
  *     proof-count analog.
  *
  * Same conventions as mongodb-contradiction.ts / mongodb-consolidation-reasoning.ts:
- * strict JSON parsing (code fences stripped), every failure path degrades to
- * the conservative outcome (unresolved / NO_MERGE) rather than throwing, so a
- * missing or misbehaving LLM never breaks a consolidation run.
+ * strict JSON parsing (code fences stripped). A provider, parse or store
+ * failure throws: it is never "unresolved" or NO_MERGE, because those outcomes
+ * are write decisions. The caller fails the unit and retries.
  *
  * @module mongodb-consolidation-adjudication
  */
-
-const log = createSubsystemLogger("memory:mongodb:consolidation-adjudication")
 
 // ---------------------------------------------------------------------------
 // Shared constants
@@ -110,9 +106,8 @@ export function foldSourceEventIds(
  *
  * Returns { resolved, invalidatedCount }. `resolved: true` means the caller
  * should re-evaluate the candidate through the normal pipeline instead of
- * skipping it. With admission, failures are rethrown so database errors remain retryable.
- * Without admission, failures degrade to unresolved, which is
- * exactly the pre-P4.4.2 skip behavior.
+ * skipping it. `resolved: false` means the model found nothing the candidate
+ * supersedes; a failure to decide throws, with or without admission.
  */
 export async function resolveConflictedCandidate(params: {
 	db: Db
@@ -140,59 +135,46 @@ export async function resolveConflictedCandidate(params: {
 	const scope: MemoryScope = candidate.scope ?? "agent"
 	const scopeRef = candidate.scopeRef ?? `agent:${agentId}`
 
-	try {
-		if (!(await candidateSupersedesExistingFact(params))) return unresolved
-		// invalidate the losing (existing) side per invalidateContradictedFacts
-		// semantics, then let the caller re-evaluate the surviving candidate.
-		const invalidation = {
-			db,
-			prefix,
-			provider,
-			model,
-			agentId,
-			scope,
-			scopeRef,
-			newFacts: [{ key: candidate.key, value: candidate.value }],
-			...(runId ? { runId } : {}),
-		}
-		let invalidatedCount: number
-		if (params.admission) {
-			const prepared = await prepareContradictionInvalidations(invalidation)
-			invalidatedCount =
-				prepared.length === 0
-					? 0
-					: await withFencedWrite({
-							db,
-							prefix,
-							token: params.admission,
-							fn: (session) =>
-								persistPreparedContradictionInvalidations({
-									db,
-									prefix,
-									agentId,
-									scope,
-									scopeRef,
-									prepared,
-									runId,
-									session,
-								}),
-						})
-		} else {
-			invalidatedCount = await invalidateContradictedFacts(invalidation)
-		}
-		return { resolved: invalidatedCount > 0, invalidatedCount }
-	} catch (err) {
-		if (
-			params.admission ||
-			isErasureGateConflictError(err) ||
-			isMalformedGateError(err)
-		)
-			throw err
-		log.warn("conflicted candidate resolution failed; preserving skip", {
-			...settledFailureMeta(err),
-		})
-		return unresolved
+	if (!(await candidateSupersedesExistingFact(params))) return unresolved
+	// invalidate the losing (existing) side per invalidateContradictedFacts
+	// semantics, then let the caller re-evaluate the surviving candidate.
+	const invalidation = {
+		db,
+		prefix,
+		provider,
+		model,
+		agentId,
+		scope,
+		scopeRef,
+		newFacts: [{ key: candidate.key, value: candidate.value }],
+		...(runId ? { runId } : {}),
 	}
+	let invalidatedCount: number
+	if (params.admission) {
+		const prepared = await prepareContradictionInvalidations(invalidation)
+		invalidatedCount =
+			prepared.length === 0
+				? 0
+				: await withFencedWrite({
+						db,
+						prefix,
+						token: params.admission,
+						fn: (session) =>
+							persistPreparedContradictionInvalidations({
+								db,
+								prefix,
+								agentId,
+								scope,
+								scopeRef,
+								prepared,
+								runId,
+								session,
+							}),
+					})
+	} else {
+		invalidatedCount = await invalidateContradictedFacts(invalidation)
+	}
+	return { resolved: invalidatedCount > 0, invalidatedCount }
 }
 
 async function candidateSupersedesExistingFact(
@@ -248,30 +230,17 @@ async function candidateSupersedesExistingFact(
 export async function prepareConflictedCandidateResolution(
 	params: Parameters<typeof resolveConflictedCandidate>[0],
 ): Promise<PreparedContradictionInvalidation[]> {
-	try {
-		if (!(await candidateSupersedesExistingFact(params))) return []
-		return await prepareContradictionInvalidations({
-			db: params.db,
-			prefix: params.prefix,
-			provider: params.provider,
-			model: params.model,
-			agentId: params.agentId,
-			scope: params.candidate.scope ?? "agent",
-			scopeRef: params.candidate.scopeRef ?? `agent:${params.agentId}`,
-			newFacts: [{ key: params.candidate.key, value: params.candidate.value }],
-		})
-	} catch (err) {
-		if (
-			params.admission ||
-			isErasureGateConflictError(err) ||
-			isMalformedGateError(err)
-		)
-			throw err
-		log.warn("conflicted candidate preparation failed; preserving skip", {
-			...settledFailureMeta(err),
-		})
-		return []
-	}
+	if (!(await candidateSupersedesExistingFact(params))) return []
+	return prepareContradictionInvalidations({
+		db: params.db,
+		prefix: params.prefix,
+		provider: params.provider,
+		model: params.model,
+		agentId: params.agentId,
+		scope: params.candidate.scope ?? "agent",
+		scopeRef: params.candidate.scopeRef ?? `agent:${params.agentId}`,
+		newFacts: [{ key: params.candidate.key, value: params.candidate.value }],
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -308,10 +277,10 @@ function buildMergeUserPrompt(
  * Ask the LLM for a 1-by-1 merge verdict on a pair of similar facts.
  *
  * Strictness conventions match the other consolidation LLM seams: code fences
- * stripped, unknown verdicts downgrade to NO_MERGE, and a MERGE without union
- * text downgrades to NO_MERGE (the caller must never invent merged text or
- * lose the loser's information). LLM failure or malformed JSON is NO_MERGE —
- * never throws.
+ * stripped. NO_MERGE is a verdict only when the model said so. An unknown
+ * verdict, a MERGE without union text (the caller must never invent merged
+ * text or lose the loser's information), malformed JSON and a provider
+ * failure all throw; none of them is NO_MERGE.
  */
 export async function adjudicateFactMerge(params: {
 	provider: EnrichmentProvider
@@ -324,24 +293,16 @@ export async function adjudicateFactMerge(params: {
 		return { verdict: "NO_MERGE" }
 	}
 
-	let content: string
-	try {
-		const response = await provider.chatCompletion({
-			model,
-			messages: [
-				{ role: "system", content: MERGE_SYSTEM_PROMPT },
-				{ role: "user", content: buildMergeUserPrompt(factA, factB) },
-			],
-			responseFormat: { type: "json_object" },
-			maxTokens: MAX_TOKENS,
-		})
-		content = response.content
-	} catch (err) {
-		log.warn("llm dedup adjudication call failed", {
-			...settledFailureMeta(err),
-		})
-		return { verdict: "NO_MERGE" }
-	}
+	const response = await provider.chatCompletion({
+		model,
+		messages: [
+			{ role: "system", content: MERGE_SYSTEM_PROMPT },
+			{ role: "user", content: buildMergeUserPrompt(factA, factB) },
+		],
+		responseFormat: { type: "json_object" },
+		maxTokens: MAX_TOKENS,
+	})
+	const content = response.content
 
 	let parsed: unknown
 	try {
@@ -350,23 +311,30 @@ export async function adjudicateFactMerge(params: {
 			.replace(/\n?```\s*$/i, "")
 		parsed = JSON.parse(stripped)
 	} catch {
-		log.warn("llm dedup adjudication JSON parse failed", {
-			preview: content.slice(0, 200),
-		})
-		return { verdict: "NO_MERGE" }
+		throw new EnrichmentParseError(
+			`llm dedup adjudication JSON parse failed (provider=${provider.name})`,
+		)
 	}
 
 	if (!parsed || typeof parsed !== "object") {
-		return { verdict: "NO_MERGE" }
+		throw new EnrichmentParseError(
+			`llm dedup adjudication response is not an object (provider=${provider.name})`,
+		)
 	}
 	const record = parsed as Record<string, unknown>
-	if (record.verdict !== "MERGE") {
+	if (record.verdict === "NO_MERGE") {
 		return { verdict: "NO_MERGE" }
+	}
+	if (record.verdict !== "MERGE") {
+		throw new EnrichmentParseError(
+			`llm dedup adjudication returned no MERGE or NO_MERGE verdict (provider=${provider.name})`,
+		)
 	}
 	const merged = typeof record.merged === "string" ? record.merged.trim() : ""
 	if (!merged) {
-		log.warn("llm dedup MERGE verdict missing union text; treating as no-merge")
-		return { verdict: "NO_MERGE" }
+		throw new EnrichmentParseError(
+			`llm dedup MERGE verdict is missing the union text (provider=${provider.name})`,
+		)
 	}
 	return { verdict: "MERGE", mergedValue: merged }
 }

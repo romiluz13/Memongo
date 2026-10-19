@@ -34,6 +34,7 @@ import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import { findExactProcedureMatches } from "./mongodb-procedures.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { SearchLaneError } from "./search-outcomes.js"
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 const privateText = "CANARY164 confidential project and medical details"
 beforeEach(() => {
 	vi.clearAllMocks()
@@ -72,7 +73,6 @@ for (const seam of ["lane", "exact-backstop"] as const) {
 		vi.spyOn(console, "warn").mockImplementation((...args) =>
 			warnings.push(args.join(" ")),
 		)
-		const onPathFailure = vi.fn()
 		if (seam === "lane")
 			vi.mocked(searchStructuredMemory).mockRejectedValue(err)
 		else vi.mocked(findExactProcedureMatches).mockRejectedValue(err)
@@ -85,7 +85,7 @@ for (const seam of ["lane", "exact-backstop"] as const) {
 				availablePaths: new Set(
 					seam === "lane" ? ["structured"] : ["structured", "procedural"],
 				),
-				onPathFailure,
+				searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
 			},
 		)
 		expect(result.results).toEqual([])
@@ -98,12 +98,6 @@ for (const seam of ["lane", "exact-backstop"] as const) {
 		expect(relevant[0]).not.toContain("queryDigest")
 		if (kind === "driver") expect(relevant[0]).toContain('"code":2')
 		expect(poison).not.toHaveBeenCalled()
-		expect(onPathFailure).toHaveBeenCalledOnce()
-		const [hookLane, hookErr] = onPathFailure.mock.calls[0] as [string, Error]
-		expect(hookLane).toBe(lane)
-		expect(hookErr).toBeInstanceOf(SearchLaneError)
-		expect(hookErr.cause).toBe(err)
-		expect(hookErr.message).not.toContain(privateText)
 		expect(result.metadata.laneOutcomes).toContainEqual({
 			lane,
 			stage: "lane",
@@ -131,6 +125,7 @@ for (const seam of ["lane", "exact-backstop"] as const) {
 				availablePaths: new Set(
 					seam === "lane" ? ["structured"] : ["structured", "procedural"],
 				),
+				searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
 			},
 		).catch((caught: unknown) => caught)
 		expect(failure).toBeInstanceOf(SearchLaneError)

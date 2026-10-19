@@ -4,6 +4,10 @@ import { createSubsystemLogger } from "@memongo/lib"
 
 const log = createSubsystemLogger("memory:mongodb:schema")
 import { sortObject } from "./search-utils.js"
+import {
+	reconcileRequiredIndex,
+	verifyServerVersion,
+} from "./mongodb-boot-contract.js"
 
 // ---------------------------------------------------------------------------
 // Search / Vector Search index creation
@@ -20,15 +24,11 @@ export function isSearchIndexManagementUnavailable(message: string): boolean {
 // registry (mongodb-capability-registry.ts), so every gate in this file and
 // the registry share one comparison.
 
-// Exported for sibling schema modules (validators); not part of the
-// mongodb-schema.js public surface.
+// Exported for sibling schema modules; not part of the mongodb-schema.js
+// public surface. An unreadable version is a typed boot failure, never
+// "unknown".
 export async function detectServerVersionArray(db: Db): Promise<unknown> {
-	try {
-		const buildInfo = await db.admin().command({ buildInfo: 1 })
-		return (buildInfo as { versionArray?: unknown }).versionArray
-	} catch {
-		return undefined
-	}
+	return verifyServerVersion(db)
 }
 
 export type SearchIndexDescription = {
@@ -38,7 +38,7 @@ export type SearchIndexDescription = {
 	queryable?: boolean
 	definition?: Document
 	statusDetail?: Array<{
-		mainIndex?: { queryable?: boolean; status?: string }
+		mainIndex?: { queryable?: boolean; status?: string; definition?: Document }
 		definitions?: Array<{ queryable?: boolean; status?: string }>
 	}>
 	latestDefinition?: Document
@@ -149,7 +149,7 @@ export function isSearchIndexReadyWithFilterFields(
 	if (!isSearchIndexQueryable(index)) {
 		return false
 	}
-	if (expectedType && !isSearchIndexTypeCompatible(index.type, expectedType)) {
+	if (expectedType && !isSearchIndexTypeCompatible(index, expectedType)) {
 		return false
 	}
 	const definition = index.latestDefinition ?? index.definition
@@ -221,27 +221,9 @@ export function isSearchIndexFailed(index: SearchIndexDescription): boolean {
 export async function listSearchIndexes(
 	collection: Collection,
 ): Promise<SearchIndexDescription[]> {
-	try {
-		return (await collection
-			.aggregate([{ $listSearchIndexes: {} }])
-			.toArray()) as SearchIndexDescription[]
-	} catch {
-		return (await collection
-			.listSearchIndexes()
-			.toArray()) as SearchIndexDescription[]
-	}
-}
-
-export async function isSearchIndexManagementAvailable(
-	db: Db,
-	collectionName: string,
-): Promise<boolean> {
-	try {
-		await listSearchIndexes(db.collection(collectionName))
-		return true
-	} catch {
-		return false
-	}
+	return (await collection
+		.aggregate([{ $listSearchIndexes: {} }])
+		.toArray()) as SearchIndexDescription[]
 }
 
 /**
@@ -275,17 +257,49 @@ export function searchIndexDefinitionSignature(definition: Document): string {
 	return JSON.stringify(sortObject(codeOwned))
 }
 
-export function isSearchIndexTypeCompatible(
-	actual: string | undefined,
-	expected: "search" | "vectorSearch",
-): boolean {
-	if (!actual) return true
-	if (actual === expected) return true
-	// Atlas Local reports vectorSearch indexes backed by autoEmbed as
-	// `autoEmbed`. Treat that as compatible with the vectorSearch create API.
-	return expected === "vectorSearch" && actual === "autoEmbed"
+function isDocument(value: unknown): value is Document {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+/**
+ * The type a listed Search index serves, or undefined when it cannot be read.
+ * $listSearchIndexes documents no `type` field and the server omits it (CI
+ * run 39214244063 and real-e2e-v2 both saw it undefined), so the definition
+ * decides when it is absent: a search definition requires `mappings`, a
+ * vectorSearch definition requires `fields`.
+ */
+export function servedSearchIndexType(
+	index: SearchIndexDescription,
+): "search" | "vectorSearch" | undefined {
+	if (index.type === "search") return "search"
+	// Atlas Local reports vectorSearch indexes backed by autoEmbed as `autoEmbed`.
+	if (index.type === "vectorSearch" || index.type === "autoEmbed") {
+		return "vectorSearch"
+	}
+	if (index.type !== undefined) return undefined
+	const definition =
+		index.latestDefinition ??
+		index.definition ??
+		index.statusDetail?.find((host) => host.mainIndex?.definition)?.mainIndex
+			?.definition
+	if (!isDocument(definition)) return undefined
+	if (isDocument(definition.mappings)) return "search"
+	if (Array.isArray(definition.fields)) return "vectorSearch"
+	return undefined
+}
+
+export function isSearchIndexTypeCompatible(
+	index: SearchIndexDescription,
+	expected: "search" | "vectorSearch",
+): boolean {
+	return servedSearchIndexType(index) === expected
+}
+
+/**
+ * Create or update one Search index toward its definition; never drops.
+ * Every failure is a typed MemongoBootError (no inspect-then-create guess,
+ * no warn on an incompatible type or a missing update API).
+ */
 export async function ensureNamedSearchIndex(params: {
 	collection: Collection
 	name: string
@@ -293,92 +307,12 @@ export async function ensureNamedSearchIndex(params: {
 	definition: Document
 	label: string
 }): Promise<boolean> {
-	const searchCollection = params.collection as Collection & {
-		updateSearchIndex?: (name: string, definition: Document) => Promise<void>
-		listSearchIndexes: (name?: string) => {
-			toArray: () => Promise<
-				Array<{
-					name?: string
-					type?: string
-					definition?: Document
-					latestDefinition?: Document
-					queryable?: boolean
-				}>
-			>
-		}
-	}
-
-	try {
-		const existing = (await searchCollection
-			.listSearchIndexes(params.name)
-			.toArray()) as Array<{
-			name?: string
-			type?: string
-			definition?: Document
-			latestDefinition?: Document
-			queryable?: boolean
-		}>
-		const current = existing[0]
-		if (current) {
-			if (!isSearchIndexTypeCompatible(current.type, params.type)) {
-				log.warn(
-					`${params.label} search index exists with incompatible type (${current.type}); expected ${params.type}`,
-				)
-				return false
-			}
-			const currentDefinition = current.latestDefinition ?? current.definition
-			if (
-				currentDefinition &&
-				searchIndexDefinitionSignature(currentDefinition) !==
-					searchIndexDefinitionSignature(params.definition)
-			) {
-				if (typeof searchCollection.updateSearchIndex === "function") {
-					await searchCollection.updateSearchIndex(
-						params.name,
-						params.definition,
-					)
-					log.info(`updated ${params.label} search index`)
-				} else {
-					log.warn(
-						`${params.label} search index definition drift detected but updateSearchIndex() is unavailable`,
-					)
-				}
-			}
-			if (current.queryable === false) {
-				log.warn(`${params.label} search index exists but is not yet queryable`)
-			}
-			return true
-		}
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		const explicitAutoEmbedQuantization =
-			params.type === "vectorSearch" &&
-			Array.isArray(params.definition.fields) &&
-			params.definition.fields.some(
-				(field: Document) =>
-					field.type === "autoEmbed" && field.quantization !== undefined,
-			)
-		if (
-			isSearchIndexManagementUnavailable(msg) ||
-			(explicitAutoEmbedQuantization && msg.includes("quantization"))
-		) {
-			throw err
-		}
-		log.warn(
-			`${params.label} search index inspection failed; attempting create: ${msg}`,
-		)
-	}
-
-	await searchCollection.createSearchIndex({
+	await reconcileRequiredIndex(params.collection, {
+		collectionName: params.collection.collectionName,
 		name: params.name,
 		type: params.type,
 		definition: params.definition,
+		label: params.label,
 	})
-	log.info(`created ${params.label} search index`)
 	return true
 }
-
-/**
- * Ensure Atlas Search autocomplete index on entities collection for fuzzy
- * entity lookup. Uses the existing ensureNamedSearchIndex pattern.
- */

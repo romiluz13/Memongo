@@ -1,6 +1,32 @@
 import { MongoServerError, type Db } from "mongodb"
+import { deploymentFactsOf } from "../mongodb-index-health.js"
+import { buildRequiredIndexManifest } from "../mongodb-required-index-manifest.js"
+import { readyIndex } from "./fake-search-db.js"
+import { manifestDefinition, runSearchPipeline } from "./search-stage-fake.js"
 
 export type Row = Record<string, unknown>
+
+const requiredManifest = buildRequiredIndexManifest({
+	prefix: "test_",
+	serverVersionArray: [8, 3, 0, 0],
+	env: {} as NodeJS.ProcessEnv,
+})
+
+/**
+ * What a booted manager holds for request-local index health, over the
+ * double's manifest. Every index is READY, so a job's health snapshot passes.
+ */
+export const fixtureIndexHealth = {
+	requiredManifest,
+	deploymentFacts: deploymentFactsOf({
+		vectorSearch: true,
+		textSearch: true,
+		scoreFusion: true,
+		rankFusion: true,
+		storedSource: true,
+		vectorIndexMethod: true,
+	}),
+}
 export const BODY = "My pickup label is NARU-617-QP."
 export const FACT = "The user's pickup label is NARU-617-QP."
 export const event = {
@@ -93,6 +119,7 @@ export function fixture(
 	}
 	type FakeCollection = {
 		find: (q: Row) => Cursor
+		aggregate: (pipeline: Row[]) => { toArray: () => Promise<Row[]> }
 		findOne: (q: Row) => Promise<Row | null>
 		updateOne: (
 			q: Row,
@@ -202,6 +229,31 @@ export function fixture(
 				},
 				async findOne(query: Row) {
 					return table(name).find((row) => matches(row, query)) ?? null
+				},
+				aggregate(pipeline: Row[]) {
+					// The supporting-event lookup is one `$search` over the events
+					// text index; the double evaluates it against the rows as they are
+					// when the query runs.
+					return {
+						async toArray() {
+							if ("$listSearchIndexes" in (pipeline[0] ?? {})) {
+								return requiredManifest
+									.filter((entry) => entry.collectionName === name)
+									.map((entry) =>
+										readyIndex(entry.name, entry.type, entry.definition),
+									)
+							}
+							if (name !== "test_events") {
+								throw new Error(`Unsupported aggregate on ${name}`)
+							}
+							return runSearchPipeline({
+								indexName: "test_events_text",
+								definition: manifestDefinition("test_", "test_events_text"),
+								entries: table(name).map((indexed) => ({ indexed })),
+								pipeline,
+							})
+						},
+					}
 				},
 				async updateOne(
 					query: Row,

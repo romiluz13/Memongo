@@ -1,5 +1,6 @@
 import type { Collection, Db, Document } from "mongodb"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 vi.mock("./mongodb-telemetry.js", () => ({
 	emitTelemetry: vi.fn().mockResolvedValue(undefined),
 }))
@@ -140,6 +141,7 @@ it.each([
 	await searchV2({} as Db, "test_", "preference choice", "agent-1", {
 		availablePaths: new Set(["structured"]),
 		searchOptions: {
+			capabilities: HEALTHY_TEST_CAPABILITIES,
 			structuredScope: { state },
 			allowHybridBackstop: false,
 			timeRange: { start: "2026-04-10T00:00:00Z", end: asOf.toISOString() },

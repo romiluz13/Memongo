@@ -142,14 +142,6 @@ vi.mock(
 		).queryRewriterModuleMock(),
 )
 
-vi.mock("../../packages/memory-engine/src/mongodb-reranker.js", async () =>
-	(
-		await import(
-			"../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
-		)
-	).rerankerModuleMock(),
-)
-
 vi.mock("../../packages/memory-engine/src/mongodb-lane-coverage.js", async () =>
 	(
 		await import(
@@ -203,20 +195,11 @@ vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
 const { eventsCollection, chunksCollection, sessionChunksCollection } =
 	await import("../../packages/memory-engine/src/mongodb-schema.js")
 
-describe("benchmark scenario manager configuration (B12)", () => {
-	it("zeroes post-rerank recency/access boosts without mutating the host config", async () => {
+describe("benchmark scenario manager configuration", () => {
+	it("hands the host config to the scenario manager unchanged", async () => {
 		const client = {}
 		const hostConfig = {
-			mongodb: {
-				reranking: {
-					enabled: true,
-					model: "rerank-2.5",
-					topN: 7,
-					minScore: 0.01,
-					recencyBoost: 0.3,
-					accessBoost: 0.25,
-				},
-			},
+			mongodb: { reranking: { temporalProximityBoost: 0.1 } },
 		}
 		const manager = {
 			client,
@@ -225,7 +208,10 @@ describe("benchmark scenario manager configuration (B12)", () => {
 			agentId: "benchmark-parent",
 			workspaceDir: "/workspace",
 			extraMemoryPaths: [],
-			capabilities: { textSearch: true, vectorSearch: true },
+			requestCapabilities: async () => ({
+				textSearch: true,
+				vectorSearch: true,
+			}),
 			nativeBitemporalVectorPrefilter: false,
 			config: hostConfig,
 		} as unknown as MongoDBMemoryManager
@@ -269,16 +255,7 @@ describe("benchmark scenario manager configuration (B12)", () => {
 		} finally {
 			create.mockRestore()
 		}
-		const scenarioMongo = (scenarioManager.config as Record<string, unknown>)
-			.mongodb as Record<string, Record<string, number>>
-		expect(scenarioMongo.reranking.recencyBoost).toBe(0)
-		expect(scenarioMongo.reranking.accessBoost).toBe(0)
-		// Other rerank settings pass through untouched.
-		expect(scenarioMongo.reranking.topN).toBe(7)
-		expect(scenarioMongo.reranking.minScore).toBe(0.01)
-		// The host config object is never mutated.
-		expect(hostConfig.mongodb.reranking.recencyBoost).toBe(0.3)
-		expect(hostConfig.mongodb.reranking.accessBoost).toBe(0.25)
+		expect(scenarioManager.config).toBe(hostConfig)
 	})
 })
 
@@ -854,7 +831,10 @@ describe("benchmark event search convergence", () => {
 					embeddingMode: "automated",
 				},
 			},
-			capabilities: { textSearch: true, vectorSearch: true },
+			requestCapabilities: async () => ({
+				textSearch: true,
+				vectorSearch: true,
+			}),
 		}) as MongoDBMemoryManager
 	const makeSearchableFind = (values = ["alpha", "beta"]) =>
 		vi.fn().mockReturnValue({
@@ -2050,7 +2030,10 @@ describe("benchmark event search convergence", () => {
 						prefix: fakePrefix,
 						agentId: "agent-benchmark",
 						config: { mongodb: { embeddingMode: "automated" } },
-						capabilities: { textSearch: true, vectorSearch: false },
+						requestCapabilities: async () => ({
+							textSearch: true,
+							vectorSearch: false,
+						}),
 					},
 				) as MongoDBMemoryManager
 				const ops = benchmarkOps(manager)

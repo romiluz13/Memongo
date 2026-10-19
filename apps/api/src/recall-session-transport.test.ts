@@ -21,13 +21,25 @@ vi.mock(
 		}),
 )
 beforeEach(() => vi.clearAllMocks())
-async function request(body: Record<string, unknown>, query = "") {
+async function request(
+	body: Record<string, unknown>,
+	query = "",
+	withReference = true,
+) {
+	// containerTag is itself a scopeRef transport, so it supplies the reference.
+	const reference =
+		"containerTag" in body || !withReference ? {} : { scopeRef: "session:s-1" }
 	return new Hono()
 		.route("/v1", createV1Router())
 		.request(`/v1/recall-conversation${query}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ agentId: "agent1", scope: "session", ...body }),
+			body: JSON.stringify({
+				agentId: "agent1",
+				scope: "session",
+				...reference,
+				...body,
+			}),
 		})
 }
 describe("conversation recall merged session transport", () => {
@@ -83,7 +95,7 @@ describe("conversation recall merged session transport", () => {
 		{ request: { sessionId: "session-one" } },
 		{ entry: { sessionId: "  " } },
 	])("rejects unsupported or empty coordinates %j", async (body) => {
-		expect((await request(body)).status).toBe(400)
+		expect((await request(body, "", false)).status).toBe(400)
 		expect(bridge.memongoBridgeRecallConversation).not.toHaveBeenCalled()
 	})
 	it("forwards query-only sessionId", async () => {

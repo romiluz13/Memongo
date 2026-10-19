@@ -208,6 +208,32 @@ describe("extractTypedRelations", () => {
 		).rejects.toThrow()
 	})
 
+	it.each([
+		["a non-object JSON value", JSON.stringify("relations")],
+		["null", "null"],
+		["an object without a relations list", JSON.stringify({ edges: [] })],
+		["a relations value that is not a list", JSON.stringify({ relations: {} })],
+	])("throws a typed parse error for %s, never an empty relation list", async (_label, content) => {
+		await expect(
+			extractTypedRelations({
+				provider: providerReturning(content),
+				model: "m",
+				text: "x",
+				entities: ENTITIES,
+			}),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
+
+	it("accepts an explicit empty relations list as a real, empty answer", async () => {
+		const result = await extractTypedRelations({
+			provider: providerReturning(JSON.stringify({ relations: [] })),
+			model: "m",
+			text: "x",
+			entities: ENTITIES,
+		})
+		expect(result).toEqual([])
+	})
+
 	it("deduplicates identical (from,to,type) triples", async () => {
 		const provider = providerReturning(
 			JSON.stringify({

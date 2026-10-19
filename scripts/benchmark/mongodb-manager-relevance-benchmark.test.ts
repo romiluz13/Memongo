@@ -145,14 +145,6 @@ vi.mock(
 		).queryRewriterModuleMock(),
 )
 
-vi.mock("../../packages/memory-engine/src/mongodb-reranker.js", async () =>
-	(
-		await import(
-			"../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
-		)
-	).rerankerModuleMock(),
-)
-
 vi.mock("../../packages/memory-engine/src/mongodb-lane-coverage.js", async () =>
 	(
 		await import(
@@ -311,12 +303,7 @@ describe("relevanceBenchmark", () => {
 						relevance: { benchmark: { enabled: true, datasetPath: firstPath } },
 						numDimensions: 1024,
 						quantization: "none",
-						reranking: {
-							enabled: false,
-							model: "none",
-							topN: 0,
-							minScore: 0.01,
-						},
+						reranking: {},
 					},
 				},
 				relevance: { loadBenchmarkDataset: vi.fn() },
@@ -439,7 +426,7 @@ describe("relevanceBenchmark", () => {
 						},
 						numDimensions: 1024,
 						quantization: "none",
-						reranking: { enabled: false, model: "rerank-2.5", topN: 20 },
+						reranking: {},
 					},
 				},
 				relevance: {
@@ -539,7 +526,7 @@ describe("relevanceBenchmark", () => {
 						relevance: {
 							benchmark: { enabled: true, datasetPath },
 						},
-						reranking: { minScore: 0.01 },
+						reranking: {},
 					},
 				},
 				relevance: { loadBenchmarkDataset: vi.fn() },
@@ -556,150 +543,6 @@ describe("relevanceBenchmark", () => {
 			expect(loadBenchmarkDataset).not.toHaveBeenCalled()
 			expect(runScenarioBenchmarkDataset).not.toHaveBeenCalled()
 			expect(runLegacyRelevanceBenchmark).not.toHaveBeenCalled()
-		} finally {
-			await rm(workspaceDir, { recursive: true, force: true })
-		}
-	})
-
-	it("refuses to run with reranking enabled but no reranker key (B7)", async () => {
-		const workspaceDir = await mkdtemp(
-			path.join(os.tmpdir(), "memongo-rerank-gate-"),
-		)
-		const datasetPath = path.join(workspaceDir, "gate.json")
-		try {
-			await writeFile(datasetPath, '{"name":"gate"}')
-			mocked(loadBenchmarkDataset).mockResolvedValue({
-				timestampValidation: {
-					policyVersion: BENCHMARK_TIMESTAMP_POLICY_VERSION,
-					weekdayMismatches: 0,
-					literalMidnightLabels: 0,
-				},
-				name: "gate",
-				datasetKind: "generic",
-				conversations: [],
-				evaluations: [],
-				scenarios: [
-					{
-						scenarioId: "scenario-1",
-						conversations: [],
-						evaluations: [
-							{
-								caseId: "case-1",
-								query: "question",
-								expectedSessionIds: ["session-1"],
-							},
-						],
-					},
-				],
-			})
-			const runScenarioBenchmarkDataset = vi.fn(async (params: unknown) => {
-				const { datasetVersion } = params as { datasetVersion: string }
-				return {
-					result: {
-						datasetVersion,
-						datasetName: "gate",
-						datasetKind: "generic" as const,
-						scenarios: 1,
-						cases: 1,
-						scoredCases: 1,
-						skippedCases: 0,
-						hitRate: 1,
-						emptyRate: 0,
-						avgTopScore: 0.9,
-						p95LatencyMs: 10,
-						rAt5: 1,
-						rAt10: 1,
-						ndcgAt10: 1,
-						questionTypeBreakdown: [],
-						regressions: [],
-					},
-					latencySamples: [10],
-				}
-			})
-			const buildBenchmarkParityBundle = vi.fn(async (params: unknown) => ({
-				runIdentity: {
-					datasetSha256: (params as { datasetSha256Override?: string })
-						.datasetSha256Override,
-					retrievalUnit: "turn" as const,
-				},
-				embedding: {
-					model: "mongodb-automated",
-					dimensions: 1024,
-					quantization: "float32" as const,
-				},
-				reranker: {
-					model: "rerank-2.5",
-					version: null,
-					stage: "post-fusion" as const,
-				},
-				storage: {
-					basis: "benchmark-agent-logical-plus-shared-physical" as const,
-					tenant: { documents: 0, logicalBytes: 0, collections: [] },
-					sharedPhysical: { collections: [] },
-				},
-				latency: { p50Ms: 0, p95Ms: 0 },
-				cost: { operations: [] },
-			}))
-			const baseManager = {
-				workspaceDir,
-				db: { command: vi.fn() },
-				prefix: "memongo_bench_",
-				config: {
-					mongodb: {
-						relevance: { benchmark: { enabled: true, datasetPath } },
-						numDimensions: 1024,
-						quantization: "none",
-					},
-				},
-				relevance: { loadBenchmarkDataset: vi.fn() },
-				snapshotBenchmarkRunConfiguration: testBenchmarkRunConfiguration,
-				runScenarioBenchmarkDataset,
-				runLegacyRelevanceBenchmark: vi.fn(),
-				buildBenchmarkParityBundle,
-			}
-
-			// Reranking enabled, no voyageApiKey: the run must refuse before
-			// any dataset or scenario work — a silently-unreranked pipeline
-			// must never produce benchmark numbers.
-			const managerWithoutKey = {
-				...baseManager,
-				config: {
-					mongodb: {
-						...baseManager.config.mongodb,
-						reranking: {
-							enabled: true,
-							model: "rerank-2.5",
-							topN: 20,
-							minScore: 0.01,
-						},
-					},
-				},
-			} as unknown as MongoDBMemoryManager
-			await expect(
-				benchmarkOps(managerWithoutKey).relevanceBenchmark({ datasetPath }),
-			).rejects.toThrow(/no reranker key/)
-			expect(loadBenchmarkDataset).not.toHaveBeenCalled()
-			expect(runScenarioBenchmarkDataset).not.toHaveBeenCalled()
-
-			// Same configuration with the key present reaches the scenario
-			// pipeline — the gate refuses only the unconfigured reranker.
-			const managerWithKey = {
-				...baseManager,
-				config: {
-					mongodb: {
-						...baseManager.config.mongodb,
-						reranking: {
-							enabled: true,
-							model: "rerank-2.5",
-							topN: 20,
-							minScore: 0.01,
-							voyageApiKey: "test-voyage-key",
-						},
-					},
-				},
-			} as unknown as MongoDBMemoryManager
-			await benchmarkOps(managerWithKey).relevanceBenchmark({ datasetPath })
-			expect(runScenarioBenchmarkDataset).toHaveBeenCalledOnce()
 		} finally {
 			await rm(workspaceDir, { recursive: true, force: true })
 		}
@@ -750,7 +593,7 @@ describe("relevanceBenchmark", () => {
 						},
 						numDimensions: 1024,
 						quantization: "none",
-						reranking: { enabled: false, model: "rerank-2.5", topN: 20 },
+						reranking: {},
 					},
 				},
 				relevance: {
@@ -1049,7 +892,7 @@ describe("relevanceBenchmark resume admission binds the executable digest", () =
 					},
 					numDimensions: 1024,
 					quantization: "none",
-					reranking: { enabled: false, model: "rerank-2.5", topN: 20 },
+					reranking: {},
 				},
 			},
 			relevance: { loadBenchmarkDataset: vi.fn() },

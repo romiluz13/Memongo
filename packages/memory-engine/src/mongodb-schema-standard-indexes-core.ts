@@ -30,7 +30,6 @@ export async function ensureCoreStandardIndexes(
 	ttlOpts?: StandardIndexOptions,
 ): Promise<number> {
 	let applied = 0
-	const textFallbackIndexes = ttlOpts?.textFallbackIndexes ?? true
 
 	const chunks = chunksCollection(db, prefix)
 	// P3.8: idx_chunks_path retired — a strict prefix of idx_chunks_path_hash
@@ -72,12 +71,8 @@ export async function ensureCoreStandardIndexes(
 		},
 	)
 	applied++
-	// Keep a BSON $text index as a defensive last-resort fallback if Search is unavailable.
-	// Only one $text index is allowed per collection.
-	if (textFallbackIndexes) {
-		await chunks.createIndex({ text: "text" }, { name: "idx_chunks_text" })
-		applied++
-	}
+	// M2: no BSON $text index is created; Search serves text. An existing
+	// idx_chunks_text is left in place (boot never drops an index).
 
 	// Optional TTL on files for memory auto-expiry
 	// WARNING: This deletes memory files from MongoDB after ttlDays
@@ -179,11 +174,7 @@ export async function ensureCoreStandardIndexes(
 		handleUniqueIndexCreationError(err, "uq_kbchunks_scope_path_lines_v2")
 		applied++
 	}
-	// $text index on kb_chunks text field for text search fallback
-	if (textFallbackIndexes) {
-		await kbChunks.createIndex({ text: "text" }, { name: "idx_kbchunks_text" })
-		applied++
-	}
+	// M2: no BSON $text index; an existing idx_kbchunks_text is left in place.
 
 	// Structured Memory indexes
 	const structured = structuredMemCollection(db, prefix)

@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { createSubsystemLogger } from "@memongo/lib"
 import {
+	type IndexHealthStats,
+	type RequestIndexHealth,
+	activeIndexHealth,
+} from "./mongodb-index-health.js"
+import {
 	SearchBudgetDeniedError,
 	type SearchBudgetReason,
 	type SearchStage,
@@ -12,9 +17,10 @@ const log = createSubsystemLogger("memory:mongodb:search-budget")
 // Per-search cost budget (fix-plan-2026-08-03 P3.2)
 //
 // One sparse query on an empty corpus used to fire 30+ aggregations and 4-6
-// paid server-side embeddings (the mongoSearch waterfall, procedural
-// backstops, a recursive hybrid backstop, then a legacySearch re-run). Cost
-// was inverse to data presence — cold tenants burned the most.
+// paid server-side embeddings (a mongoSearch tier ladder, procedural
+// backstops, a recursive hybrid backstop and a legacy re-run; the ladder and
+// the re-run no longer exist). Cost was inverse to data presence — cold
+// tenants burned the most.
 //
 // This module is the per-request ledger that caps that storm: the request
 // boundary opens one budget and every $vectorSearch stage build (an autoEmbed
@@ -69,6 +75,13 @@ export type SearchBudgetSnapshot = SearchBudgetLimits & {
 	equivalentSkips: number
 	/** True when consumption hit either limit during the search. */
 	exhausted: boolean
+	/**
+	 * M2 decision 8: the request's index-status metadata reads, reported apart
+	 * from the retrieval work above. Metadata checks never consume an
+	 * aggregation or an embed. Absent when the request ran outside an
+	 * index-health scope.
+	 */
+	indexHealth?: IndexHealthStats
 }
 
 /** #101 decision 18: one attempt's charges, consumed together or not at all. */
@@ -147,6 +160,8 @@ type ActiveSearchBudget = {
 	admitted: boolean
 	/** Decision 18: completed retrievals of this request, by equivalence key. */
 	completed: Map<string, readonly unknown[]>
+	/** M2 decision 8: the request's index-health snapshot, when one is open. */
+	health?: RequestIndexHealth
 }
 
 type ReservationState = {
@@ -179,6 +194,7 @@ function toSnapshot(budget: ActiveSearchBudget): SearchBudgetSnapshot {
 		},
 		equivalentSkips: budget.equivalentSkips,
 		exhausted: budget.exhausted,
+		...(budget.health ? { indexHealth: budget.health.stats() } : {}),
 	}
 }
 
@@ -250,8 +266,8 @@ export function getSearchBudgetSnapshot(): SearchBudgetSnapshot | undefined {
 
 /**
  * #101 decision 18: open one request ledger. Every `run` executes inside the
- * same ledger, so a request boundary can run its passes and its opt-in
- * legacy re-run against one set of counts.
+ * same ledger, so a request boundary can run all of its passes against one
+ * set of counts.
  */
 export function openSearchBudget(
 	limits: SearchBudgetLimits,
@@ -269,6 +285,7 @@ export function openSearchBudget(
 		exhausted: false,
 		admitted: options.admitted ?? true,
 		completed: new Map(),
+		health: activeIndexHealth(),
 		// RET-16: the request wall starts when the budget opens; nested
 		// re-entries keep the PARENT's deadline.
 		...(limits.maxWallMs != null

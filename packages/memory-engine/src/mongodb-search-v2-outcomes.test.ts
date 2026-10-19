@@ -49,6 +49,7 @@ vi.mock("./mongodb-search-lanes.js", async (original) => ({
 	searchConversationEvidenceEvents: vi.fn(),
 	searchTemporalCoverageEvents: vi.fn(),
 	searchTurnEventsWithinSessions: vi.fn(),
+	searchRawWindowEvents: vi.fn(async () => []),
 }))
 
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
@@ -65,11 +66,13 @@ import type { Entity } from "./mongodb-graph.js"
 import { mongoSearch } from "./mongodb-search.js"
 import {
 	searchConversationEvidenceEvents,
+	searchRawWindowEvents,
 	searchTemporalCoverageEvents,
 } from "./mongodb-search-lanes.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import type { SearchLaneOutcome } from "./search-outcomes.js"
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 
 const db = {} as Db
 const noCapabilities = {
@@ -115,7 +118,11 @@ function run(
 	return searchV2(db, "test_", query, "agent-1", {
 		availablePaths: new Set(paths),
 		...extra,
-		searchOptions: { allowHybridBackstop: false, ...searchOptions },
+		searchOptions: {
+			allowHybridBackstop: false,
+			capabilities: HEALTHY_TEST_CAPABILITIES,
+			...searchOptions,
+		},
 	})
 }
 
@@ -361,6 +368,24 @@ describe("searchV2 outcome rows (#101 section 1b)", () => {
 			reason: "internal-error",
 		})
 		expect(result.metadata.outcomeStatus).toBe("partial")
+	})
+
+	it("T11: raw-window reads events_text, so the chunk text flag does not decide whether it runs", async () => {
+		plan(["raw-window"])
+		const result = await run("what did we discuss", ["raw-window"], {
+			capabilities: noCapabilities,
+		})
+		expect(searchRawWindowEvents).toHaveBeenCalledTimes(1)
+		const rows = rowsFor(result.metadata.laneOutcomes, "raw-window")
+		expect(rows).toEqual([
+			{
+				lane: "raw-window",
+				stage: "lane",
+				outcome: "ok-empty",
+				reason: "zero-hits",
+				resultCount: 0,
+			},
+		])
 	})
 
 	it.each([

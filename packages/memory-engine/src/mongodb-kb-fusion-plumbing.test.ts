@@ -18,9 +18,7 @@ vi.mock("./mongodb-schema.js", async (importOriginal) => {
 
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 
-function makeManagerStub(
-	fusionMethod: "scoreFusion" | "rankFusion" | "js-merge",
-) {
+function makeManagerStub(fusionMethod: "scoreFusion" | "rankFusion") {
 	return {
 		db: createStatefulMongoFake().db,
 		agentId: "agent-1",
@@ -31,14 +29,14 @@ function makeManagerStub(
 				embeddingMode: "automated",
 			},
 		},
-		capabilities: {
-			vectorSearch: true,
-			textSearch: true,
+		deploymentFacts: {
 			scoreFusion: true,
 			rankFusion: true,
 			storedSource: false,
 			vectorIndexMethod: false,
 		},
+		requiredManifest: [],
+		runIndexHealthRequest: MongoDBMemoryManager.prototype.runIndexHealthRequest,
 		agentScopeRef: "agent:agent-1",
 	}
 }

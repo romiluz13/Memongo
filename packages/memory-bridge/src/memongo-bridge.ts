@@ -19,6 +19,8 @@ import type {
 	MemoryStableHandle,
 	MongoDBMemoryManager,
 	RelevanceExplainResult,
+	SearchBudgetReason,
+	SearchFailureReason,
 	SearchOutcomeSummary,
 	V2Status,
 } from "@memongo/memory-engine"
@@ -54,13 +56,20 @@ import type {
 	QuarantineStatus,
 } from "@memongo/memory-engine/internal"
 import {
+	type BootPreflightReport,
+	SearchBudgetDeniedError,
+	SearchLaneError,
+	classifySearchError,
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
+	isMemongoBootError,
+	MemongoBootError,
+	safeBootText,
 } from "@memongo/memory-engine"
-import { materializeBlocks } from "@memongo/memory-engine/internal"
-// #101 section 3 step 7: the classic $text index rule, re-exported so the
-// API boot table derives its `text` lane from it instead of copying it.
-export { shouldEnsureTextFallbackIndexes } from "@memongo/memory-engine/internal"
+import {
+	materializeBlocks,
+	runMemongoPreflight,
+} from "@memongo/memory-engine/internal"
 import { resolveBridgeConfig } from "./memory-config.js"
 
 /**
@@ -99,36 +108,19 @@ export async function memongoBridgeGetManager(
 ): Promise<MongoDBMemoryManager> {
 	const id = resolveAgentId(agentId)
 	const cfg = resolveBridgeConfig()
-	const { manager, error } = await getMemorySearchManager({
+	const { manager, error, cause } = await getMemorySearchManager({
 		cfg,
 		agentId: id,
 		...(opts?.ownership ? { ownership: opts.ownership } : {}),
 	})
 	if (!manager || error) {
-		throw new Error(error ?? "mongodb memory unavailable")
+		// X-04: a typed boot failure keeps its type (code, index, requirement).
+		if (isMemongoBootError(cause)) {
+			throw cause
+		}
+		throw new Error(error ?? "mongodb memory unavailable", { cause })
 	}
 	return manager as MongoDBMemoryManager
-}
-
-export async function memongoBridgeSearch(params: {
-	query: string
-	agentId?: string
-	maxResults?: number
-	minScore?: number
-	sessionKey?: string
-	scope?: MemoryScope
-	scopeRef?: string
-	kbRestricted?: boolean
-}) {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.search(params.query, {
-		maxResults: params.maxResults,
-		minScore: params.minScore,
-		sessionKey: params.sessionKey,
-		scope: params.scope,
-		scopeRef: params.scopeRef,
-		kbRestricted: params.kbRestricted,
-	})
 }
 
 /**
@@ -141,6 +133,51 @@ export type MemongoBridgeSearchEnvelope = {
 	results: MemorySearchResult[]
 	degradation?: MemorySearchDegradation
 	outcomes?: SearchOutcomeSummary
+}
+
+/**
+ * M2 T10 (X-01, X-02): a call whose outcome summary is `failed` has no
+ * answer, so the library accessors throw the engine's typed lane error
+ * instead of returning an empty envelope. The full summary rides on the
+ * error as `outcomes`. The HTTP routes use the WithDegradation accessors and
+ * map the same summary to a non-2xx themselves.
+ */
+function throwIfSearchFailed(envelope: MemongoBridgeSearchEnvelope): void {
+	const { outcomes } = envelope
+	if (outcomes?.status !== "failed") {
+		return
+	}
+	const failedRow = outcomes.lanes.find(
+		(row) => row.stage !== "explain" && row.outcome === "failed",
+	)
+	if (failedRow) {
+		throw Object.assign(
+			new SearchLaneError({
+				lane: failedRow.lane,
+				stage: failedRow.stage,
+				reason: (failedRow.reason as SearchFailureReason) ?? "internal-error",
+			}),
+			{ outcomes },
+		)
+	}
+	const deniedRow = outcomes.lanes.find(
+		(row) => row.stage !== "explain" && row.outcome === "budget-denied",
+	)
+	if (deniedRow) {
+		throw Object.assign(
+			new SearchBudgetDeniedError({
+				lane: deniedRow.lane,
+				stage: deniedRow.stage,
+				reason:
+					(deniedRow.reason as SearchBudgetReason) ?? "budget-reservation",
+			}),
+			{ outcomes },
+		)
+	}
+	throw Object.assign(
+		new SearchLaneError({ stage: "request", reason: "internal-error" }),
+		{ outcomes },
+	)
 }
 
 function searchEnvelope(
@@ -158,8 +195,8 @@ function searchEnvelope(
 /**
  * WS-12 (C-019): search carrying the degradation marker out of the engine.
  * Same pipeline as memongoBridgeSearch; the response's `degradation` is set
- * exactly when admission control degraded the answer (denied query, denied
- * legacy re-run), so the API boundary can serve "throttled" as throttling
+ * exactly when admission control denied the whole query, so the API
+ * boundary can serve "throttled" as throttling
  * instead of "no memories found". Absent means the answer is authoritative.
  */
 export async function memongoBridgeSearchWithDegradation(params: {
@@ -192,36 +229,19 @@ export async function memongoBridgeSearchWithDegradation(params: {
 	return searchEnvelope(results, degradation, outcomes)
 }
 
-export async function memongoBridgeSearchKB(params: {
-	query: string
-	agentId?: string
-	scope?: MemoryScope
-	sessionKey?: string
-	scopeRef?: string
-	maxResults?: number
-	minScore?: number
-	filter?: { tags?: string[]; category?: string; source?: string }
-	fusionMethod?: MemoryMongoDBFusionMethod
-}) {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.searchKB(params.query, {
-		maxResults: params.maxResults,
-		minScore: params.minScore,
-		// Explicit references win; otherwise searchKB derives an explicit scope.
-		// Omitted scope retains the legacy agent partition.
-		scope: params.scope,
-		sessionKey: params.sessionKey,
-		scopeRef: params.scopeRef,
-		filter: params.filter,
-		fusionMethod: params.fusionMethod,
-	})
+/** Library search: the WithDegradation envelope, thrown when the call failed. */
+export async function memongoBridgeSearch(
+	params: Parameters<typeof memongoBridgeSearchWithDegradation>[0],
+): Promise<MemongoBridgeSearchEnvelope> {
+	const envelope = await memongoBridgeSearchWithDegradation(params)
+	throwIfSearchFailed(envelope)
+	return envelope
 }
 
 /**
- * WS-12 (C-019): KB search carrying the degradation marker out of the engine.
- * `degradation` is set when admission control dropped the vector lane — the
- * text-lane results stand (real hits, degraded ranking), and the marker says
- * why, so degraded ranking never reads as authoritative ranking.
+ * KB search envelope. Since M2 a denied or failed KB search throws a typed
+ * error, so the envelope carries results and outcomes only, never a
+ * degradation marker.
  */
 export async function memongoBridgeSearchKBWithDegradation(params: {
 	query: string
@@ -235,7 +255,6 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 	fusionMethod?: MemoryMongoDBFusionMethod
 }): Promise<MemongoBridgeSearchEnvelope> {
 	const m = await memongoBridgeGetManager(params.agentId)
-	let degradation: MemorySearchDegradation | undefined
 	let outcomes: SearchOutcomeSummary | undefined
 	const results = await m.searchKB(params.query, {
 		maxResults: params.maxResults,
@@ -247,14 +266,20 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 		scopeRef: params.scopeRef,
 		filter: params.filter,
 		fusionMethod: params.fusionMethod,
-		onDegradation: (d) => {
-			degradation = d
-		},
 		onOutcomes: (o) => {
 			outcomes = o
 		},
 	})
-	return searchEnvelope(results, degradation, outcomes)
+	return searchEnvelope(results, undefined, outcomes)
+}
+
+/** Library KB search: the WithDegradation envelope, thrown when the call failed. */
+export async function memongoBridgeSearchKB(
+	params: Parameters<typeof memongoBridgeSearchKBWithDegradation>[0],
+): Promise<MemongoBridgeSearchEnvelope> {
+	const envelope = await memongoBridgeSearchKBWithDegradation(params)
+	throwIfSearchFailed(envelope)
+	return envelope
 }
 
 export async function memongoBridgeReadFile(params: {
@@ -561,8 +586,8 @@ export async function memongoBridgeBuildContextBundle(params: {
 
 export async function memongoBridgeRecallConversation(params: {
 	agentId?: string
-	scope?: string
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	query?: string
 	sessionId?: string
 	roles?: Array<"user" | "assistant" | "system" | "tool">
@@ -576,8 +601,6 @@ export async function memongoBridgeRecallConversation(params: {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const asOf = params.asOf ? new Date(params.asOf) : undefined
 	return m.recallConversation({
-		// Tenant isolation: forward the authorized scope/scopeRef so recall is
-		// filtered to the caller's tenant, never all scopes under the agent.
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		query: params.query,
@@ -690,12 +713,12 @@ export async function memongoBridgeSearchDetailed(params: {
 			end?: string
 		}
 		needExactEvidence?: boolean
+		rerank?: boolean
 		allowConstraintRelaxation?: boolean
 		numCandidates?: number
-		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod?: "scoreFusion" | "rankFusion"
 		hybridMode?: "hybrid" | "vector-only"
 		allowHybridBackstop?: boolean
-		lexicalPrefilter?: "disabled" | "experimental"
 	}
 	kbRestricted?: boolean
 }) {
@@ -770,12 +793,12 @@ export async function memongoBridgeSearchDetailed(params: {
 						end?: string
 					}
 					needExactEvidence?: boolean
+					rerank?: boolean
 					allowConstraintRelaxation?: boolean
 					numCandidates?: number
-					fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+					fusionMethod?: "scoreFusion" | "rankFusion"
 					hybridMode?: "hybrid" | "vector-only"
 					allowHybridBackstop?: boolean
-					lexicalPrefilter?: "disabled" | "experimental"
 			  }
 			| undefined,
 	})
@@ -836,11 +859,15 @@ export async function memongoBridgeDeleteAllForAgent(params: {
  */
 export async function memongoBridgeListQuarantined(params: {
 	agentId?: string
+	scope: MemoryScope
+	scopeRef: string
 	status?: QuarantineStatus
 	limit?: number
 }): Promise<QuarantinedEntry[]> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.listQuarantined({
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 		status: params.status,
 		limit: params.limit,
 	})
@@ -908,29 +935,57 @@ export async function memongoBridgeProbeVector(params: { agentId?: string }) {
 }
 
 /**
- * Serving capabilities detected by the engine at manager creation. Alias of
- * the engine's `DetectedCapabilities` (re-exported through the engine package
- * entry since P2.2 — previously redeclared here because the engine did not
- * export the type). vectorSearch/textSearch are true only when the concrete
- * serving Atlas Search indexes exist and are queryable — not merely when the
- * deployment could support them.
+ * Serving capabilities of one request. Alias of the engine's
+ * `DetectedCapabilities` (re-exported through the engine package entry since
+ * P2.2). vectorSearch/textSearch are true only when the concrete serving
+ * Atlas Search indexes were observed READY, queryable and serving their
+ * manifest definition by this call's own index-status read; there is no boot
+ * snapshot.
  */
 export type MemongoBridgeCapabilities = DetectedCapabilities
 
 /**
- * P1.9 boot capability surface: exposes the manager's detected serving
- * capabilities so deploy targets (memongo-api boot) can log a search-lane
- * table and enforce MEMONGO_REQUIRE_VECTOR without re-probing Mongo
- * themselves. B2a: the manager declares `capabilities` publicly, so this is
- * a typed read (the `| null` return shape is kept for callers compiled
- * against the pre-typed surface).
+ * P1.9 boot capability surface: reads the manager's serving capabilities
+ * live so deploy targets (memongo-api boot) can log a search-lane table
+ * without re-probing Mongo themselves. M2: acquiring the manager runs the
+ * startup contract, so a failed boot rejects here with its MemongoBootError;
+ * the capability view is then this call's own index-health snapshot (M2
+ * decision 8), never a value stored at boot. The `| null` return shape is
+ * kept for callers compiled against the pre-typed surface.
  */
 export async function memongoBridgeCapabilities(params: {
 	agentId?: string
 }): Promise<MemongoBridgeCapabilities | null> {
 	const m = await memongoBridgeGetManager(params.agentId)
-	return m.capabilities
+	return m.requestCapabilities()
 }
+
+/**
+ * M2 /ready manifest lane (X-08): one read-only pass of the startup contract
+ * on the cached manager. Every unmet requirement is listed; nothing writes.
+ */
+export async function memongoBridgeCheckManifest(params: {
+	agentId?: string
+}): Promise<BootPreflightReport> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.checkRequiredIndexManifest()
+}
+
+/**
+ * M2 preflight for deploy targets: config validation plus the read-only boot
+ * checks against the configured deployment, without creating a manager.
+ */
+export async function memongoBridgePreflight(params: {
+	agentId?: string
+}): Promise<BootPreflightReport> {
+	return runMemongoPreflight({
+		cfg: resolveBridgeConfig(),
+		agentId: resolveAgentId(params.agentId),
+	})
+}
+
+export type { BootPreflightReport }
+export { isMemongoBootError, MemongoBootError, safeBootText }
 
 /**
  * Readiness probe for the Mongo lane (P1.7). This probe forces a live,
@@ -1052,12 +1107,16 @@ export async function memongoBridgeTraceChain(params: {
 	agentId?: string
 	factId: string
 	collection: string
+	scope: MemoryScope
+	scopeRef: string
 	maxDepth?: number
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.traceChain({
 		factId: params.factId,
 		collection: params.collection,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 		options:
 			params.maxDepth !== undefined ? { maxDepth: params.maxDepth } : undefined,
 	})
@@ -1121,12 +1180,39 @@ export async function memongoBridgeSelfEdit(params: {
 	})
 }
 
+export type MemongoStateSection = keyof MemoryStateFamily
+
+/**
+ * M2 T10 (X-03): one typed row per rejected state section. The reason is the
+ * engine's value-free failure enum, or `erasure-in-progress` when the tenant
+ * is being erased; the raw error never rides on the row.
+ */
+export type MemongoStateFailure = {
+	section: MemongoStateSection
+	reason: SearchFailureReason | "erasure-in-progress"
+}
+
+/**
+ * A section that could not be read is absent and named in `failures`; it is
+ * never replaced by an empty object that reads as a healthy empty section.
+ */
+export type MemongoBridgeState = Partial<MemoryStateFamily> & {
+	partial?: true
+	failures?: MemongoStateFailure[]
+}
+
+function stateFailureReason(error: unknown): MemongoStateFailure["reason"] {
+	return error instanceof Error && error.name === "ErasureGateConflictError"
+		? "erasure-in-progress"
+		: classifySearchError(error)
+}
+
 export async function memongoBridgeGetState(params: {
 	agentId?: string
 	scope?: MemoryScope
 	scopeRef?: string
 	kbRestricted?: boolean
-}): Promise<MemoryStateFamily & { partial?: boolean }> {
+}): Promise<MemongoBridgeState> {
 	const results = await Promise.allSettled([
 		memongoBridgeProfile({
 			agentId: params.agentId,
@@ -1154,20 +1240,34 @@ export async function memongoBridgeGetState(params: {
 			"all unified state reads failed",
 		)
 	}
-	const partial = results.some((r) => r.status === "rejected")
-	const profile =
-		results[0].status === "fulfilled"
-			? results[0].value
-			: ({} as MemoryStateFamily["profile"])
-	const slate = results[1].status === "fulfilled" ? results[1].value : null
-	const bundle =
-		results[2].status === "fulfilled"
-			? results[2].value
-			: ({} as MemoryStateFamily["bundle"])
-	const blocks = slate
-		? materializeBlocks(slate)
-		: { blocks: [], totalTokenBudget: 0, totalActualTokens: 0 }
-	return { profile, blocks, bundle, ...(partial ? { partial: true } : {}) }
+	const [profile, slate, bundle] = results
+	const failures: MemongoStateFailure[] = []
+	const state: MemongoBridgeState = {}
+	if (profile.status === "fulfilled") {
+		state.profile = profile.value
+	} else {
+		failures.push({
+			section: "profile",
+			reason: stateFailureReason(profile.reason),
+		})
+	}
+	if (slate.status === "fulfilled") {
+		state.blocks = materializeBlocks(slate.value)
+	} else {
+		failures.push({
+			section: "blocks",
+			reason: stateFailureReason(slate.reason),
+		})
+	}
+	if (bundle.status === "fulfilled") {
+		state.bundle = bundle.value
+	} else {
+		failures.push({
+			section: "bundle",
+			reason: stateFailureReason(bundle.reason),
+		})
+	}
+	return failures.length > 0 ? { ...state, partial: true, failures } : state
 }
 
 export async function memongoBridgeListRecallTraces(params: {

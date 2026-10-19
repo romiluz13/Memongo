@@ -59,6 +59,7 @@ vi.mock("./mongodb-search.js", async (original) => ({
 vi.mock("./mongodb-search-lanes.js", async (original) => ({
 	...(await original<typeof import("./mongodb-search-lanes.js")>()),
 	searchConversationEvidenceEvents: vi.fn(),
+	searchRawWindowEvents: vi.fn(),
 }))
 
 import { searchKB } from "./mongodb-kb-search.js"
@@ -77,7 +78,10 @@ import {
 	type SearchWorkCost,
 } from "./mongodb-search-budget.js"
 import { executeMongoSearchPlan } from "./mongodb-search-executor.js"
-import { searchConversationEvidenceEvents } from "./mongodb-search-lanes.js"
+import {
+	searchConversationEvidenceEvents,
+	searchRawWindowEvents,
+} from "./mongodb-search-lanes.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import type { MemorySearchResult } from "./types.js"
@@ -167,6 +171,13 @@ beforeEach(() => {
 	)
 	vi.mocked(searchKB).mockImplementation(charging("kb", [VECTOR, TEXT]))
 	vi.mocked(mongoSearch).mockImplementation(charging("hybrid", [VECTOR, TEXT]))
+	// M2 T6: raw-window is one $search aggregate charged to the ledger.
+	vi.mocked(searchRawWindowEvents).mockImplementation(async () => {
+		calls.push("raw-window")
+		await Promise.resolve()
+		consumeSearchWorkOrThrow("atlas-search", TEXT)
+		return []
+	})
 	vi.mocked(searchConversationEvidenceEvents).mockImplementation(
 		async (params) => {
 			calls.push("conversation-evidence")
@@ -198,14 +209,18 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 				},
 				// No hybrid path on the deployment: only the corrective
 				// hybrid-evidence-relaxed pass adds it, so its backstop is the
-				// one retrieval the request has not already completed.
+				// one retrieval the request has not already completed. #122 R1:
+				// no graph path either. Graph now charges its real entity
+				// lookups (up to four aggregations), which this three-pass
+				// scenario cannot also fit under the 12-aggregation cap; the
+				// graph lane's own ledger is pinned in
+				// mongodb-search-v2-graph-episode-ledger.test.ts.
 				availablePaths: new Set([
 					"active-critical",
 					"structured",
 					"procedural",
 					"kb",
 					"raw-window",
-					"graph",
 				]),
 				executePass: ({ query, availablePaths }) =>
 					searchV2(db, "test_", query, "agent-1", {
@@ -213,7 +228,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 						maxResults: 20,
 						searchOptions: {
 							capabilities,
-							fusionMethod: "js-merge",
+							fusionMethod: "rankFusion",
 							embeddingMode: "automated",
 							conversationEvidenceMode: "parallel",
 							needExactEvidence: true,
@@ -225,7 +240,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 	const rows = response.metadata.laneOutcomes ?? []
 	const required: Record<number, string[]> = {
 		0: ["active-critical", "structured", "kb", "conversation-evidence"],
-		1: ["procedural", "raw-window", "graph", "conversation-evidence"],
+		1: ["procedural", "raw-window", "conversation-evidence"],
 		2: ["active-critical", "structured", "kb", "conversation-evidence"],
 	}
 	expect(response.metadata.passes.map((pass) => pass.reason)).toEqual([
@@ -262,6 +277,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 			"conversation-evidence",
 			"kb",
 			"procedural",
+			"raw-window",
 			"structured",
 		].sort(),
 	)
@@ -278,7 +294,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 	expect(mongoSearch).not.toHaveBeenCalled()
 	expect(budget).toMatchObject({
 		accounting: "engine-query-work",
-		aggregations: 8,
+		aggregations: 9,
 		embeds: 5,
 	})
 	expect(budget.equivalentSkips).toBeGreaterThanOrEqual(6)

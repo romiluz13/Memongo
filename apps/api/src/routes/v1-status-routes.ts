@@ -13,7 +13,9 @@ import {
 	internalError,
 	isDependencyUnavailableError,
 	jsonError,
+	kbRefreshFailureResponse,
 } from "../lib/errors.js"
+import { searchFailureOrInternalError } from "../lib/search-outcomes.js"
 import { MEMONGO_API_VERSION } from "../version.js"
 
 import {
@@ -126,7 +128,9 @@ export function registerStatusRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json({ ok: true })
 		} catch (err) {
-			return internalError(c, err, "SYNC_FAILED")
+			return (
+				kbRefreshFailureResponse(c, err) ?? internalError(c, err, "SYNC_FAILED")
+			)
 		}
 	})
 
@@ -146,7 +150,7 @@ export function registerStatusRoutes(v1: Hono<V1RouterEnv>): void {
 			const ok = await memongoBridgeProbeVector({ agentId })
 			return c.json({ ok })
 		} catch (err) {
-			return internalError(c, err, "PROBE_VECTOR_FAILED")
+			return searchFailureOrInternalError(c, err, "PROBE_VECTOR_FAILED")
 		}
 	})
 }

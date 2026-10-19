@@ -54,12 +54,29 @@ describe("createMemongoTools", () => {
 			recallConversation,
 		} as unknown as MemongoClient)
 		const recallTool = tools.memongo_recall_conversation as ExecutableTool
-		const input = { query: "deployment", asOf: "2026-04-09T12:00:00.000Z" }
+		const input = {
+			query: "deployment",
+			scope: "agent",
+			scopeRef: "agent:a1",
+			asOf: "2026-04-09T12:00:00.000Z",
+		}
 
 		expect(recallTool.inputSchema.parse(input)).toEqual(input)
 		await recallTool.execute(input, {})
 
 		expect(recallConversation).toHaveBeenCalledWith(input)
+	})
+
+	it.each([
+		{ query: "deployment" },
+		{ query: "deployment", scope: "agent" },
+		{ query: "deployment", scopeRef: "agent:a1" },
+		{ query: "deployment", scope: "agent", scopeRef: "" },
+	])("rejects a recall without its full tenant %j before it reaches the client", (input) => {
+		const tools = createMemongoTools({} as unknown as MemongoClient)
+		const recallTool = tools.memongo_recall_conversation as ExecutableTool
+
+		expect(recallTool.inputSchema.safeParse(input).success).toBe(false)
 	})
 
 	it("accepts scopeRef and control flags on consolidation schemas (P2.8, B8)", async () => {
@@ -171,7 +188,12 @@ describe("createMemongoTools", () => {
 
 		// Every collection the engine can actually traverse parses and forwards.
 		for (const collection of CHAIN_TRACE_COLLECTION_VALUES) {
-			const input = { factId: "fact-1", collection }
+			const input = {
+				factId: "fact-1",
+				collection,
+				scope: "workspace",
+				scopeRef: "workspace:demo",
+			}
 			expect(chainTool.inputSchema.parse(input)).toEqual(input)
 			await chainTool.execute(input, {})
 			expect(traceChain).toHaveBeenCalledWith(input)
@@ -180,11 +202,34 @@ describe("createMemongoTools", () => {
 		// Plausible-but-wrong collection names fail at the tool boundary
 		// instead of surfacing as an opaque API 400 (or, pre-C-015, a
 		// fabricated empty chain).
+		const tenant = { scope: "workspace", scopeRef: "workspace:demo" }
 		expect(() =>
-			chainTool.inputSchema.parse({ factId: "fact-1", collection: "events" }),
+			chainTool.inputSchema.parse({
+				factId: "fact-1",
+				collection: "events",
+				...tenant,
+			}),
 		).toThrow()
 		expect(() =>
-			chainTool.inputSchema.parse({ factId: "fact-1", collection: "episodes" }),
+			chainTool.inputSchema.parse({
+				factId: "fact-1",
+				collection: "episodes",
+				...tenant,
+			}),
+		).toThrow()
+		expect(() =>
+			chainTool.inputSchema.parse({
+				factId: "fact-1",
+				collection: "structured_mem",
+				scopeRef: "workspace:demo",
+			}),
+		).toThrow()
+		expect(() =>
+			chainTool.inputSchema.parse({
+				factId: "fact-1",
+				collection: "structured_mem",
+				scope: "workspace",
+			}),
 		).toThrow()
 
 		// Type-level (C-015): the guard narrows the parsed value to the lib
@@ -192,6 +237,7 @@ describe("createMemongoTools", () => {
 		const rawCollection: unknown = chainTool.inputSchema.parse({
 			factId: "fact-1",
 			collection: "structured_mem",
+			...tenant,
 		})
 		if (
 			typeof rawCollection === "object" &&

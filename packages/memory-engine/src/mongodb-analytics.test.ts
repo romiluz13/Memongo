@@ -12,7 +12,6 @@ vi.mock("./mongodb-schema.js", () => ({
 import {
 	getMemoryStats,
 	measureEmbeddingCoverage,
-	reconcileEmbeddingStatus,
 } from "./mongodb-analytics.js"
 import {
 	chunksCollection,
@@ -121,7 +120,7 @@ describe("getMemoryStats", () => {
 		})
 	})
 
-	it("#26/W13: derives automated embedding coverage from the tenant-scoped probe, not index-wide numDocs", async () => {
+	it("#26/W13/T10: /stats never embeds a probe query; automated coverage under a tenant filter is unknown", async () => {
 		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
 			toArray: vi.fn(async () => []),
 		})
@@ -136,19 +135,16 @@ describe("getMemoryStats", () => {
 		).mockResolvedValue(2)
 
 		// numDocs is INDEX-WIDE (every tenant's documents at once) — under a
-		// tenant filter it cannot answer a per-tenant question, so coverage must
-		// come from the $vectorSearch probe carrying the tenant filter instead.
+		// tenant filter it cannot answer a per-tenant question. The only other
+		// source was a $vectorSearch probe whose text query is embedded
+		// server-side on every call, outside the cost ledger; /stats no longer
+		// runs it, so the per-tenant answer is unknown, never a guess.
 		const searchIndexCounts = new Map([
 			["test_chunks_vector", 999],
 			["test_kb_chunks_vector", 999],
 			["test_structured_mem_vector", 999],
 		])
-		const probeCounts = new Map([
-			["test_chunks_vector", 8],
-			["test_kb_chunks_vector", 1],
-			["test_structured_mem_vector", 2],
-		])
-		const probeFilters: Array<Record<string, unknown> | undefined> = []
+		const vectorSearches: Array<Record<string, unknown>> = []
 		for (const col of [mockChunks, mockKbChunks, mockStructuredMem]) {
 			;(col.aggregate as ReturnType<typeof vi.fn>).mockImplementation(
 				(pipeline: Array<Record<string, unknown>>) => ({
@@ -173,10 +169,8 @@ describe("getMemoryStats", () => {
 							| Record<string, unknown>
 							| undefined
 						if (vectorSearch) {
-							probeFilters.push(
-								vectorSearch.filter as Record<string, unknown> | undefined,
-							)
-							return [{ n: probeCounts.get(vectorSearch.index as string) }]
+							vectorSearches.push(vectorSearch)
+							return [{ n: 8 }]
 						}
 						return []
 					}),
@@ -188,30 +182,23 @@ describe("getMemoryStats", () => {
 			embeddingMode: "automated",
 		})
 
+		expect(vectorSearches).toEqual([])
 		expect(stats.embeddingCoverage).toEqual({
-			withEmbedding: 8,
-			withoutEmbedding: 2,
-			unknown: 0,
+			withEmbedding: 0,
+			withoutEmbedding: 0,
+			unknown: 10,
 			total: 10,
-			coveragePercent: 80,
+			coveragePercent: null,
 			basis: "search-index",
 		})
 		expect(stats.embeddingStatusCoverage).toEqual({
 			total: 16,
-			success: 11,
+			success: 0,
 			failed: 0,
-			pending: 5,
-			unknown: 0,
+			pending: 0,
+			unknown: 16,
 			basis: "search-index",
 		})
-		// Every probe carries the tenant filter — the per-agent surface never
-		// counts another tenant's retrievable documents. Four probes: the
-		// chunks coverage measurement plus the three status-coverage
-		// collections (chunks is measured on both surfaces).
-		expect(probeFilters).toHaveLength(4)
-		for (const filter of probeFilters) {
-			expect(filter).toEqual({ agentId: "agent-a" })
-		}
 	})
 
 	it("#26: reports automated coverage as unknown when Search index counts are not observable", async () => {
@@ -268,25 +255,6 @@ describe("getMemoryStats", () => {
 			unknown: 16,
 			basis: "search-index",
 		})
-	})
-
-	it("#26: reconcileEmbeddingStatus advances only docs carrying a vector", async () => {
-		const updateMany = vi.fn(async () => ({ modifiedCount: 3 }))
-		const cols = [mockChunks, mockKbChunks, mockStructuredMem]
-		for (const col of cols) {
-			;(col as unknown as { updateMany: unknown }).updateMany = updateMany
-		}
-
-		const res = await reconcileEmbeddingStatus(db, "test_")
-
-		expect(res.advanced).toBe(9) // 3 per collection × 3 collections
-		expect(updateMany).toHaveBeenCalledWith(
-			{
-				"embedding.0": { $exists: true },
-				embeddingStatus: { $ne: "success" },
-			},
-			{ $set: { embeddingStatus: "success" } },
-		)
 	})
 
 	it("returns per-source breakdown for memory + sessions", async () => {
@@ -595,11 +563,92 @@ describe("getMemoryStats W13 tenant scoping", () => {
 	})
 })
 
+describe("measureEmbeddingCoverage rejects a failed read (T11, G3-78)", () => {
+	const failure = new Error("injected coverage read failure")
+
+	it("client mode: a failed stored-vector aggregation rejects instead of reporting zero coverage", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => 3),
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw failure
+				}),
+			})),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "client",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("automated mode: a failed total count rejects instead of reporting an empty collection", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => {
+				throw failure
+			}),
+			aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "automated",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("automated mode: a failed index listing rejects instead of reporting unknown coverage of a zero total", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => 3),
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw failure
+				}),
+			})),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "automated",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("a healthy empty collection is zero coverage, not a failure", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => 0),
+			aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "client",
+			}),
+		).resolves.toEqual({
+			total: 0,
+			success: 0,
+			failed: 0,
+			pending: 0,
+			unknown: 0,
+			basis: "stored-vector",
+		})
+	})
+})
+
 describe("measureEmbeddingCoverage on a server without numDocs", () => {
 	// Atlas does not report numDocs on $listSearchIndexes; only the local
-	// atlas-local container does. Keying coverage on that field left coverage
-	// permanently `unknown` against a real cluster — the deployment that
-	// actually matters — while the dev container looked fine.
+	// atlas-local container does. Without it the retrievable count is unknown:
+	// the former $vectorSearch probe embedded a text query on every call
+	// (unledgered provider spend per /stats request) and is gone.
 	const readyAutoEmbedIndex = {
 		name: "vec_idx",
 		status: "READY",
@@ -612,7 +661,6 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 	function collectionWith(params: {
 		total: number
 		index: Record<string, unknown>
-		probeCount?: number | null
 		onVectorSearch?: (stage: Record<string, unknown>) => void
 	}): Collection {
 		return {
@@ -626,26 +674,20 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 					params.onVectorSearch?.(
 						stage.$vectorSearch as Record<string, unknown>,
 					)
-					if (params.probeCount === null) {
-						throw new Error("probe unavailable")
-					}
-					return {
-						toArray: vi.fn(async () => [{ n: params.probeCount }]),
-					}
+					return { toArray: vi.fn(async () => [{ n: params.total }]) }
 				}
 				return { toArray: vi.fn(async () => []) }
 			}),
 		} as unknown as Collection
 	}
 
-	it("measures what the index will actually return", async () => {
-		let seen: Record<string, unknown> | undefined
+	it("reports unknown, and never runs a vector probe, when numDocs is absent", async () => {
+		let probed = false
 		const collection = collectionWith({
 			total: 3,
 			index: readyAutoEmbedIndex,
-			probeCount: 3,
-			onVectorSearch: (stage) => {
-				seen = stage
+			onVectorSearch: () => {
+				probed = true
 			},
 		})
 
@@ -657,27 +699,37 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 
 		expect(result).toEqual({
 			total: 3,
-			success: 3,
+			success: 0,
 			failed: 0,
 			pending: 0,
-			unknown: 0,
+			unknown: 3,
 			basis: "search-index",
 		})
-		// The probe must target the autoEmbed field, or it cannot embed the query.
-		expect(seen?.path).toBe("text")
-		expect(seen?.index).toBe("vec_idx")
-		// WS-16 (C-032): the probe runs exact nearest neighbor with no
-		// numCandidates, so the measured count is what ENN actually returns —
-		// coverage cannot be fabricated by an approximation.
-		expect(seen?.exact).toBe(true)
-		expect(seen).not.toHaveProperty("numCandidates")
+		expect(probed).toBe(false)
 	})
 
-	it("reports the shortfall as pending rather than as covered", async () => {
+	it("uses numDocs when the server reports it", async () => {
+		let probed = false
+		const collection = collectionWith({
+			total: 4,
+			index: { ...readyAutoEmbedIndex, numDocs: 4 },
+			onVectorSearch: () => {
+				probed = true
+			},
+		})
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+		})
+		expect(result).toMatchObject({ total: 4, success: 4, unknown: 0 })
+		expect(probed).toBe(false)
+	})
+
+	it("reports the numDocs shortfall as pending rather than as covered", async () => {
 		const collection = collectionWith({
 			total: 5,
-			index: readyAutoEmbedIndex,
-			probeCount: 2,
+			index: { ...readyAutoEmbedIndex, numDocs: 2 },
 		})
 		const result = await measureEmbeddingCoverage({
 			collection,
@@ -692,68 +744,11 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 		})
 	})
 
-	it("stays unknown when the probe itself cannot answer", async () => {
-		const collection = collectionWith({
-			total: 3,
-			index: readyAutoEmbedIndex,
-			probeCount: null,
-		})
-		const result = await measureEmbeddingCoverage({
-			collection,
-			indexName: "vec_idx",
-			embeddingMode: "automated",
-		})
-		expect(result).toMatchObject({ total: 3, success: 0, unknown: 3 })
-	})
-
-	it("refuses to guess for a collection larger than one probe can cover", async () => {
-		// The server caps `limit` at 10k, so a bigger collection cannot be
-		// measured in one query. Reporting the capped count as the total would
-		// understate coverage as a hard number.
-		let probed = false
-		const collection = collectionWith({
-			total: 10_001,
-			index: readyAutoEmbedIndex,
-			probeCount: 10_000,
-			onVectorSearch: () => {
-				probed = true
-			},
-		})
-		const result = await measureEmbeddingCoverage({
-			collection,
-			indexName: "vec_idx",
-			embeddingMode: "automated",
-		})
-		expect(result).toMatchObject({ unknown: 10_001, success: 0 })
-		expect(probed).toBe(false)
-	})
-
-	it("still prefers numDocs when the server does report it", async () => {
-		let probed = false
-		const collection = collectionWith({
-			total: 4,
-			index: { ...readyAutoEmbedIndex, numDocs: 4 },
-			probeCount: 999,
-			onVectorSearch: () => {
-				probed = true
-			},
-		})
-		const result = await measureEmbeddingCoverage({
-			collection,
-			indexName: "vec_idx",
-			embeddingMode: "automated",
-		})
-		expect(result).toMatchObject({ total: 4, success: 4, unknown: 0 })
-		// No reason to pay for an ENN query when the cheap field is present.
-		expect(probed).toBe(false)
-	})
-
 	it("does not probe an index that is not ready", async () => {
 		let probed = false
 		const collection = collectionWith({
 			total: 3,
 			index: { ...readyAutoEmbedIndex, status: "BUILDING", queryable: false },
-			probeCount: 3,
 			onVectorSearch: () => {
 				probed = true
 			},
@@ -767,20 +762,16 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 		expect(probed).toBe(false)
 	})
 
-	it("W13: with a tenant filter the probe answers instead of index-wide numDocs", async () => {
+	it("W13: a tenant filter never borrows the index-wide numDocs and never probes", async () => {
 		// numDocs counts EVERY tenant's documents — under a tenant filter it
 		// would fabricate coverage (another tenant's indexed docs counted as
-		// this tenant's success). The tenant-scoped probe must answer instead.
+		// this tenant's success).
 		let probed = false
-		let seenFilter: Record<string, unknown> | undefined
 		const collection = collectionWith({
 			total: 3,
-			// Index-wide count of 999 must NOT be used for the tenant answer.
 			index: { ...readyAutoEmbedIndex, numDocs: 999 },
-			probeCount: 2,
-			onVectorSearch: (stage) => {
+			onVectorSearch: () => {
 				probed = true
-				seenFilter = stage.filter as Record<string, unknown> | undefined
 			},
 		})
 
@@ -791,13 +782,13 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 			tenantFilter: { agentId: "agent-a" },
 		})
 
-		expect(probed).toBe(true)
-		expect(seenFilter).toEqual({ agentId: "agent-a" })
-		expect(result).toMatchObject({
+		expect(probed).toBe(false)
+		expect(result).toEqual({
 			total: 3,
-			success: 2,
-			pending: 1,
-			unknown: 0,
+			success: 0,
+			failed: 0,
+			pending: 0,
+			unknown: 3,
 			basis: "search-index",
 		})
 	})

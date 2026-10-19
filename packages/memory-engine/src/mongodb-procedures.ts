@@ -21,10 +21,10 @@ import {
 	recordEmbeddingSpend,
 	recordEmbeddingSpendInSession,
 } from "./mongodb-cost-ledger.js"
+import { bestEffort } from "./best-effort.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
-import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	procedureRevisionsCollection,
@@ -48,7 +48,7 @@ import {
 } from "./mongodb-temporal.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
-	isTransactionUnsupported,
+	typedTransactionError,
 } from "./mongodb-transactions.js"
 import type {
 	MemoryActorRole,
@@ -291,10 +291,6 @@ function applyProcedureOutcomeSnapshot(
 		updated.lastFailureAt = now
 	}
 	return updated
-}
-
-function escapeRegex(input: string): string {
-	return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 function hasProcedureChanged(
@@ -922,13 +918,7 @@ export async function writeProcedure(params: {
 							}
 						)
 					} catch (err) {
-						if (!isTransactionUnsupported(err)) {
-							throw err
-						}
-						log.info(
-							"transactions not supported for procedure writes, falling back to direct writes",
-						)
-						return await persist()
+						throw typedTransactionError(err)
 					} finally {
 						await session.endSession()
 					}
@@ -988,9 +978,7 @@ export async function writeProcedure(params: {
 		if (session) {
 			await audit
 		} else {
-			audit.catch((err) => {
-				log.warn("procedure audit failed", { error: err })
-			})
+			void bestEffort("procedure-audit", () => audit)
 		}
 	}
 	if (params.session) {
@@ -1193,13 +1181,7 @@ export async function invalidateProcedureByHandle(params: {
 					await persist(session)
 				}, MAJORITY_TRANSACTION_OPTIONS)
 			} catch (err) {
-				if (!isTransactionUnsupported(err)) {
-					throw err
-				}
-				log.info(
-					"transactions not supported for procedure lifecycle, falling back to direct writes",
-				)
-				await persist()
+				throw typedTransactionError(err)
 			} finally {
 				await session.endSession()
 			}
@@ -1242,9 +1224,7 @@ export async function invalidateProcedureByHandle(params: {
 			if (session) {
 				await audit
 			} else {
-				audit.catch((err) => {
-					log.warn("procedure invalidate audit failed", { error: err })
-				})
+				void bestEffort("procedure-invalidate-audit", () => audit)
 			}
 		}
 		if (params.session && params.transactionalSideEffects === "inline") {
@@ -1362,25 +1342,25 @@ export async function recordProcedureOutcome(params: {
 			return false
 		}
 		const updated = applyProcedureOutcomeSnapshot(oldSnapshot, success, now)
-		recordMutation({
-			db,
-			prefix,
-			mutation: {
-				collectionName: "procedures",
-				documentId: procedureHandleFromDoc(updated).id,
-				operation: "update",
-				agentId,
-				oldValue: oldSnapshot,
-				newValue: updated,
-				changedFields: success
-					? ["successCount", "lastSuccessAt"]
-					: ["failCount", "lastFailureAt"],
-				actorRole: actorRole ?? "system",
-				...(mutationMeta ? { meta: mutationMeta } : {}),
-			},
-		}).catch((error) => {
-			log.warn("recordProcedureOutcome audit failed", { error })
-		})
+		void bestEffort("procedure-outcome-audit", () =>
+			recordMutation({
+				db,
+				prefix,
+				mutation: {
+					collectionName: "procedures",
+					documentId: procedureHandleFromDoc(updated).id,
+					operation: "update",
+					agentId,
+					oldValue: oldSnapshot,
+					newValue: updated,
+					changedFields: success
+						? ["successCount", "lastSuccessAt"]
+						: ["failCount", "lastFailureAt"],
+					actorRole: actorRole ?? "system",
+					...(mutationMeta ? { meta: mutationMeta } : {}),
+				},
+			}),
+		)
 		return true
 	} catch (err) {
 		log.error("recordProcedureOutcome failed", { procedureId, error: err })
@@ -1462,9 +1442,7 @@ export async function reportProcedureOutcomeByHandle(params: {
 		if (session) {
 			await audit
 		} else {
-			audit.catch((error) => {
-				log.warn("procedure outcome audit failed", { error })
-			})
+			void bestEffort("procedure-outcome-audit", () => audit)
 		}
 		return procedureLifecycleItemFromDoc(updated)
 	}
@@ -1658,11 +1636,25 @@ function toProcedureResult(doc: Document): MemorySearchResult {
 	}
 }
 
+/**
+ * Exact procedure name or trigger-query match: `$search` `equals` on the
+ * `name` and `triggerQueries` token fields, which the manifest indexes with
+ * the lowercase normalizer. The match is the full value, case-insensitive;
+ * a prefix, a superset or a mid-word substring does not match.
+ *
+ * The Search stage only selects candidates. The full filter (owner, scope,
+ * state, validity window) is applied again to the hydrated document before
+ * the limit, so a procedure that changed after it was indexed cannot return.
+ * A Search failure or budget denial is a typed throw, never a different
+ * lookup.
+ */
 export async function findExactProcedureMatches(
 	collection: Collection,
 	query: string,
 	opts: {
 		maxResults: number
+		/** The Search index that serves `equals` on name and triggerQueries. */
+		textIndexName: string
 		filter?: {
 			agentId?: string
 			scope?: MemoryScope
@@ -1704,43 +1696,58 @@ export async function findExactProcedureMatches(
 	if (opts.filter?.intentTags?.length) {
 		filter.intentTags = { $in: opts.filter.intentTags }
 	}
-	const exactAlias = new RegExp(`^${escapeRegex(trimmed)}$`, "i")
-	const exactAliasFilter = {
-		$or: [{ name: exactAlias }, { triggerQueries: exactAlias }],
-	}
-	const docs = await collection
-		.find(
-			mergeQueryClauses(
-				filter,
-				opts.filter?.currentOnly
-					? buildCurrentValidityClause({ asOf })
-					: undefined,
-				exactAliasFilter,
-			),
-			{
-				maxTimeMS: resolveUserSearchMaxTimeMs(),
-				projection: {
-					_id: 0,
-					procedureId: 1,
-					searchText: 1,
-					sessionId: 1,
-					// RET-09: surface the stored confidence for the
-					// provenance classifier.
-					confidence: 1,
-					updatedAt: 1,
-					state: 1,
-					scope: 1,
-					scopeRef: 1,
-					provenance: 1,
-					sourceEventIds: 1,
-					validFrom: 1,
-					validTo: 1,
+	const canonicalFilter = mergeQueryClauses(
+		filter,
+		opts.filter?.currentOnly ? buildCurrentValidityClause({ asOf }) : undefined,
+	)
+	const { compoundFilter } = splitAtlasSearchFilter(canonicalFilter)
+	const pipeline: Document[] = [
+		{
+			$search: {
+				index: opts.textIndexName,
+				compound: {
+					should: [
+						{ equals: { path: "name", value: trimmed } },
+						{ equals: { path: "triggerQueries", value: trimmed } },
+					],
+					minimumShouldMatch: 1,
+					...(compoundFilter ? { filter: compoundFilter } : {}),
 				},
-				sort: { updatedAt: -1 },
-				limit: opts.maxResults,
 			},
-		)
-		.toArray()
+		},
+		// The compound filter runs against the indexed copy, which can lag the
+		// latest write; revalidate the whole filter on the hydrated document.
+		...freshnessRevalidationStages(canonicalFilter),
+		{ $sort: { updatedAt: -1 } },
+		{ $limit: opts.maxResults },
+		{
+			$project: {
+				_id: 0,
+				procedureId: 1,
+				searchText: 1,
+				sessionId: 1,
+				// RET-09: surface the stored confidence for the
+				// provenance classifier.
+				confidence: 1,
+				updatedAt: 1,
+				state: 1,
+				scope: 1,
+				scopeRef: 1,
+				provenance: 1,
+				sourceEventIds: 1,
+				validFrom: 1,
+				validTo: 1,
+			},
+		},
+	]
+	let docs: Document[]
+	try {
+		docs = await runSearchAggregateWithRetry(collection, pipeline, {
+			stage: "exact-match",
+		})
+	} catch (err) {
+		throw toTypedSearchError(err, "exact-match")
+	}
 
 	return docs.map((doc) =>
 		toProcedureResult({
@@ -1777,10 +1784,7 @@ export async function searchProcedures(
 	},
 ): Promise<MemorySearchResult[]> {
 	const minScore = opts.minScore ?? 0.1
-	const canVector =
-		opts.embeddingMode === "automated"
-			? opts.capabilities.vectorSearch
-			: queryVector != null && opts.capabilities.vectorSearch
+	const canVector = opts.capabilities.vectorSearch
 	const numCandidates = Math.min(
 		opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		MONGODB_MAX_NUM_CANDIDATES,

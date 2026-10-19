@@ -49,7 +49,7 @@ export const fakePrefix = "test_"
 /**
  * The canonical resolved `config.mongodb` shape for kit-based tests. Trace
  * and verdict seams read deep fields (`relevance.telemetry.queryPrivacyMode`,
- * `legacySearchFallback`, …), so partial configs crash — spread overrides on
+ * `searchBudget`, …), so partial configs crash — spread overrides on
  * top of this instead of building ad-hoc config objects.
  */
 export function kitMongoConfig(overrides?: Record<string, unknown>) {
@@ -67,7 +67,7 @@ export function kitMongoConfig(overrides?: Record<string, unknown>) {
 			kb: { enabled: false },
 			episodes: { enabled: true, minEventsForEpisode: 6 },
 			graph: { enabled: false },
-			reranking: { enabled: false },
+			reranking: {},
 			queryRewriting: { enabled: false },
 			// RET-21: every recordRecallTrace site reads the diagnostic
 			// privacy mode from the resolved relevance telemetry config —
@@ -107,14 +107,15 @@ export function buildMockManager(overrides?: Record<string, unknown>) {
 		agentScopeRef: "agent:agent-1",
 		workspaceScopeRef: "workspace:agent-1",
 		client: undefined,
-		capabilities: {
-			vectorSearch: false,
-			textSearch: false,
+		deploymentFacts: {
 			rankFusion: false,
 			storedSource: false,
 			vectorIndexMethod: false,
 			scoreFusion: false,
 		},
+		// An empty manifest gates nothing; tests of the index-health seams
+		// supply a real manifest and a fake Search db.
+		requiredManifest: [],
 		config: kitMongoConfig(),
 		extraMemoryPaths: [],
 		writeQueue: Promise.resolve(),
@@ -423,7 +424,9 @@ export function schemaModuleMock() {
 		proceduresCollection: vi.fn(),
 		chunksCollection: vi.fn(),
 		filesCollection: vi.fn(),
-		metaCollection: vi.fn(),
+		// The erasure-epoch read has no failure fallback: the default meta
+		// collection answers with no gate document (epoch 0).
+		metaCollection: vi.fn(() => ({ findOne: vi.fn(async () => null) })),
 		kbCollection: vi.fn(),
 		kbChunksCollection: vi.fn(),
 		relevanceRunsCollection: vi.fn(),
@@ -439,17 +442,16 @@ export function schemaModuleMock() {
 		ensureSchemaValidation: vi.fn(),
 		ensureSearchIndexes: vi.fn(),
 		ensureStandardIndexes: vi.fn(),
-		waitForSearchCapabilities: vi.fn(),
-		waitForSearchIndexesQueryable: vi.fn(),
 		listSearchIndexes: vi.fn(),
 		isSearchIndexReadyWithFilterFields: vi.fn(),
-		isSearchIndexManagementAvailable: vi.fn(),
 		isEventsVectorBitemporalPrefilterReady: vi.fn(),
-		// W17 factory-unwind tests exercise create() end to end; the manager
-		// imports this from mongodb-schema.js for the standard-index phase.
-		shouldEnsureTextFallbackIndexes: vi.fn(() => false),
+		enforceBootContract: vi.fn(async () => ({
+			serverVersion: [8, 3, 0],
+			manifest: [],
+			indexes: new Map(),
+		})),
 		resolveSearchIndexReadinessTiming: vi.fn(() => ({
-			timeoutMs: 60_000,
+			timeoutMs: 180_000,
 			pollMs: 1_000,
 		})),
 		getExpectedSearchIndexTargets: vi.fn(() => []),
@@ -485,20 +487,6 @@ export function queryRewriterModuleMock() {
 			rewrittenQuery: query,
 			rewritten: false,
 			method: "synonym-expansion",
-			latencyMs: 0,
-		})),
-	}
-}
-
-export function rerankerModuleMock() {
-	return {
-		// C-031: mongodb-search-v2.ts reads this constant at module scope, so
-		// the mock must carry the real value (mongodb-reranker.ts) or every
-		// manager test file fails at import time.
-		RERANK_TIMEOUT_MS: 2_000,
-		crossEncoderRerank: vi.fn(async ({ results }) => ({
-			results,
-			reranked: false,
 			latencyMs: 0,
 		})),
 	}
@@ -556,6 +544,10 @@ export function memoryJobsModuleMock() {
 export function consolidatorModuleMock() {
 	return {
 		consolidateMemory: vi.fn(),
+		consolidationSearchBudgetLimits: (maxEvents: number) => ({
+			maxAggregations: maxEvents + 200,
+			maxEmbeds: maxEvents + 200,
+		}),
 	}
 }
 
@@ -599,5 +591,26 @@ export async function benchmarkReadinessModuleMock(
 export function telemetryModuleMock() {
 	return {
 		emitTelemetry: vi.fn().mockResolvedValue(undefined),
+	}
+}
+
+/**
+ * M2 T6: raw-window selects with one `$search` over the window (a `range`
+ * with `gte` in `compound.filter`). This events collection answers that
+ * aggregate with the given candidates and every other events aggregate with
+ * none, so a test can seed raw-window without seeding the fused event lanes.
+ */
+export function rawWindowEventsCollection(events: object[]) {
+	return {
+		aggregate: vi.fn((pipeline: Array<Record<string, unknown>>) => ({
+			toArray: vi.fn(async () => {
+				const search = pipeline[0]?.$search as
+					| { compound?: { filter?: Array<Record<string, { gte?: Date }>> } }
+					| undefined
+				const rawWindow =
+					search?.compound?.filter?.some((clause) => clause.range?.gte) ?? false
+				return rawWindow ? events : []
+			}),
+		})),
 	}
 }

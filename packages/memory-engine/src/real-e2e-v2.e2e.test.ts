@@ -11,10 +11,7 @@
 import { randomUUID } from "node:crypto"
 import { MongoClient, type Db } from "mongodb"
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
-import {
-	RegexEntityExtractor,
-	LLMEntityExtractor,
-} from "./mongodb-entity-extractor.js"
+import { RegexEntityExtractor } from "./mongodb-entity-extractor.js"
 // v2 episodes
 import {
 	materializeEpisode,
@@ -52,7 +49,6 @@ import { writeEventAndProject } from "./test-helpers/legacy-write-event.js"
 import { getRecentIngestRuns } from "./mongodb-ops.js"
 import { synthesizeProfile } from "./mongodb-profile.js"
 import { rewriteQuery, expandSynonyms } from "./mongodb-query-rewriter.js"
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
 // v2 retrieval planner
 import { planRetrieval } from "./mongodb-retrieval-planner.js"
 // Schema setup
@@ -64,11 +60,7 @@ import {
 } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 // Search functions (direct vector search, keyword search, hybrid)
-import {
-	vectorSearch,
-	keywordSearch,
-	buildVectorSearchStage,
-} from "./mongodb-search.js"
+import { vectorSearch, buildVectorSearchStage } from "./mongodb-search.js"
 // Time series telemetry
 import {
 	emitTelemetry,
@@ -97,8 +89,6 @@ const TEST_WINDOW_END = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
 const PREVIEW_VOYAGE_API_KEY = resolvePreviewVoyageApiKey()
 const AUTO_EMBED_ENABLED = hasAtlasModelKey(PREVIEW_VOYAGE_API_KEY)
 const describeAutoEmbed = AUTO_EMBED_ENABLED ? describe : describe.skip
-const describeRerank =
-	PREVIEW_VOYAGE_API_KEY.length > 0 ? describe : describe.skip
 
 async function waitForSearchIndexesReady(
 	db: Db,
@@ -355,6 +345,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			// Verify events persisted
 			const events = await getEventsBySession({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -378,6 +370,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			}
 
 			const events = await getEventsBySession({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -428,6 +422,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should retrieve events by time range", async () => {
 			const allEvents = await getEventsByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -453,6 +449,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should extract entities from all conversation events", async () => {
 			// Gather all event bodies
 			const allEvents = await getEventsByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -484,6 +482,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should find @romiluz as a person entity", async () => {
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -498,6 +498,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should find @sarah as a person entity (regex captures word chars only)", async () => {
 			// MENTION_REGEX /@(\w{3,})/ captures "sarah" from "@sarah-chen" (no hyphens in \w)
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "sarah",
@@ -512,6 +514,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should find #data as a topic entity (regex captures word chars only)", async () => {
 			// TAG_REGEX /#(\w{3,})/ captures "data" from "#data-pipeline" (no hyphens in \w)
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "data",
@@ -524,6 +528,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should find GitHub URL as a document entity", async () => {
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "github.com",
@@ -537,6 +543,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			// FILE_PATH_REGEX requires (?:^|\s) before the path — leading "/" after
 			// backticks won't match. But URLs always match (https://...).
 			const docs = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -550,6 +558,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should find quoted name 'Sarah Chen' as a person entity", async () => {
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "Sarah Chen",
@@ -560,6 +570,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have person entities across conversations", async () => {
 			const people = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -576,6 +588,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have topic entities", async () => {
 			const topics = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -590,6 +604,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have document entities (URLs + file paths)", async () => {
 			const docs = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -652,6 +668,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should create relations between entities", async () => {
 			// Find romiluz entity
 			const romiluz = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -659,6 +677,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			})
 
 			const sarah = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "sarah",
@@ -718,6 +738,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			// Unidirectional follows fromEntityId → toEntityId.
 			// romiluz has outbound relations: works_on DataVault, works_on team
 			const romiluz = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -726,6 +748,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			expect(romiluz.length).toBeGreaterThan(0)
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				entityId: romiluz[0].entityId,
@@ -746,6 +770,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should expand graph bidirectionally", async () => {
 			// Find romiluz entity for bidirectional expansion
 			const romiluz = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -754,6 +780,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			if (romiluz.length > 0) {
 				const result = await expandGraph({
+					scope: "agent",
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					entityId: romiluz[0].entityId,
@@ -806,6 +834,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			})
 
 			const result = await deleteEntity({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				entityId: tempId,
@@ -877,6 +907,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should materialize a daily episode for Day 1", async () => {
 			const episode = await materializeEpisode({
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -904,6 +935,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should materialize a topic episode for 'architecture'", async () => {
 			const episode = await materializeEpisode({
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -922,6 +954,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should materialize a decision episode", async () => {
 			const episode = await materializeEpisode({
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -991,6 +1024,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should retrieve episodes by time range", async () => {
 			const episodes = await getEpisodesByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1006,6 +1041,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should retrieve episodes by type", async () => {
 			const dailyEpisodes = await getEpisodesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1014,6 +1051,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			expect(dailyEpisodes.length).toBeGreaterThanOrEqual(1)
 
 			const decisionEpisodes = await getEpisodesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1024,6 +1063,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should search episodes by keyword", async () => {
 			const results = await searchEpisodes({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "pipeline",
@@ -1040,6 +1081,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 	describe("Phase 5: Consolidation Lifecycle", () => {
 		it("should have unconsolidated events", async () => {
 			const events = await getUnconsolidatedEvents({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1050,6 +1093,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should mark events as consolidated", async () => {
 			const events = await getUnconsolidatedEvents({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1070,6 +1115,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have fewer unconsolidated events after marking", async () => {
 			const remaining = await getUnconsolidatedEvents({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1091,6 +1138,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 	describe("Phase 6: Auto Episode Triggers", () => {
 		it("should detect trigger conditions on unconsolidated events", async () => {
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1115,6 +1164,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should respect rate limiting", async () => {
 			// Second call within 60min should be rate-limited (if first triggered)
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1480,6 +1531,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			// Search from our agent should NOT find it
 			const ourEvents = await getEventsByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1506,6 +1559,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			})
 
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "SecretOtherAgent",
@@ -1531,6 +1586,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			// Our agent should not find the other agent's entity
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				entityId: otherEntityId,
@@ -1579,12 +1636,12 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				// isSearchIndexTypeCompatible exists to absorb, and what
 				// detectCapabilities already uses. Asserting the literal string
 				// here was asserting a field MongoDB never sends.
-				expect(
-					isSearchIndexTypeCompatible(vectorIdx!.type, "vectorSearch"),
-				).toBe(true)
+				expect(isSearchIndexTypeCompatible(vectorIdx!, "vectorSearch")).toBe(
+					true,
+				)
 				expect(vectorIdx!.status).toBe("READY")
 				expect(textIdx).toBeDefined()
-				expect(isSearchIndexTypeCompatible(textIdx!.type, "search")).toBe(true)
+				expect(isSearchIndexTypeCompatible(textIdx!, "search")).toBe(true)
 				expect(textIdx!.status).toBe("READY")
 
 				// Verify autoEmbed definition
@@ -1719,32 +1776,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 						r.snippet.toLowerCase().includes("connection"),
 				)
 				expect(bugHit).toBe(true)
-			},
-			VECTOR_SEARCH_TIMEOUT,
-		)
-
-		it(
-			"should return keyword search results with text index",
-			async () => {
-				await waitForSearchIndexesReady(db, {
-					timeoutMs: VECTOR_SEARCH_TIMEOUT,
-				})
-				const chunks = db.collection(`${PREFIX}chunks`)
-				const results = await keywordSearch(chunks, "DataVault pipeline", {
-					maxResults: 5,
-					minScore: 0.0,
-					indexName: `${PREFIX}chunks_text`,
-				})
-
-				expect(results.length).toBeGreaterThan(0)
-
-				// Text search results should contain the search terms
-				const hasRelevant = results.some(
-					(r) =>
-						r.snippet.toLowerCase().includes("datavault") ||
-						r.snippet.toLowerCase().includes("pipeline"),
-				)
-				expect(hasRelevant).toBe(true)
 			},
 			VECTOR_SEARCH_TIMEOUT,
 		)
@@ -2044,123 +2075,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 	})
 
 	// ═══════════════════════════════════════════════════════════════════════════
-	// PHASE 15: Cross-Encoder Re-ranking — Real Voyage rerank-2.5 API
-	// ═══════════════════════════════════════════════════════════════════════════
-
-	describeRerank("Phase 15: Cross-Encoder Re-ranking (Voyage API)", () => {
-		// Reranker auto-routes based on key prefix (same as Python SDK):
-		// al-... → ai.mongodb.com/v1/rerank (Atlas proxy)
-		// pa-... → api.voyageai.com/v1/rerank (direct)
-		// Rerank-only tests may use either family. MongoDB auto-embedding still requires al-....
-		const RERANK_KEY = PREVIEW_VOYAGE_API_KEY
-
-		it("should rerank search results via Voyage rerank-2.5 with instruction-following", async () => {
-			// Create results that mimic what searchV2 would return from the conversation data
-			const results: MemorySearchResult[] = [
-				{
-					path: "events/1",
-					startLine: 0,
-					endLine: 0,
-					score: 0.5,
-					snippet: "Python is a programming language for data science",
-					source: "conversation",
-				},
-				{
-					path: "events/2",
-					startLine: 0,
-					endLine: 0,
-					score: 0.8,
-					snippet:
-						"MongoDB is a document database. We chose it for DataVault because it handles flexible schemas and pipeline metadata well.",
-					source: "conversation",
-				},
-				{
-					path: "events/3",
-					startLine: 0,
-					endLine: 0,
-					score: 0.3,
-					snippet:
-						"TypeScript provides strong typing for the DataVault backend codebase",
-					source: "conversation",
-				},
-			]
-
-			const config: RerankConfig = {
-				enabled: true,
-				model: "rerank-2.5",
-				topN: 10,
-				minScore: 0,
-				voyageApiKey: RERANK_KEY,
-				instruction:
-					"This is agent memory for a coding assistant building DataVault. Prioritize database and architecture decisions.",
-			}
-
-			const result = await crossEncoderRerank({
-				db,
-				prefix: PREFIX,
-				agentId: AGENT_ID,
-				query: "What database does DataVault use and why?",
-				results,
-				config,
-			})
-
-			expect(result.reranked).toBe(true)
-			expect(result.latencyMs).toBeGreaterThan(0)
-			expect(result.results.length).toBe(3)
-
-			// MongoDB doc should rank highest for this database query
-			expect(result.results[0].snippet).toContain("MongoDB")
-			expect(result.results[0].score).toBeGreaterThan(0)
-			expect(result.results[0].score).toBeLessThanOrEqual(1)
-
-			console.log(`  Rerank latency: ${result.latencyMs}ms`)
-			console.log(
-				`  Reranked: ${result.results.map((r) => `${r.path}:${r.score.toFixed(4)}`).join(", ")}`,
-			)
-		})
-
-		it("should fall back gracefully with invalid API key", async () => {
-			const results: MemorySearchResult[] = [
-				{
-					path: "events/1",
-					startLine: 0,
-					endLine: 0,
-					score: 0.5,
-					snippet: "Test doc 1",
-					source: "conversation",
-				},
-				{
-					path: "events/2",
-					startLine: 0,
-					endLine: 0,
-					score: 0.8,
-					snippet: "Test doc 2",
-					source: "conversation",
-				},
-			]
-
-			const result = await crossEncoderRerank({
-				db,
-				prefix: PREFIX,
-				agentId: AGENT_ID,
-				query: "test",
-				results,
-				config: {
-					enabled: true,
-					model: "rerank-2.5",
-					topN: 10,
-					minScore: 0,
-					voyageApiKey: "invalid-key-xxx",
-				},
-			})
-
-			expect(result.reranked).toBe(false)
-			expect(result.results.length).toBe(2)
-			expect(result.results[0].path).toBe("events/1") // original order preserved
-		})
-	})
-
-	// ═══════════════════════════════════════════════════════════════════════════
 	// PHASE 16: Query Rewriting — Synonym expansion for better recall
 	// ═══════════════════════════════════════════════════════════════════════════
 
@@ -2239,27 +2153,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				`  Extracted ${result.entities.length} entities: ${result.entities.map((e) => `${e.name}(${e.type})`).join(", ")}`,
 			)
 			console.log(`  Created ${result.relationsCreated} relations`)
-		})
-
-		it("should fall back to regex when LLM times out", async () => {
-			const slowLlm = () => new Promise<string>(() => {}) // never resolves
-			const extractor = new LLMEntityExtractor(slowLlm, 100) // 100ms timeout
-			const testAgentId = `llm-timeout-e2e-${randomUUID().slice(0, 8)}`
-
-			const result = await extractAndUpsertEntities({
-				db,
-				prefix: PREFIX,
-				agentId: testAgentId,
-				eventContent: "@charlie works on #typescript with @dave",
-				scope: "agent",
-				extractor,
-			})
-
-			// Should fall back to regex and still extract entities
-			expect(result.entities.length).toBeGreaterThanOrEqual(2)
-			const names = result.entities.map((e) => e.name)
-			expect(names).toContain("charlie")
-			expect(names).toContain("typescript")
 		})
 
 		it("should produce identical results to inline extraction (backward compatibility)", async () => {

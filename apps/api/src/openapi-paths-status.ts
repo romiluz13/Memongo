@@ -1,7 +1,30 @@
+import { nonSearchFailureResponses } from "./openapi-paths-search.js"
 import {
 	CLIENT_VERSION_HEADER_PARAMETER,
 	memoryScopeEnum,
 } from "./openapi-schemas.js"
+
+const rerankStatusSchema = {
+	type: "object",
+	description:
+		"There is no reranker. The engine does not implement native $rerank (Atlas only) yet, and the server is not probed.",
+	properties: {
+		nativeRerank: {
+			type: "object",
+			properties: {
+				engineSupport: { type: "boolean", enum: [false] },
+				serverSupport: { type: "string", enum: ["unknown"] },
+			},
+		},
+		lane: {
+			type: "object",
+			properties: {
+				outcome: { type: "string", enum: ["not-applicable"] },
+				reason: { type: "string", enum: ["capability-absent"] },
+			},
+		},
+	},
+}
 
 export const statusPaths = {
 	"/v1/profile": {
@@ -49,7 +72,20 @@ export const statusPaths = {
 			responses: {
 				"200": {
 					description:
-						"Status. Includes `version`, the Memongo release version of this server.",
+						"Status. Includes `version`, the Memongo release version of this server, and `custom.rerank`: native rerank is unsupported by the engine and unknown on the server, and the rerank lane is not-applicable (capability-absent).",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									custom: {
+										type: "object",
+										properties: { rerank: rerankStatusSchema },
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -83,7 +119,13 @@ export const statusPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "Ok" } },
+			responses: {
+				"200": { description: "Ok" },
+				"500": {
+					description:
+						'KB_REFRESH_FAILED: the file sync committed, but the KB auto-refresh did not complete (a rejected import, an import that reported errors, a configured KB source that could not be scanned or read, or a marker write that failed after a clean import). The body carries error.commitState = "committed" (or "unknown" when a marker or import write ended with an uncertain commit outcome) and error.commit = { operation: "sync", fileSync, kbImport? }: fileSync says what the file-sync phase left undone, and kbImport holds the import\'s acknowledged counts only when the import produced them (absent means not known, never zero). The message names the reason. The refresh marker is not advanced, so the next sync retries, except for marker-write-failed, where the outcome of the marker write is not known. Other unexpected failures return SYNC_FAILED, which also carries error.commitState and error.commit when the failure came after the file sync committed.',
+				},
+			},
 		},
 	},
 	"/v1/probes/embedding": {
@@ -95,7 +137,10 @@ export const statusPaths = {
 	"/v1/probes/vector": {
 		get: {
 			summary: "Probe vector search availability",
-			responses: { "200": { description: "{ ok: boolean }" } },
+			responses: {
+				"200": { description: "{ ok: boolean }" },
+				...nonSearchFailureResponses("PROBE_VECTOR_FAILED"),
+			},
 		},
 	},
 } as const

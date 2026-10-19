@@ -17,10 +17,6 @@ import { hasValidBenchmarkIngestCounts } from "./mongodb-benchmark-checkpoint.js
  */
 
 import { createHash, randomUUID } from "node:crypto"
-import {
-	DEFAULT_HTTP_RERANK_MODEL,
-	resolveEffectiveRerankTopN,
-} from "../../packages/memory-engine/src/http-rerank-config.js"
 import { access, mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
@@ -324,18 +320,6 @@ export function resolveBenchmarkMeasurementPasses(): number {
 	return Math.floor(raw)
 }
 
-/**
- * B12: benchmark scenario runs force the post-cross-encoder recency and
- * access-boost weights to 0. Benchmark replay writes every result freshly,
- * so recency and access counts carry no signal — leaving them on lets the
- * boost reorder results on ingestion artifacts instead of retrieval and
- * reranking quality.
- */
-export const BENCHMARK_RERANK_BOOST_OVERRIDES = {
-	recencyBoost: 0,
-	accessBoost: 0,
-} as const
-
 export class MongoDBManagerBenchmarkOps {
 	constructor(private readonly host: MongoDBManagerHost) {
 		this.scenario = new MongoDBManagerBenchmarkScenarioOps(host)
@@ -347,23 +331,10 @@ export class MongoDBManagerBenchmarkOps {
 		agentId: string,
 		workspaceDir: string,
 	): Promise<MongoDBMemoryManager> {
-		const mongoConfig = this.host.config.mongodb
-		const resolved = {
-			...this.host.config,
-			mongodb: mongoConfig
-				? {
-						...mongoConfig,
-						reranking: {
-							...(mongoConfig.reranking ?? {}),
-							...BENCHMARK_RERANK_BOOST_OVERRIDES,
-						},
-					}
-				: mongoConfig,
-		}
 		const manager = await MongoDBMemoryManager.create({
 			cfg: { agents: { list: [{ id: agentId, workspace: workspaceDir }] } },
 			agentId,
-			resolved,
+			resolved: this.host.config,
 			extraPaths: [],
 			client: this.host.client,
 		})
@@ -415,24 +386,11 @@ export class MongoDBManagerBenchmarkOps {
 		if (!mongoCfg.relevance.benchmark.enabled) {
 			throw new Error("relevance benchmark is disabled by configuration")
 		}
-		// B7: refuse to run with the reranker enabled but unconfigured. A
-		// missing key previously made the engine silently skip reranking, so
-		// a retrieval-only pipeline could produce benchmark numbers that
-		// looked identical to reranked runs. --no-rerank (run-benchmark CLI)
-		// sets MEMONGO_RERANKING_ENABLED=false before the manager exists,
-		// which both disables reranking here and records the deviation in the
-		// run manifest's settings snapshot.
-		const reranking = mongoCfg.reranking
-		if (reranking?.enabled && !reranking.voyageApiKey) {
-			throw new Error(
-				"benchmark refuses to run with reranking enabled but no reranker key: set VOYAGE_API_KEY or pass --no-rerank (recorded in the manifest)",
-			)
-		}
 		const datasetPath =
 			params?.datasetPath ?? mongoCfg.relevance.benchmark.datasetPath
 		const maxResults =
 			params?.maxResults ?? (params?.qualityThresholds ? 50 : 10)
-		const minScore = params?.minScore ?? mongoCfg.reranking?.minScore ?? 0.01
+		const minScore = params?.minScore ?? 0.01
 		const resolvedDatasetPath = await resolveBenchmarkDatasetPath({
 			datasetPath,
 			baseDir: this.host.workspaceDir,
@@ -697,20 +655,6 @@ export class MongoDBManagerBenchmarkOps {
 			mongoEmbeddingConfig: {
 				numDimensions: mongoCfg.numDimensions,
 				quantization: mongoCfg.quantization,
-			},
-			mongoRerankerConfig: {
-				enabled:
-					retrievalLane === "raw-session"
-						? false
-						: (mongoCfg.reranking?.enabled ?? false),
-				model:
-					retrievalLane === "raw-session"
-						? "none"
-						: (mongoCfg.reranking?.model ?? DEFAULT_HTTP_RERANK_MODEL),
-				topN:
-					retrievalLane === "raw-session"
-						? 0
-						: resolveEffectiveRerankTopN(mongoCfg.reranking?.topN),
 			},
 			latencySamples: params.latencySamples,
 			cost: params.runContext.accounting.snapshot(),
@@ -1417,6 +1361,8 @@ export class MongoDBManagerBenchmarkOps {
 								db: this.host.db,
 								prefix: this.host.prefix,
 								agentId: scenarioManager.agentId,
+								scope: "agent",
+								scopeRef,
 								sessionEventMap,
 							})
 
@@ -1502,7 +1448,6 @@ export class MongoDBManagerBenchmarkOps {
 										scopeRef,
 										eventIds: sessionEventMap,
 										concurrency: enrichmentConcurrency,
-										strict: enrichmentStrict,
 										onProviderCall: (outcome) => {
 											const accounting = params.runContext.accounting
 											const metadata = {
@@ -2370,23 +2315,7 @@ export class MongoDBManagerBenchmarkOps {
 		qualityContractId?: string
 		qualityContractVersion?: string
 	}): BenchmarkRunConfiguration {
-		const configuration =
-			this.scenario.snapshotBenchmarkRunConfiguration(params)
-		const reranking = this.host.config.mongodb?.reranking
-		const rawSession = params.retrievalLane === "raw-session"
-		return {
-			...configuration,
-			settings: {
-				...configuration.settings,
-				rerankerEnabled: rawSession ? false : (reranking?.enabled ?? false),
-				rerankerModel: rawSession
-					? "none"
-					: (reranking?.model ?? DEFAULT_HTTP_RERANK_MODEL),
-				rerankerTopN: rawSession
-					? 0
-					: resolveEffectiveRerankTopN(reranking?.topN),
-			},
-		}
+		return this.scenario.snapshotBenchmarkRunConfiguration(params)
 	}
 
 	async settleBenchmarkScenarioManager(

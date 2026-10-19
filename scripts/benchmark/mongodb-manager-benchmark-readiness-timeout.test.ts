@@ -26,7 +26,7 @@ function fixture(lane: "text" | "vector", status = "FAILED") {
 	} as unknown as Collection<Document>
 	const ops = new MongoDBManagerBenchmarkScenarioOps({
 		config: { mongodb: { embeddingMode: "automated" } },
-		capabilities: { textSearch: true, vectorSearch: true },
+		requestCapabilities: async () => ({ textSearch: true, vectorSearch: true }),
 		db: { collection: () => ({ aggregate: statusRead }) },
 	} as unknown as MongoDBManagerHost)
 	const params = {
@@ -205,12 +205,7 @@ function snapshot() {
 					kbTtlSec: 600,
 					similarityThreshold: 0.92,
 				},
-				reranking: {
-					enabled: false,
-					model: "rerank-2.5",
-					topN: 20,
-					minScore: 0.01,
-				},
+				reranking: {},
 				queryRewriting: {
 					enabled: false,
 					method: "rules",
@@ -233,12 +228,12 @@ function snapshot() {
 				episodes: { enabled: true, minEventsForEpisode: 6 },
 			},
 		},
-		capabilities: {
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: false,
-			rankFusion: true,
-		},
+		prefix: "benchmark_",
+		requiredManifest: [
+			{ name: "benchmark_chunks_vector" },
+			{ name: "benchmark_chunks_text" },
+		],
+		deploymentFacts: { scoreFusion: false, rankFusion: true },
 	} as unknown as MongoDBManagerHost
 	return new MongoDBManagerBenchmarkScenarioOps(
 		host,

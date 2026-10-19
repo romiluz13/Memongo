@@ -13,6 +13,7 @@ vi.mock("./mongodb-schema.js", () => ({
 }))
 
 import { hashText } from "./internal.js"
+import { TransactionUnsupportedError } from "./mongodb-transactions.js"
 import {
 	ingestToKB,
 	ingestFilesToKB,
@@ -454,18 +455,149 @@ describe("ingestFilesToKB", () => {
 		expect(result.errors).toHaveLength(0)
 	})
 
-	it("handles missing paths gracefully", async () => {
+	it("records a missing configured path as an import error, never a clean empty import (M2 review D2)", async () => {
+		const missing = path.join(tmpDir, "does-not-exist")
 		const result = await ingestFilesToKB({
 			db: mockDb(),
 			prefix: "test_",
-			paths: ["/nonexistent/path"],
+			paths: [missing],
 			importedBy: "cli",
 			embeddingMode: "automated",
 			scope: SCOPE,
 		})
 
 		expect(result.documentsProcessed).toBe(0)
-		expect(result.errors).toHaveLength(0)
+		expect(result.errors).toHaveLength(1)
+		expect(result.errors[0]).toContain(missing)
+		expect(result.errors[0]).toContain("ENOENT")
+	})
+
+	it("a scan failure on one configured path keeps the real counts of the documents that did succeed (M2 review D2)", async () => {
+		const good = path.join(tmpDir, "good.md")
+		await fs.writeFile(good, "# Good\nContent that ingests")
+		const missing = path.join(tmpDir, "gone.md")
+
+		const result = await ingestFilesToKB({
+			db: mockDb(),
+			prefix: "test_",
+			paths: [missing, good],
+			importedBy: "cli",
+			embeddingMode: "automated",
+			scope: SCOPE,
+		})
+
+		expect(result.documentsProcessed).toBe(1)
+		expect(result.chunksCreated).toBeGreaterThan(0)
+		expect(result.skipped).toBe(0)
+		expect(result.errors).toHaveLength(1)
+		expect(result.errors[0]).toContain(missing)
+	})
+
+	it("a directory that cannot be read is an import error naming the directory (M2 review D2)", async () => {
+		const docsDir = path.join(tmpDir, "docs")
+		await fs.mkdir(docsDir, { recursive: true })
+		await fs.writeFile(path.join(docsDir, "guide.md"), "# Guide\nBody")
+		const realReaddir = fs.readdir.bind(fs)
+		const spy = vi.spyOn(fs, "readdir").mockImplementation(((
+			dir: string,
+			options?: unknown,
+		) =>
+			dir === docsDir
+				? Promise.reject(
+						Object.assign(
+							new Error(`EACCES: permission denied, scandir '${dir}'`),
+							{
+								code: "EACCES",
+							},
+						),
+					)
+				: realReaddir(dir, options as never)) as unknown as typeof fs.readdir)
+		try {
+			const result = await ingestFilesToKB({
+				db: mockDb(),
+				prefix: "test_",
+				paths: [docsDir],
+				importedBy: "cli",
+				embeddingMode: "automated",
+				scope: SCOPE,
+			})
+
+			expect(result.documentsProcessed).toBe(0)
+			expect(result.errors).toHaveLength(1)
+			expect(result.errors[0]).toContain(docsDir)
+			expect(result.errors[0]).toContain("EACCES")
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
+	it("a file that cannot be read is an import error and its peers keep their real counts (M2 review D2)", async () => {
+		const docsDir = path.join(tmpDir, "docs")
+		await fs.mkdir(docsDir, { recursive: true })
+		const unreadable = path.join(docsDir, "locked.md")
+		await fs.writeFile(unreadable, "# Locked\nBody")
+		await fs.writeFile(path.join(docsDir, "open.md"), "# Open\nBody")
+		const realReadFile = fs.readFile.bind(fs)
+		const spy = vi.spyOn(fs, "readFile").mockImplementation(((
+			file: string,
+			options?: unknown,
+		) =>
+			file === unreadable
+				? Promise.reject(
+						Object.assign(
+							new Error(`EACCES: permission denied, open '${file}'`),
+							{
+								code: "EACCES",
+							},
+						),
+					)
+				: realReadFile(
+						file,
+						options as never,
+					)) as unknown as typeof fs.readFile)
+		try {
+			const result = await ingestFilesToKB({
+				db: mockDb(),
+				prefix: "test_",
+				paths: [docsDir],
+				importedBy: "cli",
+				embeddingMode: "automated",
+				scope: SCOPE,
+			})
+
+			expect(result.documentsProcessed).toBe(1)
+			expect(result.chunksCreated).toBeGreaterThan(0)
+			expect(result.errors).toHaveLength(1)
+			expect(result.errors[0]).toContain(unreadable)
+			expect(result.errors[0]).toContain("EACCES")
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
+	it("intentional non-input skips stay skips: an unsupported extension, a symlink and an unsupported file path are not errors", async () => {
+		const docsDir = path.join(tmpDir, "docs")
+		await fs.mkdir(docsDir, { recursive: true })
+		await fs.writeFile(path.join(docsDir, "guide.md"), "# Guide\nBody")
+		await fs.writeFile(path.join(docsDir, "script.js"), "console.log(1)")
+		await fs.symlink(
+			path.join(docsDir, "guide.md"),
+			path.join(docsDir, "link.md"),
+		)
+		const unsupported = path.join(tmpDir, "data.json")
+		await fs.writeFile(unsupported, "{}")
+
+		const result = await ingestFilesToKB({
+			db: mockDb(),
+			prefix: "test_",
+			paths: [docsDir, unsupported],
+			importedBy: "cli",
+			embeddingMode: "automated",
+			scope: SCOPE,
+		})
+
+		expect(result.documentsProcessed).toBe(1)
+		expect(result.errors).toEqual([])
 	})
 
 	it("ingests single file path", async () => {
@@ -530,7 +662,7 @@ describe("removeKBDocument", () => {
 		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
 
-	it("falls back to sequential when transactions are unsupported (F11)", async () => {
+	it("fails with TransactionUnsupportedError instead of deleting without a transaction (F11)", async () => {
 		const sessionMock = {
 			withTransaction: vi.fn(async () => {
 				const error = new Error(
@@ -545,20 +677,18 @@ describe("removeKBDocument", () => {
 			startSession: vi.fn(() => sessionMock),
 		}
 
-		const removed = await removeKBDocument(
-			mockDb(),
-			"test_",
-			"doc-fallback",
-			SCOPE,
-			clientMock as unknown as import("mongodb").MongoClient,
-		)
-		expect(removed).toBe(true)
-		// Should still delete via sequential fallback
-		expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({
-			docId: "doc-fallback",
-			scopeRef: SCOPE_REF,
-		})
-		expect(mockKB.deleteOne).toHaveBeenCalled()
+		await expect(
+			removeKBDocument(
+				mockDb(),
+				"test_",
+				"doc-fallback",
+				SCOPE,
+				clientMock as unknown as import("mongodb").MongoClient,
+			),
+		).rejects.toBeInstanceOf(TransactionUnsupportedError)
+		expect(mockKB.deleteOne).not.toHaveBeenCalled()
+		expect(mockKBChunks.deleteMany).not.toHaveBeenCalled()
+		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
 
 	it("propagates transaction failures without replaying sequential deletes", async () => {
@@ -690,7 +820,7 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 		expect(mockKBChunks.bulkWrite).not.toHaveBeenCalled()
 	})
 
-	it("falls back to sequential writes when transaction fails (standalone)", async () => {
+	it("fails with TransactionUnsupportedError instead of re-ingesting without a transaction (standalone)", async () => {
 		const oldHash = hashText("Old content standalone")
 		const newContent = "Updated content standalone test"
 		const doc: KBDocument = {
@@ -729,13 +859,13 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 			client: clientMock as unknown as import("mongodb").MongoClient,
 		})
 
-		// Should still succeed via fallback
-		expect(result.documentsProcessed).toBe(1)
-		expect(result.errors).toHaveLength(0)
-		// Chunks and doc deletion + new insertion should happen sequentially
-		expect(mockKBChunks.deleteMany).toHaveBeenCalled()
-		expect(mockKB.deleteOne).toHaveBeenCalled()
-		expect(mockKB.insertOne).toHaveBeenCalled()
+		expect(result.documentsProcessed).toBe(0)
+		expect(result.errors).toHaveLength(1)
+		expect(result.errors[0]).toContain("transactions are required")
+		expect(mockKBChunks.deleteMany).not.toHaveBeenCalled()
+		expect(mockKB.deleteOne).not.toHaveBeenCalled()
+		expect(mockKB.insertOne).not.toHaveBeenCalled()
+		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
 
 	it("uses session in all operations inside the transaction body", async () => {

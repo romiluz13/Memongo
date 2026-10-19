@@ -65,23 +65,15 @@ function matchesTimestamp(value: Date, filter: unknown): boolean {
 	return true
 }
 
-function matchesBody(value: string, filter: unknown): boolean {
-	if (
-		filter &&
-		typeof filter === "object" &&
-		!Array.isArray(filter) &&
-		(filter as Record<string, unknown>).$regex instanceof RegExp
-	) {
-		return (filter as Record<string, RegExp>).$regex.test(value)
-	}
-	return true
-}
-
 function matchesFilter(doc: BenchmarkEvent, filter: Document): boolean {
 	return Object.entries(filter).every(([key, value]) => {
 		switch (key) {
 			case "agentId":
 				return matchesScalarFilter(doc.agentId, value)
+			case "scope":
+				return matchesScalarFilter(doc.scope, value)
+			case "scopeRef":
+				return matchesScalarFilter(doc.scopeRef, value)
 			case "sessionId":
 				return matchesScalarFilter(doc.sessionId, value)
 			case "role":
@@ -89,7 +81,9 @@ function matchesFilter(doc: BenchmarkEvent, filter: Document): boolean {
 			case "timestamp":
 				return matchesTimestamp(doc.timestamp, value)
 			case "body":
-				return matchesBody(doc.body, value)
+				throw new Error(
+					"this fake serves no body filter: recall reads Search, never a content find",
+				)
 			default:
 				return true
 		}
@@ -124,6 +118,10 @@ function makeCorpusCollection(docs: BenchmarkEvent[]): Collection {
 			toArray: vi.fn(async () => []),
 		})),
 	} as unknown as Collection
+}
+
+function tenantOf(agentId: string) {
+	return { scope: "agent" as const, scopeRef: `agent:${agentId}` }
 }
 
 function makeEvent(params: {
@@ -194,19 +192,15 @@ describe("conversation recall regression suite", () => {
 		const debugging = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
+			// M2 T6: a query recall is one hybrid Search lane, which this
+			// in-memory corpus cannot serve; the session boundary is checked
+			// on the chronological listing instead.
 			request: {
 				agentId,
-				query: "debugging",
+				...tenantOf(agentId),
+				sessionId: "C",
 				asOf: new Date("2026-04-12T00:00:00.000Z"),
 				limit: 20,
-			},
-			capabilities: {
-				vectorSearch: false,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
 			},
 		})
 		const sessionOnly = await recallConversation({
@@ -214,6 +208,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				sessionId: "B",
 				limit: 20,
 			},
@@ -266,17 +261,22 @@ describe("conversation recall regression suite", () => {
 		const defaultRecall = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId, limit: 20 },
+			request: { agentId, ...tenantOf(agentId), limit: 20 },
 		})
 		const includeTools = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId, includeToolMessages: true, limit: 20 },
+			request: {
+				agentId,
+				...tenantOf(agentId),
+				includeToolMessages: true,
+				limit: 20,
+			},
 		})
 		const usersOnly = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId, roles: ["user"], limit: 20 },
+			request: { agentId, ...tenantOf(agentId), roles: ["user"], limit: 20 },
 		})
 
 		expect(defaultRecall.results).toHaveLength(8)
@@ -334,6 +334,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				startTime: "2026-04-08",
 				endTime: "2026-04-08",
 				limit: 10,
@@ -387,6 +388,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				startTime: "2026-04-08",
 				endTime: "2026-04-08",
 				timezone: "America/New_York",
@@ -435,6 +437,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				asOf: new Date("2026-04-08T11:00:00.000Z"),
 				limit: 10,
 			},
@@ -474,6 +477,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				limit: 10,
 			},
 		})

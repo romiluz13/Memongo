@@ -30,7 +30,6 @@ import type { consolidateMemory } from "./mongodb-consolidator.js"
 import { buildContextBundle } from "./mongodb-context-bundle.js"
 import { recallConversation } from "./mongodb-conversation-recall.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
-import type { SearchMethod } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import type { V2Status } from "./mongodb-manager-admin.js"
 import type { ManagerReadResult } from "./mongodb-manager-read.js"
@@ -65,12 +64,13 @@ import type {
 	RelevanceSourceScope,
 } from "./mongodb-relevance.js"
 import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
+import type { DeploymentFacts } from "./mongodb-index-health.js"
+import type { RequiredSearchIndex } from "./mongodb-required-index-manifest.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import type {
 	ActiveSources,
 	RelevanceExplainResult,
 } from "./mongodb-search-ranking.js"
-import type { SearchTraceEvent } from "./mongodb-search.js"
 import { selfEditBlock } from "./mongodb-self-edit.js"
 import { writeStructuredMemory } from "./mongodb-structured-memory.js"
 import type {
@@ -106,7 +106,6 @@ import type {
 	ClaimedMemoryJob,
 	MemoryJobType,
 	MemoryJobStatus,
-	SearchLaneOutcome,
 } from "./types.js"
 import type { SearchOutcomeSummary } from "./search-outcomes.js"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
@@ -122,7 +121,10 @@ export interface MongoDBManagerHost {
 	readonly agentScopeRef: string
 	readonly workspaceScopeRef: string
 	readonly extraMemoryPaths: string[]
-	readonly capabilities: DetectedCapabilities
+	/** M2 decision 8: what the deployment guarantees for this boot; never index health. */
+	readonly deploymentFacts: DeploymentFacts
+	/** The required-index manifest (intended definitions) the startup contract verified. */
+	readonly requiredManifest: readonly RequiredSearchIndex[]
 	nativeBitemporalVectorPrefilter: boolean
 	nativeBitemporalPrefilterCheckedAt: number
 	readonly config: ResolvedMemoryBackendConfig
@@ -185,19 +187,6 @@ export interface MongoDBManagerHost {
 		admission?: AdmissionToken,
 	): void
 	setLastSearchMode(mode: string, details?: Record<string, unknown>): void
-	legacySearch(
-		query: string,
-		opts?: {
-			maxResults?: number
-			minScore?: number
-			sessionKey?: string
-			scope?: MemoryScope
-			scopeRef?: string
-			kbRestricted?: boolean
-		},
-		admission?: AdmissionToken,
-		onOutcome?: (row: SearchLaneOutcome) => void,
-	): Promise<MemorySearchResult[]>
 	search(
 		query: string,
 		opts?: {
@@ -256,22 +245,12 @@ export interface MongoDBManagerHost {
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
 			/**
-			 * WS-12 (C-019): receives the degradation marker when admission
-			 * control dropped the KB vector lane. Sink-not-state.
-			 */
-			onDegradation?: (degradation: MemorySearchDegradation) => void
-			/**
 			 * #101: receives this call's outcome summary ({status, lanes})
 			 * exactly once. Sink-not-state; rows are value-free enums.
 			 */
 			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 	): Promise<MemorySearchResult[]>
-	detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod
-	resolveObservedSearchMethod(
-		traceEvents: SearchTraceEvent[],
-		mongoCfg: ResolvedMongoDBConfig,
-	): SearchMethod
 	relevanceExplain(params: {
 		query: string
 		sourceScope?: RelevanceSourceScope
@@ -319,7 +298,6 @@ export interface MongoDBManagerHost {
 	}): Promise<void>
 	loadPersistedChangeStreamResumeToken(): Promise<unknown>
 	persistChangeStreamResumeToken(token: unknown): Promise<void>
-	clearPersistedChangeStreamResumeToken(): Promise<void>
 	maybeAutoRefreshKB(): Promise<void>
 	ensureWatcher(): void
 	scheduleWatchSync(): void
@@ -435,8 +413,13 @@ export interface MongoDBManagerHost {
 	probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>
 	probeVectorAvailability(): Promise<boolean>
 	probeEmbeddingModeSupportsVector(): boolean
-	/** C-016: record a query-time search-path failure and re-poll readiness. */
-	noteSearchLaneFailure(path: string, error: unknown): void
+	/**
+	 * M2 decision 8: run one top-level request or job inside a request-local
+	 * index-health scope. Nested calls share the open scope.
+	 */
+	runIndexHealthRequest<T>(fn: () => Promise<T>): Promise<T>
+	/** This request's capability view, derived from its index-health snapshot. */
+	requestCapabilities(): Promise<DetectedCapabilities>
 	getDetailedStatus(): Promise<V2Status>
 	stats(): Promise<MemoryStats>
 	readFile(params: {
@@ -553,6 +536,8 @@ export interface MongoDBManagerHost {
 	traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}): ReturnType<typeof traceReasoningChain>
 	scanNovelty(params?: {

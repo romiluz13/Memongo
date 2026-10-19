@@ -335,11 +335,6 @@ describe("mongodb benchmark runner", () => {
 				numDimensions: 1024,
 				quantization: "none",
 			},
-			mongoRerankerConfig: {
-				enabled: true,
-				model: "rerank-2.5",
-				topN: 20,
-			},
 			latencySamples: [10, 20, 30, 40, 50],
 			cost: benchmarkCost([
 				{
@@ -363,8 +358,8 @@ describe("mongodb benchmark runner", () => {
 		expect(projected.embedding?.model).toBe("voyage-4-large")
 		expect(projected.embedding?.dimensions).toBe(1024)
 		expect(projected.embedding?.quantization).toBe("float32")
-		expect(projected.reranker?.model).toBe("rerank-2.5")
-		expect(projected.reranker?.stage).toBe("post-fusion")
+		expect(projected.reranker?.model).toBe("none")
+		expect(projected.reranker?.stage).toBe("none")
 		expect(projected.storage?.sharedPhysical.collections[0]).toEqual(
 			expect.objectContaining({
 				collectionBytes: 4096,
@@ -416,11 +411,6 @@ describe("mongodb benchmark runner", () => {
 				numDimensions: 1024,
 				quantization: "none",
 			},
-			mongoRerankerConfig: {
-				enabled: false,
-				model: "none",
-				topN: 0,
-			},
 			latencySamples: [10],
 			cost: benchmarkCost(),
 			runContext: benchmarkRunContext("raw-session"),
@@ -455,11 +445,6 @@ describe("mongodb benchmark runner", () => {
 			mongoEmbeddingConfig: {
 				numDimensions: 1024,
 				quantization: "none",
-			},
-			mongoRerankerConfig: {
-				enabled: true,
-				model: "rerank-2.5",
-				topN: 20,
 			},
 			latencySamples: [42],
 			cost: benchmarkCost(),

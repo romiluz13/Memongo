@@ -12,12 +12,7 @@ vi.mock("@memongo/memory-bridge", () => ({
 }))
 vi.mock("./lib/boot-env.js", () => ({ validateBootEnv: vi.fn() }))
 vi.mock("./lib/capabilities.js", () => ({
-	probeBootCapabilities: vi.fn(async () => ({
-		lanes: {},
-		probeError: undefined,
-	})),
-	logCapabilityTable: vi.fn(),
-	isRequireVectorEnabled: () => false,
+	bootOrRefuse: vi.fn(async () => ({})),
 }))
 vi.mock("./lib/readiness.js", () => ({ checkReadiness: vi.fn() }))
 vi.mock("./routes/v1.js", async () => {
@@ -37,7 +32,6 @@ beforeEach(() => {
 		"MEMONGO_API_SCOPED_KEYS",
 		"MEMONGO_ALLOW_INSECURE_REMOTE",
 		"MEMONGO_CORS_ORIGINS",
-		"MEMONGO_REQUIRE_VECTOR",
 	])
 		vi.stubEnv(key, "")
 	vi.stubEnv("MEMONGO_API_HOST", "0.0.0.0")

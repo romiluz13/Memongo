@@ -3,7 +3,6 @@ import { writeFileSync } from "node:fs"
 import { Collection, MongoClient } from "mongodb"
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest"
 import {
-	findExactProcedureMatches,
 	getProcedureHistoryByHandle,
 	invalidateProcedureByHandle,
 	updateProcedureByHandle,
@@ -11,6 +10,7 @@ import {
 	type ProcedureEntry,
 } from "./mongodb-procedures.js"
 import { ensureCollections } from "./mongodb-schema.js"
+import { buildCurrentValidityClause } from "./mongodb-temporal.js"
 import {
 	captureAdmissionToken,
 	type AdmissionToken,
@@ -85,18 +85,18 @@ async function seedClosed() {
 	expect(closed?.state).toBe("invalidated")
 	return { value, admission, identity, handle, row, closed }
 }
+// The exact-match lane is a Search query and this fixture builds no Search
+// index, so the probe reads the same current-validity clause canonically.
 function current(value: ProcedureEntry, asOf?: Date) {
-	return findExactProcedureMatches(col, "Deploy", {
-		maxResults: 10,
-		filter: {
+	return col
+		.find({
 			agentId: value.agentId,
 			scope: "agent",
 			scopeRef: `agent:${value.agentId}`,
 			state: "active",
-			currentOnly: true,
-			...(asOf ? { asOf } : {}),
-		},
-	})
+			...buildCurrentValidityClause(asOf ? { asOf } : {}),
+		})
+		.toArray()
 }
 beforeAll(async () => {
 	evidence("fixture-worker", { fixturePid: process.pid })

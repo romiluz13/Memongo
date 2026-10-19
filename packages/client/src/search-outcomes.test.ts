@@ -180,3 +180,120 @@ describe("silent mode keeps degradation and adds code and outcomes", () => {
 		})
 	})
 })
+
+// M2 decision 8: both admission-time index-health reasons are part of the
+// SDK's typed vocabulary. A silent client keeps the code and the rows, so a
+// swallowed index-stale or index-unavailable never reads as "no memories".
+describe("index-health reasons (M2)", () => {
+	const INDEX_HEALTH_ROWS: MemongoSearchLaneOutcome[] = [
+		{
+			lane: "hybrid:chunks",
+			stage: "index-health",
+			outcome: "failed",
+			reason: "index-stale",
+		},
+		{
+			lane: "kb",
+			stage: "index-health",
+			outcome: "failed",
+			reason: "index-unavailable",
+		},
+	]
+	const indexHealthBody = JSON.stringify({
+		error: {
+			code: "SEARCH_LANES_UNAVAILABLE",
+			message: "search failed (request id: r-2)",
+		},
+		outcomes: { status: "failed", lanes: INDEX_HEALTH_ROWS },
+	})
+
+	it("MemongoClientError carries both reasons on a 503 failure body", () => {
+		const err = new MemongoClientError(503, indexHealthBody)
+
+		expect(err.code).toBe("SEARCH_LANES_UNAVAILABLE")
+		expect(err.outcomes?.lanes).toEqual(INDEX_HEALTH_ROWS)
+	})
+
+	it("silent search, searchKB and searchDetailed keep the code and both rows", async () => {
+		stubResponse(503, indexHealthBody)
+		const client = silentClient()
+
+		const results = [
+			await client.search({ query: "q" }),
+			await client.searchKB({ query: "q" }),
+			await client.searchDetailed({ query: "q" }),
+		]
+
+		for (const out of results) {
+			expect(out.results).toEqual([])
+			expect(out.degradation).toEqual({
+				kind: "unavailable",
+				status: 503,
+				code: "SEARCH_LANES_UNAVAILABLE",
+				outcomes: { status: "failed", lanes: INDEX_HEALTH_ROWS },
+			})
+		}
+	})
+
+	it("silent recallConversation keeps the code and both rows on an index-health failure", async () => {
+		stubResponse(503, indexHealthBody)
+
+		const out = await silentClient().recallConversation({
+			scope: "agent",
+			scopeRef: "agent:a1",
+			query: "q",
+		})
+
+		expect(out.results).toEqual([])
+		expect(out.degradation).toEqual({
+			kind: "unavailable",
+			status: 503,
+			code: "SEARCH_LANES_UNAVAILABLE",
+			outcomes: { status: "failed", lanes: INDEX_HEALTH_ROWS },
+		})
+	})
+
+	it("a non-silent recallConversation rejects with the typed error carrying the rows", async () => {
+		stubResponse(503, indexHealthBody)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 0,
+		})
+
+		await expect(
+			client.recallConversation({
+				scope: "agent",
+				scopeRef: "agent:a1",
+				query: "q",
+			}),
+		).rejects.toMatchObject({
+			name: "MemongoClientError",
+			status: 503,
+			code: "SEARCH_LANES_UNAVAILABLE",
+			outcomes: { status: "failed", lanes: INDEX_HEALTH_ROWS },
+		})
+	})
+
+	it("a 200 partial keeps an index-health row beside a healthy sibling", async () => {
+		const partial = {
+			results: [],
+			outcomes: {
+				status: "partial",
+				lanes: [
+					{
+						lane: "structured",
+						stage: "lane",
+						outcome: "ok-empty",
+						reason: "zero-hits",
+					},
+					INDEX_HEALTH_ROWS[0],
+				],
+			},
+		}
+		stubResponse(200, JSON.stringify(partial))
+
+		await expect(silentClient().search({ query: "q" })).resolves.toEqual(
+			partial,
+		)
+	})
+})

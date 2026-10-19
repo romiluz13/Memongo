@@ -7,7 +7,6 @@ import {
 	writeStructuredMemory,
 	searchStructuredMemory,
 	getStructuredMemoryByHandle,
-	getStructuredMemoryByType,
 	type StructuredMemoryEntry,
 } from "./mongodb-structured-memory.js"
 
@@ -983,63 +982,6 @@ describe("searchStructuredMemory", () => {
 				},
 			]),
 		})
-	})
-})
-
-describe("getStructuredMemoryByType", () => {
-	it("queries structured memory by type", async () => {
-		const col = createMockStructuredCol()
-
-		vi.mocked(col.find).mockReturnValueOnce({
-			toArray: vi.fn(async () => [
-				{
-					type: "decision",
-					key: "db-choice",
-					value: "Using MongoDB",
-					confidence: 0.9,
-					updatedAt: new Date("2025-01-01"),
-				},
-			]),
-		} as unknown as ReturnType<Collection["find"]>)
-
-		const entries = await getStructuredMemoryByType(
-			mockDb({ test_structured_mem: col }),
-			"test_",
-			"decision",
-		)
-
-		expect(entries).toHaveLength(1)
-		expect(entries[0].type).toBe("decision")
-		expect(entries[0].key).toBe("db-choice")
-		expect(entries[0].value).toBe("Using MongoDB")
-		expect(entries[0].confidence).toBe(0.9)
-	})
-
-	it("respects limit parameter", async () => {
-		const col = createMockStructuredCol()
-
-		vi.mocked(col.find).mockReturnValueOnce({
-			toArray: vi.fn(async () => []),
-		} as unknown as ReturnType<Collection["find"]>)
-
-		await getStructuredMemoryByType(
-			mockDb({ test_structured_mem: col }),
-			"test_",
-			"fact",
-			"main",
-			10,
-		)
-
-		const findCall = (col.find as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(findCall[0]).toEqual({
-			type: "fact",
-			agentId: "main",
-			$or: [
-				{ expiresAt: { $exists: false } },
-				{ expiresAt: { $gt: expect.any(Date) } },
-			],
-		})
-		expect(findCall[1]).toMatchObject({ sort: { updatedAt: -1 }, limit: 10 })
 	})
 })
 

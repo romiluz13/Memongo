@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { MemongoBootError } from "@memongo/memory-bridge"
+import { describe, expect, it, vi } from "vitest"
 import {
+	bootOrRefuse,
 	deriveSearchLanes,
-	enforceRequiredVector,
+	formatBootFailure,
 	formatCapabilityTable,
-	isRequireVectorEnabled,
-	probeBootCapabilities,
+	formatPreflightReport,
 } from "./capabilities.js"
 
 // Connection strings are assembled at runtime so no literal credential-bearing
@@ -12,213 +13,181 @@ import {
 const mongoUri = (password: string) =>
 	["mongodb://probe-user:", password, "@mongo.internal:27017/memongo"].join("")
 
+const fullCaps = {
+	vectorSearch: true,
+	textSearch: true,
+	scoreFusion: true,
+	rankFusion: true,
+	storedSource: false,
+	vectorIndexMethod: false,
+}
+
+class ExitCalled extends Error {
+	constructor(readonly code: number) {
+		super(`exit ${code}`)
+	}
+}
+
+function refusalDeps() {
+	const log = vi.fn()
+	const error = vi.fn()
+	const exit = vi.fn((code: number): never => {
+		throw new ExitCalled(code)
+	})
+	return { log, error, exit }
+}
+
 describe("deriveSearchLanes", () => {
-	// #101 section 3 step 7: `text` is the classic $text lane, which exists
-	// only where the engine creates its index — deployments without Atlas
-	// Search (the shouldEnsureTextFallbackIndexes rule).
-	it("reports no classic $text lane on an Atlas Search deployment", () => {
-		expect(
-			deriveSearchLanes({
-				vectorSearch: true,
-				textSearch: true,
-				scoreFusion: true,
-				rankFusion: true,
-				storedSource: false,
-				vectorIndexMethod: false,
-			}),
-		).toEqual({ hybrid: true, vector: true, keyword: true, text: false })
-	})
-
-	it("reports the classic $text lane on a deployment without Atlas Search", () => {
-		expect(
-			deriveSearchLanes({
-				vectorSearch: false,
-				textSearch: false,
-				scoreFusion: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-			}),
-		).toEqual({ hybrid: false, vector: false, keyword: false, text: true })
-	})
-
-	it("reports every lane unavailable when the probe is unknown", () => {
-		expect(deriveSearchLanes(null)).toEqual({
-			hybrid: false,
-			vector: false,
-			keyword: false,
-			text: false,
+	it("reports every lane on a Search deployment", () => {
+		expect(deriveSearchLanes(fullCaps)).toEqual({
+			hybrid: true,
+			vector: true,
+			keyword: true,
 		})
 	})
 
 	it("hybrid requires both retrieval legs", () => {
-		const lanes = deriveSearchLanes({
-			vectorSearch: true,
-			textSearch: false,
-			scoreFusion: false,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		})
+		const lanes = deriveSearchLanes({ ...fullCaps, textSearch: false })
 		expect(lanes.vector).toBe(true)
 		expect(lanes.hybrid).toBe(false)
 	})
-})
 
-describe("formatCapabilityTable", () => {
-	it("reports all-lane availability without a probe error line", () => {
-		const table = formatCapabilityTable({
-			hybrid: true,
-			vector: true,
-			keyword: true,
-			text: true,
-		})
-		expect(table).toContain("all retrieval lanes available")
-		expect(table).not.toContain("probe failed")
-	})
-
-	it("treats a healthy Search deployment without classic $text as fully available", () => {
-		const table = formatCapabilityTable({
-			hybrid: true,
-			vector: true,
-			keyword: true,
-			text: false,
-		})
-		expect(table).toContain("hybrid:  available")
-		expect(table).toContain("vector:  available")
-		expect(table).toContain(
-			"text:    unavailable (classic $text, chunks/KB only)",
-		)
-		expect(table).toContain("all retrieval lanes available")
-		expect(table).not.toContain("DEGRADED")
-	})
-
-	it("never claims a silent $text fallback when degraded", () => {
-		const table = formatCapabilityTable({
-			hybrid: false,
-			vector: false,
-			keyword: false,
-			text: true,
-		})
-		expect(table).toContain("DEGRADED")
-		expect(table).not.toContain("silently fall back")
-	})
-
-	it("includes the probe failure detail when present", () => {
-		const table = formatCapabilityTable(
-			{ hybrid: false, vector: false, keyword: false, text: true },
-			"index list failed",
-		)
-		expect(table).toContain("DEGRADED")
-		expect(table).toContain("capability probe failed: index list failed")
-	})
-
-	it("redacts a credential-bearing probe error at the render boundary (C-002 round 3)", () => {
-		// Round-3 refutation finding: a direct formatCapabilityTable call
-		// with an unredacted probeError emitted the raw URI — the render
-		// boundary, not just the boot chain, must be safe.
-		const upstreamUri = [
-			"mongodb://svc:",
-			"dummy-cred-00000",
-			"@mongo.internal:27017/db",
-		].join("")
-		const table = formatCapabilityTable(
-			{ hybrid: false, vector: false, keyword: false, text: true },
-			`probe failed: ${upstreamUri}`,
-		)
-		expect(table).not.toContain("dummy-cred-00000")
-		expect(table).toContain(
-			["mongodb:/", "/svc:***@", "mongo.internal:27017/db"].join(""),
+	it("has no classic $text lane", () => {
+		expect(Object.keys(deriveSearchLanes(fullCaps))).not.toContain("text")
+		expect(formatCapabilityTable(deriveSearchLanes(fullCaps))).not.toContain(
+			"$text",
 		)
 	})
 })
 
-describe("isRequireVectorEnabled", () => {
-	it("accepts 1/true in any casing or padding", () => {
-		expect(isRequireVectorEnabled("1")).toBe(true)
-		expect(isRequireVectorEnabled(" True ")).toBe(true)
-		expect(isRequireVectorEnabled("0")).toBe(false)
-		expect(isRequireVectorEnabled(undefined)).toBe(false)
+describe("bootOrRefuse (X-06: the API never warns and serves)", () => {
+	it("logs the lanes and returns them when the startup contract passes", async () => {
+		const deps = refusalDeps()
+		const lanes = await bootOrRefuse(async () => fullCaps, deps)
+		expect(lanes).toEqual({ hybrid: true, vector: true, keyword: true })
+		expect(deps.log).toHaveBeenCalledWith(
+			expect.stringContaining("hybrid:  available"),
+		)
+		expect(deps.exit).not.toHaveBeenCalled()
+	})
+
+	it("refuses to serve on a typed boot failure, naming the code and index", async () => {
+		const deps = refusalDeps()
+		const failure = new MemongoBootError(
+			{
+				code: "index-stale",
+				requirement: "a READY index",
+				index: "memongo_chunks_vector",
+				collection: "memongo_chunks",
+				status: "STALE",
+			},
+			"boot refused: memongo_chunks_vector (memongo_chunks) is STALE",
+		)
+		await expect(
+			bootOrRefuse(async () => {
+				throw failure
+			}, deps),
+		).rejects.toThrow(ExitCalled)
+		expect(deps.exit).toHaveBeenCalledExactlyOnceWith(1)
+		expect(deps.log).not.toHaveBeenCalled()
+		const message = deps.error.mock.calls[0]?.[0] as string
+		expect(message).toContain("boot failure index-stale")
+		expect(message).toContain("memongo_chunks_vector")
+	})
+
+	it("refuses to serve on an untyped failure too, with no credential in the line", async () => {
+		const deps = refusalDeps()
+		await expect(
+			bootOrRefuse(async () => {
+				throw new Error(`connect failed for ${mongoUri("dummy-cred-00000000")}`)
+			}, deps),
+		).rejects.toThrow(ExitCalled)
+		expect(deps.exit).toHaveBeenCalledExactlyOnceWith(1)
+		const message = deps.error.mock.calls[0]?.[0] as string
+		expect(message).toContain("refused to start")
+		expect(message).not.toContain("dummy-cred-00000000")
 	})
 })
 
-describe("enforceRequiredVector", () => {
-	it("passes when the vector lane is available", () => {
-		expect(() =>
-			enforceRequiredVector({
-				hybrid: true,
-				vector: true,
-				keyword: true,
-				text: true,
-			}),
-		).not.toThrow()
+describe("formatBootFailure", () => {
+	it("redacts a credential-bearing typed failure message", () => {
+		const failure = new MemongoBootError(
+			{ code: "search-management-unavailable", requirement: "Search" },
+			`boot refused: ${mongoUri("dummy-cred-11111111")} has no Search`,
+		)
+		expect(formatBootFailure(failure)).not.toContain("dummy-cred-11111111")
+	})
+})
+
+describe("boot output carries no URI, host, database or secret (F5)", () => {
+	const SECRET = "dummy-cred-22222222"
+	const URI = mongoUri(SECRET).replace(
+		"mongo.internal:27017/memongo",
+		"private-host.example.net/tenant-db",
+	)
+	const FORBIDDEN = [
+		SECRET,
+		"private-host",
+		"tenant-db",
+		"mongodb://",
+		"10.1.2.3",
+	]
+
+	function expectClean(text: string) {
+		for (const forbidden of FORBIDDEN) expect(text).not.toContain(forbidden)
+	}
+
+	it("removes a whole URI from a typed boot failure line", () => {
+		const failure = new MemongoBootError(
+			{ code: "index-not-ready", requirement: "READY index", index: "idx" },
+			`boot refused: connection to ${URI} failed`,
+		)
+		const line = formatBootFailure(failure)
+		expectClean(line)
+		expect(line).toContain("boot failure index-not-ready")
 	})
 
-	it("throws the boot refusal without a probe error", () => {
-		expect(() =>
-			enforceRequiredVector({
-				hybrid: false,
-				vector: false,
-				keyword: false,
-				text: true,
-			}),
-		).toThrow(/MEMONGO_REQUIRE_VECTOR/)
+	it("removes a URI, host and address from an untyped failure line", () => {
+		const line = formatBootFailure(
+			new Error(
+				`failed to connect to MongoDB (${URI}): connect ECONNREFUSED 10.1.2.3:27017`,
+			),
+		)
+		expectClean(line)
+		expect(line).toContain("refused to start")
 	})
 
-	it("never embeds raw credentials from an unredacted probe report", () => {
-		const rawProbeError = `connect failed for ${mongoUri("dummy-cred-00000000")}`
-		try {
-			enforceRequiredVector(
-				{ hybrid: false, vector: false, keyword: false, text: true },
-				rawProbeError,
-			)
-			expect.unreachable("enforceRequiredVector must throw")
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			expect(message).toContain("MEMONGO_REQUIRE_VECTOR")
-			expect(message).not.toContain("dummy-cred-00000000")
-			expect(message).toContain("***")
+	it("writes the refusal line to the error channel without a URI", async () => {
+		const deps = refusalDeps()
+		await expect(
+			bootOrRefuse(async () => {
+				throw new Error(`connect failed for ${URI}`)
+			}, deps),
+		).rejects.toThrow(ExitCalled)
+		expectClean(deps.error.mock.calls.map((call) => call.join(" ")).join("\n"))
+	})
+
+	it("serializes the preflight report with every string rendered safe", () => {
+		const report = {
+			ok: false,
+			serverVersion: "8.3.0",
+			manifest: [{ collection: "c", index: "i", type: "search" }],
+			unmet: [
+				{
+					code: "server-unreachable" as const,
+					requirement: `reachable ${URI}`,
+					collection: URI,
+					message: `MongoDB is unreachable (${URI}) at 10.1.2.3:27017`,
+					repairable: false,
+				},
+			],
 		}
-	})
-})
-
-describe("probeBootCapabilities (C-002: probe diagnostics never carry credentials)", () => {
-	it("derives lanes from a successful probe", async () => {
-		const report = await probeBootCapabilities(async () => ({
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: true,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		}))
-		expect(report.lanes).toEqual({
-			hybrid: true,
-			vector: true,
-			keyword: true,
-			text: false,
+		const json = formatPreflightReport(report)
+		expectClean(json)
+		expect(JSON.parse(json)).toMatchObject({
+			ok: false,
+			serverVersion: "8.3.0",
+			unmet: [{ code: "server-unreachable", repairable: false }],
 		})
-		expect(report.probeError).toBeUndefined()
-	})
-
-	it("redacts credential-bearing probe failures at the origin", async () => {
-		const report = await probeBootCapabilities(async () => {
-			throw new Error(`connect failed for ${mongoUri("dummy-cred-00000000")}`)
-		})
-
-		expect(report.lanes.vector).toBe(false)
-		expect(report.probeError).toBeDefined()
-		expect(report.probeError).not.toContain("dummy-cred-00000000")
-		expect(report.probeError).toContain("***")
-	})
-
-	it("keeps the redacted probe error out of the logged capability table", async () => {
-		const report = await probeBootCapabilities(async () => {
-			throw new Error(`connect failed for ${mongoUri("dummy-cred-00000000")}`)
-		})
-		const table = formatCapabilityTable(report.lanes, report.probeError)
-
-		expect(table).not.toContain("dummy-cred-00000000")
-		expect(table).toContain("capability probe failed:")
 	})
 })

@@ -139,6 +139,25 @@ export function buildEventLifecycleClause(
 }
 
 /**
+ * Lifecycle of a relation edge a read may follow or count: a live state
+ * (active or conflicted; an edge written without a state counts as live) and
+ * current validity. A superseded, invalidated or expired edge is history, not
+ * a relation of the entity today.
+ */
+export function buildRelationLifecycleClause(
+	options: { asOf?: Date } = {},
+): Document {
+	const asOf = resolveTemporalAsOf(options.asOf)
+	return mergeQueryClauses(
+		buildLiveStateClause({
+			liveStates: ["active", "conflicted"],
+			includeMissingAsLive: true,
+		}),
+		buildCurrentValidityClause({ asOf }),
+	)
+}
+
+/**
  * Resolve the expiresAt for one write. An explicit per-write value always
  * wins; otherwise the session-scope default applies only when the config is
  * enabled AND the write carries a sessionId. Returns undefined when no TTL

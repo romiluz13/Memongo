@@ -10,7 +10,37 @@
  * hand-written paths and the live router disagree.
  */
 import { AGENT_ID_FIELD_DESCRIPTION } from "@memongo/lib"
+import {
+	searchFailureResponses,
+	searchLaneOutcomeSchema,
+	searchOutcomeStatusSchema,
+} from "./openapi-paths-search.js"
 import { memoryScopeEnum } from "./openapi-schemas.js"
+
+/**
+ * M2 T8 (#117): one typed row per failed section of a slate, brief or
+ * bundle. Enum values only; no query text, document text or driver message.
+ * A section that failed is a row here, never an empty section.
+ */
+const sectionFailuresSchema = {
+	type: "array",
+	description:
+		"Typed rows for the sections that failed or were budget-denied while the rest answered. Empty when every planned section answered. If every planned section fails the call is a non-2xx instead.",
+	items: {
+		type: "object",
+		required: ["section", "stage", "outcome", "reason"],
+		properties: {
+			section: {
+				type: "string",
+				description:
+					"Section name; nested rows are named parent:child (for example active-slate:procedures).",
+			},
+			stage: searchLaneOutcomeSchema.properties.stage,
+			outcome: { type: "string", enum: ["failed", "budget-denied"] },
+			reason: searchLaneOutcomeSchema.properties.reason,
+		},
+	},
+} as const
 
 export const contextPaths = {
 	"/v1/hydrate-active-slate": {
@@ -72,6 +102,7 @@ export const contextPaths = {
 											maxItems: { type: "number" },
 											truncated: { type: "boolean" },
 											partial: { type: "boolean" },
+											failures: sectionFailuresSchema,
 											countsByKind: {
 												type: "object",
 												additionalProperties: { type: "number" },
@@ -88,6 +119,7 @@ export const contextPaths = {
 						},
 					},
 				},
+				...searchFailureResponses,
 			},
 		},
 	},
@@ -177,6 +209,7 @@ export const contextPaths = {
 										type: "object",
 										properties: {
 											partial: { type: "boolean" },
+											failures: sectionFailuresSchema,
 											evidenceCount: { type: "number" },
 											sourceCounts: {
 												type: "object",
@@ -204,6 +237,7 @@ export const contextPaths = {
 						},
 					},
 				},
+				...searchFailureResponses,
 			},
 		},
 	},
@@ -316,6 +350,20 @@ export const contextPaths = {
 											tokenBudget: { type: "number" },
 											estimatedTokensUsed: { type: "number" },
 											partial: { type: "boolean" },
+											failures: sectionFailuresSchema,
+											laneOutcomes: {
+												type: "array",
+												description:
+													"X-09: the query-evidence search lane outcomes, kept through the bundle.",
+												items: searchLaneOutcomeSchema,
+											},
+											outcomeStatus: searchOutcomeStatusSchema,
+											throttled: {
+												type: "object",
+												properties: { retryAfterMs: { type: "number" } },
+												description:
+													"Present when admission control denied the query-evidence search; also reported as a budget-denied failure row.",
+											},
 											truncated: { type: "boolean" },
 											pathsExecuted: {
 												type: "array",
@@ -333,6 +381,7 @@ export const contextPaths = {
 						},
 					},
 				},
+				...searchFailureResponses,
 			},
 		},
 	},
@@ -373,10 +422,12 @@ export const contextPaths = {
 								properties: {
 									profile: {
 										type: "object",
-										description: "Profile synthesis payload from /v1/profile",
+										description:
+											"Profile synthesis payload from /v1/profile. Absent when its read failed.",
 									},
 									blocks: {
 										type: "object",
+										description: "Absent when the active slate read failed.",
 										properties: {
 											blocks: {
 												type: "array",
@@ -404,7 +455,40 @@ export const contextPaths = {
 										description:
 											"Context bundle payload from /v1/context-bundle",
 									},
-									partial: { type: "boolean" },
+									partial: {
+										type: "boolean",
+										description:
+											"True when at least one section could not be read. The unreadable sections are absent and named in failures.",
+									},
+									failures: {
+										type: "array",
+										description:
+											"One row per unreadable section (profile, blocks or bundle) with a typed reason. Present only with partial.",
+										items: {
+											type: "object",
+											properties: {
+												section: {
+													type: "string",
+													enum: ["profile", "blocks", "bundle"],
+												},
+												reason: {
+													type: "string",
+													enum: [
+														"lane-unavailable",
+														"index-missing",
+														"index-not-ready",
+														"index-stale",
+														"index-unavailable",
+														"query-timeout",
+														"dependency-unavailable",
+														"query-error",
+														"internal-error",
+														"erasure-in-progress",
+													],
+												},
+											},
+										},
+									},
 								},
 							},
 						},
@@ -424,7 +508,12 @@ export const contextPaths = {
 							type: "object",
 							required: ["relPath"],
 							properties: {
-								relPath: { type: "string", minLength: 1 },
+								relPath: {
+									type: "string",
+									minLength: 1,
+									description:
+										"Locator to reopen. Tenant locators (structured:, entity:, procedure:, event:, episode:, relation:, conversation:, events/, sessions/) must carry the tenant they were written under as `?scope=<scope>&scopeRef=<scopeRef>`; without both the read fails with 400 TENANT_IDENTITY_REQUIRED. kb: and bridge paths are not tenant locators.",
+								},
 								agentId: {
 									type: "string",
 									description: AGENT_ID_FIELD_DESCRIPTION,
@@ -436,7 +525,17 @@ export const contextPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "File read result" } },
+			responses: {
+				"200": { description: "File read result" },
+				"400": {
+					description:
+						"VALIDATION_ERROR or TENANT_IDENTITY_REQUIRED: a tenant locator without a valid scope and scopeRef is refused rather than widened to the agent.",
+				},
+				"409": {
+					description:
+						"ERASURE_IN_PROGRESS: an erasure is in progress for the agent, so the read is refused rather than answered with an empty miss. Retry after the erasure finishes.",
+				},
+			},
 		},
 	},
 } as const

@@ -5,204 +5,66 @@ import { createSubsystemLogger } from "@memongo/lib"
 
 const log = createSubsystemLogger("memory:mongodb:schema")
 
+import { reconcileRequiredIndex } from "./mongodb-boot-contract.js"
+import { bootConfigError } from "./mongodb-boot-errors.js"
 import { isCapabilityEnabled } from "./mongodb-capability-registry.js"
-import { isEvidenceMirrorEnabled } from "./mongodb-evidence-mirror.js"
-import { assertIndexBudget } from "./mongodb-schema-budget.js"
-import {
-	entitiesCollection,
-	episodesCollection,
-} from "./mongodb-schema-collections.js"
+import { buildRequiredIndexManifest } from "./mongodb-required-index-manifest.js"
 
 // ---------------------------------------------------------------------------
 // Search / Vector Search index creation
 // ---------------------------------------------------------------------------
 
-import {
-	ensureNamedSearchIndex,
-	isSearchIndexFailed,
-	isSearchIndexQueryable,
-	listSearchIndexes,
-	sleep,
-	type SearchIndexDescription,
-	type SearchIndexTarget,
-	type SearchIndexWaitResult,
-} from "./mongodb-schema-search-readiness.js"
+import type { SearchIndexTarget } from "./mongodb-schema-search-readiness.js"
 
+async function ensureManifestIndex(
+	db: Db,
+	prefix: string,
+	name: string,
+): Promise<void> {
+	const entry = buildRequiredIndexManifest({ prefix, env: {} }).find(
+		(candidate) => candidate.name === name,
+	)
+	if (!entry) {
+		throw new Error(`${name} is not in the required-index manifest`)
+	}
+	await reconcileRequiredIndex(db.collection(entry.collectionName), entry)
+}
+
+/** Entity autocomplete index (manifest row `entity_autocomplete`). */
 export async function ensureEntityAutocompleteIndex(
 	db: Db,
 	prefix: string,
 ): Promise<void> {
-	const entities = entitiesCollection(db, prefix)
-	try {
-		await ensureNamedSearchIndex({
-			collection: entities,
-			name: "entity_autocomplete",
-			type: "search",
-			definition: {
-				mappings: {
-					dynamic: false,
-					fields: {
-						name: { type: "autocomplete" },
-						aliases: { type: "autocomplete" },
-						agentId: { type: "token" },
-						scope: { type: "token" },
-						scopeRef: { type: "token" },
-					},
-				},
-			},
-			label: "entity autocomplete",
-		})
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (!msg.includes("already exists") && !msg.includes("duplicate")) {
-			log.warn(`entity autocomplete index creation failed: ${msg}`)
-		}
-	}
+	await ensureManifestIndex(db, prefix, "entity_autocomplete")
 }
 
-/**
- * Ensure Atlas Search autocomplete index on episodes collection for
- * title/summary episode lookup (P3.8) — the episode counterpart of
- * ensureEntityAutocompleteIndex, retiring the request-path $regex scan.
- */
+/** Episode autocomplete index (manifest row `episode_autocomplete`). */
 export async function ensureEpisodeAutocompleteIndex(
 	db: Db,
 	prefix: string,
 ): Promise<void> {
-	const episodes = episodesCollection(db, prefix)
-	try {
-		await ensureNamedSearchIndex({
-			collection: episodes,
-			name: "episode_autocomplete",
-			type: "search",
-			definition: {
-				mappings: {
-					dynamic: false,
-					fields: {
-						title: { type: "autocomplete" },
-						summary: { type: "autocomplete" },
-						agentId: { type: "token" },
-						scope: { type: "token" },
-						scopeRef: { type: "token" },
-					},
-				},
-			},
-			label: "episode autocomplete",
-		})
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (!msg.includes("already exists") && !msg.includes("duplicate")) {
-			log.warn(`episode autocomplete index creation failed: ${msg}`)
-		}
-	}
+	await ensureManifestIndex(db, prefix, "episode_autocomplete")
 }
 
+/**
+ * The manifest's index names grouped by collection. The profile argument is
+ * kept for callers; every supported profile carries the full manifest.
+ */
 export function getExpectedSearchIndexTargets(
 	prefix: string,
 	profile: MemoryMongoDBDeploymentProfile,
 ): SearchIndexTarget[] {
-	const evidenceMirrorEnabled = isEvidenceMirrorEnabled()
-	const rawSessionIndexProfile = isRawSessionSearchIndexProfile()
-	const plannedSearchIndexCount = rawSessionIndexProfile
-		? 1
-		: evidenceMirrorEnabled
-			? 16
-			: 14
-	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
-	const reducedBudget =
-		!budget.withinBudget &&
-		typeof budget.budget === "number" &&
-		budget.budget >= 2
-	if (!budget.withinBudget && !reducedBudget) {
-		return []
+	void profile
+	const targets = new Map<string, string[]>()
+	for (const entry of buildRequiredIndexManifest({ prefix })) {
+		const names = targets.get(entry.collectionName) ?? []
+		names.push(entry.name)
+		targets.set(entry.collectionName, names)
 	}
-	if (rawSessionIndexProfile) {
-		return [
-			{
-				collectionName: `${prefix}session_chunks`,
-				indexNames: [`${prefix}session_chunks_vector`],
-			},
-		]
-	}
-	const targets: SearchIndexTarget[] = [
-		{
-			collectionName: `${prefix}chunks`,
-			indexNames: [`${prefix}chunks_text`, `${prefix}chunks_vector`],
-		},
-	]
-	if (reducedBudget) {
-		return targets
-	}
-	const evidenceTargets: SearchIndexTarget[] = evidenceMirrorEnabled
-		? [
-				{
-					collectionName: `${prefix}memory_evidence`,
-					indexNames: [
-						`${prefix}memory_evidence_text`,
-						`${prefix}memory_evidence_vector`,
-					],
-				},
-			]
-		: []
-	if (isLongMemEvalSearchIndexProfile()) {
-		return [
-			...targets,
-			{
-				collectionName: `${prefix}structured_mem`,
-				indexNames: [
-					`${prefix}structured_mem_text`,
-					`${prefix}structured_mem_vector`,
-				],
-			},
-			{
-				collectionName: `${prefix}procedures`,
-				indexNames: [`${prefix}procedures_text`, `${prefix}procedures_vector`],
-			},
-			{
-				collectionName: `${prefix}events`,
-				indexNames: [`${prefix}events_text`, `${prefix}events_vector`],
-			},
-			...evidenceTargets,
-		]
-	}
-	return [
-		...targets,
-		{
-			collectionName: `${prefix}kb_chunks`,
-			indexNames: [`${prefix}kb_chunks_text`, `${prefix}kb_chunks_vector`],
-		},
-		{
-			collectionName: `${prefix}structured_mem`,
-			indexNames: [
-				`${prefix}structured_mem_text`,
-				`${prefix}structured_mem_vector`,
-			],
-		},
-		{
-			collectionName: `${prefix}procedures`,
-			indexNames: [`${prefix}procedures_text`, `${prefix}procedures_vector`],
-		},
-		{
-			collectionName: `${prefix}events`,
-			indexNames: [`${prefix}events_text`, `${prefix}events_vector`],
-		},
-		{
-			collectionName: `${prefix}session_chunks`,
-			indexNames: [
-				`${prefix}session_chunks_text`,
-				`${prefix}session_chunks_vector`,
-			],
-		},
-		...evidenceTargets,
-		{
-			collectionName: `${prefix}entities`,
-			indexNames: ["entity_autocomplete"],
-		},
-		{
-			collectionName: `${prefix}episodes`,
-			indexNames: ["episode_autocomplete"],
-		},
-	]
+	return [...targets].map(([collectionName, indexNames]) => ({
+		collectionName,
+		indexNames,
+	}))
 }
 
 export function isLongMemEvalSearchIndexProfile(
@@ -456,122 +318,45 @@ export function buildAutoEmbedVectorDefinition(
 	}
 }
 
-export async function waitForSearchIndexesQueryable(
-	collection: Collection,
-	{
-		indexNames,
-		timeoutMs = 60_000,
-		pollMs = 1_000,
-	}: {
-		indexNames: string[]
-		timeoutMs?: number
-		pollMs?: number
-	},
-): Promise<SearchIndexWaitResult> {
-	const deadline = Date.now() + timeoutMs
-	let lastRelevant: SearchIndexDescription[] = []
-	let lastError: string | undefined
-
-	while (Date.now() < deadline) {
-		try {
-			lastRelevant = (await listSearchIndexes(collection)).filter((index) =>
-				indexNames.includes(String(index.name ?? "")),
-			)
-			lastError = undefined
-		} catch (err) {
-			lastError = err instanceof Error ? err.message : String(err)
-			await sleep(pollMs)
-			continue
-		}
-		const byName = new Map(
-			lastRelevant.map((index) => [String(index.name ?? ""), index]),
-		)
-		const failed = indexNames.filter((name) => {
-			const index = byName.get(name)
-			return index ? isSearchIndexFailed(index) : false
-		})
-		const pending = indexNames.filter((name) => {
-			const index = byName.get(name)
-			return !index || !isSearchIndexQueryable(index)
-		})
-
-		if (failed.length > 0) {
-			return {
-				ready: false,
-				indexes: lastRelevant,
-				pending,
-				failed,
-				...(lastError ? { lastError } : {}),
-			}
-		}
-		if (pending.length === 0) {
-			return {
-				ready: true,
-				indexes: lastRelevant,
-				pending: [],
-				failed: [],
-			}
-		}
-
-		await sleep(pollMs)
-	}
-
-	const byName = new Map(
-		lastRelevant.map((index) => [String(index.name ?? ""), index]),
-	)
-	const failed = indexNames.filter((name) => {
-		const index = byName.get(name)
-		return index ? isSearchIndexFailed(index) : false
-	})
-	const pending = indexNames.filter((name) => {
-		const index = byName.get(name)
-		return !index || !isSearchIndexQueryable(index)
-	})
-	return {
-		ready: pending.length === 0 && failed.length === 0,
-		indexes: lastRelevant,
-		pending,
-		failed,
-		...(lastError ? { lastError } : {}),
-	}
-}
-
+/**
+ * The boot readiness deadline (one total 180 s by default) and the metadata
+ * poll interval. Overrides must be positive integers; anything else fails
+ * boot instead of silently using the default.
+ */
 export function resolveSearchIndexReadinessTiming(
 	env: NodeJS.ProcessEnv = process.env,
 ): {
 	timeoutMs: number
 	pollMs: number
 } {
-	const benchmarkStrict = env.MEMONGO_BENCHMARK_STRICT
-	const searchReadyStrict = env.MEMONGO_STRICT_SEARCH_INDEX_READY
-	const strictDefaultTimeoutMs =
-		benchmarkStrict === "1" ||
-		benchmarkStrict?.toLowerCase() === "true" ||
-		searchReadyStrict === "1" ||
-		searchReadyStrict?.toLowerCase() === "true"
-			? 180_000
-			: 60_000
-	const timeoutMs = parsePositiveIntegerEnv(
-		env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS,
-		strictDefaultTimeoutMs,
-	)
-	const pollMs = parsePositiveIntegerEnv(
-		env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS,
-		1_000,
-	)
-	return { timeoutMs, pollMs }
+	return {
+		timeoutMs: parsePositiveIntegerEnv(
+			env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS,
+			180_000,
+			"MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS",
+		),
+		pollMs: parsePositiveIntegerEnv(
+			env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS,
+			1_000,
+			"MEMONGO_SEARCH_INDEX_READINESS_POLL_MS",
+		),
+	}
 }
 
 export function parsePositiveIntegerEnv(
 	value: string | undefined,
-	fallback: number,
+	defaultValue: number,
+	setting = "setting",
 ): number {
-	if (!value) {
-		return fallback
+	if (value === undefined || value.trim() === "") {
+		return defaultValue
 	}
 	const parsed = Number(value.trim())
-	if (!Number.isFinite(parsed) || parsed <= 0) {
-		return fallback
+	if (!Number.isInteger(parsed) || parsed <= 0) {
+		throw bootConfigError(
+			setting,
+			`${setting} is not a positive integer number of milliseconds`,
+		)
 	}
-	return Math.floor(parsed)
+	return parsed
 }

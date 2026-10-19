@@ -51,13 +51,28 @@ describe("recall scope validation", () => {
 		expect(bridge.memongoBridgeRecallConversation).not.toHaveBeenCalled()
 	})
 	it.each([
-		{},
-		{ scope: "agent" },
+		{ scope: "agent", scopeRef: "agent:agent1" },
 		{ scope: "user", scopeRef: "user:alice" },
-		{ scope: "session", sessionId: "session1" },
-	])("preserves valid or absent scope %j", async (body) => {
+		{ scope: "session", scopeRef: "session:session1", sessionId: "session1" },
+	])("serves a recall that names its full tenant %j", async (body) => {
 		expect((await request(body)).status).toBe(200)
 		expect(bridge.memongoBridgeRecallConversation).toHaveBeenCalledOnce()
+	})
+	it.each([
+		{},
+		{ scope: "agent" },
+		{ scopeRef: "agent:agent1" },
+		{ scope: "session", sessionId: "session1" },
+	])("refuses a recall without its full tenant %j instead of widening it", async (body) => {
+		const response = await request(body)
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "scope and scopeRef are required",
+			},
+		})
+		expect(bridge.memongoBridgeRecallConversation).not.toHaveBeenCalled()
 	})
 	it.each([
 		[

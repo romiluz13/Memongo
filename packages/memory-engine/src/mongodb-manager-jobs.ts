@@ -1,4 +1,10 @@
 import type { ClientSession, Db } from "mongodb"
+import { bestEffort, recordBestEffortFailure } from "./best-effort.js"
+import { resolveConsolidationMaxEvents } from "./mongodb-consolidation-options.js"
+import {
+	getSearchBudgetSnapshot,
+	runWithSearchBudget,
+} from "./mongodb-search-budget.js"
 import {
 	instrumentProviderCostSpend,
 	recordLLMSpendInSession,
@@ -20,7 +26,10 @@ import {
 	promoteDerivedMemoryFromEvent,
 } from "./mongodb-derived-memory.js"
 import { checkAutoEpisodeTriggers } from "./mongodb-episodes.js"
-import { consolidateMemory } from "./mongodb-consolidator.js"
+import {
+	consolidateMemory,
+	consolidationSearchBudgetLimits,
+} from "./mongodb-consolidator.js"
 import {
 	extractAndUpsertEntities,
 	extractAndUpsertTypedRelations,
@@ -108,8 +117,11 @@ type BufferedWorkerEffects = {
 }
 
 const PREFETCH_EFFECTS = Symbol("prefetchEffects")
+const PREFETCH_FAILURES = Symbol("prefetchFailures")
 type PrefetchedFactsMap = Map<string, string[]> & {
 	[PREFETCH_EFFECTS]?: Map<string, BufferedWorkerEffects>
+	/** Typed failure of the session-batched prefetch, per affected eventId. */
+	[PREFETCH_FAILURES]?: Map<string, unknown>
 }
 
 function newBufferedWorkerEffects(): BufferedWorkerEffects {
@@ -229,8 +241,8 @@ export function resolveDrainConcurrency(params: {
 
 /**
  * Pending (claimable) job depth for one agent's queue — the gauge's read.
- * One countDocuments per drain round; an error degrades to 0 so the gauge
- * can never break the drain itself (observability fails open here).
+ * One countDocuments per drain round. A read error throws: a failed count is
+ * never reported as an empty queue. The drain declares the gauge best-effort.
  */
 export async function countPendingMemoryJobs(params: {
 	db: Db
@@ -238,22 +250,54 @@ export async function countPendingMemoryJobs(params: {
 	agentId: string
 	jobType?: "extraction" | "consolidation"
 }): Promise<number> {
+	const filter: Record<string, unknown> = {
+		agentId: params.agentId,
+		status: "pending",
+	}
+	if (params.jobType) {
+		filter.jobType = params.jobType
+	}
+	return memoryJobsCollection(params.db, params.prefix).countDocuments(filter)
+}
+
+/**
+ * Search-ledger limits for one extraction job. The ledger is accounting with
+ * a runaway cap: one event's extraction runs a handful of Search lookups.
+ */
+const EXTRACTION_JOB_SEARCH_BUDGET = { maxAggregations: 50, maxEmbeds: 50 }
+
+/**
+ * Non-retryable provider failure class (lead decision): a policy refusal,
+ * content filter, or token-budget truncation fails identically on every
+ * retry, so the job dead-letters on FIRST failure with its truthful attempt
+ * count (failClaimedMemoryJob `terminal` — no retryAt, deadLetterAt, attempts
+ * preserved). Everything else (transient empties, parse errors, HTTP errors)
+ * keeps the bounded retry ladder.
+ */
+function isTerminalProviderFailure(err: unknown): boolean {
+	return (
+		err instanceof EnrichmentResponseError &&
+		(err.shape === "refusal" ||
+			err.shape === "content-filter" ||
+			err.shape === "length")
+	)
+}
+
+/**
+ * Sweep housekeeping that the next drain round redoes from durable state
+ * (repair, prune, dead-letter, staging). A failure is logged and counted;
+ * an erasure-gate conflict still aborts the sweep.
+ */
+async function sweepStep<T>(
+	label: string,
+	work: () => Promise<T>,
+): Promise<T | undefined> {
 	try {
-		const filter: Record<string, unknown> = {
-			agentId: params.agentId,
-			status: "pending",
-		}
-		if (params.jobType) {
-			filter.jobType = params.jobType
-		}
-		return await memoryJobsCollection(params.db, params.prefix).countDocuments(
-			filter,
-		)
+		return await work()
 	} catch (err) {
-		log.warn("memory-job backlog count failed", {
-			error: err instanceof Error ? err.message : String(err),
-		})
-		return 0
+		if (isErasureGateConflictError(err)) throw err
+		recordBestEffortFailure(label, err)
+		return undefined
 	}
 }
 
@@ -295,11 +339,9 @@ export class MongoDBManagerJobsOps {
 
 	enqueueDerivedWork(task: () => Promise<void>): void {
 		const run = async () => {
-			try {
-				await task()
-			} catch (err) {
-				log.warn(`derived memory work failed: ${String(err)}`)
-			}
+			// A task records its own durable failure before throwing; this is the
+			// last-resort line and counter for one that did not.
+			await bestEffort("derived-memory-work", task)
 		}
 		const next = this.host.derivationQueue.then(run, run)
 		this.host.derivationQueue = next.then(
@@ -310,11 +352,7 @@ export class MongoDBManagerJobsOps {
 
 	enqueueDerivationScheduling(task: () => Promise<void>): void {
 		const run = async () => {
-			try {
-				await task()
-			} catch (err) {
-				log.warn(`derived memory scheduling failed: ${String(err)}`)
-			}
+			await bestEffort("derived-memory-scheduling", task)
 		}
 		const current = this.host.derivationSchedulingQueue ?? Promise.resolve()
 		const next = current.then(run, run)
@@ -345,10 +383,63 @@ export class MongoDBManagerJobsOps {
 		return message.includes("E11000") || message.includes("duplicate key")
 	}
 
+	/**
+	 * Persist a claimed job's failure on its own row (status, error, attempts,
+	 * retryAt, or deadLetterAt for a terminal failure) for the paths that run
+	 * before an admission token exists. If that write fails too, the row stays
+	 * `running` under its lease: lease expiry makes it claimable again and the
+	 * dead-letter sweep bounds the attempts. The write failure is logged and
+	 * counted, never swallowed silently.
+	 */
+	private async recordClaimedJobFailure(
+		job: ClaimedMemoryJob,
+		startedAt: Date,
+		err: unknown,
+		options: { terminal?: boolean } = {},
+	): Promise<void> {
+		try {
+			await failClaimedMemoryJob({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				jobId: job.jobId,
+				agentId: this.host.agentId,
+				leaseOwner: job.leaseOwner,
+				leaseToken: job.leaseToken,
+				completedAt: new Date(),
+				durationMs: elapsedMsSince(startedAt),
+				error: err instanceof Error ? err.message : String(err),
+				jobType: job.jobType,
+				attempts: job.attempts,
+				...(options.terminal ? { terminal: true } : {}),
+			})
+		} catch (updateErr) {
+			log.error(
+				`failClaimedMemoryJob failed for ${job.jobId}: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`,
+			)
+			recordBestEffortFailure("memory-job-failure-record", updateErr)
+		}
+	}
+
 	async runClaimedBackgroundExtractionJob(
 		job: ClaimedMemoryJob,
 		prefetchedLlmFacts?: string[],
 		prefetchedEffects?: BufferedWorkerEffects,
+	): Promise<void> {
+		// One search ledger per job: every Search lookup the job makes charges
+		// it, and its snapshot lands on the job row. #122 R2: one index-health
+		// snapshot per job, so its supporting-event Search never runs against
+		// an index observed unhealthy.
+		await this.host.runIndexHealthRequest(() =>
+			runWithSearchBudget(EXTRACTION_JOB_SEARCH_BUDGET, () =>
+				this.runExtractionJob(job, prefetchedLlmFacts, prefetchedEffects),
+			),
+		)
+	}
+
+	private async runExtractionJob(
+		job: ClaimedMemoryJob,
+		prefetchedLlmFacts: string[] | undefined,
+		prefetchedEffects: BufferedWorkerEffects | undefined,
 	): Promise<void> {
 		const startedAt = job.startedAt ?? new Date()
 		const payloadEventId = job.payload?.eventId?.trim()
@@ -371,8 +462,14 @@ export class MongoDBManagerJobsOps {
 				storedEpoch < 0 ||
 				!Number.isFinite(storedEpoch)
 			) {
-				log.warn(
-					`extraction job ${job.jobId} has an invalid admission epoch; refusing to run`,
+				// No retry can repair a corrupt stored epoch: dead-letter now.
+				await this.recordClaimedJobFailure(
+					job,
+					startedAt,
+					new Error(
+						`extraction job ${job.jobId} has an invalid admission epoch; refusing to run`,
+					),
+					{ terminal: true },
 				)
 				return
 			}
@@ -409,14 +506,34 @@ export class MongoDBManagerJobsOps {
 				job.admissionEpoch = captured.epoch
 				admissionToken = captured
 			} catch (err) {
-				log.warn(
-					`extraction job admission capture failed for ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`,
+				if (
+					isErasureGateConflictError(err) ||
+					isMemoryJobOwnershipLostError(err)
+				) {
+					log.warn(
+						`extraction job admission capture lost to an erasure gate or lease change: ${job.jobId}`,
+					)
+					return
+				}
+				await this.recordClaimedJobFailure(
+					job,
+					startedAt,
+					new Error(
+						`extraction job admission capture failed for ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`,
+					),
 				)
 				return
 			}
 		}
 		if (!eventId || !admissionToken) {
-			log.warn(`extraction job ${job.jobId} has no event id; refusing to run`)
+			await this.recordClaimedJobFailure(
+				job,
+				startedAt,
+				new Error(
+					`extraction job ${job.jobId} has no event id; refusing to run`,
+				),
+				{ terminal: true },
+			)
 			return
 		}
 		const scope = job.payload?.scope
@@ -616,32 +733,26 @@ export class MongoDBManagerJobsOps {
 				return extracted
 			})
 
-			// LLM fact extraction (issue #30): degrade to regex-only when the
-			// provider is unconfigured or misconfigured. B1: an explicit
-			// MEMONGO_EXTRACTION_LLM=off forces the same regex-only path with
-			// zero provider calls (the B20 ablation switch), without touching
-			// the enrichment env the benchmark answerer may share.
-			let enrichmentProvider: EnrichmentProvider | null = null
-			try {
-				const resolved = isExtractionLlmDisabled(process.env)
-					? null
-					: resolveEnrichmentProvider(process.env)
-				// C-017: every production extraction call lands in the per-tenant
-				// per-day cost ledger (tokens from the transport usage block).
-				enrichmentProvider = resolved
-					? instrumentProviderCostSpend({
-							db: this.host.db,
-							prefix: this.host.prefix,
-							agentId: this.host.agentId,
-							provider: resolved,
-							onUsage: (usage) => bufferedEffects.llmUsage.push(usage),
-						})
-					: null
-			} catch (err) {
-				log.warn("enrichment provider resolution failed; using regex-only", {
-					error: err instanceof Error ? err.message : String(err),
-				})
-			}
+			// LLM fact extraction (issue #30). With no provider configured, or an
+			// explicit MEMONGO_EXTRACTION_LLM=off (the B20 ablation switch, zero
+			// provider calls, no change to the enrichment env the benchmark
+			// answerer may share), deterministic-only extraction is a declared
+			// mode. A configured provider that cannot be resolved throws a typed
+			// EnrichmentConfigError and the job fails with retry state.
+			const resolved = isExtractionLlmDisabled(process.env)
+				? null
+				: resolveEnrichmentProvider(process.env)
+			// C-017: every production extraction call lands in the per-tenant
+			// per-day cost ledger (tokens from the transport usage block).
+			const enrichmentProvider: EnrichmentProvider | null = resolved
+				? instrumentProviderCostSpend({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						agentId: this.host.agentId,
+						provider: resolved,
+						onUsage: (usage) => bufferedEffects.llmUsage.push(usage),
+					})
+				: null
 			const enrichmentModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 			const structuredProvider =
 				enrichmentProvider && runContext
@@ -814,59 +925,59 @@ export class MongoDBManagerJobsOps {
 					}
 				} catch (err) {
 					// C3: no silent success. Record the failed pass in the
-					// projection ledger, then rethrow so the runner's outer catch
-					// routes the error through failClaimedMemoryJob — the job
-					// retries via the existing mechanism instead of completing
-					// with the relations silently lost.
-					await commitBatch("typed relation failure", (session) =>
-						recordProjectionRun({
-							db: this.host.db,
-							prefix: this.host.prefix,
-							session,
-							run: {
-								agentId: this.host.agentId,
-								projectionType: "relations",
-								status: "failed",
-								itemsProjected: 0,
-								durationMs: 0,
-							},
-						}),
+					// projection ledger (bookkeeping, declared best-effort), then
+					// rethrow so the runner's outer catch routes the error through
+					// failClaimedMemoryJob — the job retries via the existing
+					// mechanism instead of completing with the relations lost.
+					await bestEffort("extraction-relations-failure-ledger", () =>
+						commitBatch("typed relation failure", (session) =>
+							recordProjectionRun({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								session,
+								run: {
+									agentId: this.host.agentId,
+									projectionType: "relations",
+									status: "failed",
+									itemsProjected: 0,
+									durationMs: 0,
+								},
+							}),
+						),
 					)
 					throw err
 				}
 			}
 
-			try {
-				const completed = await commitBatch("job completion", (session) =>
-					completeClaimedMemoryJob({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						session,
-						jobId: job.jobId,
-						agentId: this.host.agentId,
-						leaseOwner: job.leaseOwner,
-						leaseToken: job.leaseToken,
-						completedAt: new Date(),
-						durationMs: elapsedMsSince(startedAt),
-						inputCount: 1,
-						outputCount: result.structuredCreated + result.proceduresCreated,
-						metadata: {
-							eventId,
-							structuredCreated: result.structuredCreated,
-							proceduresCreated: result.proceduresCreated,
-							...(result.skipped
-								? { skipped: true, skipReason: result.skipReason }
-								: {}),
-						},
-					}),
-				)
-				if (!completed) {
-					log.warn(`extraction job lease lost before completion: ${job.jobId}`)
-				}
-			} catch (err) {
-				log.warn(
-					`completeClaimedMemoryJob failed for ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`,
-				)
+			// A failed completion write is not swallowed: it falls through to the
+			// failure path below, which records the failure and retry state (the
+			// derived writes above are receipt-idempotent, so the retry is safe).
+			const completed = await commitBatch("job completion", (session) =>
+				completeClaimedMemoryJob({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					session,
+					jobId: job.jobId,
+					agentId: this.host.agentId,
+					leaseOwner: job.leaseOwner,
+					leaseToken: job.leaseToken,
+					completedAt: new Date(),
+					durationMs: elapsedMsSince(startedAt),
+					inputCount: 1,
+					outputCount: result.structuredCreated + result.proceduresCreated,
+					metadata: {
+						eventId,
+						structuredCreated: result.structuredCreated,
+						proceduresCreated: result.proceduresCreated,
+						...(result.skipped
+							? { skipped: true, skipReason: result.skipReason }
+							: {}),
+						searchBudget: getSearchBudgetSnapshot(),
+					},
+				}),
+			)
+			if (!completed) {
+				log.warn(`extraction job lease lost before completion: ${job.jobId}`)
 			}
 		} catch (err) {
 			if (
@@ -878,18 +989,7 @@ export class MongoDBManagerJobsOps {
 				)
 				return
 			}
-			// Non-retryable provider failure class (lead decision): a policy
-			// refusal, content filter, or token-budget truncation fails
-			// identically on every retry, so the job dead-letters on FIRST
-			// failure with its truthful attempt count (failClaimedMemoryJob
-			// `terminal` — no retryAt, deadLetterAt, attempts preserved).
-			// Everything else (transient empties, parse errors, HTTP errors)
-			// keeps the bounded retry ladder.
-			const terminalFailure =
-				err instanceof EnrichmentResponseError &&
-				(err.shape === "refusal" ||
-					err.shape === "content-filter" ||
-					err.shape === "length")
+			const terminalFailure = isTerminalProviderFailure(err)
 			try {
 				await commitBatch(
 					"job failure",
@@ -905,16 +1005,19 @@ export class MongoDBManagerJobsOps {
 							completedAt: new Date(),
 							durationMs: elapsedMsSince(startedAt),
 							error: err instanceof Error ? err.message : String(err),
-							metadata: { eventId },
+							metadata: { eventId, searchBudget: getSearchBudgetSnapshot() },
 							attempts: job.attempts,
 							...(terminalFailure ? { terminal: true } : {}),
 						}),
 					false,
 				)
 			} catch (updateErr) {
-				log.warn(
+				// The row stays `running` under its lease; lease expiry makes it
+				// claimable again and the dead-letter sweep bounds the attempts.
+				log.error(
 					`failClaimedMemoryJob failed for ${job.jobId}: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`,
 				)
+				recordBestEffortFailure("memory-job-failure-record", updateErr)
 			}
 		} finally {
 			clearInterval(heartbeatTimer)
@@ -965,53 +1068,45 @@ export class MongoDBManagerJobsOps {
 				`extraction outbox repair left ${repaired.eventsFailed} event(s) pending retry`,
 			)
 		}
-		try {
-			await this.host.repairEventProjections({
+		// The sweep steps below are housekeeping the next round redoes from
+		// durable state: a failure is logged and counted, never reported as a
+		// zero result.
+		await sweepStep("worker-chunk-projection-repair", () =>
+			this.host.repairEventProjections({
 				admission: extractionAdmission,
 				singleBatch: true,
-			})
-		} catch (err) {
-			if (isErasureGateConflictError(err)) throw err
-			log.warn("worker chunk projection repair failed", settledFailureMeta(err))
-		}
+			}),
+		)
 		// C-006: fingerprint retention enforcement rides the worker sweep —
 		// the prune is hourly-gated inside the write ops, so an idle queue
 		// pays one Date.now() comparison per drain and nothing else.
-		await this.host
-			.pruneIdempotencyFingerprints({
+		await sweepStep("worker-fingerprint-prune", () =>
+			this.host.pruneIdempotencyFingerprints({
 				admission: extractionAdmission,
-			})
-			.catch((err: unknown) => {
-				if (isErasureGateConflictError(err)) throw err
-				log.warn("worker fingerprint prune failed", settledFailureMeta(err))
-				return { pruned: 0 }
-			})
+			}),
+		)
 		await this.stageAutoConsolidationJob(extractionAdmission)
 		// W18: bound the crash/lease-expiry loop. Running rows whose lease
 		// expired with a spent attempt budget are no longer claimable; this
 		// sweep transitions them to visible dead letters (once per round,
 		// idempotent) instead of leaving them looping or stalled in running.
 		const deadLetterAt = new Date()
-		const deadLettered = await withFencedWrite({
-			db: this.host.db,
-			prefix: this.host.prefix,
-			token: extractionAdmission,
-			fn: (session) =>
-				deadLetterExpiredMemoryJobs({
+		const deadLettered =
+			(await sweepStep("expired-lease-dead-letter-sweep", () =>
+				withFencedWrite({
 					db: this.host.db,
 					prefix: this.host.prefix,
-					agentId: this.host.agentId,
-					now: deadLetterAt,
-					session,
+					token: extractionAdmission,
+					fn: (session) =>
+						deadLetterExpiredMemoryJobs({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							agentId: this.host.agentId,
+							now: deadLetterAt,
+							session,
+						}),
 				}),
-		}).catch((err: unknown) => {
-			if (isErasureGateConflictError(err)) throw err
-			log.warn(
-				"expired-lease dead-letter sweep failed",
-				settledFailureMeta(err),
-			)
-			return 0
-		})
+			)) ?? 0
 		if (deadLettered > 0) {
 			log.warn(
 				`dead-lettered ${deadLettered} lease-expired job(s) with a spent attempt budget`,
@@ -1029,28 +1124,37 @@ export class MongoDBManagerJobsOps {
 		// and widens the round's concurrency within the 16 cap so a burst
 		// drains faster instead of compounding silently (09-report R6/U3).
 		const backlogThreshold = resolveMemoryJobBacklogAlertThreshold()
-		const backlogDepth = await countPendingMemoryJobs({
-			db: this.host.db,
-			prefix: this.host.prefix,
-			agentId: this.host.agentId,
-			jobType: "extraction",
-		})
+		// The gauge feeds an alert and a throughput hint, never a data decision:
+		// a failed read is logged and counted, and the round runs at the base
+		// concurrency.
+		const backlogDepth =
+			(await sweepStep("memory-job-backlog-gauge", () =>
+				countPendingMemoryJobs({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+					jobType: "extraction",
+				}),
+			)) ?? 0
 		if (backlogDepth > backlogThreshold) {
-			void emitTelemetry(
-				this.host.db,
-				this.host.prefix,
-				{
-					meta: { agentId: this.host.agentId, operation: "memory-job-backlog" },
-					durationMs: 0,
-					ok: false,
-					itemCount: backlogDepth,
-					depth: backlogDepth,
-					threshold: backlogThreshold,
-				},
-				{ admission: extractionAdmission },
-			).catch(() => {
-				log.warn("worker backlog telemetry emit failed")
-			})
+			void bestEffort("memory-job-backlog-telemetry", () =>
+				emitTelemetry(
+					this.host.db,
+					this.host.prefix,
+					{
+						meta: {
+							agentId: this.host.agentId,
+							operation: "memory-job-backlog",
+						},
+						durationMs: 0,
+						ok: false,
+						itemCount: backlogDepth,
+						depth: backlogDepth,
+						threshold: backlogThreshold,
+					},
+					{ admission: extractionAdmission },
+				),
+			)
 		}
 		const concurrency = resolveDrainConcurrency({
 			depth: backlogDepth,
@@ -1150,6 +1254,17 @@ export class MongoDBManagerJobsOps {
 						(typeof job.metadata?.eventId === "string"
 							? job.metadata.eventId.trim()
 							: "")
+					const prefetchFailures = sessionFacts[PREFETCH_FAILURES]
+					if (eventId && prefetchFailures?.has(eventId)) {
+						const failure = prefetchFailures.get(eventId)
+						this.host.memoryJobOperationContexts?.delete(job.jobId)
+						return this.recordClaimedJobFailure(
+							job,
+							job.startedAt ?? new Date(),
+							failure,
+							{ terminal: isTerminalProviderFailure(failure) },
+						)
+					}
 					return this.host.runClaimedBackgroundExtractionJob(
 						job,
 						eventId ? sessionFacts.get(eventId) : undefined,
@@ -1167,13 +1282,14 @@ export class MongoDBManagerJobsOps {
 		if (!this.host.memoryJobWorkerStopped) {
 			// W03: capture the tenant epoch BEFORE the claim — work claimed at
 			// epoch E must not execute at a higher epoch (an erasure bumped
-			// it and swept the tenant). Checked again inside the runner.
-			// Read errors degrade to lease-only fencing (see the runner).
+			// it and swept the tenant). Checked again inside the runner. A read
+			// error throws before the claim: no job is claimed on an unread
+			// epoch, and the next sweep retries.
 			const consolidationEpochAtClaim = await getTenantErasureEpoch(
 				this.host.db,
 				this.host.prefix,
 				this.host.agentId,
-			).catch(() => null)
+			)
 			const consolidationJob = await claimMemoryJob({
 				db: this.host.db,
 				prefix: this.host.prefix,
@@ -1248,9 +1364,8 @@ export class MongoDBManagerJobsOps {
 			if (this.host.isDuplicateKeyError(err)) {
 				// Another drain round or manager already staged this window.
 			} else {
-				log.warn(
-					`auto-consolidation staging failed for window ${windowIndex}: ${err instanceof Error ? err.message : String(err)}`,
-				)
+				// The window memo stays unset, so the next drain round stages again.
+				recordBestEffortFailure("auto-consolidation-staging", err)
 				return
 			}
 		}
@@ -1312,30 +1427,8 @@ export class MongoDBManagerJobsOps {
 		// job claimed before an erasure must not execute after it — its
 		// source state was swept and its writes would resurrect erased data.
 		// The job row itself is deleted by the sweep, so no re-claim follows.
-		// The check is BEST-EFFORT like the extraction fence: on a read
-		// error the lease fence still guards the run, and the erasure's
-		// post-sweep verification pass is the truth gate for any in-flight
-		// straddle.
-		const currentEpoch = await getTenantErasureEpoch(
-			this.host.db,
-			this.host.prefix,
-			this.host.agentId,
-		).catch((err: unknown) => {
-			log.warn(
-				`tenant epoch read failed for consolidation job ${job.jobId}; proceeding lease-only: ${err instanceof Error ? err.message : String(err)}`,
-			)
-			return null
-		})
-		if (
-			currentEpoch !== null &&
-			epochAtClaim !== null &&
-			currentEpoch !== epochAtClaim
-		) {
-			log.warn(
-				`tenant erasure epoch advanced (${epochAtClaim} -> ${currentEpoch}); abandoning consolidation job ${job.jobId}`,
-			)
-			return
-		}
+		// An epoch read error fails the job with retry state inside the try
+		// below; the run never proceeds on an unread epoch.
 		const heartbeatTimer = setInterval(() => {
 			renewMemoryJobLease({
 				db: this.host.db,
@@ -1353,26 +1446,49 @@ export class MongoDBManagerJobsOps {
 		}, MEMORY_JOB_HEARTBEAT_MS)
 		heartbeatTimer.unref?.()
 		try {
+			const currentEpoch = await getTenantErasureEpoch(
+				this.host.db,
+				this.host.prefix,
+				this.host.agentId,
+			)
+			if (epochAtClaim !== null && currentEpoch !== epochAtClaim) {
+				log.warn(
+					`tenant erasure epoch advanced (${epochAtClaim} -> ${currentEpoch}); abandoning consolidation job ${job.jobId}`,
+				)
+				return
+			}
 			// W05: replay the ORIGINAL caller options (explicit consolidate
 			// persists them in metadata) instead of defaulting to agent scope —
 			// a retried scoped consolidation must stay scoped.
 			const storedOptions =
 				MongoDBManagerJobsOps.consolidationOptionsFromMetadata(job.metadata)
-			const result = await consolidateMemory({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-				...(storedOptions ? { options: storedOptions } : {}),
-				...(job.admissionEpoch == null
-					? {}
-					: {
-							admission: {
-								kind: "admission" as const,
-								agentId: job.agentId,
-								epoch: job.admissionEpoch,
-							},
-						}),
-			})
+			// One search ledger per job: the consolidation run joins it, so the
+			// job row and the run row carry the same counts. #122 R2: one
+			// index-health snapshot per job for every Search probe of the run.
+			const { value: result, budget } = await this.host.runIndexHealthRequest(
+				() =>
+					runWithSearchBudget(
+						consolidationSearchBudgetLimits(
+							resolveConsolidationMaxEvents(storedOptions?.maxEvents),
+						),
+						() =>
+							consolidateMemory({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								agentId: this.host.agentId,
+								...(storedOptions ? { options: storedOptions } : {}),
+								...(job.admissionEpoch == null
+									? {}
+									: {
+											admission: {
+												kind: "admission" as const,
+												agentId: job.agentId,
+												epoch: job.admissionEpoch,
+											},
+										}),
+							}),
+					),
+			)
 			const invalidatedScope = storedOptions?.scope ?? "agent"
 			const invalidatedScopeRef =
 				storedOptions?.scopeRef ??
@@ -1381,17 +1497,17 @@ export class MongoDBManagerJobsOps {
 					agentId: this.host.agentId,
 					workspaceDir: this.host.workspaceDir,
 				})
-			await invalidateQueryCache({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-				scope: invalidatedScope,
-				scopeRef: invalidatedScopeRef,
-			}).catch((err) => {
-				log.warn(
-					`query cache invalidation after consolidation failed: ${err instanceof Error ? err.message : String(err)}`,
-				)
-			})
+			// Cache invalidation is bookkeeping with a TTL backstop: declared
+			// best-effort, counted on failure.
+			await bestEffort("consolidation-cache-invalidation", () =>
+				invalidateQueryCache({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+					scope: invalidatedScope,
+					scopeRef: invalidatedScopeRef,
+				}),
+			)
 			const completed = await completeClaimedMemoryJob({
 				db: this.host.db,
 				prefix: this.host.prefix,
@@ -1409,33 +1525,16 @@ export class MongoDBManagerJobsOps {
 					runId: result.runId,
 					factsPruned: result.factsPruned,
 					conflictsResolved: result.conflictsResolved,
+					searchBudget: budget,
 				},
 			})
 			if (!completed) {
 				log.warn(`consolidation job lease lost before completion: ${job.jobId}`)
 			}
 		} catch (err) {
-			try {
-				await failClaimedMemoryJob({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					jobId: job.jobId,
-					agentId: this.host.agentId,
-					leaseOwner: job.leaseOwner,
-					leaseToken: job.leaseToken,
-					completedAt: new Date(),
-					durationMs: elapsedMsSince(startedAt),
-					error: err instanceof Error ? err.message : String(err),
-					jobType: job.jobType,
-					attempts: job.attempts,
-					// No metadata override: the failed row keeps the caller's
-					// options so a retry restores them.
-				})
-			} catch (updateErr) {
-				log.warn(
-					`failClaimedMemoryJob failed for ${job.jobId}: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`,
-				)
-			}
+			// No metadata override: the failed row keeps the caller's options so
+			// a retry restores them.
+			await this.recordClaimedJobFailure(job, startedAt, err)
 		} finally {
 			clearInterval(heartbeatTimer)
 		}
@@ -1457,29 +1556,11 @@ export class MongoDBManagerJobsOps {
 		Object.defineProperty(facts, PREFETCH_EFFECTS, {
 			value: new Map<string, BufferedWorkerEffects>(),
 		})
+		const failures = new Map<string, unknown>()
+		Object.defineProperty(facts, PREFETCH_FAILURES, { value: failures })
 		if (jobs.length < 2) {
 			return facts
 		}
-		let provider: EnrichmentProvider | null = null
-		try {
-			// B1: MEMONGO_EXTRACTION_LLM=off skips session-batched LLM
-			// prefetch entirely (zero provider calls); the single-job path
-			// above degrades the same way.
-			const resolved = isExtractionLlmDisabled(process.env)
-				? null
-				: resolveEnrichmentProvider(process.env)
-			provider = resolved
-		} catch (err) {
-			log.warn(
-				`session-batched extraction prefetch skipped; provider resolution failed: ${err instanceof Error ? err.message : String(err)}`,
-			)
-			return facts
-		}
-		if (!provider) {
-			return facts
-		}
-		const model = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
-
 		const jobByEventId = new Map<string, ClaimedMemoryJob>()
 		for (const job of jobs) {
 			const eventId =
@@ -1491,6 +1572,30 @@ export class MongoDBManagerJobsOps {
 				jobByEventId.set(eventId, job)
 			}
 		}
+		// A prefetch failure is carried per event so each affected job fails
+		// durably with the typed error and its retry state; it is never turned
+		// into per-event extraction.
+		const failAll = (err: unknown) => {
+			for (const eventId of jobByEventId.keys()) failures.set(eventId, err)
+			return facts
+		}
+		let provider: EnrichmentProvider | null = null
+		try {
+			// B1: MEMONGO_EXTRACTION_LLM=off skips session-batched LLM
+			// prefetch entirely (zero provider calls); deterministic-only
+			// extraction is a declared mode. A configured provider that cannot
+			// be resolved fails the jobs with EnrichmentConfigError.
+			provider = isExtractionLlmDisabled(process.env)
+				? null
+				: resolveEnrichmentProvider(process.env)
+		} catch (err) {
+			return failAll(err)
+		}
+		if (!provider) {
+			return facts
+		}
+		const model = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
+
 		if (jobByEventId.size < 2) {
 			return facts
 		}
@@ -1502,30 +1607,29 @@ export class MongoDBManagerJobsOps {
 			scope: MemoryScope
 			scopeRef: string
 		}
-		const docs = (await eventsCollection(this.host.db, this.host.prefix)
-			.find(
-				{
-					agentId: this.host.agentId,
-					eventId: { $in: [...jobByEventId.keys()] },
-					...buildEventLifecycleClause(),
-				},
-				{
-					projection: {
-						eventId: 1,
-						sessionId: 1,
-						body: 1,
-						scope: 1,
-						scopeRef: 1,
+		let docs: PrefetchEventDoc[]
+		try {
+			docs = (await eventsCollection(this.host.db, this.host.prefix)
+				.find(
+					{
+						agentId: this.host.agentId,
+						eventId: { $in: [...jobByEventId.keys()] },
+						...buildEventLifecycleClause(),
 					},
-				},
-			)
-			.toArray()
-			.catch((err) => {
-				log.warn(
-					`session-batched extraction prefetch read failed; falling back to per-event extraction: ${String(err)}`,
+					{
+						projection: {
+							eventId: 1,
+							sessionId: 1,
+							body: 1,
+							scope: 1,
+							scopeRef: 1,
+						},
+					},
 				)
-				return []
-			})) as unknown as PrefetchEventDoc[]
+				.toArray()) as unknown as PrefetchEventDoc[]
+		} catch (err) {
+			return failAll(err)
+		}
 		const groups = new Map<string, PrefetchEventDoc[]>()
 		for (const doc of docs) {
 			if (!doc.sessionId) {
@@ -1592,8 +1696,9 @@ export class MongoDBManagerJobsOps {
 					}
 				} catch (err) {
 					log.warn(
-						`session-batched LLM extraction failed for ${group.length} event(s); falling back to per-event extraction: ${err instanceof Error ? err.message : String(err)}`,
+						`session-batched LLM extraction failed for ${group.length} event(s); failing their jobs: ${err instanceof Error ? err.message : String(err)}`,
 					)
+					for (const doc of group) failures.set(doc.eventId, err)
 				}
 			}),
 		)
@@ -1883,6 +1988,7 @@ export class MongoDBManagerJobsOps {
 				1,
 				mongoCfg.episodes.minEventsForEpisode - 1,
 			)
+			const startedAt = Date.now()
 			try {
 				const episodeResult = await checkAutoEpisodeTriggers({
 					db: this.host.db,
@@ -1902,25 +2008,55 @@ export class MongoDBManagerJobsOps {
 						agentId: this.host.agentId,
 						increments: { episodic: 1 },
 					}
-					await (params.admission
+					// Coverage counters are analytics bookkeeping, declared best-effort.
+					await bestEffort("episodic-lane-coverage", () =>
+						params.admission
+							? withFencedWrite({
+									db: this.host.db,
+									prefix: this.host.prefix,
+									token: params.admission,
+									fn: (session) =>
+										updateLaneCoverage({ ...coverageParams, session }),
+								})
+							: updateLaneCoverage(coverageParams),
+					)
+				}
+			} catch (err) {
+				if (isErasureGateConflictError(err)) throw err
+				log.error(
+					`auto episode trigger failed after event write: ${String(err)}`,
+				)
+				// The failure is durable: a failed "episodes" projection run. The
+				// retry state is the trigger itself, which counts events not yet
+				// in an episode, so the next write re-evaluates it.
+				const failedRun = {
+					agentId: this.host.agentId,
+					projectionType: "episodes" as const,
+					status: "failed" as const,
+					itemsProjected: 0,
+					durationMs: Date.now() - startedAt,
+				}
+				await bestEffort("auto-episode-failure-record", () =>
+					params.admission
 						? withFencedWrite({
 								db: this.host.db,
 								prefix: this.host.prefix,
 								token: params.admission,
 								fn: (session) =>
-									updateLaneCoverage({ ...coverageParams, session }),
+									recordProjectionRun({
+										db: this.host.db,
+										prefix: this.host.prefix,
+										session,
+										run: failedRun,
+									}),
 							})
-						: updateLaneCoverage(coverageParams)
-					).catch((coverageErr) => {
-						log.warn(
-							`episodic lane coverage update failed: ${String(coverageErr)}`,
-						)
-					})
-				}
-			} catch (err) {
-				log.warn(
-					`auto episode trigger failed after event write: ${String(err)}`,
+						: recordProjectionRun({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								run: failedRun,
+							}),
 				)
+				throw err
 			}
 		})
 	}

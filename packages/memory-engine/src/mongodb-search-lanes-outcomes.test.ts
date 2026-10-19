@@ -15,7 +15,7 @@ const fullCapabilities = {
 	vectorSearch: true,
 	textSearch: true,
 	scoreFusion: false,
-	rankFusion: false,
+	rankFusion: true,
 	storedSource: false,
 	vectorIndexMethod: false,
 }
@@ -182,43 +182,35 @@ describe("turn-precision rows (#101 L7-L10)", () => {
 		expect(aggregate).not.toHaveBeenCalled()
 	})
 
-	it("L9: no textSearch is a capability-absent turn-text row; the vector branch still runs", async () => {
+	it("L9: no textSearch makes the fused lane capability-absent; no single vector branch runs", async () => {
 		const { db, aggregate } = database()
 		const rows: SearchTierOutcome[] = []
 		await turns(db, rows, ["s1"], { ...fullCapabilities, textSearch: false })
-		expect(aggregate).toHaveBeenCalledOnce()
+		expect(aggregate).not.toHaveBeenCalled()
 		expect(rows).toEqual([
 			{
-				stage: "turn-text",
+				stage: "rank-fusion",
 				outcome: "not-applicable",
 				reason: "capability-absent",
-			},
-			{
-				stage: "turn-vector",
-				outcome: "ok-empty",
-				reason: "zero-hits",
-				resultCount: 0,
 			},
 		])
 	})
 
-	it("L8/L10: an embed refusal after the aggregation is charged is a denial row, not a silent skip", async () => {
-		const { db } = database()
+	it("L8/L10: an embed refusal denies the fused lane typed and runs nothing", async () => {
+		const { db, aggregate } = database()
 		const rows: SearchTierOutcome[] = []
-		await runWithSearchBudget({ maxAggregations: 4, maxEmbeds: 0 }, () =>
-			turns(db, rows, ["s1"]),
+		const { value, budget } = await runWithSearchBudget(
+			{ maxAggregations: 4, maxEmbeds: 0 },
+			() => turns(db, rows, ["s1"]).catch((err: unknown) => err),
 		)
-		expect(rows).toContainEqual({
-			stage: "turn-vector",
-			outcome: "budget-denied",
+		expect(value).toBeInstanceOf(SearchBudgetDeniedError)
+		expect(value).toMatchObject({
+			stage: "rank-fusion",
 			reason: "budget-embeds",
 		})
-		expect(rows).toContainEqual({
-			stage: "turn-text",
-			outcome: "ok-empty",
-			reason: "zero-hits",
-			resultCount: 0,
-		})
+		expect(aggregate).not.toHaveBeenCalled()
+		expect(budget).toMatchObject({ aggregations: 0, embeds: 0 })
+		expect(rows).toEqual([])
 	})
 })
 
@@ -254,7 +246,7 @@ describe("conversation-evidence rows (#101 L11-L15)", () => {
 
 	it("L12: no search capability is capability-absent and no longer throws in strict mode", async () => {
 		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "true")
-		const { db } = database()
+		const { db, aggregate } = database()
 		const rows: SearchTierOutcome[] = []
 		expect(
 			await evidence("we discussed the plan", db, rows, {
@@ -264,46 +256,48 @@ describe("conversation-evidence rows (#101 L11-L15)", () => {
 			}),
 		).toEqual([])
 		expect(rows).toEqual([
-			{ stage: "lane", outcome: "not-applicable", reason: "capability-absent" },
+			{
+				stage: "rank-fusion",
+				outcome: "not-applicable",
+				reason: "capability-absent",
+			},
 		])
+		expect(aggregate).not.toHaveBeenCalled()
 	})
 
-	it("L14: no textSearch is a capability-absent turn-text row", async () => {
-		const { db } = database()
+	it("L14: no textSearch makes the fused lane capability-absent; no vector-only run", async () => {
+		const { db, aggregate } = database()
 		const rows: SearchTierOutcome[] = []
 		await evidence("we discussed the plan", db, rows, {
 			...fullCapabilities,
 			textSearch: false,
 		})
-		expect(rows).toContainEqual({
-			stage: "turn-text",
-			outcome: "not-applicable",
-			reason: "capability-absent",
-		})
-	})
-
-	it("L15: with no branch able to run, the lane throws the denial instead of returning a bare empty", async () => {
-		const { db } = database()
-		const rows: SearchTierOutcome[] = []
-		const { value } = await runWithSearchBudget(
-			{ maxAggregations: 0, maxEmbeds: 0 },
-			() =>
-				evidence("we discussed the plan", db, rows, {
-					...fullCapabilities,
-					vectorSearch: false,
-				}).catch((err: unknown) => err),
-		)
-		expect(value).toBeInstanceOf(SearchBudgetDeniedError)
-		expect(value).toMatchObject({
-			stage: "turn-text",
-			reason: "budget-aggregations",
-		})
+		expect(aggregate).not.toHaveBeenCalled()
 		expect(rows).toEqual([
 			{
-				stage: "turn-vector",
+				stage: "rank-fusion",
 				outcome: "not-applicable",
 				reason: "capability-absent",
 			},
 		])
+	})
+
+	it("L15: an unaffordable fused lane throws the denial instead of returning a bare empty", async () => {
+		const { db, aggregate } = database()
+		const rows: SearchTierOutcome[] = []
+		const { value } = await runWithSearchBudget(
+			{ maxAggregations: 0, maxEmbeds: 0 },
+			() =>
+				evidence("we discussed the plan", db, rows).catch(
+					(err: unknown) => err,
+				),
+		)
+		expect(value).toBeInstanceOf(SearchBudgetDeniedError)
+		expect(value).toMatchObject({
+			stage: "rank-fusion",
+			reason: "budget-embeds",
+		})
+		expect(aggregate).not.toHaveBeenCalled()
+		expect(rows).toEqual([])
 	})
 })

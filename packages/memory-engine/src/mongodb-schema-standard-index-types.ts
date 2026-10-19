@@ -20,5 +20,4 @@ export type StandardIndexOptions = {
 	 * trail.
 	 */
 	quarantineRetentionDays?: number
-	textFallbackIndexes?: boolean
 }

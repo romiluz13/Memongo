@@ -1,4 +1,7 @@
-import { captureAdmissionToken } from "./mongodb-write-fence.js"
+import {
+	captureAdmissionToken,
+	isErasureGateConflictError,
+} from "./mongodb-write-fence.js"
 import type {
 	RelevanceArtifact,
 	RelevanceSourceScope,
@@ -11,6 +14,7 @@ import {
 	getActiveSources,
 } from "./mongodb-search-ranking.js"
 import type { RelevanceExplainResult } from "./mongodb-search-ranking.js"
+import { classifySearchError } from "./search-outcomes.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 
 /**
@@ -121,6 +125,7 @@ export class MongoDBManagerRelevanceOps {
 		const { scope: searchScope, scopeRef: searchScopeRef } =
 			this.host.resolveSearchIdentity({ sessionKey: params.sessionKey })
 
+		const capabilities = await this.host.requestCapabilities()
 		const v2 = await searchV2(
 			this.host.db,
 			this.host.prefix,
@@ -132,17 +137,13 @@ export class MongoDBManagerRelevanceOps {
 				hasEpisodes: mongoCfg.episodes.enabled,
 				hasGraphData: mongoCfg.graph.enabled,
 				maxResults,
-				// C-016: re-poll index readiness when a lane fails at query
-				// time so status reflects the outage — same seam as search().
-				onPathFailure: (path, error) =>
-					this.host.noteSearchLaneFailure(path, error),
 				searchOptions: {
 					// Same default chain as search(), so the diagnostic runs
 					// the pipeline at the thresholds the served path uses.
-					minScore: params.minScore ?? mongoCfg.reranking?.minScore ?? 0.01,
+					minScore: params.minScore ?? 0.01,
 					sessionKey: params.sessionKey,
 					numCandidates: mongoCfg.numCandidates,
-					capabilities: this.host.capabilities,
+					capabilities,
 					fusionMethod: mongoCfg.fusionMethod,
 					embeddingMode: mongoCfg.embeddingMode,
 					queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
@@ -174,12 +175,24 @@ export class MongoDBManagerRelevanceOps {
 
 		// WS-11: a throttled diagnostic is not a retrieval verdict — surface
 		// it as such instead of feeding a synthetic "empty/degraded" signal
-		// into the adaptive sampler.
+		// into the adaptive sampler. M2 T10 (X-11): the same holds when any lane
+		// failed or was budget-denied. The surviving results are not a verdict
+		// on relevance, so health is not computed from them and the sampler
+		// learns nothing; the lane rows below carry the failure.
 		const throttled = v2.metadata.throttled
-		const health = throttled
+		const outcomes = v2.metadata.outcomeStatus
+			? {
+					status: v2.metadata.outcomeStatus,
+					lanes: v2.metadata.laneOutcomes ?? [],
+				}
+			: undefined
+		const unverdicted =
+			Boolean(throttled) ||
+			(outcomes !== undefined && outcomes.status !== "complete")
+		const health = unverdicted
 			? "insufficient-data"
 			: relevance.evaluateHealth(v2.results)
-		if (!throttled) {
+		if (!unverdicted) {
 			relevance.recordSignal(v2.results)
 		}
 
@@ -219,6 +232,7 @@ export class MongoDBManagerRelevanceOps {
 		]
 
 		let runId: string | undefined
+		let persistFailure: RelevanceExplainResult["persistFailure"]
 		try {
 			runId = await relevance.persistRun({
 				admission: readAdmission,
@@ -237,16 +251,23 @@ export class MongoDBManagerRelevanceOps {
 			})
 		} catch (err) {
 			relevance.logTelemetryFailure(err)
+			persistFailure = {
+				reason: isErasureGateConflictError(err)
+					? "erasure-in-progress"
+					: classifySearchError(err),
+			}
 		}
 
 		return {
 			runId,
+			...(persistFailure ? { persistFailure } : {}),
 			latencyMs,
 			sourceScope,
 			health,
 			sampleRate: relevance.getSampleState().current,
 			artifacts,
 			results: v2.results,
+			...(outcomes ? { outcomes } : {}),
 		}
 	}
 }

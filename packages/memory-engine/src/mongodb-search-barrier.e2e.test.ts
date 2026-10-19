@@ -11,6 +11,11 @@
  *   - the barrier's own `exact: true` autoEmbed vector probe: its count or
  *     its error is recorded, and an error must surface as probe-failed.
  *
+ * Setup builds only the two text indexes the witness and barrier probe need,
+ * from their required-index manifest rows. Keyless mongot refuses every
+ * autoEmbed definition, so the full manifest boot (ensureSearchIndexes) is a
+ * typed refusal here; the keyed proof-pack job boots the full manifest.
+ *
  * Each case prints one bounded JSON line (no token, body or query text) so a
  * run records the observed behavior. With a model key and an autoEmbed
  * index, the vector probe is one paid query embedding per call.
@@ -20,14 +25,17 @@
 import { randomUUID } from "node:crypto"
 import { type Db, MongoClient } from "mongodb"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import {
+	reconcileRequiredIndex,
+	verifyServerVersion,
+} from "./mongodb-boot-contract.js"
 import { writeEvent } from "./mongodb-events.js"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
+import { buildRequiredIndexManifest } from "./mongodb-required-index-manifest.js"
 import {
 	chunksCollection,
 	ensureCollections,
-	ensureSearchIndexes,
 	eventsCollection,
-	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
 import {
 	awaitSearchBarrier,
@@ -38,6 +46,7 @@ import {
 	searchBarrierTargets,
 } from "./mongodb-search-barrier.js"
 import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 const TEST_URI = resolvePreviewMongoTestUri(
 	"mongodb://127.0.0.1:27019/?directConnection=true",
@@ -116,12 +125,21 @@ beforeAll(async () => {
 	await client.connect()
 	db = client.db(DB_NAME)
 	await ensureCollections(db, PREFIX)
-	const ensured = await ensureSearchIndexes(
-		db,
-		PREFIX,
-		"atlas-local-preview",
-		"automated",
+	const textIndexes = new Set([`${PREFIX}events_text`, `${PREFIX}chunks_text`])
+	const manifest = buildRequiredIndexManifest({
+		prefix: PREFIX,
+		serverVersionArray: await verifyServerVersion(db),
+	}).filter((entry) => textIndexes.has(entry.name))
+	expect(manifest.map((entry) => entry.name).sort()).toEqual(
+		[...textIndexes].sort(),
 	)
+	const ensured: Record<string, string> = {}
+	for (const entry of manifest) {
+		ensured[entry.name] = await reconcileRequiredIndex(
+			db.collection(entry.collectionName),
+			entry,
+		)
+	}
 	const eventsText = await waitForSearchIndexesQueryable(
 		eventsCollection(db, PREFIX),
 		{ indexNames: [`${PREFIX}events_text`], timeoutMs: 120_000 },

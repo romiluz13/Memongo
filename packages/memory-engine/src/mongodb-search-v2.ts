@@ -13,12 +13,16 @@ import { resolveDefaultScope } from "./backend-config.js"
 import { resolveConversationEvidenceMode } from "./mongodb-conversation-evidence-mode.js"
 import { searchEpisodes } from "./mongodb-episodes.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
-import { getEventsByTimeRange } from "./mongodb-events.js"
 import { searchEntitiesAutocomplete, expandGraph } from "./mongodb-graph.js"
 import type { GraphExpansionResult } from "./mongodb-graph.js"
 import { derivationFromRole } from "./memory-derivation.js"
 import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
+import {
+	assertLaneIndexesHealthy,
+	laneHasNoManifestIndex,
+	capabilitiesFromActiveHealth,
+} from "./mongodb-index-health.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import type { ProcedureState } from "./mongodb-procedures.js"
 import {
@@ -39,11 +43,6 @@ import { resolveUserfactEvidenceMode } from "./mongodb-userfact-evidence.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveEnrichmentMode } from "./mongodb-llm-enrichment.js"
 import {
-	crossEncoderRerank,
-	RERANK_TIMEOUT_MS,
-	type RerankConfig,
-} from "./mongodb-reranker.js"
-import {
 	planRetrieval,
 	type RetrievalPath,
 	type RetrievalPlan,
@@ -62,7 +61,6 @@ import {
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { mongoSearch, vectorSearch } from "./mongodb-search.js"
 import {
-	DEFAULT_USER_SEARCH_MAX_TIME_MS,
 	findCompletedSearchRetrieval,
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
@@ -79,10 +77,15 @@ import {
 	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
 import {
+	addSearchCosts,
 	conversationEvidenceLaneCost,
+	episodicLaneCost,
+	GRAPH_LANE_MAX_LOOKUPS,
+	graphLaneCost,
 	kbLaneCost,
-	mongoSearchTierCost,
+	nativeFusionCost,
 	NO_SEARCH_COST,
+	rawWindowLaneCost,
 	structuredLaneCost,
 	vectorLeafCost,
 } from "./search-lane-cost.js"
@@ -118,6 +121,7 @@ import {
 	searchFailureLogFields,
 	searchFailureRow,
 	summarizeSearchOutcomes,
+	throttledSearchOutcomes,
 	toTypedSearchError,
 } from "./search-outcomes.js"
 // #101: the shared value-free outcome row lives in search-outcomes.ts (the
@@ -125,9 +129,7 @@ import {
 // so the v2 public surface keeps its name.
 export type { SearchLaneOutcome } from "./search-outcomes.js"
 import {
-	applyPreferenceEvidenceBoostAfterRerank,
 	clampSearchQuery,
-	applyRecencyAccessBoostAfterRerank,
 	deduplicateSearchResults,
 	isBenchmarkStrictMode,
 	isBenchmarkTurnPrecisionMode,
@@ -153,6 +155,7 @@ import {
 	isTrustedPlannerEntityCandidate,
 	pickBestEntityMatch,
 	searchConversationEvidenceEvents,
+	searchRawWindowEvents,
 	searchTemporalCoverageEvents,
 	searchTurnEventsWithinSessions,
 } from "./mongodb-search-lanes.js"
@@ -161,7 +164,7 @@ import { extractTemporalWindow } from "./mongodb-retrieval-planner.js"
 const log = createSubsystemLogger("memory:mongodb")
 
 // P4.4.4: default temporal-proximity weight for the raw-window lane when the
-// resolved rerank config does not carry one (direct searchV2 callers).
+// resolved reranking config does not carry one (direct searchV2 callers).
 const DEFAULT_TEMPORAL_PROXIMITY_BOOST = 0.1
 
 // ---------------------------------------------------------------------------
@@ -183,6 +186,7 @@ export type V2SearchMetadata = {
 	laneOutcomes?: SearchLaneOutcome[]
 	/** #101 section 5: complete, partial or failed, computed from the rows. */
 	outcomeStatus?: SearchOutcomeStatus
+	/** Always false: M2 has no reranker. Native $rerank arrives in M4. */
 	reranked?: boolean
 	queryRewritten?: boolean
 	laneControls?: ReturnType<typeof applyLaneAwareResultControls>["summary"]
@@ -305,17 +309,6 @@ export function renderGraphRelationSnippet(
 }
 
 /**
- * WS-16 (C-031): the end-to-end tail budget one search may spend — the
- * documented 12s worst-case composition (10s maxTimeMS aggregate + 2s
- * rerank timeout) pinned by
- * mongodb-search-latency-composition.test.ts. searchV2 stamps its start
- * time and hands rerank the REMAINDER of this budget, so the provider call
- * can never stack its full 2s cap on top of an already-consumed tail.
- */
-export const SEARCH_TAIL_COMPOSITION_BUDGET_MS =
-	DEFAULT_USER_SEARCH_MAX_TIME_MS + RERANK_TIMEOUT_MS
-
-/**
  * searchV2 entry point: opens the per-request cost budget (P3.2) that every
  * lane, waterfall stage, and backstop consumes. Every entry clamps query text.
  * When a budget is already active — the recursive hybrid backstop re-entering
@@ -414,6 +407,7 @@ export async function searchV2(
 				proceduralScope: context.searchOptions?.proceduralScope,
 			},
 		})
+		const denied = throttledSearchOutcomes()
 		return {
 			results: [],
 			metadata: {
@@ -421,11 +415,13 @@ export async function searchV2(
 				pathsExecuted: [],
 				resultsByPath: {},
 				throttled: { retryAfterMs: admission.retryAfterMs },
+				laneOutcomes: denied.lanes,
+				outcomeStatus: denied.status,
 			},
 		}
 	}
 	// #101 decision 18: search() opens the request ledger before admission so
-	// its opt-in legacy re-run shares it; this search is admitted on it.
+	// every pass shares it; this search is admitted on it.
 	if (hasActiveSearchBudget()) {
 		markSearchBudgetAdmitted()
 		return runInRequestLedger()
@@ -444,16 +440,6 @@ export type SearchV2Context = {
 	hasEpisodes?: boolean
 	hasGraphData?: boolean
 	maxResults?: number
-	/**
-	 * C-016 + RET-13: invoked at the ACTUAL catch seam when an individual
-	 * lane, sub-lane, or phase fails at query time (non-strict mode). The
-	 * manager wires this to noteSearchLaneFailure() so index readiness is
-	 * re-polled and the outage is reflected in status instead of the
-	 * boot-time snapshot. Labels are seam-level strings — a path name
-	 * ("hybrid"), a sub-lane ("hybrid:chunks"), or a phase
-	 * ("phase:conversation-evidence", "kb:$text").
-	 */
-	onPathFailure?: (lane: string, error: unknown) => void
 	searchOptions?: {
 		minScore?: number
 		sessionKey?: string
@@ -469,7 +455,8 @@ export type SearchV2Context = {
 		scope?: MemoryScope
 		scopeRef?: string
 		allowHybridBackstop?: boolean
-		rerankConfig?: RerankConfig
+		/** The `reranking` config; only the raw-window lane's boost is left. */
+		rerankConfig?: { temporalProximityBoost?: number }
 		queryRewriteConfig?: QueryRewriteConfig
 		projection?: "full" | "ids-only"
 		sourcePreference?: MemorySearchRequest["sourcePreference"]
@@ -528,10 +515,6 @@ async function searchV2WithBudget(
 	agentId: string,
 	context: SearchV2Context,
 ): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
-	// WS-16 (C-031): wall-clock start of the whole search. The rerank stage
-	// derives its provider timeout from what REMAINS of the tail budget, so
-	// the last stage is bounded by the composition, not just by its own cap.
-	const searchStartedAt = Date.now()
 	try {
 		const graphQueryCandidates =
 			context.knownEntityNames && context.knownEntityNames.length > 0
@@ -647,14 +630,12 @@ async function searchV2WithBudget(
 		const maxResults = context.maxResults ?? 20
 		const minScore = context.searchOptions?.minScore ?? 0.01
 		const numCandidates = context.searchOptions?.numCandidates ?? 500
-		const capabilities = context.searchOptions?.capabilities ?? {
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: false,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		}
+		// M2 decision 8: index health comes from this request's snapshot. A
+		// caller that passes no capabilities and runs outside any request scope
+		// is refused; nothing assumes the indexes are healthy.
+		const capabilities =
+			context.searchOptions?.capabilities ??
+			(await capabilitiesFromActiveHealth())
 		const fusionMethod = context.searchOptions?.fusionMethod ?? "scoreFusion"
 		const embeddingMode = context.searchOptions?.embeddingMode ?? "automated"
 		const queryEmbeddingModel =
@@ -956,9 +937,8 @@ async function searchV2WithBudget(
 		const perPathResults: Record<string, MemorySearchResult[]> = {}
 		// #101: the ONE failure policy used at every lane seam. Strict →
 		// rethrow typed so the search fails loudly; else record one value-free
-		// failure row at the seam that caught it, surface it through
-		// onPathFailure, and let sibling lanes stand. A lane that failed never
-		// also records ok.
+		// failure row at the seam that caught it, and let sibling lanes stand.
+		// A lane that failed never also records ok.
 		const emitLaneFailure = (lane: SearchLane, err: unknown): void => {
 			const typed = toTypedSearchError(err, "lane", lane)
 			log.warn("searchV2 lane failed", {
@@ -966,16 +946,6 @@ async function searchV2WithBudget(
 				...searchFailureLogFields(typed),
 			})
 			laneOutcomes.push(searchFailureRow(lane, "lane", typed))
-			// C-016: surface the failure so the manager can re-poll index
-			// readiness. Never let the hook break the remaining lanes.
-			try {
-				context.onPathFailure?.(lane, typed)
-			} catch (hookErr) {
-				log.warn(
-					"searchV2 onPathFailure hook failed",
-					searchFailureLogFields(hookErr),
-				)
-			}
 		}
 		const tierSink =
 			(lane: SearchLane): SearchTierOutcomeSink =>
@@ -995,6 +965,13 @@ async function searchV2WithBudget(
 		): Promise<MemorySearchResult[]> => {
 			const firstRow = laneOutcomes.length
 			try {
+				// M2 decision 8: a lane never runs against an index observed
+				// unhealthy at admission. The typed failure below is this lane's
+				// row, so siblings stand (partial) exactly as for any lane failure.
+				await assertLaneIndexesHealthy(lane, {
+					vectorOnly:
+						hybridMode === "vector-only" && lane.startsWith("hybrid:"),
+				})
 				const hits = await run(tierSink(lane))
 				const own = laneOutcomes
 					.slice(firstRow)
@@ -1135,19 +1112,24 @@ async function searchV2WithBudget(
 				case "raw-window": {
 					// M2 audit fix: cap raw-window events at 50 to avoid unbounded result sets
 					const rawWindowLimit = 50
-					const events = await getEventsByTimeRange({
+					const queryTerms = extractRawWindowQueryTerms(query)
+					// M2 (G1-28): candidates come from one $search over the
+					// window; the scoring below is composition over them.
+					const events = await searchRawWindowEvents({
 						db,
 						prefix,
 						agentId,
+						scope,
+						scopeRef: agentScopeRef,
 						start:
 							timeRange?.start ??
 							new Date(referenceDate.getTime() - 24 * 60 * 60 * 1000),
 						end: timeRange?.end ?? referenceDate,
-						scope,
-						scopeRef: agentScopeRef,
+						referenceDate,
+						queryTerms,
 						limit: rawWindowLimit,
+						onTierOutcome,
 					})
-					const queryTerms = extractRawWindowQueryTerms(query)
 					// P4.4.4 temporal proximity scoring (hindsight): when the
 					// query implies a temporal window, events nearer the window
 					// midpoint (origin ± scaleDays) outrank equally matched far
@@ -1188,9 +1170,13 @@ async function searchV2WithBudget(
 							if (right.temporalProximity !== left.temporalProximity) {
 								return right.temporalProximity - left.temporalProximity
 							}
-							return (
+							const byTime =
 								right.event.timestamp.getTime() - left.event.timestamp.getTime()
-							)
+							// Search returns candidates in score order; the event id
+							// makes equal-time ties deterministic.
+							return byTime !== 0
+								? byTime
+								: left.event.eventId.localeCompare(right.event.eventId)
 						})
 					pathResults = rankedEvents.map(
 						({ event: e, matchScore, temporalProximity }, i) => ({
@@ -1235,23 +1221,26 @@ async function searchV2WithBudget(
 					break
 				}
 				case "graph": {
+					if (laneHasNoManifestIndex("graph")) {
+						pathResults = notApplicable("graph", "plan", "capability-absent")
+						break
+					}
 					if (constrainedGraphCandidates.length > 0) {
 						const candidateEntities = (
 							await Promise.all(
-								constrainedGraphCandidates.slice(0, 4).map((name) =>
-									searchEntitiesAutocomplete({
-										db,
-										prefix,
-										query: name,
-										agentId,
-										scope,
-										scopeRef: agentScopeRef,
-										limit: 5,
-										// P3.8: route through entity_autocomplete $search only when
-										// mongot is present; otherwise the escaped $regex fallback.
-										textSearchAvailable: capabilities.textSearch,
-									}),
-								),
+								constrainedGraphCandidates
+									.slice(0, GRAPH_LANE_MAX_LOOKUPS)
+									.map((name) =>
+										searchEntitiesAutocomplete({
+											db,
+											prefix,
+											query: name,
+											agentId,
+											scope,
+											scopeRef: agentScopeRef,
+											limit: 5,
+										}),
+									),
 							)
 						).flat()
 						const entity = pickBestEntityMatch(candidateEntities, query)
@@ -1340,6 +1329,10 @@ async function searchV2WithBudget(
 					break
 				}
 				case "episodic": {
+					if (laneHasNoManifestIndex("episodic")) {
+						pathResults = notApplicable("episodic", "plan", "capability-absent")
+						break
+					}
 					// Use original query for episodic search (synonym expansion breaks matching)
 					const episodes = await searchEpisodes({
 						db,
@@ -1349,9 +1342,6 @@ async function searchV2WithBudget(
 						scope,
 						scopeRef: agentScopeRef,
 						...(timeRange ? { timeRange } : {}),
-						// P3.8: route through episode_autocomplete $search only when
-						// mongot is present; otherwise the escaped $regex tier.
-						textSearchAvailable: capabilities.textSearch,
 						onTierOutcome,
 					})
 					pathResults = episodes.map((ep, i) => ({
@@ -1411,145 +1401,68 @@ async function searchV2WithBudget(
 						throw new SearchLaneUnavailableError({ lane: "hybrid" })
 					}
 					const searches: Array<Promise<MemorySearchResult[]>> = []
-					// P3.1: the conversation and bridge lanes read the same
+					// P3.1: the conversation and bridge sub-lanes read the same
 					// collection with the same query text, and under autoEmbed
-					// every $vectorSearch embeds that text server-side — two
-					// lanes cost two paid embeddings per request. When both
+					// every $vectorSearch embeds that text server-side. When both
 					// filters pin the same identity they differ only in the
-					// `source` set, so fuse them into ONE lane with the union of
-					// sources: one aggregation, one embedding. The bridge budget
-					// folds into the lane's (larger) conversation budget; the
-					// results were merged into one pool downstream anyway.
-					// Incompatible filters keep the split lanes below — a fusion
-					// must never widen or narrow either read.
-					const fusedChunkFilter = conversationChunkFilter
-						? fuseChunkLaneFilters(conversationChunkFilter, bridgeChunkFilter)
-						: undefined
-					if (fusedChunkFilter) {
-						searches.push(
-							timeLane("hybrid:chunks", () =>
-								runLane("hybrid:chunks", (onTierOutcome) =>
-									hybridMode === "vector-only"
-										? vectorSearch(chunksCollection(db, prefix), null, {
-												maxResults: context.maxResults ?? 10,
+					// `source` set, so they fuse into ONE read with the union of
+					// sources. When they cannot merge, the bridge sub-lane rides
+					// in the SAME native aggregate as a sibling input pair with its
+					// own filter and cap: one aggregation, never a second lane. A
+					// fusion must never widen or narrow either read.
+					const fusedChunkFilter = fuseChunkLaneFilters(
+						conversationChunkFilter,
+						bridgeChunkFilter,
+					)
+					const chunkFilter = fusedChunkFilter ?? conversationChunkFilter
+					const chunkSibling =
+						!fusedChunkFilter && bridgeChunkFilter
+							? { filter: bridgeChunkFilter, maxResults: bridgeMaxResults }
+							: undefined
+					const chunkMaxResults = context.maxResults ?? 10
+					searches.push(
+						timeLane("hybrid:chunks", () =>
+							runLane("hybrid:chunks", (onTierOutcome) =>
+								hybridMode === "vector-only"
+									? vectorSearch(chunksCollection(db, prefix), null, {
+											maxResults:
+												chunkMaxResults + (chunkSibling?.maxResults ?? 0),
+											minScore,
+											numCandidates,
+											sessionKey: context.searchOptions?.sessionKey,
+											filter: chunkSibling
+												? { $or: [chunkFilter, chunkSibling.filter] }
+												: chunkFilter,
+											indexName: `${prefix}chunks_vector`,
+											queryText: searchQuery,
+											embeddingMode,
+											queryEmbeddingModel,
+											onTierOutcome,
+										})
+									: mongoSearch(
+											chunksCollection(db, prefix),
+											searchQuery,
+											null,
+											{
+												maxResults: chunkMaxResults,
 												minScore,
 												numCandidates,
 												sessionKey: context.searchOptions?.sessionKey,
-												filter: fusedChunkFilter,
-												indexName: `${prefix}chunks_vector`,
-												queryText: searchQuery,
+												filter: chunkFilter,
+												sibling: chunkSibling,
+												fusionMethod,
+												vectorIndexName: `${prefix}chunks_vector`,
+												textIndexName: `${prefix}chunks_text`,
+												vectorWeight: 0.7,
+												textWeight: 0.3,
 												embeddingMode,
 												queryEmbeddingModel,
 												onTierOutcome,
-											})
-										: mongoSearch(
-												chunksCollection(db, prefix),
-												searchQuery,
-												null,
-												{
-													maxResults: context.maxResults ?? 10,
-													minScore,
-													numCandidates,
-													sessionKey: context.searchOptions?.sessionKey,
-													filter: fusedChunkFilter,
-													fusionMethod,
-													capabilities,
-													vectorIndexName: `${prefix}chunks_vector`,
-													textIndexName: `${prefix}chunks_text`,
-													vectorWeight: 0.7,
-													textWeight: 0.3,
-													embeddingMode,
-													queryEmbeddingModel,
-													onTierOutcome,
-												},
-											),
-								),
+											},
+										),
 							),
-						)
-					} else if (conversationChunkFilter) {
-						searches.push(
-							timeLane("hybrid:chunks", () =>
-								runLane("hybrid:chunks", (onTierOutcome) =>
-									hybridMode === "vector-only"
-										? vectorSearch(chunksCollection(db, prefix), null, {
-												maxResults: context.maxResults ?? 10,
-												minScore,
-												numCandidates,
-												sessionKey: context.searchOptions?.sessionKey,
-												filter: conversationChunkFilter,
-												indexName: `${prefix}chunks_vector`,
-												queryText: searchQuery,
-												embeddingMode,
-												queryEmbeddingModel,
-												onTierOutcome,
-											})
-										: mongoSearch(
-												chunksCollection(db, prefix),
-												searchQuery,
-												null,
-												{
-													maxResults: context.maxResults ?? 10,
-													minScore,
-													numCandidates,
-													sessionKey: context.searchOptions?.sessionKey,
-													filter: conversationChunkFilter,
-													fusionMethod,
-													capabilities,
-													vectorIndexName: `${prefix}chunks_vector`,
-													textIndexName: `${prefix}chunks_text`,
-													vectorWeight: 0.7,
-													textWeight: 0.3,
-													embeddingMode,
-													queryEmbeddingModel,
-													onTierOutcome,
-												},
-											),
-								),
-							),
-						)
-					}
-					if (!fusedChunkFilter && bridgeChunkFilter) {
-						searches.push(
-							timeLane("hybrid:bridge", () =>
-								runLane("hybrid:bridge", (onTierOutcome) =>
-									hybridMode === "vector-only"
-										? vectorSearch(chunksCollection(db, prefix), null, {
-												maxResults: bridgeMaxResults,
-												minScore,
-												numCandidates,
-												sessionKey: context.searchOptions?.sessionKey,
-												filter: bridgeChunkFilter,
-												indexName: `${prefix}chunks_vector`,
-												queryText: searchQuery,
-												embeddingMode,
-												queryEmbeddingModel,
-												onTierOutcome,
-											})
-										: mongoSearch(
-												chunksCollection(db, prefix),
-												searchQuery,
-												null,
-												{
-													maxResults: bridgeMaxResults,
-													minScore,
-													numCandidates,
-													sessionKey: context.searchOptions?.sessionKey,
-													filter: bridgeChunkFilter,
-													fusionMethod,
-													capabilities,
-													vectorIndexName: `${prefix}chunks_vector`,
-													textIndexName: `${prefix}chunks_text`,
-													vectorWeight: 0.7,
-													textWeight: 0.3,
-													embeddingMode,
-													queryEmbeddingModel,
-													onTierOutcome,
-												},
-											),
-								),
-							),
-						)
-					}
+						),
+					)
 					// Option B: parallel search on session_chunks collection (vector +
 					// text hybrid). Strictly opt-in: only benchmark ingest writes this
 					// collection, so for a real user it is empty — and the scorer
@@ -1621,7 +1534,6 @@ async function searchV2WithBudget(
 													sessionKey: context.searchOptions?.sessionKey,
 													filter: sessionFilter,
 													fusionMethod,
-													capabilities,
 													vectorIndexName: `${prefix}session_chunks_vector`,
 													textIndexName: `${prefix}session_chunks_text`,
 													vectorWeight: 0.7,
@@ -1692,7 +1604,6 @@ async function searchV2WithBudget(
 													sessionKey: context.searchOptions?.sessionKey,
 													filter: evidenceFilter,
 													fusionMethod,
-													capabilities,
 													vectorIndexName: `${prefix}memory_evidence_vector`,
 													textIndexName: `${prefix}memory_evidence_text`,
 													vectorWeight: 0.65,
@@ -1746,15 +1657,11 @@ async function searchV2WithBudget(
 							numCandidates,
 							vectorIndexName: `${prefix}kb_chunks_vector`,
 							textIndexName: `${prefix}kb_chunks_text`,
-							capabilities,
 							embeddingMode,
 							queryEmbeddingModel,
 							onTierOutcome,
 							fusionMethod,
 							kbDocs: kbCollection(db, prefix),
-							// #101 K7: strict mode fails the lane on a js-merge branch
-							// failure instead of letting the survivor stand.
-							strict: isBenchmarkStrictMode(),
 						},
 					)
 					pathResults = kbHits
@@ -1825,12 +1732,21 @@ async function searchV2WithBudget(
 		// optional starts, and run inside that reservation; optional work
 		// spends only the unreserved remainder.
 		const vectorOrText = capabilities.vectorSearch || capabilities.textSearch
-		const hybridSubLaneCount =
-			(fuseChunkLaneFilters(conversationChunkFilter, bridgeChunkFilter)
-				? 1
-				: 2) +
-			(sessionMode === "B" && vectorOrText ? 1 : 0) +
-			(isEvidenceMirrorEnabled() && vectorOrText ? 1 : 0)
+		// Each chunk-family read is ONE native aggregate (decision 18): one
+		// aggregation plus every embedded vector input. Chunk filters that cannot
+		// merge ride as a sibling input pair, so they add an embed, not an
+		// aggregation. A vector-only sub-lane stays one $vectorSearch.
+		const chunkVectorInputs = fuseChunkLaneFilters(
+			conversationChunkFilter,
+			bridgeChunkFilter,
+		)
+			? 1
+			: 2
+		const hybridSubLaneInputs = [
+			chunkVectorInputs,
+			...(sessionMode === "B" && vectorOrText ? [1] : []),
+			...(isEvidenceMirrorEnabled() && vectorOrText ? [1] : []),
+		]
 		const laneCost = (lane: SearchLane): SearchWorkCost => {
 			switch (lane) {
 				case "active-critical":
@@ -1847,23 +1763,23 @@ async function searchV2WithBudget(
 						textIndexName: `${prefix}procedures_text`,
 					})
 				case "kb":
-					return kbLaneCost({ capabilities, embeddingMode, fusionMethod })
-				case "hybrid": {
-					const subLane =
-						hybridMode === "vector-only"
-							? vectorLeafCost({ embeddingMode })
-							: mongoSearchTierCost({
-									capabilities,
-									embeddingMode,
-									fusionMethod,
-								})
-					return {
-						aggregations: subLane.aggregations * hybridSubLaneCount,
-						embeds: subLane.embeds * hybridSubLaneCount,
-					}
-				}
+					return kbLaneCost({ embeddingMode })
+				case "hybrid":
+					return addSearchCosts(
+						...hybridSubLaneInputs.map((vectorInputs) =>
+							hybridMode === "vector-only"
+								? vectorLeafCost({ embeddingMode })
+								: nativeFusionCost({ embeddingMode, vectorInputs }),
+						),
+					)
 				case "conversation-evidence":
 					return conversationEvidenceLaneCost({ capabilities, embeddingMode })
+				case "raw-window":
+					return rawWindowLaneCost()
+				case "graph":
+					return graphLaneCost(constrainedGraphCandidates.length)
+				case "episodic":
+					return episodicLaneCost()
 				default:
 					return NO_SEARCH_COST
 			}
@@ -1896,6 +1812,11 @@ async function searchV2WithBudget(
 						conversationScope: context.searchOptions?.conversationScope,
 						sourcePreference: context.searchOptions?.sourcePreference,
 						needExactEvidence: context.searchOptions?.needExactEvidence,
+						graphCandidates: constrainedGraphCandidates.slice(
+							0,
+							GRAPH_LANE_MAX_LOOKUPS,
+						),
+						graphMaxDepth: context.searchOptions?.graphMaxDepth,
 					},
 					limits: {
 						maxResults,
@@ -2183,6 +2104,7 @@ async function searchV2WithBudget(
 					runLane("backstop:procedural-exact", (onTierOutcome) =>
 						findExactProcedureMatches(proceduresCollection(db, prefix), query, {
 							maxResults: context.maxResults ?? 10,
+							textIndexName: `${prefix}procedures_text`,
 							filter: proceduralFilter,
 							onTierOutcome,
 						}),
@@ -2326,7 +2248,7 @@ async function searchV2WithBudget(
 			Date.now() - heuristicRerankStartedAt
 
 		// Post-retrieval scoring: keyword, temporal, entity, quoted-phrase boosts
-		// Applied AFTER heuristic rerank, BEFORE cross-encoder rerank
+		// Applied AFTER the heuristic rerank
 		const postRetrievalScoringStartedAt = Date.now()
 		const postScored = applyPostRetrievalScoring(query, heuristicReranked, {
 			questionDate: context.searchOptions?.questionDate,
@@ -2436,7 +2358,7 @@ async function searchV2WithBudget(
 					: postScored
 		latencyByPath["phase:precision-merge"] =
 			Date.now() - precisionMergeStartedAt
-		const preRerankLaneControlsStartedAt = Date.now()
+		const laneControlsStartedAt = Date.now()
 		const laneControlled = applyLaneAwareResultControls({
 			query,
 			results: precisionScored,
@@ -2450,109 +2372,14 @@ async function searchV2WithBudget(
 			}),
 			planPaths: plan.paths,
 		})
-		latencyByPath["phase:lane-controls-pre-rerank"] =
-			Date.now() - preRerankLaneControlsStartedAt
+		latencyByPath["phase:lane-controls"] = Date.now() - laneControlsStartedAt
 
-		// Cross-encoder re-ranking via Voyage API (after heuristic, before final slice)
-		const rerankCfg = context.searchOptions?.rerankConfig
-		let finalResults = laneControlled.results
-		let laneControlSummary = laneControlled.summary
-		let wasReranked = false
-		if (rerankCfg?.enabled) {
-			const rerankInputStartedAt = Date.now()
-			const timelineResults = finalResults.filter(
-				(result) => result.provenance?.temporalTimeline === true,
-			)
-			const rerankInput = finalResults.filter(
-				(result) => result.provenance?.temporalTimeline !== true,
-			)
-			latencyByPath["phase:rerank-input"] = Date.now() - rerankInputStartedAt
-			const rerankResult = await timeLane("phase:rerank", () =>
-				crossEncoderRerank({
-					admission: context.admission,
-					db,
-					prefix,
-					agentId,
-					query,
-					results: rerankInput.length > 0 ? rerankInput : precisionScored,
-					config: rerankCfg,
-					// WS-16 (C-031): the provider call gets only what the
-					// search has left of its tail budget, never its own full
-					// 2s cap stacked on an already-slow tail.
-					remainingBudgetMs: Math.max(
-						0,
-						SEARCH_TAIL_COMPOSITION_BUDGET_MS - (Date.now() - searchStartedAt),
-					),
-					onProviderCall: (outcome) => {
-						const accounting =
-							context.searchOptions?.operationRunContext?.accounting
-						if (!accounting) return
-						const metadata = { provider: "voyage", model: rerankCfg.model }
-						if (outcome === "attempted") {
-							accounting.recordAttempt("rerank", metadata)
-						} else if (outcome === "succeeded") {
-							accounting.recordSuccess("rerank", metadata)
-						} else {
-							accounting.recordFailure("rerank", metadata)
-						}
-					},
-				}),
-			)
-			if (rerankResult.reranked) {
-				const postRerankLaneControlsStartedAt = Date.now()
-				// RET-08: post-CE boosts refine only the CE-scored partition
-				// (they are cross-encoder refinements, not retrieval-score
-				// corrections), and the untouched partitions keep their
-				// original retrieval order behind the CE head. Composing in
-				// partition order — then sorting segment-stable in lane
-				// controls — keeps CE-ranked results ahead of higher-scoring
-				// unreranked overflow instead of comparing uncalibrated score
-				// domains.
-				const boostedReranked = applyPreferenceEvidenceBoostAfterRerank(
-					query,
-					applyRecencyAccessBoostAfterRerank(rerankResult.partitions.reranked, {
-						recencyBoost: rerankCfg.recencyBoost,
-						accessBoost: rerankCfg.accessBoost,
-					}),
-				)
-				const composedTimeline = orderTimelineAfterSourceEvidence(
-					deduplicateSearchResults([
-						...boostedReranked,
-						...rerankResult.partitions.emptySnippet,
-						...rerankResult.partitions.overflow,
-						...rerankResult.partitions.below,
-						...timelineResults,
-					]),
-				)
-				const postRerankLaneControlled = applyLaneAwareResultControls({
-					query,
-					results: composedTimeline,
-					// RET-08: the rerank input was deduplicated upstream and
-					// timeline items are appended behind the partitions, so the
-					// CE-scored partition is exactly the first
-					// `boostedReranked.length` composed results.
-					rerankPartitionCount: boostedReranked.length,
-					classification: classifyExecutorSearch({
-						query,
-						timeRange: context.searchOptions?.timeRange,
-						conversationScope: context.searchOptions?.conversationScope,
-						structuredScope: context.searchOptions?.structuredScope,
-						referenceScope: context.searchOptions?.referenceScope,
-						proceduralScope: context.searchOptions?.proceduralScope,
-					}),
-					planPaths: plan.paths,
-				})
-				latencyByPath["phase:lane-controls-post-rerank"] =
-					Date.now() - postRerankLaneControlsStartedAt
-				finalResults = postRerankLaneControlled.results
-				laneControlSummary = postRerankLaneControlled.summary
-				wasReranked = true
-			}
-		}
+		const finalResults = laneControlled.results
+		const laneControlSummary = laneControlled.summary
 
 		// Ranking boosts run after lane normalization and can compound above 1.
 		// Preserve their ordering and relative score gaps while enforcing the
-		// public searchV2 score contract for every lane and reranker branch.
+		// public searchV2 score contract for every lane.
 		const finalNormalizeStartedAt = Date.now()
 		const sliced = normalizeFinalSearchScores(finalResults).slice(0, maxResults)
 		latencyByPath["phase:final-normalize"] =
@@ -2573,7 +2400,7 @@ async function searchV2WithBudget(
 				plan,
 				pathsExecuted,
 				resultsByPath,
-				reranked: wasReranked,
+				reranked: false,
 				queryRewritten: wasQueryRewritten,
 				laneControls: laneControlSummary,
 				latencyByPath,

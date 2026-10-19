@@ -168,10 +168,7 @@ export async function prepareRuntime(options: PrepareOptions) {
 		const db = client.db(options.database)
 		await ensureCollections(db, options.prefix)
 		// Configured retention is passed through so preparation preserves the
-		// application's TTL policies; textFallbackIndexes stays at its default
-		// (true) — preparation targets a standalone runtime where the BSON
-		// $text fallback is the safe choice, unlike the manager's
-		// capability-derived skip (mongodb-manager.ts:788-796).
+		// application's TTL policies.
 		const standardIndexes = await ensureStandardIndexes(db, options.prefix, {
 			memoryTtlDays: options.memoryTtlDays,
 			episodesRetentionDays: options.episodesRetentionDays,
@@ -232,8 +229,7 @@ export async function runSchemaOnly(
 	await ensureCollections(db, options.prefix)
 	// Identical retention pass-through to full mode (prepareRuntime): the
 	// same three configured fields, so retention converges the same way in
-	// both modes. textFallbackIndexes stays at its default (true) for the
-	// same reason as full mode.
+	// both modes.
 	const standardIndexes = await ensureStandardIndexes(db, options.prefix, {
 		memoryTtlDays: options.memoryTtlDays,
 		episodesRetentionDays: options.episodesRetentionDays,

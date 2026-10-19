@@ -7,6 +7,7 @@ import {
 	memongoBridgeReadFile,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
+import { searchErrorResponse } from "../lib/search-outcomes.js"
 import {
 	contextBundleModeSchema,
 	timeRangeSchema,
@@ -23,6 +24,7 @@ import {
 	readScopeRef,
 	readScopeInputError,
 	readDiscoveryProjectionKind,
+	isErasureGateConflictError,
 	type V1RouterEnv,
 } from "./v1-helpers.js"
 
@@ -56,7 +58,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(slate)
 		} catch (err) {
-			return internalError(c, err, "ACTIVE_SLATE_FAILED")
+			return searchErrorResponse(c, err, "ACTIVE_SLATE_FAILED")
 		}
 	})
 
@@ -95,7 +97,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(projection)
 		} catch (err) {
-			return internalError(c, err, "DISCOVERY_PROJECTION_FAILED")
+			return searchErrorResponse(c, err, "DISCOVERY_PROJECTION_FAILED")
 		}
 	})
 
@@ -172,7 +174,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(bundle)
 		} catch (err) {
-			return internalError(c, err, "CONTEXT_BUNDLE_FAILED")
+			return searchErrorResponse(c, err, "CONTEXT_BUNDLE_FAILED")
 		}
 	})
 
@@ -191,6 +193,14 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(out)
 		} catch (err) {
+			if (isErasureGateConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"ERASURE_IN_PROGRESS",
+					"read refused: an erasure is in progress for this agent",
+				)
+			}
 			return internalError(c, err, "READ_FILE_FAILED")
 		}
 	})

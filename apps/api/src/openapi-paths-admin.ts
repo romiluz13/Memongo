@@ -10,6 +10,11 @@
  * hand-written paths and the live router disagree.
  */
 import { AGENT_ID_FIELD_DESCRIPTION } from "@memongo/lib"
+import { memoryScopeEnum } from "./openapi-schemas.js"
+import {
+	searchFailureResponses,
+	searchOutcomesSchema,
+} from "./openapi-paths-search.js"
 
 export const adminPaths = {
 	"/v1/admin/relevance/explain": {
@@ -41,7 +46,42 @@ export const adminPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "Explain payload" } },
+			responses: {
+				"200": {
+					description:
+						"Explain payload. `health` is `insufficient-data` when any lane failed or was budget-denied (failed lanes are not a relevance verdict); the lane rows are in `outcomes`. `persistFailure` is set, and `runId` absent, when the diagnostic run could not be stored.",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									runId: { type: "string" },
+									persistFailure: {
+										type: "object",
+										properties: {
+											reason: {
+												type: "string",
+												enum: [
+													"lane-unavailable",
+													"index-missing",
+													"index-not-ready",
+													"query-timeout",
+													"dependency-unavailable",
+													"query-error",
+													"internal-error",
+													"erasure-in-progress",
+												],
+											},
+										},
+									},
+									outcomes: searchOutcomesSchema,
+								},
+							},
+						},
+					},
+				},
+				...searchFailureResponses,
+			},
 		},
 	},
 	"/v1/admin/relevance/report": {
@@ -194,6 +234,21 @@ export const adminPaths = {
 			description:
 				"Returns the injection-classified memories held for review, oldest first, with the matched patterns and decision metadata. Admin-only: scoped and agent-scoped API keys are rejected, because quarantined payloads must not flow back to agent credentials.",
 			parameters: [
+				{
+					name: "scope",
+					in: "query",
+					required: true,
+					description: "Tenant scope whose quarantine queue is listed.",
+					schema: { type: "string", enum: memoryScopeEnum },
+				},
+				{
+					name: "scopeRef",
+					in: "query",
+					required: true,
+					description:
+						"Tenant scope reference whose quarantine queue is listed.",
+					schema: { type: "string" },
+				},
 				{ name: "agentId", in: "query", schema: { type: "string" } },
 				{
 					name: "status",

@@ -11,17 +11,13 @@ import {
 	createSubsystemLogger,
 	resolveUserPath,
 } from "@memongo/lib"
-import {
-	DEFAULT_HTTP_RERANK_MODEL,
-	DEFAULT_HTTP_RERANK_TOP_N,
-	resolveEffectiveRerankTopN,
-} from "./http-rerank-config.js"
 import { resolveSearchBudgetLimits } from "./mongodb-search-budget.js"
 import {
 	type ConversationEvidenceMode,
 	resolveConversationEvidenceMode,
 } from "./mongodb-conversation-evidence-mode.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
+import { bootConfigError } from "./mongodb-boot-errors.js"
 import type { DiagnosticQueryPrivacyMode } from "./mongodb-diagnostic-privacy.js"
 
 const log = createSubsystemLogger("memory:backend-config")
@@ -53,16 +49,11 @@ export type ResolvedMongoDBConfig = {
 	quantization: "none" | "scalar" | "binary"
 	watchDebounceMs: number
 	/**
-	 * Dead knob under autoEmbed (fix-plan-2026-08-03 P3.2): Atlas/Voyage
-	 * decide the dimensions server-side; this value only flows into validator
-	 * warnings and the generic index preset. Setting it logs an error.
+	 * Under autoEmbed, Atlas/Voyage decide the dimensions server-side. The
+	 * configured value must be unset or equal to the autoEmbed model's
+	 * dimension; any other value fails boot with `config-invalid`.
 	 */
 	numDimensions: number
-	/**
-	 * P3.2: opt-in legacySearch re-run after searchV2 returns empty or
-	 * errors. Default OFF — "empty ≠ error": the v2 empty answer stands.
-	 */
-	legacySearchFallback: boolean
 	/**
 	 * P3.2: resolved per-search cost budget (mongodb-search-budget.ts) —
 	 * user overrides applied over DEFAULT_SEARCH_BUDGET, always populated.
@@ -148,15 +139,11 @@ export type ResolvedMongoDBConfig = {
 		method: "synonym-expansion"
 		maxTokens: number
 	}
+	/**
+	 * M2: no reranker exists, so only the raw-window lane's temporal-proximity
+	 * weight is left under this key. Native $rerank arrives in M4.
+	 */
 	reranking: {
-		enabled: boolean
-		model: "rerank-3" | "rerank-3-lite" | "rerank-2.5" | "rerank-2.5-lite"
-		topN: number
-		minScore: number
-		voyageApiKey: string
-		instruction?: string
-		recencyBoost: number
-		accessBoost: number
 		temporalProximityBoost: number
 	}
 	/** @deprecated Persisted search-result serving is disabled. */
@@ -235,7 +222,7 @@ export function assertEmbeddingPipelineSupport(params: {
 		throw new Error(
 			[
 				`embedding pipeline supported-target contract v${EMBEDDING_PIPELINE_SUPPORT.contractVersion} violated:`,
-				`deploymentProfile "${params.deploymentProfile}" with embeddingMode "${params.embeddingMode}".`,
+				"the resolved deploymentProfile and embeddingMode are outside it.",
 				`Supported: embeddingMode "${EMBEDDING_PIPELINE_SUPPORT.embeddingMode}" on deploymentProfile ${EMBEDDING_PIPELINE_SUPPORT.deploymentProfiles.map((profile) => `"${profile}"`).join(" or ")} — Atlas Automated Embeddings (${EMBEDDING_PIPELINE_SUPPORT.featureStage}); no client-side fallback exists.`,
 			].join(" "),
 		)
@@ -257,12 +244,15 @@ export function resolveMemoryBackendConfig(params: {
 
 	if (backend !== "mongodb") {
 		throw new Error(
-			`Unsupported memory.backend "${String(backend)}". Memongo supports only the MongoDB memory backend.`,
+			"Unsupported memory.backend. Memongo supports only the MongoDB memory backend.",
 		)
 	}
 
 	if (backend === "mongodb") {
 		const mongoCfg = params.cfg.memory?.mongodb
+		rejectRemovedEnvSettings()
+		rejectRerankSettings(mongoCfg?.reranking)
+		rejectRemovedMongoKeys(mongoCfg)
 		// P2.6: one URI precedence rule, shared with the bridge via
 		// applyMongoDbForceUriOverride (@memongo/lib): MEMONGO_FORCE_MONGODB_URI
 		// wins over every other URI source, in every layer. Among the
@@ -289,9 +279,7 @@ export function resolveMemoryBackendConfig(params: {
 			mongoCfg?.deploymentProfile ??
 			(uri.includes(".mongodb.net") ? "atlas-managed" : DEFAULT_MONGODB_PROFILE)
 		const deploymentProfile: MemoryMongoDBDeploymentProfile =
-			rawDeploymentProfile === "community-mongot"
-				? "atlas-local-preview"
-				: rawDeploymentProfile
+			rawDeploymentProfile
 		// P3.1: honor the configured embeddingMode (validated below against the
 		// supported set) instead of hardcoding the default — "automated" stays
 		// the default when unset.
@@ -301,24 +289,25 @@ export function resolveMemoryBackendConfig(params: {
 		const envCollectionPrefix =
 			process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
 
+		// M2: the community-mongot alias and unknown profiles fail boot; the
+		// alias used to be rewritten to atlas-local-preview silently.
 		if (
 			rawDeploymentProfile !== "atlas-local-preview" &&
-			rawDeploymentProfile !== "atlas-managed" &&
-			rawDeploymentProfile !== "community-mongot"
+			rawDeploymentProfile !== "atlas-managed"
 		) {
-			const unsupportedDeploymentProfile = String(mongoCfg?.deploymentProfile)
-			throw new Error(
+			throw bootConfigError(
+				"memory.mongodb.deploymentProfile",
 				[
-					`deploymentProfile "${unsupportedDeploymentProfile}" is not supported in Memongo.`,
+					"memory.mongodb.deploymentProfile is not supported in Memongo.",
 					'Use deploymentProfile "atlas-local-preview" or "atlas-managed".',
 				].join(" "),
 			)
 		}
 		if (rawEmbeddingMode !== "automated") {
-			const unsupportedEmbeddingMode = String(mongoCfg?.embeddingMode)
-			throw new Error(
+			throw bootConfigError(
+				"memory.mongodb.embeddingMode",
 				[
-					`embeddingMode "${unsupportedEmbeddingMode}" is not supported in Memongo.`,
+					"memory.mongodb.embeddingMode is not supported in Memongo.",
 					'Use embeddingMode "automated" with atlas-local-preview or atlas-managed.',
 				].join(" "),
 			)
@@ -332,20 +321,34 @@ export function resolveMemoryBackendConfig(params: {
 			typeof mongoCfg?.queryRewriting?.method === "string" &&
 			mongoCfg.queryRewriting.method !== "synonym-expansion"
 		) {
-			throw new Error(
+			throw bootConfigError(
+				"memory.mongodb.queryRewriting.method",
 				[
-					`queryRewriting.method "${mongoCfg.queryRewriting.method}" is not supported in Memongo.`,
+					"memory.mongodb.queryRewriting.method is not supported in Memongo.",
 					'Use queryRewriting.method "synonym-expansion" or disable query rewriting.',
 				].join(" "),
 			)
 		}
 
-		// P3.1: numDimensions is a dead knob under autoEmbed — the embedding
-		// model fixes the dimensions server-side. The value still resolves for
-		// config-schema compat, but it is inert; say so loudly at error level.
-		if (mongoCfg?.numDimensions !== undefined) {
-			log.error(
-				`memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value ${String(mongoCfg.numDimensions)} resolves for compatibility but has no effect)`,
+		// P3.1 / M2: under autoEmbed the index model fixes vector dimensions
+		// server-side. numDimensions is accepted only unset or equal to the
+		// autoEmbed model's dimension; a mismatch fails boot (it was a warning).
+		const autoEmbedDimensions = KNOWN_MODEL_DIMENSIONS[INDEX_AUTOEMBED_MODEL]
+		if (
+			mongoCfg?.numDimensions !== undefined &&
+			mongoCfg.numDimensions !== autoEmbedDimensions
+		) {
+			throw bootConfigError(
+				"memory.mongodb.numDimensions",
+				`memory.mongodb.numDimensions does not match the autoEmbed model ${INDEX_AUTOEMBED_MODEL} (${autoEmbedDimensions} dimensions); unset it or set ${autoEmbedDimensions}`,
+			)
+		}
+		// M2: LLM entity extraction has no provider wiring, so "llm" used to run
+		// the regex extractor silently. It fails boot until a provider exists.
+		if (mongoCfg?.graph?.entityExtraction?.method === "llm") {
+			throw bootConfigError(
+				"memory.mongodb.graph.entityExtraction.method",
+				'memory.mongodb.graph.entityExtraction.method "llm" is configured but no LLM entity-extraction provider is configured; use "regex"',
 			)
 		}
 
@@ -379,17 +382,11 @@ export function resolveMemoryBackendConfig(params: {
 				conversationEvidenceMode: resolveConversationEvidenceMode(
 					process.env.MEMONGO_CONVERSATION_EVIDENCE_MODE,
 				),
-				fusionMethod: resolveEnvFusionMethod(
-					"MEMONGO_MONGODB_FUSION_METHOD",
-					mongoCfg?.fusionMethod ?? "scoreFusion",
-				),
+				fusionMethod: resolveFusionMethod(mongoCfg?.fusionMethod),
 				recallProfile: resolveEnvRecallProfile(
 					"MEMONGO_MONGODB_RECALL_PROFILE",
 					mongoCfg?.recallProfile ?? "balanced",
 				),
-				// P3.2: legacySearch re-runs the whole retrieval stack after
-				// searchV2 — opt-in only, off by default (empty ≠ error).
-				legacySearchFallback: mongoCfg?.legacySearchFallback ?? false,
 				searchBudget: resolveSearchBudgetLimits(mongoCfg?.searchBudget),
 				quantization: mongoCfg?.quantization ?? "none",
 				watchDebounceMs:
@@ -457,12 +454,7 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg?.waitQueueTimeoutMs,
 					"MEMONGO_MONGODB_WAIT_QUEUE_TIMEOUT_MS",
 				),
-				memoryTtlDays:
-					typeof mongoCfg?.memoryTtlDays === "number" &&
-					Number.isFinite(mongoCfg.memoryTtlDays) &&
-					mongoCfg.memoryTtlDays >= 0
-						? Math.floor(mongoCfg.memoryTtlDays)
-						: 0,
+				memoryTtlDays: resolveMemoryTtlDays(mongoCfg?.memoryTtlDays),
 				episodesRetentionDays: resolveEpisodesRetentionDays(
 					mongoCfg?.episodesRetentionDays,
 				),
@@ -642,39 +634,9 @@ export function resolveMemoryBackendConfig(params: {
 							: 128,
 				},
 				reranking: {
-					enabled: resolveEnvBoolean(
-						"MEMONGO_RERANKING_ENABLED",
-						mongoCfg?.reranking?.enabled !== false,
-					),
-					model: mongoCfg?.reranking?.model ?? DEFAULT_HTTP_RERANK_MODEL,
-					topN:
-						typeof mongoCfg?.reranking?.topN === "number" &&
-						Number.isFinite(mongoCfg.reranking.topN) &&
-						mongoCfg.reranking.topN > 0
-							? resolveEffectiveRerankTopN(mongoCfg.reranking.topN)
-							: DEFAULT_HTTP_RERANK_TOP_N,
-					minScore:
-						typeof mongoCfg?.reranking?.minScore === "number" &&
-						Number.isFinite(mongoCfg.reranking.minScore)
-							? Math.min(1, Math.max(0, mongoCfg.reranking.minScore))
-							: resolveEnvFloat("MEMONGO_RERANK_MIN_SCORE", 0.01),
-					voyageApiKey:
-						mongoCfg?.reranking?.voyageApiKey ??
-						process.env.VOYAGE_API_KEY ??
-						"",
-					instruction: mongoCfg?.reranking?.instruction,
-					// P3.7: post-cross-encoder recency/access boost weights. 0 is
-					// the off-switch; non-finite or negative values fall back to
-					// the default so a misconfigured weight cannot invert ranking.
-					recencyBoost: resolveRerankBoostWeight(
-						mongoCfg?.reranking?.recencyBoost,
-					),
-					accessBoost: resolveRerankBoostWeight(
-						mongoCfg?.reranking?.accessBoost,
-					),
 					// P4.4.4: raw-window lane temporal-proximity weight. 0 is the
-					// off-switch; the 0.1 default is deliberately smaller than
-					// the post-CE boosts — it nudges ordering in one lane only.
+					// off-switch; non-finite or negative values fall back to the 0.1
+					// default so a misconfigured weight cannot invert ranking.
 					temporalProximityBoost: resolveRerankBoostWeight(
 						mongoCfg?.reranking?.temporalProximityBoost,
 						0.1,
@@ -710,34 +672,10 @@ export function resolveMemoryBackendConfig(params: {
 				mongodb.relevance.telemetry.baseSampleRate
 		}
 
-		// F22: numDimensions validation warning — check if configured dimensions
-		// match known model dimensions for the default embedding model
-		const resolvedNumDims = mongodb?.numDimensions
-		const defaultModel = DEFAULT_QUERY_EMBEDDING_MODEL
-		const expectedDims = KNOWN_MODEL_DIMENSIONS[defaultModel]
-		if (
-			mongoCfg?.numDimensions &&
-			expectedDims &&
-			resolvedNumDims !== expectedDims
-		) {
-			log.warn(
-				`numDimensions=${resolvedNumDims} may not match expected dimensions for ${defaultModel} (${expectedDims}). ` +
-					"Mismatched dimensions will cause vector search errors.",
-			)
-		}
-
-		// H2 audit fix: warn when entity extraction method is 'llm' but no LLM function injected
-		if (mongodb?.graph.entityExtraction.method === "llm") {
-			log.warn(
-				"entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. " +
-					"Set graph.entityExtraction.method to 'regex' to suppress this warning.",
-			)
-		}
-
 		return result
 	}
 
-	throw new Error(`Unsupported memory backend: ${String(backend)}`)
+	throw new Error("Unsupported memory backend")
 }
 
 // ---------------------------------------------------------------------------
@@ -862,20 +800,11 @@ function resolveOptionalMongoServerMonitoringMode(
 	return undefined
 }
 
-function resolveEnvFloat(envKey: string, fallback: number): number {
-	const raw = process.env[envKey]
-	if (raw === undefined || raw === "") return fallback
-	const parsed = Number.parseFloat(raw)
-	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
-		? parsed
-		: fallback
-}
-
-// P3.7: boost weights must be finite and non-negative; anything else falls
-// back to the default so a bad config cannot invert ranking.
+// Boost weights must be finite and non-negative; anything else falls back to
+// the default so a bad config cannot invert ranking.
 function resolveRerankBoostWeight(
 	value: number | undefined,
-	fallback = 0.2,
+	fallback: number,
 ): number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0
 		? value
@@ -886,45 +815,189 @@ const DEFAULT_TTL_SESSION_DAYS = 30
 
 /**
  * P4.4.1: memory.mongodb.ttl — optional per-document TTL, off by default.
- * `sessionDays` must be a positive finite number; anything else falls back
- * to the 30-day default (with a warning when the caller DID supply a value)
- * so a misconfigured retention window can never silently become "expire
- * immediately" or "never expire".
+ * `sessionDays` must be a positive finite number. M2: anything else fails
+ * boot (it used to fall back to the 30-day default with a warning).
  */
 function resolveTtlSettings(ttlCfg?: {
 	enabled?: boolean
 	sessionDays?: number
 }): { enabled: boolean; sessionDays: number } {
 	const raw = ttlCfg?.sessionDays
-	const valid = typeof raw === "number" && Number.isFinite(raw) && raw > 0
-	if (raw !== undefined && !valid) {
-		log.warn(
-			`memory.mongodb.ttl.sessionDays "${String(raw)}" is not a positive number; falling back to ${DEFAULT_TTL_SESSION_DAYS} days`,
+	if (raw === undefined) {
+		return {
+			enabled: ttlCfg?.enabled === true,
+			sessionDays: DEFAULT_TTL_SESSION_DAYS,
+		}
+	}
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+		throw bootConfigError(
+			"memory.mongodb.ttl.sessionDays",
+			"memory.mongodb.ttl.sessionDays is not a positive number of days",
 		)
 	}
-	return {
-		enabled: ttlCfg?.enabled === true,
-		sessionDays: valid ? (raw as number) : DEFAULT_TTL_SESSION_DAYS,
-	}
+	return { enabled: ttlCfg?.enabled === true, sessionDays: raw }
 }
 
+/** M2: memoryTtlDays must be a non-negative number; anything else fails boot. */
+function resolveMemoryTtlDays(raw: unknown): number {
+	if (raw === undefined) return 0
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+		throw bootConfigError(
+			"memory.mongodb.memoryTtlDays",
+			"memory.mongodb.memoryTtlDays is not a non-negative number of days",
+		)
+	}
+	return Math.floor(raw)
+}
+
+/** M2: an unrecognized boolean env value fails boot instead of defaulting. */
 function resolveEnvBoolean(envKey: string, fallback: boolean): boolean {
 	const raw = process.env[envKey]?.trim().toLowerCase()
 	if (!raw) return fallback
 	if (["1", "true", "yes", "on", "enabled"].includes(raw)) return true
 	if (["0", "false", "no", "off", "disabled"].includes(raw)) return false
-	return fallback
+	throw bootConfigError(
+		envKey,
+		`${envKey} is not a boolean; use true/false, 1/0, yes/no, on/off or enabled/disabled`,
+	)
 }
 
-function resolveEnvFusionMethod(
-	envKey: string,
-	fallback: MemoryMongoDBFusionMethod,
-): MemoryMongoDBFusionMethod {
-	const raw = process.env[envKey]?.trim()
-	if (raw === "rankFusion" || raw === "scoreFusion" || raw === "js-merge") {
-		return raw
+const ACCEPTED_FUSION_METHODS = ["scoreFusion", "rankFusion"] as const
+
+/**
+ * M2 (G4-86): fusionMethod accepts only the server-side stages. The env
+ * value wins over the config value; `js-merge` and unknown values from either
+ * source fail boot (the env used to replace them with the config value).
+ */
+function resolveFusionMethod(configValue: unknown): MemoryMongoDBFusionMethod {
+	const envRaw = process.env.MEMONGO_MONGODB_FUSION_METHOD?.trim()
+	const [setting, value] = envRaw
+		? ["MEMONGO_MONGODB_FUSION_METHOD", envRaw]
+		: ["memory.mongodb.fusionMethod", configValue ?? "scoreFusion"]
+	if ((ACCEPTED_FUSION_METHODS as readonly unknown[]).includes(value)) {
+		return value as MemoryMongoDBFusionMethod
 	}
-	return fallback
+	throw bootConfigError(
+		setting,
+		`${setting} is not supported; use "scoreFusion" or "rankFusion" (js-merge was removed)`,
+	)
+}
+
+const REMOVED_ENV_SETTINGS = [
+	"MEMONGO_STRICT_SEARCH_INDEX_READY",
+	"MEMONGO_REQUIRE_VECTOR",
+] as const
+
+/**
+ * M2: strict readiness is the only mode, so the opt-in strict flags are
+ * removed. Setting either fails boot with a message naming it.
+ */
+function rejectRemovedEnvSettings(): void {
+	for (const key of REMOVED_ENV_SETTINGS) {
+		if (process.env[key]?.trim()) {
+			throw bootConfigError(
+				key,
+				`${key} was removed: strict Search readiness is the only mode, so boot always refuses to serve without READY required indexes. Unset ${key}.`,
+				"config-removed",
+			)
+		}
+	}
+}
+
+const REMOVED_RERANKING_KEYS = [
+	"model",
+	"topN",
+	"minScore",
+	"voyageApiKey",
+	"instruction",
+	"recencyBoost",
+	"accessBoost",
+] as const
+
+const RERANK_REMOVED_REASON =
+	"the client-side Voyage cross-encoder reranker was removed, so there is nothing to configure"
+
+const RERANK_UNSUPPORTED_REASON =
+	"this release cannot rerank: the client-side Voyage cross-encoder reranker was removed and native $rerank (Atlas only) is not implemented yet"
+
+/**
+ * M2 (#114): reranking is off and cannot be enabled. `reranking.enabled: true`
+ * and `MEMONGO_RERANKING_ENABLED=true` fail boot as `rerank-unsupported`; the
+ * removed keys and `MEMONGO_RERANK_MIN_SCORE` fail as `config-removed`. Values
+ * are never echoed, because `voyageApiKey` was a secret.
+ * `reranking.temporalProximityBoost` stays: it belongs to the raw-window lane.
+ */
+function rejectRerankSettings(raw: unknown): void {
+	if (
+		raw !== undefined &&
+		(typeof raw !== "object" || raw === null || Array.isArray(raw))
+	) {
+		throw bootConfigError(
+			"memory.mongodb.reranking",
+			"memory.mongodb.reranking must be an object",
+		)
+	}
+	const reranking = (raw ?? {}) as Record<string, unknown>
+	for (const key of REMOVED_RERANKING_KEYS) {
+		if (reranking[key] !== undefined) {
+			const setting = `memory.mongodb.reranking.${key}`
+			throw bootConfigError(
+				setting,
+				`${setting} was removed: ${RERANK_REMOVED_REASON}. Remove ${setting}.`,
+				"config-removed",
+			)
+		}
+	}
+	if (process.env.MEMONGO_RERANK_MIN_SCORE?.trim()) {
+		throw bootConfigError(
+			"MEMONGO_RERANK_MIN_SCORE",
+			`MEMONGO_RERANK_MIN_SCORE was removed: ${RERANK_REMOVED_REASON}. Unset MEMONGO_RERANK_MIN_SCORE.`,
+			"config-removed",
+		)
+	}
+	if (
+		reranking.enabled !== undefined &&
+		typeof reranking.enabled !== "boolean"
+	) {
+		throw bootConfigError(
+			"memory.mongodb.reranking.enabled",
+			"memory.mongodb.reranking.enabled must be a boolean; only false is supported",
+		)
+	}
+	if (resolveEnvBoolean("MEMONGO_RERANKING_ENABLED", false)) {
+		throw bootConfigError(
+			"MEMONGO_RERANKING_ENABLED",
+			`MEMONGO_RERANKING_ENABLED is true, but ${RERANK_UNSUPPORTED_REASON}. Unset it or set it to false.`,
+			"rerank-unsupported",
+		)
+	}
+	if (reranking.enabled === true) {
+		throw bootConfigError(
+			"memory.mongodb.reranking.enabled",
+			`memory.mongodb.reranking.enabled is true, but ${RERANK_UNSUPPORTED_REASON}. Remove it or set it to false.`,
+			"rerank-unsupported",
+		)
+	}
+}
+
+/**
+ * M2 (T11): `legacySearchFallback` re-ran retrieval after an empty answer.
+ * That re-run no longer exists, so the key fails boot instead of being
+ * ignored.
+ */
+function rejectRemovedMongoKeys(raw: unknown): void {
+	if (
+		typeof raw === "object" &&
+		raw !== null &&
+		(raw as Record<string, unknown>).legacySearchFallback !== undefined
+	) {
+		const setting = "memory.mongodb.legacySearchFallback"
+		throw bootConfigError(
+			setting,
+			`${setting} was removed: the legacy search re-run no longer exists, so an empty answer is final. Remove ${setting}.`,
+			"config-removed",
+		)
+	}
 }
 
 function resolveQueryEmbeddingModel(
@@ -943,7 +1016,7 @@ function resolveQueryEmbeddingModel(
 		return value
 	}
 	throw new Error(
-		`memory.mongodb.queryEmbeddingModel "${String(value)}" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"`,
+		`${envValue?.trim() ? "MEMONGO_QUERY_EMBEDDING_MODEL" : "memory.mongodb.queryEmbeddingModel"} is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"`,
 	)
 }
 
@@ -991,7 +1064,7 @@ export function resolveSearchDefaultScope(
 		return raw as MemoryScope
 	}
 	throw new Error(
-		`MEMONGO_SEARCH_DEFAULT_SCOPE "${envValue}" is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
+		`MEMONGO_SEARCH_DEFAULT_SCOPE is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
 	)
 }
 
@@ -1039,14 +1112,14 @@ export function resolveDefaultScope(params: {
 				if (lastDefaultScopeConflictWarned !== conflictKey) {
 					lastDefaultScopeConflictWarned = conflictKey
 					params.warn?.(
-						`MEMONGO_DEFAULT_SCOPE ("${raw}") and legacy MEMONGO_SEARCH_DEFAULT_SCOPE ("${legacyRaw}") disagree; MEMONGO_DEFAULT_SCOPE wins. Remove the legacy name to silence this warning.`,
+						`MEMONGO_DEFAULT_SCOPE ("${raw}") and legacy MEMONGO_SEARCH_DEFAULT_SCOPE disagree; MEMONGO_DEFAULT_SCOPE wins. Remove the legacy name to silence this warning.`,
 					)
 				}
 			}
 			return raw as MemoryScope
 		}
 		throw new Error(
-			`MEMONGO_DEFAULT_SCOPE "${params.value}" is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
+			`MEMONGO_DEFAULT_SCOPE is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
 		)
 	}
 	if (params.applyTo === "read") {

@@ -16,33 +16,29 @@ export type SearchLane =
 	| "kb"
 	| "hybrid"
 	| "hybrid:chunks"
-	| "hybrid:bridge"
 	| "hybrid:session_chunks"
 	| "hybrid:memory_evidence"
 	| "conversation-evidence"
 	| "temporal-coverage"
 	| "turn-precision"
+	| "recall"
 	| "backstop:procedural-exact"
 	| "backstop:procedural"
 	| "backstop:hybrid"
 	| "planner"
-	| "legacy"
 	| "search"
 
 export type SearchStage =
 	| "plan"
 	| "request"
+	| "index-health"
 	| "lane"
 	| "reservation"
 	| "filter"
-	| "rerun"
 	| "vector"
 	| "atlas-search"
-	| "classic-text"
-	| "keyword"
 	| "score-fusion"
 	| "rank-fusion"
-	| "js-merge"
 	| "exact-match"
 	| "entity-lookup"
 	| "graph-expand"
@@ -62,10 +58,16 @@ export type SearchFailureReason =
 	| "lane-unavailable"
 	| "index-missing"
 	| "index-not-ready"
+	// M2 decision 8: an index observed STALE or drifted from its manifest
+	// definition at request admission, and an index observed absent, building,
+	// FAILED, unqueryable or unreadable. Both are retryable unavailability.
+	| "index-stale"
+	| "index-unavailable"
 	| "query-timeout"
 	| "dependency-unavailable"
 	| "query-error"
 	| "internal-error"
+	| "rerank-unsupported"
 
 export type SearchBudgetReason =
 	| "budget-aggregations"
@@ -147,11 +149,14 @@ export class SearchBudgetDeniedError extends Error {
 	readonly lane?: SearchLane
 	readonly stage: SearchStage
 	readonly reason: SearchBudgetReason
+	/** Set by an admission-bucket denial only: ms until a token refills. */
+	readonly retryAfterMs?: number
 
 	constructor(params: {
 		lane?: SearchLane
 		stage: SearchStage
 		reason: SearchBudgetReason
+		retryAfterMs?: number
 	}) {
 		super(
 			`search ${params.lane ?? "lane"} budget denied at ${params.stage}: ${params.reason}`,
@@ -160,6 +165,7 @@ export class SearchBudgetDeniedError extends Error {
 		this.lane = params.lane
 		this.stage = params.stage
 		this.reason = params.reason
+		this.retryAfterMs = params.retryAfterMs
 	}
 }
 
@@ -295,4 +301,22 @@ export function summarizeSearchOutcomes(
 		status: !requiredSucceeded && requiredFailed ? "failed" : "partial",
 		lanes,
 	}
+}
+
+/**
+ * An admission denial ran nothing, so the request itself is the denied lane:
+ * a typed budget-denied row and a failed status, never a bare empty answer.
+ */
+export function throttledSearchOutcomes(): SearchOutcomeSummary {
+	return summarizeSearchOutcomes(
+		[
+			{
+				lane: "search",
+				stage: "request",
+				outcome: "budget-denied",
+				reason: "budget-embeds",
+			},
+		],
+		["search"],
+	)
 }

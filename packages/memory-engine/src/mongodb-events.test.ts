@@ -10,6 +10,10 @@ import {
 } from "mongodb"
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import * as writeFence from "./mongodb-write-fence.js"
+import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
 
 // Mock the schema module before imports
 vi.mock("./mongodb-schema.js", () => ({
@@ -978,6 +982,37 @@ describe("projection marker degradation (W08)", () => {
 		})
 
 		expect(result).toEqual({ chunkCreated: true })
+	})
+
+	it("declares the chunk projection-run record best-effort: logged and counted, receipt kept", async () => {
+		resetBestEffortFailureCounts()
+		const chunksCol = {
+			updateOne: vi.fn(async () => ({
+				upsertedCount: 1,
+				upsertedId: "chunk-id-1",
+				matchedCount: 0,
+			})),
+		} as unknown as Collection
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		vi.mocked(eventsCollection).mockReturnValue({
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 })),
+		} as unknown as Collection)
+		vi.mocked(projectionRunsCollection).mockReturnValueOnce({
+			insertOne: vi.fn(async () => {
+				throw new Error("runs store down")
+			}),
+		} as unknown as Collection)
+
+		const result = await projectEventChunk({
+			db: mockDb(),
+			prefix: "test_",
+			event: makeEvent("evt-run-record"),
+		})
+
+		expect(result).toEqual({ chunkCreated: true })
+		expect(getBestEffortFailureCounts()).toMatchObject({
+			"chunk-projection-run": 1,
+		})
 	})
 
 	it("uses one session for the chunk and marker and rethrows marker failure", async () => {
@@ -2626,6 +2661,8 @@ describe("getEventsByTimeRange", () => {
 		const start = new Date(now.getTime() - 120000)
 		const end = new Date(now.getTime() + 1000)
 		const result = await getEventsByTimeRange({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -2640,6 +2677,8 @@ describe("getEventsByTimeRange", () => {
 		// Verify filter
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			timestamp: { $gte: start, $lte: end },
 			// P4.4.1: expired events are hidden until the TTL sweep runs.
 			$or: [
@@ -2718,6 +2757,8 @@ describe("getEventsBySession", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		const result = await getEventsBySession({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -2728,6 +2769,8 @@ describe("getEventsBySession", () => {
 		expect(result[0].sessionId).toBe("sess-1")
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			sessionId: "sess-1",
 			// P4.4.1: expired events are hidden until the TTL sweep runs.
 			$or: [

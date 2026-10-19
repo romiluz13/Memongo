@@ -19,6 +19,10 @@ import {
 	filesCollection,
 	metaCollection,
 } from "./mongodb-schema.js"
+import { bestEffort } from "./best-effort.js"
+import { safeBootText } from "./mongodb-boot-errors.js"
+import { attachCommitReport } from "./mongodb-commit-report.js"
+import { isUncertainCommitError } from "./mongodb-search-barrier.js"
 import { syncToMongoDB } from "./mongodb-sync.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
@@ -29,6 +33,7 @@ import {
 	isErasureGateConflictError,
 	withFencedWrite,
 } from "./mongodb-write-fence.js"
+import type { KBIngestResult } from "./mongodb-kb.js"
 import type { MemorySyncProgressUpdate } from "./types.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import { createSubsystemLogger } from "@memongo/lib"
@@ -43,6 +48,69 @@ const log = createSubsystemLogger("memory:mongodb")
  */
 
 const CHANGE_STREAM_RESUME_TOKEN_META_KEY = "change_stream_resume_token"
+
+const KB_REFRESH_ERROR_SAMPLE = 5
+const KB_REFRESH_ERROR_MAX_LENGTH = 200
+
+/**
+ * M2 review R7: a KB auto-refresh that did not complete is a typed failure,
+ * never a log line. `reason` says which step failed, and the counts say what
+ * the import had already committed (a failed import can have written some
+ * documents). The success marker never advances on a failure, so the next
+ * cycle re-attempts the whole refresh. `errors` holds the first import errors,
+ * bounded and scrubbed; the full list is in the import result, not here.
+ */
+export class KBRefreshError extends Error {
+	readonly code = "KB_REFRESH_FAILED"
+	readonly reason: "import-rejected" | "import-errors" | "marker-write-failed"
+	readonly documentsProcessed?: number
+	readonly chunksCreated?: number
+	readonly skipped?: number
+	readonly errors: string[]
+
+	constructor(params: {
+		reason: KBRefreshError["reason"]
+		message: string
+		cause?: unknown
+		result?: {
+			documentsProcessed: number
+			chunksCreated: number
+			skipped: number
+			errors: string[]
+		}
+	}) {
+		super(
+			safeBootText(params.message),
+			params.cause === undefined ? undefined : { cause: params.cause },
+		)
+		this.name = "KBRefreshError"
+		this.reason = params.reason
+		this.documentsProcessed = params.result?.documentsProcessed
+		this.chunksCreated = params.result?.chunksCreated
+		this.skipped = params.result?.skipped
+		this.errors = (params.result?.errors ?? [])
+			.slice(0, KB_REFRESH_ERROR_SAMPLE)
+			.map((error) => safeBootText(error).slice(0, KB_REFRESH_ERROR_MAX_LENGTH))
+	}
+}
+
+function kbImportCounts(err: unknown):
+	| {
+			documentsProcessed: number
+			chunksCreated: number
+			skipped: number
+	  }
+	| undefined {
+	if (!(err instanceof KBRefreshError)) {
+		return undefined
+	}
+	const { documentsProcessed, chunksCreated, skipped } = err
+	return documentsProcessed === undefined ||
+		chunksCreated === undefined ||
+		skipped === undefined
+		? undefined
+		: { documentsProcessed, chunksCreated, skipped }
+}
 
 type RepairDiagnostics = {
 	status: "ok" | "failed"
@@ -516,26 +584,19 @@ export class MongoDBManagerSyncOps {
 				progress: params?.progress,
 			})
 
-			// Query actual totals from MongoDB (not just the delta from this sync)
-			try {
-				// W13: host.fileCount/chunkCount describe the TENANT, not the
-				// shared deployment — count this agent's rows only.
-				const tenantFilter = { agentId: this.host.agentId }
-				this.host.fileCount = await filesCollection(
-					this.host.db,
-					this.host.prefix,
-				).countDocuments(tenantFilter)
-				this.host.chunkCount = await chunksCollection(
-					this.host.db,
-					this.host.prefix,
-				).countDocuments(tenantFilter)
-			} catch {
-				// Fallback to delta counts if count query fails
-				this.host.fileCount =
-					result.filesProcessed + result.sessionFilesProcessed
-				this.host.chunkCount =
-					result.chunksUpserted + result.sessionChunksUpserted
-			}
+			// Query actual totals from MongoDB (not just the delta from this sync).
+			// W13: host.fileCount/chunkCount describe the TENANT, not the shared
+			// deployment — count this agent's rows only. A failed count fails the
+			// sync: the delta of one run is not a total.
+			const tenantFilter = { agentId: this.host.agentId }
+			this.host.fileCount = await filesCollection(
+				this.host.db,
+				this.host.prefix,
+			).countDocuments(tenantFilter)
+			this.host.chunkCount = await chunksCollection(
+				this.host.db,
+				this.host.prefix,
+			).countDocuments(tenantFilter)
 
 			// W14: only a fully-successful sync may clear the dirty flag. With
 			// failed files or an incomplete source enumeration, chunks are
@@ -556,7 +617,27 @@ export class MongoDBManagerSyncOps {
 			)
 
 			// KB auto-refresh: re-import autoImportPaths if autoRefreshHours has elapsed
-			await this.host.maybeAutoRefreshKB()
+			try {
+				await this.host.maybeAutoRefreshKB()
+			} catch (err) {
+				// M2 review D3: the file-sync phase above already committed, so a
+				// failure here carries that commit boundary on the typed error. The
+				// import's counts are named only when the import produced them.
+				const kbImport = kbImportCounts(err)
+				throw attachCommitReport(err, {
+					// An uncertain marker or import commit anywhere in the cause
+					// chain outranks the acknowledged file sync.
+					commitState: isUncertainCommitError(err) ? "unknown" : "committed",
+					commit: {
+						operation: "sync",
+						fileSync: {
+							filesFailed: result.filesFailed,
+							enumerationComplete: result.enumerationComplete,
+						},
+						...(kbImport ? { kbImport } : {}),
+					},
+				})
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`sync failed: ${msg}`)
@@ -565,46 +646,25 @@ export class MongoDBManagerSyncOps {
 	}
 
 	async loadPersistedChangeStreamResumeToken(): Promise<unknown> {
-		try {
-			const meta = metaCollection(this.host.db, this.host.prefix)
-			const doc = await meta.findOne({
-				_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
-			} as Record<string, unknown>)
-			if (!doc || !("token" in doc)) {
-				return null
-			}
-			return (doc as Record<string, unknown>).token ?? null
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to load persisted change stream resume token: ${msg}`)
+		const meta = metaCollection(this.host.db, this.host.prefix)
+		const doc = await meta.findOne({
+			_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
+		} as Record<string, unknown>)
+		if (!doc || !("token" in doc)) {
 			return null
 		}
+		return (doc as Record<string, unknown>).token ?? null
 	}
 
 	async persistChangeStreamResumeToken(token: unknown): Promise<void> {
-		try {
+		await bestEffort("change-stream-resume-token", async () => {
 			const meta = metaCollection(this.host.db, this.host.prefix)
 			await meta.updateOne(
 				{ _id: CHANGE_STREAM_RESUME_TOKEN_META_KEY } as Record<string, unknown>,
 				{ $set: { token, updatedAt: new Date() } },
 				{ upsert: true },
 			)
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to persist change stream resume token: ${msg}`)
-		}
-	}
-
-	async clearPersistedChangeStreamResumeToken(): Promise<void> {
-		try {
-			const meta = metaCollection(this.host.db, this.host.prefix)
-			await meta.deleteOne({
-				_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
-			} as Record<string, unknown>)
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to clear stale change stream resume token: ${msg}`)
-		}
+		})
 	}
 
 	async maybeAutoRefreshKB(): Promise<void> {
@@ -639,6 +699,7 @@ export class MongoDBManagerSyncOps {
 		log.info(
 			`KB auto-refresh: ${hoursSinceRefresh.toFixed(1)}h since last import, refreshing ${paths.length} paths`,
 		)
+		let imported: KBIngestResult | undefined
 		try {
 			// S1 (plan e5ec10dc §4.1): capture once before any scan/read/CPU
 			// work; the token threads through the ingest and the marker
@@ -660,6 +721,18 @@ export class MongoDBManagerSyncOps {
 				chunking: mongoCfg.kb.chunking,
 				admission: token,
 			})
+			imported = result
+			// M2 review R7: an import that resolved with errors did not refresh
+			// the KB. The marker stays put, so the next cycle re-attempts the
+			// whole refresh, and the caller sees the failure with what the
+			// import had committed.
+			if (result.errors.length > 0) {
+				throw new KBRefreshError({
+					reason: "import-errors",
+					message: `KB auto-refresh failed: the import reported ${result.errors.length} error(s) (${result.documentsProcessed} docs, ${result.chunksCreated} chunks written, ${result.skipped} skipped)`,
+					result,
+				})
+			}
 			log.info(
 				`KB auto-refresh complete: ${result.documentsProcessed} docs, ${result.chunksCreated} chunks, ${result.skipped} skipped`,
 			)
@@ -688,8 +761,25 @@ export class MongoDBManagerSyncOps {
 				log.warn("KB auto-refresh deferred: tenant erasure in progress")
 				return
 			}
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`KB auto-refresh failed: ${msg}`)
+			if (err instanceof KBRefreshError) {
+				log.warn(err.message)
+				throw err
+			}
+			// A rejected import (or a marker write that failed after a clean
+			// import) is a typed failure for the caller, never a swallowed log.
+			const causeText = safeBootText(
+				err instanceof Error ? err.message : String(err),
+			).slice(0, KB_REFRESH_ERROR_MAX_LENGTH)
+			const failed = new KBRefreshError({
+				reason: imported ? "marker-write-failed" : "import-rejected",
+				message: imported
+					? `KB auto-refresh failed: the refresh marker could not be written after a clean import (${causeText})`
+					: `KB auto-refresh failed: the import was rejected (${causeText})`,
+				cause: err,
+				result: imported,
+			})
+			log.warn(failed.message)
+			throw failed
 		}
 	}
 

@@ -25,6 +25,7 @@ import {
 } from "./mongodb-cost-ledger.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { classifyInjection } from "./mongodb-injection-classifier.js"
+import { bestEffort } from "./best-effort.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
@@ -56,7 +57,7 @@ import {
 } from "./mongodb-temporal.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
-	isTransactionUnsupported,
+	typedTransactionError,
 } from "./mongodb-transactions.js"
 import type {
 	MemoryActorRole,
@@ -1579,13 +1580,7 @@ export async function writeStructuredMemory(params: {
 							}
 						)
 					} catch (err) {
-						if (!isTransactionUnsupported(err)) {
-							throw err
-						}
-						log.info(
-							"transactions not supported for structured memory, falling back to direct writes",
-						)
-						return await persistWithDuplicateKeyRetry()
+						throw typedTransactionError(err)
 					} finally {
 						await session.endSession()
 					}
@@ -1658,11 +1653,7 @@ export async function writeStructuredMemory(params: {
 		if (session) {
 			await audit
 		} else {
-			Promise.allSettled([audit]).catch((err) => {
-				log.warn(
-					`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
-				)
-			})
+			void bestEffort("structured-memory-audit", () => audit)
 		}
 	}
 
@@ -1884,13 +1875,7 @@ export async function invalidateStructuredMemoryByHandle(params: {
 				await persist(session)
 			}, MAJORITY_TRANSACTION_OPTIONS)
 		} catch (err) {
-			if (!isTransactionUnsupported(err)) {
-				throw err
-			}
-			log.info(
-				"transactions not supported for structured lifecycle, falling back to direct writes",
-			)
-			await withRevisionCasRetry(() => persist())
+			throw typedTransactionError(err)
 		} finally {
 			await session.endSession()
 		}
@@ -1932,11 +1917,7 @@ export async function invalidateStructuredMemoryByHandle(params: {
 			if (session) {
 				await audit
 			} else {
-				audit.catch((err) => {
-					log.warn("structured memory invalidate audit failed", {
-						error: err,
-					})
-				})
+				void bestEffort("structured-memory-invalidate-audit", () => audit)
 			}
 		}
 		if (params.session && params.transactionalSideEffects === "inline") {
@@ -2093,9 +2074,7 @@ export async function applyStructuredMemoryFeedbackByHandle(params: {
 		if (session) {
 			await audit
 		} else {
-			audit.catch((err) => {
-				log.warn("structured memory feedback audit failed", { error: err })
-			})
+			void bestEffort("structured-memory-feedback-audit", () => audit)
 		}
 		return structuredLifecycleItemFromDoc(updated)
 	}
@@ -2289,10 +2268,7 @@ export async function searchStructuredMemory(
 	},
 ): Promise<MemorySearchResult[]> {
 	const minScore = opts.minScore ?? 0.1
-	const canVector =
-		opts.embeddingMode === "automated"
-			? opts.capabilities.vectorSearch
-			: queryVector != null && opts.capabilities.vectorSearch
+	const canVector = opts.capabilities.vectorSearch
 
 	const numCandidates = Math.min(
 		opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
@@ -2551,45 +2527,4 @@ export async function searchStructuredMemory(
 		.filter((r) => r.score >= minScore)
 	report("atlas-search", textResults.length)
 	return textResults
-}
-
-// ---------------------------------------------------------------------------
-// Query by type
-// ---------------------------------------------------------------------------
-
-export async function getStructuredMemoryByType(
-	db: Db,
-	prefix: string,
-	type: string,
-	agentId?: string,
-	limit?: number,
-): Promise<
-	Array<{
-		type: string
-		key: string
-		value: string
-		confidence: number
-		updatedAt: Date
-	}>
-> {
-	const collection = structuredMemCollection(db, prefix)
-	const filter: Document = {
-		type,
-		// P4.4.1: hide expired docs until the TTL sweep removes them.
-		...buildUnexpiredClause(),
-	}
-	if (agentId) {
-		filter.agentId = agentId
-	}
-	const docs = await collection
-		.find(filter, { sort: { updatedAt: -1 }, limit: limit ?? 50 })
-		.toArray()
-
-	return docs.map((doc: Record<string, unknown>) => ({
-		type: doc.type as string,
-		key: doc.key as string,
-		value: doc.value as string,
-		confidence: (doc.confidence as number) ?? 0.8,
-		updatedAt: doc.updatedAt as Date,
-	}))
 }
