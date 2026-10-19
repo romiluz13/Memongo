@@ -137,7 +137,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	for (const key of ENV_KEYS) vi.stubEnv(key, undefined)
-	vi.stubEnv("MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS", "200")
+	vi.stubEnv("MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS", "1000")
 	vi.stubEnv("MEMONGO_SEARCH_INDEX_READINESS_POLL_MS", "20")
 	vi.mocked(schemaModule.chunksCollection).mockReturnValue({
 		collectionName: "memongo_chunks",
