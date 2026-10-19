@@ -30,7 +30,6 @@ import {
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
 	isSearchBudgetAdmitted,
-	openSearchBudget,
 } from "./mongodb-search-budget.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import { hydrateActiveSlate as hydrateActiveSlateCore } from "./mongodb-active-slate.js"
@@ -514,47 +513,36 @@ describe("#122 R1 and R2: public novelty runs on one request ledger and the requ
 		expect(events.probes).toHaveLength(3)
 		expect(snapshots).toEqual([
 			expect.objectContaining({
-				maxAggregations: 30,
-				maxEmbeds: 30,
+				maxAggregations: 12,
+				maxEmbeds: 5,
 				aggregations: events.probes.length,
 				embeds: events.probes.length,
 			}),
 		])
 	})
 
-	it("a scan at the 30-candidate ceiling fits its own ledger at the default 12/5 config", async () => {
-		const events = passThroughNovelty(30)
-		const { manager } = await boot()
-
-		const report = await manager.scanNovelty({ limit: 10 })
-
-		expect(report.scannedCount).toBe(30)
-		expect(events.probes).toHaveLength(30)
-		expect(snapshots).toEqual([
-			expect.objectContaining({
-				aggregations: 30,
-				embeds: 30,
-				exhausted: false,
-			}),
-		])
-	})
-
-	it("inside a caller's 12/5 ledger, a scan of six candidates is a typed reservation denial and emits no probe", async () => {
+	it("at the default 12/5 ledger, a scan of six candidates is a typed reservation denial and emits no probe", async () => {
 		const events = passThroughNovelty(6)
 		const { manager } = await boot()
 
-		const failure = await failureOf(
-			openSearchBudget(
-				{ maxAggregations: 12, maxEmbeds: 5 },
-				{ admitted: false },
-			).run(() => manager.scanNovelty({ limit: 10 })),
-		)
+		const failure = await failureOf(manager.scanNovelty({ limit: 10 }))
 
 		expect(failure).toBeInstanceOf(SearchBudgetDeniedError)
 		expect(failure).toMatchObject({
 			stage: "reservation",
 			reason: "budget-reservation",
 		})
+		expect(events.probes).toEqual([])
+	})
+
+	it("an operator's lower configured limit is honored: three candidates at maxEmbeds 2 are denied", async () => {
+		const events = passThroughNovelty(3)
+		const { manager } = await boot({ maxAggregations: 12, maxEmbeds: 2 })
+
+		const failure = await failureOf(manager.scanNovelty({ limit: 10 }))
+
+		expect(failure).toBeInstanceOf(SearchBudgetDeniedError)
+		expect(failure).toMatchObject({ reason: "budget-reservation" })
 		expect(events.probes).toEqual([])
 	})
 

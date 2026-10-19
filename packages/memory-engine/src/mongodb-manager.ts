@@ -239,7 +239,7 @@ import { syncToMongoDB } from "./mongodb-sync.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import { annotateResultsWithTrust, summarizeTrust } from "./mongodb-trust.js"
 import { traceReasoningChain } from "./mongodb-reasoning-chain.js"
-import { noveltySearchBudgetLimits, scanNovelty } from "./mongodb-novelty.js"
+import { scanNovelty } from "./mongodb-novelty.js"
 import { consolidateMemory } from "./mongodb-consolidator.js"
 import { expandSearchContext } from "./mongodb-context-expansion.js"
 import {
@@ -1327,13 +1327,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	 * share both, and searchV2 still takes its admission token on the ledger.
 	 * A caller that already holds a ledger joins it.
 	 */
-	runRetrievalRequest<T>(
-		fn: () => Promise<T>,
-		limits = resolveSearchBudgetLimits(this.config.mongodb?.searchBudget),
-	): Promise<T> {
+	runRetrievalRequest<T>(fn: () => Promise<T>): Promise<T> {
 		return this.runIndexHealthRequest(() => {
 			if (hasActiveSearchBudget()) return fn()
-			return openSearchBudget(limits, { admitted: false }).run(fn)
+			return openSearchBudget(
+				resolveSearchBudgetLimits(this.config.mongodb?.searchBudget),
+				{ admitted: false },
+			).run(fn)
 		})
 	}
 
@@ -1578,9 +1578,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		scope?: string
 		scopeRef?: string
 	}) {
-		return this.runRetrievalRequest(
-			() => lifecycleOpsOf(this).scanNovelty(params),
-			noveltySearchBudgetLimits(),
+		return this.runRetrievalRequest(() =>
+			lifecycleOpsOf(this).scanNovelty(params),
 		)
 	}
 
