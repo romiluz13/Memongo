@@ -9,8 +9,9 @@
 // The Search stage is MODELED (test-helpers/search-model-db.ts); the health
 // metadata comes from the T2 fake over the real required-index manifest.
 import type { Document } from "mongodb"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
+import { buildContextBundle } from "./mongodb-context-bundle.js"
 import { expandSearchContext } from "./mongodb-context-expansion.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 import {
@@ -29,6 +30,8 @@ import {
 	createSearchModelDb,
 } from "./test-helpers/search-model-db.js"
 import type {
+	MemoryContextBundle,
+	MemoryContextBundleRequest,
 	MemoryDiscoveryProjectionKind,
 	MemorySearchResult,
 } from "./types.js"
@@ -358,5 +361,106 @@ describe("surfaces that read no Search index are not gated (negative controls)",
 			"events/ev-prev",
 		)
 		expect(listReads()).toBe(0)
+	})
+})
+
+// M2 T13: the bundle's episode summary is the one place the bundle itself
+// issues a Search query (`loadEpisodeSummary` -> `searchDiscoveryCandidates`),
+// so it takes the same request-snapshot health gate as discovery. Driven
+// through `buildContextBundle` inside a request scope, as the manager runs it.
+describe("the context bundle gates its episode-summary Search on the request's index snapshot", () => {
+	const bundle = (request: MemoryContextBundleRequest) =>
+		buildContextBundle({
+			db: model.db,
+			prefix: PREFIX,
+			...TENANT,
+			request,
+		})
+	const summaryTitles = (result: MemoryContextBundle): string[] =>
+		result.sections
+			.filter((section) => section.kind === "summary")
+			.flatMap((section) => section.items.map((item) => item.title))
+
+	beforeEach(async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {})
+		// A summary section needs summary text; the shared episode has none.
+		await model.fake
+			.collection("episodes")
+			.updateOne(
+				{ episodeId: "ep-1" },
+				{ $set: { summary: "Rotated the pager to the new on-call." } },
+			)
+		await model.seed("events", [
+			{
+				...TENANT,
+				eventId: "ev-1",
+				sessionId: "s1",
+				role: "user",
+				body: "paged the on-call engineer",
+				timestamp: daysAgo(1),
+			},
+		])
+	})
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	it.each([
+		{ damage: "STALE", reason: "index-stale", patch: { status: "STALE" } },
+		{ damage: "missing", reason: "index-unavailable", patch: null },
+	])("a $damage episodes index is a typed $reason episode-summary row, is never queried, and the healthy sections survive", async ({
+		patch,
+		reason,
+	}) => {
+		setIndex("episodes", indexNameOf("episodes", "search"), patch)
+
+		const result = await inRequestScope(() => bundle({ query: "pager" }))
+
+		expect(result.metadata.failures).toEqual([
+			{
+				section: "episode-summary",
+				stage: "index-health",
+				outcome: "failed",
+				reason,
+			},
+		])
+		expect(result.metadata.partial).toBe(true)
+		expect(model.searchPipelines("episodes")).toEqual([])
+		expect(summaryTitles(result)).toEqual([])
+		expect(result.metadata.pathsExecuted).not.toContain("episode-summary")
+		expect(result.metadata.sectionsIncluded).toEqual(
+			expect.arrayContaining(["active-slate", "recent-events"]),
+		)
+	})
+
+	it("a healthy episodes index serves the summary with no failure row", async () => {
+		const result = await inRequestScope(() => bundle({ query: "pager" }))
+
+		expect(summaryTitles(result)).toEqual(["Pager handoff"])
+		expect(result.metadata.failures).toEqual([])
+		expect(result.metadata.partial).toBe(false)
+		expect(model.searchPipelines("episodes")).toHaveLength(1)
+	})
+
+	it("an unhealthy index on another collection does not fail the episode summary", async () => {
+		setIndex("structured_mem", indexNameOf("structured_mem", "search"), {
+			status: "STALE",
+		})
+
+		const result = await inRequestScope(() => bundle({ query: "pager" }))
+
+		expect(summaryTitles(result)).toEqual(["Pager handoff"])
+		expect(result.metadata.failures).toEqual([])
+	})
+
+	it("without a query the episode summary is a plain find: a missing episodes index does not refuse it and no index metadata is read", async () => {
+		setIndex("episodes", indexNameOf("episodes", "search"), null)
+
+		const result = await inRequestScope(() => bundle({}))
+
+		expect(summaryTitles(result)).toEqual(["Pager handoff"])
+		expect(result.metadata.failures).toEqual([])
+		expect(listReads()).toBe(0)
+		expect(model.searchPipelines("episodes")).toEqual([])
 	})
 })

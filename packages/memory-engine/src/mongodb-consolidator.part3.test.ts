@@ -427,6 +427,87 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 	})
 
 	// =====================================================================
+	// M2 T13 (#120): the reasoning-chain trace of a candidate is confined to
+	// the candidate's own tenant. traceReasoningChain is mocked above, so the
+	// call it receives is the observable.
+	// =====================================================================
+
+	async function consolidateOneEvent(event: Document) {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "evt-trace",
+								agentId: "agent-1",
+								body: "I prefer TypeScript over JavaScript",
+								timestamp: new Date(),
+								role: "user",
+								...event,
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const db = mockDb({
+			test_consolidation_runs: mockCollection({
+				findOne: vi.fn(async () => null),
+			}),
+			test_events: eventsCol,
+			test_structured_mem: mockCollection({ findOne: vi.fn(async () => null) }),
+		})
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+		return db
+	}
+
+	it("traces a candidate's reasoning chain with the candidate event's own agentId, scope and scopeRef", async () => {
+		const { traceReasoningChain } = await import("./mongodb-reasoning-chain.js")
+
+		const db = await consolidateOneEvent({
+			scope: "user",
+			scopeRef: "user:alice",
+		})
+
+		expect(traceReasoningChain).toHaveBeenCalledTimes(1)
+		expect(traceReasoningChain).toHaveBeenCalledWith({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			scope: "user",
+			scopeRef: "user:alice",
+			factId: "evt-trace",
+			collection: "events",
+		})
+	})
+
+	it.each([
+		{ name: "no scope and no scopeRef", tenant: {} },
+		{ name: "a scope but no scopeRef", tenant: { scope: "user" } },
+		{ name: "a scopeRef but no scope", tenant: { scopeRef: "user:alice" } },
+	])("does not trace the reasoning chain of a candidate with $name, and still promotes it", async ({
+		tenant,
+	}) => {
+		const { traceReasoningChain } = await import("./mongodb-reasoning-chain.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+
+		await consolidateOneEvent(tenant)
+
+		expect(writeStructuredMemory).toHaveBeenCalledTimes(1)
+		expect(traceReasoningChain).not.toHaveBeenCalled()
+	})
+
+	// =====================================================================
 	// Scope-isolation safety — fast-check: no consolidated row spans scopes.
 	//
 	// Seed = 20260512, numRuns = 300. Evidence doc:

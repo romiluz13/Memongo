@@ -622,3 +622,12 @@ A tenant is `(agentId, scope, scopeRef)`. The reads below used to filter by `age
 
 - **Discovery.** Each discovery content read checks the section's `*_text` Search index through the request-local snapshot and fails typed `index-stale` or `index-unavailable` (a section failure row per T8; a total failure throws). `hydrateActiveSlate` and `buildDiscoveryProjection` open a request scope. The check names the Search index type, so a text-only read is not refused for an unrelated vector index.
 - **Slate and context expansion are not gated.** They read plain `find`s and no Search index, so there is no index to be stale; this is pinned by tests. The brief expected them to read through Search.
+
+## T11 follow-up: failure-matrix test gaps (#121)
+
+Test gaps in the failure matrix (#121). This work adds tests only; no production behavior changed.
+
+### Changed in the failure matrix
+
+- **Decision needed 10 is removed.** `buildContextBundle` now has tests for its episode-summary health gate: an episodes Search index that is STALE or missing is a typed `index-stale` or `index-unavailable` row on the `episode-summary` section, the index is never queried, and the healthy sections survive. The consolidator's reasoning-chain trace is now tested: it carries the candidate event's own `agentId`, `scope` and `scopeRef`, and a candidate without a full tenant is promoted but not traced (E-37, E-41).
+- **Decision needed 9 loses H-07 and H-08.** `POST /v1/discovery-projection` and `POST /v1/context-bundle` now have tests that map an `index-stale` and an `index-unavailable` failure to 503 `SEARCH_LANES_UNAVAILABLE` with the failure row in the body. Eighteen rows still read `no test:`.
