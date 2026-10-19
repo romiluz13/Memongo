@@ -4,7 +4,12 @@ import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
 import {
 	captureAdmissionToken,
 	type AdmissionToken,
+	withFencedWrite,
 } from "./mongodb-write-fence.js"
+import {
+	isErasureGateConflictError,
+	isMalformedGateError,
+} from "./mongodb-erasure-epoch.js"
 import { accessTargetFromSearchResult } from "./mongodb-access-tracker.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
@@ -1207,6 +1212,7 @@ export class MongoDBManagerSearchOps {
 		const requestLedger = openSearchBudget(
 			resolveSearchBudgetLimits(mongoCfg.searchBudget),
 		)
+		let erasureDenied = false
 		const runKBLane = () => {
 			const reservation = tryReserveSearchBudget(
 				kbLaneCost({ embeddingMode: mongoCfg.embeddingMode }),
@@ -1281,6 +1287,17 @@ export class MongoDBManagerSearchOps {
 				await assertLaneIndexesHealthy("kb")
 				return runKBLane()
 			})
+			// M2 T13 (review F2): the admission token above only proves erasure
+			// had not started when this read began. Re-check the gate at the
+			// return boundary so chunks hydrated while erasure began are never
+			// returned. A denial is the same typed conflict the admission
+			// throws, never an empty answer.
+			await withFencedWrite({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				token: readAdmission,
+				fn: async () => undefined,
+			})
 			lanes.push({
 				lane: "kb",
 				stage: "lane",
@@ -1290,12 +1307,20 @@ export class MongoDBManagerSearchOps {
 			})
 			return results
 		} catch (err) {
+			if (isErasureGateConflictError(err) || isMalformedGateError(err)) {
+				erasureDenied = true
+				throw err
+			}
 			const typed = toTypedSearchError(err, "lane", "kb")
 			log.warn("KB search failed", searchFailureLogFields(typed))
 			lanes.push(searchFailureRow("kb", "lane", typed))
 			throw typed
 		} finally {
-			opts?.onOutcomes?.(summarizeSearchOutcomes(lanes, ["kb"]))
+			// An erasure denial mirrors admission-time denial: no outcome
+			// summary, because no lane answered.
+			if (!erasureDenied) {
+				opts?.onOutcomes?.(summarizeSearchOutcomes(lanes, ["kb"]))
+			}
 		}
 	}
 }

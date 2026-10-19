@@ -19,6 +19,7 @@ import type { Collection, Db } from "mongodb"
 import type { MemoryScope } from "@memongo/lib"
 import type { MemoryBenchmarkConversation } from "./types.js"
 import { eventsCollection } from "./mongodb-schema.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -220,9 +221,15 @@ export async function resolveSessionEvidenceExpiresAt(params: {
 	db: Db
 	prefix: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	sessionEventMap: Map<string, string[]> // sessionId → event IDs
 }): Promise<Map<string, Date>> {
-	const { db, prefix, agentId, sessionEventMap } = params
+	const { db, prefix, sessionEventMap } = params
+	const tenant = requireTenantIdentity(
+		"resolveSessionEvidenceExpiresAt",
+		params,
+	)
 	const allEventIds = [...new Set([...sessionEventMap.values()].flat())]
 	const result = new Map<string, Date>()
 	if (allEventIds.length === 0) {
@@ -230,7 +237,7 @@ export async function resolveSessionEvidenceExpiresAt(params: {
 	}
 	const docs = (await eventsCollection(db, prefix)
 		.find(
-			{ agentId, eventId: { $in: allEventIds } },
+			{ ...tenant, eventId: { $in: allEventIds } },
 			{ projection: { eventId: 1, expiresAt: 1 } },
 		)
 		.toArray()) as Array<{ eventId?: unknown; expiresAt?: unknown }>

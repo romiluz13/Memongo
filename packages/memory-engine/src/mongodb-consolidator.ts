@@ -37,6 +37,7 @@ import {
 } from "./mongodb-search-budget.js"
 import { toTypedSearchError } from "./search-outcomes.js"
 import {
+	buildEventLifecycleClause,
 	buildUnexpiredClause,
 	buildCurrentValidityClause,
 } from "./mongodb-temporal.js"
@@ -705,9 +706,12 @@ async function runConsolidation(
 	try {
 		// Query un-dreamer-processed events
 		const eventsCol = eventsCollection(db, prefix)
+		// M2 T13: an expired, invalidated or not-yet-valid event is not
+		// consolidated into durable memory.
 		const filter: Document = {
 			agentId,
 			dreamerProcessedAt: { $exists: false },
+			...buildEventLifecycleClause(),
 		}
 		if (options?.scope) {
 			filter.scope = options.scope
@@ -1028,15 +1032,21 @@ async function runConsolidation(
 
 				// Walk reasoning chain for provenance context. Nothing reads the
 				// result, so it is declared best-effort and never gates the event.
-				void bestEffort("consolidator-reasoning-chain-trace", () =>
-					traceReasoningChain({
-						db,
-						prefix,
-						agentId,
-						factId: candidate.eventId,
-						collection: "events",
-					}),
-				)
+				// A trace is confined to one tenant, so a candidate that names none
+				// is not traced.
+				if (candidateScope && candidateScopeRef) {
+					void bestEffort("consolidator-reasoning-chain-trace", () =>
+						traceReasoningChain({
+							db,
+							prefix,
+							agentId,
+							scope: candidateScope,
+							scopeRef: candidateScopeRef,
+							factId: candidate.eventId,
+							collection: "events",
+						}),
+					)
+				}
 
 				// Check for conflicts with existing structured memory
 				const conflicted = await hasConflict({

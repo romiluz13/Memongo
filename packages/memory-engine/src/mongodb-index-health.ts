@@ -406,15 +406,18 @@ export async function assertLaneIndexesHealthy(
 
 /**
  * Admit an operation that is not a search lane (recall, novelty, the
- * consolidator): the named collections' indexes must be healthy.
+ * consolidator, discovery): the named collections' indexes must be healthy.
+ * `types` narrows the check to the index types the operation queries, so a
+ * text-only read is not refused for an unrelated vector index.
  */
 export async function assertCollectionIndexesHealthy(
 	collections: readonly string[],
 	lane?: SearchLane,
+	types?: readonly RequiredSearchIndex["type"][],
 ): Promise<void> {
 	const health = activeIndexHealth()
 	if (!health) return
-	await health.assertHealthy(health.select(collections), lane)
+	await health.assertHealthy(health.select(collections, types), lane)
 }
 
 // ---------------------------------------------------------------------------

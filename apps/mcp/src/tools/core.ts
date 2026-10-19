@@ -334,11 +334,11 @@ export const coreTools: readonly McpToolDefinition[] = [
 				scope: {
 					type: "string",
 					enum: memoryScopeEnum,
-					description: "Optional memory isolation scope for recall.",
+					description: "Memory isolation scope whose messages are recalled.",
 				},
 				scopeRef: {
 					type: "string",
-					description: "Optional reference for the selected memory scope.",
+					description: "Reference for the selected memory scope.",
 				},
 				sessionId: {
 					type: "string",
@@ -382,6 +382,7 @@ export const coreTools: readonly McpToolDefinition[] = [
 					description: "Maximum results to return. Default 50, max 200.",
 				},
 			},
+			required: ["scope", "scopeRef"],
 		},
 		category: "core",
 	},

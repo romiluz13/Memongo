@@ -27,6 +27,8 @@ import {
 	readJsonBody,
 	parseListLimit,
 	readAccessCollection,
+	readScope,
+	readScopeRef,
 	isErasureGateConflictError,
 	type V1RouterEnv,
 } from "./v1-helpers.js"
@@ -281,9 +283,21 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 			)
 		}
 		const limit = parseListLimit(c.req.query("limit"))
+		const scope = await readScope(c)
+		const scopeRef = await readScopeRef(c)
+		if (!scope || !scopeRef) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"scope and scopeRef are required",
+			)
+		}
 		try {
 			const entries = await memongoBridgeListQuarantined({
 				agentId: c.req.query("agentId") || undefined,
+				scope,
+				scopeRef,
 				status:
 					status === "pending-review" ||
 					status === "promoting" ||

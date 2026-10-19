@@ -1454,6 +1454,8 @@ describe("E2E v2: graph expansion", () => {
 
 		// 4. expandGraph from Rom entityId -> finds Memongo
 		const expansion = await expandGraph({
+			scope: "agent",
+			scopeRef: `agent:${agentId}`,
 			db,
 			prefix: TEST_PREFIX,
 			entityId: romEntityId,
@@ -1519,6 +1521,8 @@ describe("E2E v2: graph expansion", () => {
 		expect(link.linkId).toBeTruthy()
 
 		const links = await getEntityLinks({
+			scope: "agent",
+			scopeRef: `agent:${agentId}`,
 			db,
 			prefix: TEST_PREFIX,
 			agentId,
@@ -1530,6 +1534,7 @@ describe("E2E v2: graph expansion", () => {
 		)
 
 		const changed = await setEntityLinkStatus({
+			scopeRef: `agent:${agentId}`,
 			db,
 			prefix: TEST_PREFIX,
 			agentId,
@@ -1542,6 +1547,8 @@ describe("E2E v2: graph expansion", () => {
 		expect(changed).toBe(true)
 
 		const activeLinks = await getEntityLinks({
+			scope: "agent",
+			scopeRef: `agent:${agentId}`,
 			db,
 			prefix: TEST_PREFIX,
 			agentId,
@@ -1616,6 +1623,8 @@ describe("E2E v2: episode materialization", () => {
 
 		// 2. Materialize episode with mock summarizer
 		const episode = await materializeEpisode({
+			scope: "agent",
+			scopeRef: `agent:${agentId}`,
 			db,
 			prefix: TEST_PREFIX,
 			agentId,
@@ -1637,6 +1646,8 @@ describe("E2E v2: episode materialization", () => {
 
 		// 4. searchEpisodes finds the episode
 		const searchResults = await searchEpisodes({
+			scope: "agent",
+			scopeRef: `agent:${agentId}`,
 			db,
 			prefix: TEST_PREFIX,
 			query: "Memongo",

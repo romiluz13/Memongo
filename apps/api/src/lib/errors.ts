@@ -70,6 +70,12 @@ export function isDependencyUnavailableError(err: unknown): boolean {
  * so client retry means something; everything else stays a generic 500.
  */
 export function internalError(c: Context, err: unknown, code: string) {
+	// M2 T13: a read that lacks the full tenant identity is the caller's
+	// request, not a server fault; the engine error carries a fixed message
+	// naming the operation and the missing parts.
+	if (err instanceof Error && err.name === "TenantIdentityRequiredError") {
+		return jsonError(c, 400, "TENANT_IDENTITY_REQUIRED", err.message)
+	}
 	const requestId = c.get("requestId") ?? "no-request-id"
 	let errorCode: unknown
 	let commitState: unknown

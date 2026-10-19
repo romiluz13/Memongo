@@ -9,6 +9,7 @@ import { recallConversation as recallConversationCore } from "./mongodb-conversa
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	createMemoryJob,
 	getMemoryJob,
@@ -717,6 +718,10 @@ export class MongoDBManagerLifecycleOps {
 	async recallConversation(
 		request: Omit<ConversationRecallRequest, "agentId">,
 	): Promise<ConversationRecallResponse> {
+		requireTenantIdentity("recallConversation", {
+			...request,
+			agentId: this.host.agentId,
+		})
 		// M2 decision 8: a querying recall is one hybrid lane on the events
 		// indexes and never runs against one observed unhealthy at admission.
 		// A query-less recall is a plain find and reads no Search index.
@@ -764,12 +769,16 @@ export class MongoDBManagerLifecycleOps {
 	async traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}) {
 		return traceReasoningChain({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
 			factId: params.factId,
 			collection: params.collection,
 			options: params.options,

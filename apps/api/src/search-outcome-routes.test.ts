@@ -754,7 +754,10 @@ describe("/v1/recall-conversation maps typed index-health failures (M2)", () => 
 			}),
 		)
 
-		const res = await post("/v1/recall-conversation")
+		const res = await post("/v1/recall-conversation", {
+			scope: "agent",
+			scopeRef: "agent:owner",
+		})
 
 		expect(res.status).toBe(503)
 		const text = await res.text()
@@ -777,7 +780,10 @@ describe("/v1/recall-conversation maps typed index-health failures (M2)", () => 
 			new Error("mongodb memory unavailable"),
 		)
 
-		const res = await post("/v1/recall-conversation")
+		const res = await post("/v1/recall-conversation", {
+			scope: "agent",
+			scopeRef: "agent:owner",
+		})
 
 		expect(res.status).toBe(500)
 		const json = (await res.json()) as Record<string, unknown>

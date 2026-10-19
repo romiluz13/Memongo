@@ -7,6 +7,7 @@ import {
 	openSearchBudget,
 } from "./mongodb-search-budget.js"
 import { SearchLaneError } from "./search-outcomes.js"
+import { matchesFilter } from "./test-helpers/stateful-mongo-fake.js"
 
 const seams = vi.hoisted(() => ({
 	provider: vi.fn((): unknown => null),
@@ -105,6 +106,14 @@ describe("consolidator entity filter selects its batch through Atlas Search", ()
 					scope: "agent",
 					scopeRef: "agent:agent-1",
 					timestamp: { $gte: from, $lte: to },
+					$and: expect.arrayContaining([
+						{
+							$or: [
+								{ expiresAt: { $exists: false } },
+								{ expiresAt: { $gt: expect.any(Date) } },
+							],
+						},
+					]),
 				},
 			},
 			{ $sort: { timestamp: -1 } },
@@ -148,6 +157,66 @@ describe("consolidator entity filter selects its batch through Atlas Search", ()
 		})
 		expect(f.events.aggregate).not.toHaveBeenCalled()
 		expect(f.events.find).toHaveBeenCalledOnce()
+	})
+
+	describe("the batch is live events only (M2 T13)", () => {
+		const DAY = 86_400_000
+		const live = { agentId: "agent-1", timestamp: new Date() }
+		const dead = {
+			expired: { ...live, expiresAt: new Date(Date.now() - DAY) },
+			invalidated: { ...live, invalidAt: new Date(Date.now() - DAY) },
+			notYetValid: { ...live, validAt: new Date(Date.now() + DAY) },
+		}
+
+		function expectLiveOnly(filter: Record<string, unknown>) {
+			expect(matchesFilter(live, filter)).toBe(true)
+			expect(matchesFilter({ ...live, invalidAt: null }, filter)).toBe(true)
+			for (const doc of Object.values(dead)) {
+				expect(matchesFilter(doc, filter)).toBe(false)
+			}
+			expect(
+				matchesFilter({ ...live, dreamerProcessedAt: new Date() }, filter),
+			).toBe(false)
+		}
+
+		it("the newest-unprocessed find carries the event lifecycle", async () => {
+			const cursor = {
+				sort: vi.fn(),
+				limit: vi.fn(),
+				toArray: vi.fn(async () => []),
+			}
+			cursor.sort.mockReturnValue(cursor)
+			cursor.limit.mockReturnValue(cursor)
+			const f = fixture(async () => [])
+			f.events.find.mockReturnValue(cursor)
+			await consolidateMemory({
+				db: f.db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { maxEvents: 3 },
+			})
+			expectLiveOnly(
+				(
+					f.events.find.mock.calls[0] as unknown as [Record<string, unknown>]
+				)[0],
+			)
+		})
+
+		it("the Search-selected entity batch re-checks the event lifecycle on the hydrated document", async () => {
+			const f = fixture(async () => [])
+			await consolidateMemory({
+				db: f.db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { entitySet: ["Acme"] },
+			})
+			const pipeline = (
+				f.events.aggregate.mock.calls[0] as unknown as [
+					Array<{ $match?: Record<string, unknown> }>,
+				]
+			)[0]
+			expectLiveOnly(pipeline[1].$match as Record<string, unknown>)
+		})
 	})
 
 	it("fails the run with a typed Search error, never an empty batch, when the $search stage fails", async () => {

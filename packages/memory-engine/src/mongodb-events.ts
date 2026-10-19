@@ -14,6 +14,7 @@ import {
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import {
 	captureAdmissionToken,
@@ -1069,23 +1070,18 @@ export async function getEventsByTimeRange(params: {
 	agentId: string
 	start: Date
 	end: Date
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, start, end, scope, scopeRef, limit } = params
+	const { db, prefix, start, end, limit } = params
+	const tenant = requireTenantIdentity("getEventsByTimeRange", params)
 	const collection = eventsCollection(db, prefix)
 	const filter: Document = {
-		agentId,
+		...tenant,
 		timestamp: { $gte: start, $lte: end },
 		// P4.4.1: hide expired docs until the TTL sweep removes them.
 		...buildUnexpiredClause(),
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 
 	return (await collection
@@ -1101,13 +1097,16 @@ export async function getEventsBySession(params: {
 	prefix: string
 	agentId: string
 	sessionId: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, sessionId, limit } = params
+	const { db, prefix, sessionId, limit } = params
+	const tenant = requireTenantIdentity("getEventsBySession", params)
 	const collection = eventsCollection(db, prefix)
 	return (await collection
 		.find({
-			agentId,
+			...tenant,
 			sessionId,
 			// P4.4.1: hide expired docs until the TTL sweep removes them.
 			...buildUnexpiredClause(),
@@ -1209,23 +1208,18 @@ export async function getUnconsolidatedEvents(params: {
 	db: Db
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, scope, scopeRef, limit } = params
+	const { db, prefix, limit } = params
+	const tenant = requireTenantIdentity("getUnconsolidatedEvents", params)
 	const collection = eventsCollection(db, prefix)
 	const filter: Document = {
-		agentId,
+		...tenant,
 		consolidatedAt: { $exists: false },
 		// P4.4.1: hide expired docs until the TTL sweep removes them.
 		...buildUnexpiredClause(),
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 
 	return (await collection
@@ -1246,23 +1240,18 @@ export async function getSessionEventsWithBound(params: {
 	agentId: string
 	sessionId: string
 	bound?: number
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<CanonicalEvent[]> {
-	const { db, prefix, agentId, sessionId, scope, scopeRef } = params
+	const { db, prefix, sessionId } = params
+	const tenant = requireTenantIdentity("getSessionEventsWithBound", params)
 	const effectiveBound = Math.max(1, params.bound ?? 50)
 	const collection = eventsCollection(db, prefix)
 	const filter: Document = {
-		agentId,
+		...tenant,
 		sessionId,
 		// P4.4.1: hide expired docs until the TTL sweep removes them.
 		...buildUnexpiredClause(),
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 
 	const events = (await collection

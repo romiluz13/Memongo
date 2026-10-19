@@ -543,6 +543,8 @@ export interface MongoDBManagerHost {
 	traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}): ReturnType<typeof traceReasoningChain>
 	scanNovelty(params?: {

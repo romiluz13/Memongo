@@ -13,8 +13,11 @@ import {
 } from "./mongodb-discovery-search.js"
 import { resolveTimeRangePreset } from "./mongodb-retrieval-planner.js"
 import {
+	buildCurrentValidityClause,
 	buildEventLifecycleClause,
+	buildRelationLifecycleClause,
 	buildUnexpiredClause,
+	mergeQueryClauses,
 } from "./mongodb-temporal.js"
 import {
 	entitiesCollection,
@@ -458,6 +461,7 @@ function searchStructured(params: {
 	return searchDiscoveryCandidates({
 		collection: structuredMemCollection(params.db, params.prefix),
 		indexName: `${params.prefix}structured_mem_text`,
+		healthCollection: "structured_mem",
 		lane: "structured",
 		query: params.query,
 		textPaths: ["key", "value", "context", "tags"],
@@ -482,11 +486,14 @@ function searchProcedures(params: {
 	limit: number
 	states?: string[]
 	updatedWindow?: { start: Date; end: Date }
+	/** Re-check validFrom/validTo on the hydrated procedure (not indexed). */
+	currentOnly?: boolean
 }): Promise<Document[]> {
 	const state = params.states ? stateClauses(params.states) : undefined
 	return searchDiscoveryCandidates({
 		collection: proceduresCollection(params.db, params.prefix),
 		indexName: `${params.prefix}procedures_text`,
+		healthCollection: "procedures",
 		lane: "procedural",
 		query: params.query,
 		// searchText embeds name, intentTags, triggerQueries and steps.
@@ -498,18 +505,21 @@ function searchProcedures(params: {
 				? [windowRange("updatedAt", params.updatedWindow)]
 				: []),
 		],
-		recheck: {
-			...params.tenant,
-			...(state ? { state: state.match } : {}),
-			...(params.updatedWindow
-				? {
-						updatedAt: {
-							$gte: params.updatedWindow.start,
-							$lte: params.updatedWindow.end,
-						},
-					}
-				: {}),
-		},
+		recheck: mergeQueryClauses(
+			{
+				...params.tenant,
+				...(state ? { state: state.match } : {}),
+				...(params.updatedWindow
+					? {
+							updatedAt: {
+								$gte: params.updatedWindow.start,
+								$lte: params.updatedWindow.end,
+							},
+						}
+					: {}),
+			},
+			params.currentOnly ? buildCurrentValidityClause() : undefined,
+		),
 		sort: { updatedAt: -1 },
 		limit: params.limit,
 	})
@@ -525,6 +535,7 @@ async function searchAdjacentEntityIds(params: {
 	const entities = await searchDiscoveryCandidates({
 		collection: entitiesCollection(params.db, params.prefix),
 		indexName: "entity_autocomplete",
+		healthCollection: "entities",
 		lane: "graph",
 		query: params.query,
 		textPaths: ["name", "aliases", "type"],
@@ -587,6 +598,7 @@ async function buildEntityBrief(
 			searchDiscoveryCandidates({
 				collection: entitiesCollection(db, prefix),
 				indexName: "entity_autocomplete",
+				healthCollection: "entities",
 				lane: "graph",
 				query,
 				textPaths: ["name", "aliases"],
@@ -719,6 +731,7 @@ async function buildTopicBrief(
 			searchDiscoveryCandidates({
 				collection: episodesCollection(db, prefix),
 				indexName: "episode_autocomplete",
+				healthCollection: "episodes",
 				lane: "episodic",
 				query,
 				textPaths: ["title", "summary", "tags", "topics"],
@@ -821,6 +834,7 @@ async function buildWhatChanged(params: {
 				? searchDiscoveryCandidates({
 						collection: structuredMemRevisionsCollection(db, prefix),
 						indexName: `${prefix}structured_mem_revisions_text`,
+						healthCollection: "structured_mem_revisions",
 						lane: "structured",
 						query,
 						textPaths: ["key", "value", "context", "tags"],
@@ -893,11 +907,18 @@ async function buildWhatChanged(params: {
 						prefix,
 						tenant: scopeFilter,
 						query,
+						states: ["active"],
+						currentOnly: true,
 						updatedWindow: window,
 						limit: laneQueryLimit,
 					})
 				: proceduresCollection(db, prefix)
-						.find({ ...scopeFilter, updatedAt: dateFilter })
+						.find({
+							...scopeFilter,
+							state: "active",
+							...buildCurrentValidityClause(),
+							updatedAt: dateFilter,
+						})
 						.sort({ updatedAt: -1 })
 						.limit(laneQueryLimit)
 						.toArray(),
@@ -920,11 +941,18 @@ async function buildWhatChanged(params: {
 						tenant: scopeFilter,
 						query,
 						entityLimit: laneQueryLimit,
-						extra: { updatedAt: dateFilter },
+						extra: {
+							...buildRelationLifecycleClause(),
+							updatedAt: dateFilter,
+						},
 						limit: laneQueryLimit,
 					})
 				: relationsCollection(db, prefix)
-						.find({ ...scopeFilter, updatedAt: dateFilter })
+						.find({
+							...scopeFilter,
+							...buildRelationLifecycleClause(),
+							updatedAt: dateFilter,
+						})
 						.sort({ updatedAt: -1 })
 						.limit(laneQueryLimit)
 						.toArray(),
@@ -952,6 +980,7 @@ async function buildWhatChanged(params: {
 				? searchDiscoveryCandidates({
 						collection: eventsCollection(db, prefix),
 						indexName: `${prefix}events_text`,
+						healthCollection: "events",
 						lane: "raw-window",
 						query,
 						textPaths: ["body"],

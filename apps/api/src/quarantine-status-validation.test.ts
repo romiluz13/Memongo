@@ -23,6 +23,8 @@ vi.mock(
 		}),
 )
 beforeEach(() => vi.clearAllMocks())
+const TENANT = "scope=workspace&scopeRef=workspace%3Ademo"
+const TENANT_ARGS = { scope: "workspace", scopeRef: "workspace:demo" }
 function request(query: string) {
 	return new Hono()
 		.route("/v1", createV1Router())
@@ -56,23 +58,32 @@ describe("HTTP quarantine-list status validation", () => {
 		"promoted",
 		"rejected",
 	])("preserves valid status %s", async (status) => {
-		const response = await request(`?status=${status}&agentId=agent&limit=5`)
+		const response = await request(
+			`?status=${status}&agentId=agent&limit=5&${TENANT}`,
+		)
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual([])
 		expect(bridge.memongoBridgeListQuarantined).toHaveBeenCalledExactlyOnceWith(
-			{ status, agentId: "agent", limit: 5 },
+			{ status, agentId: "agent", ...TENANT_ARGS, limit: 5 },
 		)
 	})
 	it("preserves omitted status as all stages", async () => {
-		expect((await request("?agentId=agent&limit=5")).status).toBe(200)
+		expect((await request(`?agentId=agent&limit=5&${TENANT}`)).status).toBe(200)
 		expect(bridge.memongoBridgeListQuarantined).toHaveBeenCalledExactlyOnceWith(
-			{ agentId: "agent", status: undefined, limit: 5 },
+			{ agentId: "agent", ...TENANT_ARGS, status: undefined, limit: 5 },
 		)
 	})
 	it("preserves Hono's first-value behavior for repeated status parameters", async () => {
-		expect((await request("?status=promoted&status=bogus")).status).toBe(200)
+		expect(
+			(await request(`?status=promoted&status=bogus&${TENANT}`)).status,
+		).toBe(200)
 		expect(bridge.memongoBridgeListQuarantined).toHaveBeenCalledExactlyOnceWith(
-			{ agentId: undefined, status: "promoted", limit: undefined },
+			{
+				agentId: undefined,
+				...TENANT_ARGS,
+				status: "promoted",
+				limit: undefined,
+			},
 		)
 	})
 	it("documents 400 with the common error envelope", () => {

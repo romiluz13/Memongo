@@ -120,7 +120,14 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 	memongo_lifecycle_history: ["handle", "limit"],
 	memongo_procedure_outcome: ["handle", "success", "note", "actorRole"],
 	memongo_status: ["agentId"],
-	memongo_chain_trace: ["factId", "collection", "agentId", "maxDepth"],
+	memongo_chain_trace: [
+		"factId",
+		"collection",
+		"scope",
+		"scopeRef",
+		"agentId",
+		"maxDepth",
+	],
 	memongo_novelty_scan: ["agentId", "limit", "scope", "scopeRef"],
 	memongo_consolidate: [
 		"agentId",
@@ -155,7 +162,7 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 	memongo_admin_list_traces: ["agentId", "limit"],
 	memongo_admin_get_trace: ["traceId", "agentId"],
 	memongo_erase_agent: ["confirm", "agentId", "recovery"],
-	memongo_quarantine_list: ["agentId", "status", "limit"],
+	memongo_quarantine_list: ["scope", "scopeRef", "agentId", "status", "limit"],
 	memongo_quarantine_promote: [
 		"quarantineId",
 		"agentId",

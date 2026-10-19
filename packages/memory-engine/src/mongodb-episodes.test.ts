@@ -143,6 +143,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			const result = await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -174,6 +176,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			const result = await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -288,6 +292,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			const result = await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -342,6 +348,8 @@ describe("mongodb-episodes", () => {
 				})
 
 				await materializeEpisode({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -391,6 +399,8 @@ describe("mongodb-episodes", () => {
 				})
 
 				await materializeEpisode({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -421,6 +431,8 @@ describe("mongodb-episodes", () => {
 				})
 
 				await materializeEpisode({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -447,6 +459,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -475,6 +489,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -484,6 +500,8 @@ describe("mongodb-episodes", () => {
 			})
 			// Same events, a window widened by one second.
 			await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -522,6 +540,8 @@ describe("mongodb-episodes", () => {
 				makeEventDocs(5, start) as never,
 			)
 			await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -533,6 +553,8 @@ describe("mongodb-episodes", () => {
 				makeEventDocs(6, start) as never,
 			)
 			await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -561,6 +583,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			const result = await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -606,6 +630,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			const result = await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -638,6 +664,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const results = await getEpisodesByTimeRange({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -678,6 +706,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const results = await getEpisodesByType({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -692,6 +722,8 @@ describe("mongodb-episodes", () => {
 			expect(filter).toEqual({
 				agentId: AGENT_ID,
 				type: "daily",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				status: { $ne: "deleted" },
 			})
 		})
@@ -720,6 +752,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			const result = await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -770,6 +804,8 @@ describe("mongodb-episodes", () => {
 
 			await expect(
 				materializeEpisode({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -803,6 +839,8 @@ describe("mongodb-episodes", () => {
 
 			await expect(
 				materializeEpisode({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -822,6 +860,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const results = await searchEpisodes({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				query: "",
@@ -838,6 +878,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const results = await searchEpisodes({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				query: "   ",
@@ -864,6 +906,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			await materializeEpisode({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -901,6 +945,8 @@ describe("mongodb-episodes", () => {
 
 			await expect(
 				materializeEpisode({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -923,6 +969,8 @@ describe("mongodb-episodes", () => {
 
 			const { updateEpisodeStatus } = await import("./mongodb-episodes.js")
 			const result = await updateEpisodeStatus({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				episodeId: "ep-1",
@@ -934,7 +982,12 @@ describe("mongodb-episodes", () => {
 			const [filter, update] = (
 				episodesCol.updateOne as ReturnType<typeof vi.fn>
 			).mock.calls[0]
-			expect(filter).toEqual({ episodeId: "ep-1", agentId: AGENT_ID })
+			expect(filter).toEqual({
+				episodeId: "ep-1",
+				agentId: AGENT_ID,
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			})
 			expect(update).toEqual({
 				$set: { status: "archived", updatedAt: expect.any(Date) },
 			})
@@ -950,6 +1003,8 @@ describe("mongodb-episodes", () => {
 
 			const { updateEpisodeStatus } = await import("./mongodb-episodes.js")
 			const result = await updateEpisodeStatus({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				episodeId: "nonexistent",
@@ -974,6 +1029,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			await getEpisodesByTimeRange({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1000,6 +1057,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			await getEpisodesByType({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1019,6 +1078,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			await getEpisodesByIds({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				episodeIds: ["ep-1"],
@@ -1041,6 +1102,8 @@ describe("mongodb-episodes", () => {
 			vi.mocked(getUnconsolidatedEvents).mockResolvedValue([] as never)
 
 			const first = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1049,6 +1112,8 @@ describe("mongodb-episodes", () => {
 			expect(first).toEqual({ triggered: false, reason: "insufficient_events" })
 
 			const second = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1070,12 +1135,16 @@ describe("mongodb-episodes", () => {
 			vi.mocked(getUnconsolidatedEvents).mockResolvedValue([] as never)
 
 			await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
 				summarizer: mockSummarizer,
 			})
 			const other = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: "agent-2",
@@ -1096,6 +1165,8 @@ describe("mongodb-episodes", () => {
 				vi.mocked(getUnconsolidatedEvents).mockResolvedValue([] as never)
 
 				await checkAutoEpisodeTriggers({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -1104,6 +1175,8 @@ describe("mongodb-episodes", () => {
 				vi.setSystemTime(Date.now() + AUTO_EPISODE_NEGATIVE_MEMO_MS + 1)
 
 				const result = await checkAutoEpisodeTriggers({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -1145,6 +1218,8 @@ describe("mongodb-episodes", () => {
 			// Seed a fresh negative memo: 2 events, no gap, under the count
 			// threshold -> no trigger reason -> negative memo recorded.
 			await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1152,6 +1227,8 @@ describe("mongodb-episodes", () => {
 			})
 
 			const forced = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,

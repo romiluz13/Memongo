@@ -934,6 +934,8 @@ export interface MemorySearchManager {
 	traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}): Promise<ReasoningChain>
 	scanNovelty(params?: {
@@ -1885,13 +1887,12 @@ export type ConversationRecallRole = "user" | "assistant" | "system" | "tool"
 export type ConversationRecallRequest = {
 	agentId: string
 	/**
-	 * Tenant-isolation coordinates. When present, recall is filtered to events
-	 * carrying the same scope/scopeRef so a scope-restricted caller cannot read
-	 * another tenant's conversation events under the same agent. Absent = the
-	 * caller is unscoped (full access) and recall spans all scopes.
+	 * Tenant identity (M2 T13). Recall is always filtered to events carrying
+	 * this scope and scopeRef; a request without both fails with
+	 * `TenantIdentityRequiredError` instead of spanning every scope.
 	 */
-	scope?: string
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	query?: string
 	sessionId?: string
 	roles?: ConversationRecallRole[]

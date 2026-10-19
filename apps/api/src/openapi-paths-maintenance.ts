@@ -10,6 +10,7 @@
  * hand-written paths and the live router disagree.
  */
 import { AGENT_ID_FIELD_DESCRIPTION } from "@memongo/lib"
+import { memoryScopeEnum } from "./openapi-schemas.js"
 
 export const maintenancePaths = {
 	"/v1/chain-trace": {
@@ -20,7 +21,7 @@ export const maintenancePaths = {
 					"application/json": {
 						schema: {
 							type: "object",
-							required: ["factId", "collection"],
+							required: ["factId", "collection", "scope", "scopeRef"],
 							properties: {
 								factId: {
 									type: "string",
@@ -29,6 +30,16 @@ export const maintenancePaths = {
 								collection: {
 									type: "string",
 									description: "Collection containing the fact.",
+								},
+								scope: {
+									type: "string",
+									enum: memoryScopeEnum,
+									description: "Tenant scope the trace is confined to.",
+								},
+								scopeRef: {
+									type: "string",
+									description:
+										"Tenant scope reference the trace is confined to.",
 								},
 								agentId: { type: "string" },
 								maxDepth: {

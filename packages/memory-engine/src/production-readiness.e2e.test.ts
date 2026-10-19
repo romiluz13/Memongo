@@ -578,6 +578,8 @@ describeIfMongo(
 			it("extracts entities from conversation content", async () => {
 				// Extract entities from ALL events written in Phase 1
 				const allEvents = await getEventsByTimeRange({
+					scope: "agent",
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -612,6 +614,7 @@ describeIfMongo(
 
 			it("materializes day-1 episode", async () => {
 				const episode = await materializeEpisode({
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -1159,6 +1162,7 @@ describeIfMongo(
 			it("excludes deleted episodes from recentEpisodes", async () => {
 				const scopeRef = resolveScopeRef({ scope: "agent", agentId: AGENT_ID })
 				const deletedEpisode = await materializeEpisode({
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					agentId: AGENT_ID,
@@ -1177,6 +1181,8 @@ describeIfMongo(
 
 				expect(deletedEpisode).not.toBeNull()
 				const deleted = await updateEpisodeStatus({
+					scope: "agent",
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					episodeId: deletedEpisode!.episodeId,
@@ -2601,6 +2607,8 @@ describeIfMongo(
 						await MongoDBMemoryManager.prototype.recallConversation.call(
 							manager,
 							{
+								scope: "agent",
+								scopeRef: `agent:${AGENT_ID}`,
 								sessionId,
 								roles: ["user", "assistant"],
 								limit: 10,

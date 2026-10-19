@@ -950,7 +950,7 @@ export class MemongoClient {
 	}
 
 	async recallConversation(
-		input: MemongoConversationRecallInput = {},
+		input: MemongoConversationRecallInput,
 	): Promise<MemongoConversationRecallResponse> {
 		return this._silently<MemongoConversationRecallResponse>(
 			{
@@ -1364,16 +1364,20 @@ export class MemongoClient {
 	 * every stage so a review surface can show decided history alongside the
 	 * pending queue.
 	 */
-	async listQuarantined(input?: {
+	async listQuarantined(input: {
+		scope: MemongoScope
+		scopeRef: string
 		agentId?: string
 		status?: MemongoQuarantineStatus
 		limit?: number
 	}): Promise<MemongoQuarantinedMemory[]> {
 		return apiGet(
 			this._opts,
-			`/v1/admin/quarantine${q(input?.agentId, {
-				status: input?.status,
-				limit: input?.limit,
+			`/v1/admin/quarantine${q(input.agentId, {
+				scope: input.scope,
+				scopeRef: input.scopeRef,
+				status: input.status,
+				limit: input.limit,
 			})}`,
 		)
 	}
@@ -1588,6 +1592,8 @@ export class MemongoClient {
 		return apiPost(this._opts, "/v1/chain-trace", {
 			factId: input.factId,
 			collection: input.collection,
+			scope: input.scope,
+			scopeRef: input.scopeRef,
 			agentId: input.agentId,
 			maxDepth: input.maxDepth,
 		})

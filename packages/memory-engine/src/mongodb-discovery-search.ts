@@ -8,6 +8,7 @@
  * Recency ordering is declared composition over the bounded candidate pool.
  */
 import type { Collection, Document } from "mongodb"
+import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
 import { runSearchAggregateWithRetry } from "./mongodb-search.js"
 import { clampSearchQuery } from "./mongodb-search-ranking.js"
 import { toTypedSearchError, type SearchLane } from "./search-outcomes.js"
@@ -29,6 +30,8 @@ export type DiscoverySearchSpec = {
 	collection: Collection
 	/** The Search index name, already prefixed where the manifest prefixes it. */
 	indexName: string
+	/** The unprefixed collection whose manifest `search` index this read runs against. */
+	healthCollection: string
 	lane: SearchLane
 	query: string
 	textPaths: string[]
@@ -92,10 +95,18 @@ export function buildDiscoverySearchPipeline(
 	]
 }
 
-/** A Search failure is a typed throw, never an empty list. */
+/**
+ * A Search failure is a typed throw, never an empty list. An index observed
+ * STALE or unavailable at admission (M2 decision 8) is the typed
+ * `index-stale` / `index-unavailable` failure before any query runs; the
+ * check is a no-op outside a request-local health scope.
+ */
 export async function searchDiscoveryCandidates(
 	spec: DiscoverySearchSpec,
 ): Promise<Document[]> {
+	await assertCollectionIndexesHealthy([spec.healthCollection], spec.lane, [
+		"search",
+	])
 	try {
 		return await runSearchAggregateWithRetry(
 			spec.collection,

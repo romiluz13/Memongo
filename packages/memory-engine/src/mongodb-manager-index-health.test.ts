@@ -29,6 +29,12 @@ import {
 import { searchKB as searchKBCore } from "./mongodb-kb-search.js"
 import { recallConversation as recallConversationCore } from "./mongodb-conversation-recall.js"
 import { searchV2 } from "./mongodb-search-v2.js"
+import { hydrateActiveSlate as hydrateActiveSlateCore } from "./mongodb-active-slate.js"
+import { buildDiscoveryProjection as buildDiscoveryProjectionCore } from "./mongodb-discovery-projections.js"
+import {
+	activeIndexHealth,
+	assertCollectionIndexesHealthy,
+} from "./mongodb-index-health.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import {
 	getLatestIngestRun,
@@ -127,10 +133,21 @@ vi.mock("./mongodb-write-fence.js", async (importOriginal) => ({
 		agentId,
 		epoch: 0,
 	})),
+	withFencedWrite: vi.fn(
+		async ({ fn }: { fn: (session: unknown) => Promise<unknown> }) => fn({}),
+	),
 }))
 vi.mock("./mongodb-kb-search.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	searchKB: vi.fn(),
+}))
+vi.mock("./mongodb-active-slate.js", async (importOriginal) => ({
+	...(await importOriginal<Record<string, unknown>>()),
+	hydrateActiveSlate: vi.fn(),
+}))
+vi.mock("./mongodb-discovery-projections.js", async (importOriginal) => ({
+	...(await importOriginal<Record<string, unknown>>()),
+	buildDiscoveryProjection: vi.fn(),
 }))
 vi.mock("./mongodb-search-v2.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./mongodb-search-v2.js")>()
@@ -231,6 +248,7 @@ function restoreIndex(
 	]
 }
 
+const RECALL_TENANT = { scope: "agent", scopeRef: "agent:agent-1" } as const
 const STALE = { status: "STALE" } as const
 const BUILDING = { status: "BUILDING", queryable: false } as const
 const READY = { status: "READY", queryable: true } as const
@@ -546,7 +564,10 @@ describe("running manager: recallConversation gates on the events indexes", () =
 		patchIndex(indexes, "events_vector", patch)
 
 		const failure = await failureOf(
-			manager.recallConversation({ query: "what did we say" } as never),
+			manager.recallConversation({
+				...RECALL_TENANT,
+				query: "what did we say",
+			} as never),
 		)
 
 		expect(failure).toBeInstanceOf(SearchLaneError)
@@ -559,7 +580,10 @@ describe("running manager: recallConversation gates on the events indexes", () =
 
 		restoreIndex(indexes, saved)
 		await expect(
-			manager.recallConversation({ query: "what did we say" } as never),
+			manager.recallConversation({
+				...RECALL_TENANT,
+				query: "what did we say",
+			} as never),
 		).resolves.toEqual({ results: [] })
 		expect(recallConversationCore).toHaveBeenCalledTimes(1)
 	})
@@ -569,13 +593,88 @@ describe("running manager: recallConversation gates on the events indexes", () =
 		patchIndex(indexes, "events_vector", STALE)
 
 		await expect(
-			manager.recallConversation({ limit: 5 } as never),
+			manager.recallConversation({ ...RECALL_TENANT, limit: 5 } as never),
 		).resolves.toEqual({ results: [] })
 
 		expect(recallConversationCore).toHaveBeenCalledTimes(1)
 		expect(
 			vi.mocked(recallConversationCore).mock.calls[0]?.[0],
 		).not.toHaveProperty("capabilities")
+	})
+
+	it("a recall without its tenant identity fails typed before the health gate and the core", async () => {
+		const { manager, indexes } = await boot()
+		patchIndex(indexes, "events_vector", STALE)
+
+		const failure = await failureOf(
+			manager.recallConversation({ query: "what did we say" } as never),
+		)
+
+		expect(failure).toMatchObject({
+			code: "TENANT_IDENTITY_REQUIRED",
+			operation: "recallConversation",
+			missing: ["scope", "scopeRef"],
+		})
+		expect(recallConversationCore).not.toHaveBeenCalled()
+	})
+})
+
+describe("running manager: the slate and discovery entries open a request scope (M2 T13)", () => {
+	it("buildDiscoveryProjection runs inside a request scope: a STALE index its core checks fails typed, then recovers", async () => {
+		vi.mocked(buildDiscoveryProjectionCore).mockImplementation((async () => {
+			await assertCollectionIndexesHealthy(["structured_mem"], "structured", [
+				"search",
+			])
+			return { kind: "topic-brief", sections: [] }
+		}) as never)
+		const { manager, indexes } = await boot()
+		const saved = findIndex(indexes, "structured_mem_text")
+		patchIndex(indexes, "structured_mem_text", STALE)
+
+		const failure = await failureOf(
+			manager.buildDiscoveryProjection({
+				kind: "topic-brief",
+				query: "pager",
+			}),
+		)
+
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect(failure).toMatchObject({
+			lane: "structured",
+			stage: "index-health",
+			reason: "index-stale",
+		})
+
+		restoreIndex(indexes, saved)
+		await expect(
+			manager.buildDiscoveryProjection({ kind: "topic-brief", query: "pager" }),
+		).resolves.toMatchObject({ kind: "topic-brief" })
+	})
+
+	it("hydrateActiveSlate runs inside a request scope", async () => {
+		let scopeOpen = false
+		vi.mocked(hydrateActiveSlateCore).mockImplementation((async () => {
+			scopeOpen = activeIndexHealth() !== undefined
+			return { items: [] }
+		}) as never)
+		const { manager } = await boot()
+
+		await manager.hydrateActiveSlate({})
+
+		expect(scopeOpen).toBe(true)
+	})
+
+	it("hydrateActiveSlate reads no Search index: a STALE index does not refuse it", async () => {
+		vi.mocked(hydrateActiveSlateCore).mockResolvedValue({ items: [] } as never)
+		const { manager, indexes, calls } = await boot()
+		patchIndex(indexes, "structured_mem_text", STALE)
+		const readsBefore = listReadsOf(calls, "structured_mem")
+
+		await expect(manager.hydrateActiveSlate({})).resolves.toEqual({
+			items: [],
+		})
+
+		expect(listReadsOf(calls, "structured_mem")).toBe(readsBefore)
 	})
 })
 

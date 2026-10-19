@@ -62,7 +62,8 @@ export const adminTools: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "memongo_read_file",
-		description: "Read memory file by path (memory_get parity)",
+		description:
+			"Read memory file by path (memory_get parity). Tenant locators (structured:, entity:, procedure:, event:, episode:, relation:, conversation:, events/, sessions/) need ?scope=<scope>&scopeRef=<scopeRef> on relPath.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -212,10 +213,15 @@ export const adminTools: readonly McpToolDefinition[] = [
 					type: "string",
 					enum: chainTraceCollectionEnum,
 				},
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+				},
+				scopeRef: { type: "string" },
 				agentId: { type: "string" },
 				maxDepth: { type: "number" },
 			},
-			required: ["factId", "collection"],
+			required: ["factId", "collection", "scope", "scopeRef"],
 		},
 		category: "admin",
 	},
@@ -531,6 +537,11 @@ export const adminTools: readonly McpToolDefinition[] = [
 		inputSchema: {
 			type: "object",
 			properties: {
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+				},
+				scopeRef: { type: "string" },
 				agentId: { type: "string" },
 				status: {
 					type: "string",
@@ -538,6 +549,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				},
 				limit: { type: "integer", minimum: 1, maximum: 100 },
 			},
+			required: ["scope", "scopeRef"],
 		},
 		category: "admin",
 	},

@@ -3,6 +3,9 @@ import { describe, it, expect, vi } from "vitest"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { mocked } from "./test-helpers/manager-test-kit.js"
 
+// M2 T13: every tenant locator names its tenant.
+const TENANT_QUERY = "scope=agent&scopeRef=agent%3Aagent-1"
+
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
 )
@@ -138,7 +141,11 @@ describe("MongoDBMemoryManager conversation recall", () => {
 			},
 		) as MongoDBMemoryManager
 
-		await manager.recallConversation({ query: "deployment" })
+		await manager.recallConversation({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			query: "deployment",
+		})
 
 		expect(recallConversation).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -184,7 +191,11 @@ describe("MongoDBMemoryManager conversation recall", () => {
 			},
 		) as MongoDBMemoryManager
 
-		await manager.recallConversation({ query: "deployment" })
+		await manager.recallConversation({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			query: "deployment",
+		})
 
 		expect(recallConversation).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -225,7 +236,11 @@ describe("MongoDBMemoryManager conversation recall", () => {
 		) as MongoDBMemoryManager
 
 		await expect(
-			manager.recallConversation({ query: "deployment" }),
+			manager.recallConversation({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				query: "deployment",
+			}),
 		).rejects.toThrow("$listSearchIndexes failed on test_events")
 		expect(recallConversation).not.toHaveBeenCalled()
 	})
@@ -248,7 +263,7 @@ describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		const result = await ops.readFile({
-			relPath: "structured:preference:editor-theme",
+			relPath: `structured:preference:editor-theme?${TENANT_QUERY}`,
 		})
 
 		expect(result.text).toBe("")
@@ -281,7 +296,7 @@ describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
 
 		const result = await ops.readCanonicalEvent(
 			"evt-expired",
-			"event:evt-expired",
+			`event:evt-expired?${TENANT_QUERY}`,
 		)
 
 		expect(result.text).toBe("")
@@ -322,7 +337,7 @@ describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		await ops.readEpisodeLocator({
-			rawPath: "episode:ep-1?expand=events",
+			rawPath: `episode:ep-1?expand=events&${TENANT_QUERY}`,
 			episodeId: "ep-1",
 			expandEvents: true,
 		})
@@ -575,7 +590,7 @@ describe("MongoDBManagerReadOps relation locator (C-025)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		const result = await ops.readFile({
-			relPath: "relation:ent-1-ent-2-works_on",
+			relPath: `relation:ent-1-ent-2-works_on?${TENANT_QUERY}`,
 		})
 
 		expect(findRelationByLocatorId).toHaveBeenCalledWith(
@@ -601,7 +616,7 @@ describe("MongoDBManagerReadOps relation locator (C-025)", () => {
 		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
 
 		const result = await ops.readFile({
-			relPath: "relation:ent-1-ent-2?type=works_on&scope=agent",
+			relPath: `relation:ent-1-ent-2?type=works_on&${TENANT_QUERY}`,
 		})
 
 		expect(findRelationByLocatorId).toHaveBeenCalledWith(
@@ -609,6 +624,7 @@ describe("MongoDBManagerReadOps relation locator (C-025)", () => {
 				relationId: "ent-1-ent-2",
 				type: "works_on",
 				scope: "agent",
+				scopeRef: "agent:agent-1",
 			}),
 		)
 		// Miss renders as an empty conversation read, not an error.

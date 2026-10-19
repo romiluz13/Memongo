@@ -630,17 +630,45 @@ describe("memongo quarantine review (C-004)", () => {
 
 		const out = await handleToolCall(
 			"memongo_quarantine_list",
-			{ agentId: "agent-42", status: "pending-review", limit: 5 },
+			{
+				agentId: "agent-42",
+				scope: "workspace",
+				scopeRef: "workspace:demo",
+				status: "pending-review",
+				limit: 5,
+			},
 			{ listQuarantined } as any,
 		)
 
 		expect(listQuarantined).toHaveBeenCalledWith({
 			agentId: "agent-42",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			status: "pending-review",
 			limit: 5,
 		})
 		expect(out.isError).toBeUndefined()
 		expect(parseTextPayload(out)).toEqual([entry])
+	})
+
+	it.each([
+		["scope", { scopeRef: "workspace:demo" }],
+		["scopeRef", { scope: "workspace" }],
+		["scope and scopeRef", {}],
+	])("rejects a quarantine list with no %s before calling the client (M2 T13)", async (_label, identity) => {
+		const listQuarantined = vi.fn().mockResolvedValue([])
+
+		const result = await handleToolCall(
+			"memongo_quarantine_list",
+			{ status: "pending-review", ...identity },
+			{ listQuarantined } as unknown as MemongoClient,
+		)
+
+		expect(result.isError).toBe(true)
+		expect(parseTextPayload(result)).toEqual({
+			error: "scope and scopeRef are required",
+		})
+		expect(listQuarantined).not.toHaveBeenCalled()
 	})
 
 	it("rejects an unrecognized status before calling the client", async () => {
@@ -784,8 +812,25 @@ describe("structuredContent envelopes (P1.2)", () => {
 			memoryIds: ["mem-1"],
 		},
 		memongo_admin_get_trace: { traceId: "trace-1" },
-		memongo_chain_trace: { factId: "fact-1", collection: "structured_mem" },
+		memongo_chain_trace: {
+			factId: "fact-1",
+			collection: "structured_mem",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
 		memongo_erase_agent: { confirm: "erase", agentId: "agent-42" },
+		memongo_quarantine_list: {
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
+		memongo_recall_conversation: {
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
+		memongo_recall_messages: {
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
 		memongo_quarantine_promote: { quarantineId: "q-1" },
 		memongo_quarantine_reject: { quarantineId: "q-1" },
 		memongo_get_job: { jobId: "job-1" },
@@ -977,6 +1022,8 @@ describe("handleToolCall B2a contract field forwarding", () => {
 			}),
 		)
 
+		expect(recallTool?.inputSchema.required).toEqual(["scope", "scopeRef"])
+
 		const recallConversation = vi.fn().mockResolvedValue({ results: [] })
 		const out = await handleToolCall(
 			"memongo_recall_conversation",
@@ -996,6 +1043,23 @@ describe("handleToolCall B2a contract field forwarding", () => {
 				scopeRef: "session-1",
 			}),
 		)
+	})
+
+	it.each([
+		["memongo_recall_conversation", { query: "q" }],
+		["memongo_recall_conversation", { query: "q", scope: "agent" }],
+		["memongo_recall_conversation", { query: "q", scopeRef: "agent:a1" }],
+		["memongo_recall_messages", { query: "q" }],
+	])("refuses %s without its full tenant %j instead of recalling every scope", async (name, args) => {
+		const recallConversation = vi.fn()
+
+		const out = await handleToolCall(name, args, { recallConversation } as any)
+
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "scope and scopeRef are required",
+		})
+		expect(recallConversation).not.toHaveBeenCalled()
 	})
 
 	it("exposes and forwards scope/scopeRef on memongo_profile", async () => {
@@ -1388,12 +1452,22 @@ describe("chain-trace collection validation (WS-08 / C-015)", () => {
 		] as const) {
 			const out = await handleToolCall(
 				"memongo_chain_trace",
-				{ factId: "fact-1", collection },
+				{
+					factId: "fact-1",
+					collection,
+					scope: "workspace",
+					scopeRef: "workspace:demo",
+				},
 				{ traceChain } as unknown as MemongoClient,
 			)
 			expect(out.isError).toBeUndefined()
 			expect(traceChain).toHaveBeenCalledWith(
-				expect.objectContaining({ factId: "fact-1", collection }),
+				expect.objectContaining({
+					factId: "fact-1",
+					collection,
+					scope: "workspace",
+					scopeRef: "workspace:demo",
+				}),
 			)
 		}
 	})
@@ -1410,6 +1484,24 @@ describe("chain-trace collection validation (WS-08 / C-015)", () => {
 		expect(parseTextPayload(out)).toEqual({
 			error:
 				"collection must be one of structured_mem|entities|relations|procedures|entity_links",
+		})
+	})
+
+	it.each([
+		["scope", { scopeRef: "workspace:demo" }],
+		["scopeRef", { scope: "workspace" }],
+		["scope and scopeRef", {}],
+	])("rejects a trace with no %s before calling the client (M2 T13)", async (_label, identity) => {
+		const traceChain = vi.fn()
+		const out = await handleToolCall(
+			"memongo_chain_trace",
+			{ factId: "fact-1", collection: "structured_mem", ...identity },
+			{ traceChain } as unknown as MemongoClient,
+		)
+		expect(traceChain).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "scope and scopeRef are required",
 		})
 	})
 
@@ -1462,18 +1554,17 @@ describe("untrusted-memory provenance label on retrieval results (C-040)", () =>
 			name: "memongo_recall_conversation",
 			method: "recallConversation",
 			payload: { results: [], metadata: {} },
+			args: { scope: "agent", scopeRef: "agent:a1" },
 		},
 	] as const
 
 	it.each(
 		RETRIEVAL_SURFACES,
-	)("$name labels its serialized payload as untrusted memory, label first", async ({
-		name,
-		method,
-		payload,
-	}) => {
+	)("$name labels its serialized payload as untrusted memory, label first", async (surface) => {
+		const { name, method, payload } = surface
+		const args = "args" in surface ? surface.args : {}
 		const client = { [method]: vi.fn().mockResolvedValue(payload) }
-		const out = await handleToolCall(name, {}, client as any)
+		const out = await handleToolCall(name, args, client as any)
 
 		expect(out.isError).toBeUndefined()
 		const text = parseTextPayload(out) as Record<string, unknown>
@@ -1492,7 +1583,7 @@ describe("untrusted-memory provenance label on retrieval results (C-040)", () =>
 		const recallConversation = vi.fn().mockResolvedValue({ results: [] })
 		const out = await handleToolCall(
 			"memongo_recall_messages",
-			{ query: "rollback plan" },
+			{ query: "rollback plan", scope: "agent", scopeRef: "agent:a1" },
 			{ recallConversation } as any,
 		)
 		expect(parseTextPayload(out)).toEqual({

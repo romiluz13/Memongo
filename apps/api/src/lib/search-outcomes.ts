@@ -190,10 +190,18 @@ function isRerankUnsupportedError(err: unknown): boolean {
 	)
 }
 
+// Engine error classes do not cross every bridge/runtime boundary reliably,
+// so match the stable error name (as routes/v1-helpers.ts does).
+function isErasureInProgressError(err: unknown): boolean {
+	return err instanceof Error && err.name === "ErasureGateConflictError"
+}
+
 /**
  * The catch-block mapping: a typed search failure goes through the same
  * table; any other error keeps the generic internal error envelope. A rerank
  * demand is the caller's request, not a lane failure: 400 RERANK_UNSUPPORTED.
+ * An erasure in progress refuses the read (M2 T13, review F2): 409
+ * ERASURE_IN_PROGRESS, never an empty answer and never an internal error.
  */
 export function searchErrorResponse(
 	c: Context,
@@ -202,6 +210,14 @@ export function searchErrorResponse(
 ) {
 	if (isRerankUnsupportedError(err)) {
 		return jsonError(c, 400, "RERANK_UNSUPPORTED", RERANK_UNSUPPORTED_MESSAGE)
+	}
+	if (isErasureInProgressError(err)) {
+		return jsonError(
+			c,
+			409,
+			"ERASURE_IN_PROGRESS",
+			"read refused: an erasure is in progress for this agent",
+		)
 	}
 	const outcomes = searchOutcomesFromError(err)
 	const mapping = mapSearchOutcomes(outcomes)

@@ -2661,6 +2661,8 @@ describe("getEventsByTimeRange", () => {
 		const start = new Date(now.getTime() - 120000)
 		const end = new Date(now.getTime() + 1000)
 		const result = await getEventsByTimeRange({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -2675,6 +2677,8 @@ describe("getEventsByTimeRange", () => {
 		// Verify filter
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			timestamp: { $gte: start, $lte: end },
 			// P4.4.1: expired events are hidden until the TTL sweep runs.
 			$or: [
@@ -2753,6 +2757,8 @@ describe("getEventsBySession", () => {
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
 		const result = await getEventsBySession({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db: mockDb(),
 			prefix: "test_",
 			agentId: "agent-1",
@@ -2763,6 +2769,8 @@ describe("getEventsBySession", () => {
 		expect(result[0].sessionId).toBe("sess-1")
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			sessionId: "sess-1",
 			// P4.4.1: expired events are hidden until the TTL sweep runs.
 			$or: [

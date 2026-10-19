@@ -33,7 +33,12 @@ async function recall(body: Record<string, unknown>) {
 		.request("/v1/recall-conversation", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ agentId: "agent1", ...body }),
+			body: JSON.stringify({
+				agentId: "agent1",
+				scope: "agent",
+				scopeRef: "agent:agent1",
+				...body,
+			}),
 		})
 	return {
 		status: response.status,

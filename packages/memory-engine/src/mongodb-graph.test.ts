@@ -571,6 +571,7 @@ describe("mongodb-graph", () => {
 			const db = createMockDb({ [`${PREFIX}entity_links`]: entityLinksCol })
 
 			const changed = await setEntityLinkStatus({
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: "agent-1",
@@ -619,6 +620,8 @@ describe("mongodb-graph", () => {
 			const db = createMockDb({ [`${PREFIX}entity_links`]: entityLinksCol })
 
 			const results = await getEntityLinks({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: "agent-1",
@@ -671,6 +674,8 @@ describe("mongodb-graph", () => {
 			const db = createMockDb({ [`${PREFIX}entities`]: entitiesCol })
 
 			const results = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				type: "person",
@@ -680,7 +685,12 @@ describe("mongodb-graph", () => {
 			expect(results).toHaveLength(2)
 			const [filter] = (entitiesCol.find as ReturnType<typeof vi.fn>).mock
 				.calls[0]
-			expect(filter).toEqual({ agentId: "agent-1", type: "person" })
+			expect(filter).toEqual({
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				type: "person",
+			})
 		})
 	})
 
@@ -708,6 +718,8 @@ describe("mongodb-graph", () => {
 					}),
 				})
 				return expandGraph({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					entityId: "ent-1",
@@ -868,6 +880,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -968,6 +982,8 @@ describe("mongodb-graph", () => {
 			const asOf = new Date("2026-04-11T10:30:00.000Z")
 
 			await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1010,6 +1026,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1062,6 +1080,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1093,6 +1113,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntity({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1105,8 +1127,10 @@ describe("mongodb-graph", () => {
 			expect(entitiesCol.deleteOne).toHaveBeenCalledWith({
 				entityId: "ent-1",
 				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 			})
-			// Verify cascade deletion of relations includes agentId
+			// Verify cascade deletion of relations stays in the tenant
 			const [relFilter] = (relationsCol.deleteMany as ReturnType<typeof vi.fn>)
 				.mock.calls[0]
 			expect(relFilter.$or).toEqual([
@@ -1114,6 +1138,8 @@ describe("mongodb-graph", () => {
 				{ toEntityId: "ent-1" },
 			])
 			expect(relFilter.agentId).toBe("agent-1")
+			expect(relFilter.scope).toBe("agent")
+			expect(relFilter.scopeRef).toBe("agent:agent-1")
 		})
 
 		it("cascades entity_links deletion and reports the count (C-024)", async () => {
@@ -1133,6 +1159,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntity({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1172,6 +1200,8 @@ describe("mongodb-graph", () => {
 			})
 
 			await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1204,6 +1234,8 @@ describe("mongodb-graph", () => {
 			})
 
 			await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1269,6 +1301,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1347,6 +1381,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1411,6 +1447,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -1445,6 +1483,8 @@ describe("mongodb-graph", () => {
 
 			await expect(
 				deleteEntity({
+					scope: "agent",
+					scopeRef: "agent:agent-1",
 					db,
 					prefix: PREFIX,
 					entityId: "ent-1",

@@ -1479,8 +1479,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return adminOpsOf(this).deleteAllForAgent(params)
 	}
 
-	/** C-004: list this agent's quarantine review queue, oldest first. */
-	async listQuarantined(params?: {
+	/** C-004: list one tenant's quarantine review queue, oldest first. */
+	async listQuarantined(params: {
+		scope: MemoryScope
+		scopeRef: string
 		status?: import("./mongodb-quarantine-review.js").QuarantineStatus
 		limit?: number
 	}) {
@@ -1537,13 +1539,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			maxItems?: number
 		} = {},
 	): Promise<MemoryActiveSlate> {
-		return lifecycleOpsOf(this).hydrateActiveSlate(params)
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).hydrateActiveSlate(params),
+		)
 	}
 
 	async buildDiscoveryProjection(
 		request: MemoryDiscoveryProjectionRequest,
 	): Promise<MemoryDiscoveryProjection> {
-		return lifecycleOpsOf(this).buildDiscoveryProjection(request)
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).buildDiscoveryProjection(request),
+		)
 	}
 
 	async buildContextBundle(
@@ -1573,6 +1579,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}) {
 		return lifecycleOpsOf(this).traceChain(params)

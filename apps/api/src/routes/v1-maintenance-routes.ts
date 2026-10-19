@@ -54,11 +54,23 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 				"collection must be structured_mem|entities|relations|procedures|entity_links",
 			)
 		}
+		const scope = await readScope(c)
+		const scopeRef = await readScopeRef(c)
+		if (!scope || !scopeRef) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"scope and scopeRef are required",
+			)
+		}
 		try {
 			const chain = await memongoBridgeTraceChain({
 				agentId: await readAgentId(c),
 				factId,
 				collection: parsedCollection.value,
+				scope,
+				scopeRef,
 				maxDepth: typeof body.maxDepth === "number" ? body.maxDepth : undefined,
 			})
 			return c.json(chain)

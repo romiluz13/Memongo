@@ -348,6 +348,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			// Verify events persisted
 			const events = await getEventsBySession({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -371,6 +373,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			}
 
 			const events = await getEventsBySession({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -421,6 +425,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should retrieve events by time range", async () => {
 			const allEvents = await getEventsByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -446,6 +452,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should extract entities from all conversation events", async () => {
 			// Gather all event bodies
 			const allEvents = await getEventsByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -477,6 +485,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should find @romiluz as a person entity", async () => {
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -491,6 +501,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should find @sarah as a person entity (regex captures word chars only)", async () => {
 			// MENTION_REGEX /@(\w{3,})/ captures "sarah" from "@sarah-chen" (no hyphens in \w)
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "sarah",
@@ -505,6 +517,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should find #data as a topic entity (regex captures word chars only)", async () => {
 			// TAG_REGEX /#(\w{3,})/ captures "data" from "#data-pipeline" (no hyphens in \w)
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "data",
@@ -517,6 +531,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should find GitHub URL as a document entity", async () => {
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "github.com",
@@ -530,6 +546,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			// FILE_PATH_REGEX requires (?:^|\s) before the path — leading "/" after
 			// backticks won't match. But URLs always match (https://...).
 			const docs = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -543,6 +561,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should find quoted name 'Sarah Chen' as a person entity", async () => {
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "Sarah Chen",
@@ -553,6 +573,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have person entities across conversations", async () => {
 			const people = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -569,6 +591,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have topic entities", async () => {
 			const topics = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -583,6 +607,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have document entities (URLs + file paths)", async () => {
 			const docs = await getEntitiesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -645,6 +671,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should create relations between entities", async () => {
 			// Find romiluz entity
 			const romiluz = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -652,6 +680,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			})
 
 			const sarah = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "sarah",
@@ -711,6 +741,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			// Unidirectional follows fromEntityId → toEntityId.
 			// romiluz has outbound relations: works_on DataVault, works_on team
 			const romiluz = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -719,6 +751,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			expect(romiluz.length).toBeGreaterThan(0)
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				entityId: romiluz[0].entityId,
@@ -739,6 +773,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should expand graph bidirectionally", async () => {
 			// Find romiluz entity for bidirectional expansion
 			const romiluz = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "romiluz",
@@ -747,6 +783,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			if (romiluz.length > 0) {
 				const result = await expandGraph({
+					scope: "agent",
+					scopeRef: `agent:${AGENT_ID}`,
 					db,
 					prefix: PREFIX,
 					entityId: romiluz[0].entityId,
@@ -799,6 +837,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			})
 
 			const result = await deleteEntity({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				entityId: tempId,
@@ -870,6 +910,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should materialize a daily episode for Day 1", async () => {
 			const episode = await materializeEpisode({
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -897,6 +938,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should materialize a topic episode for 'architecture'", async () => {
 			const episode = await materializeEpisode({
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -915,6 +957,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should materialize a decision episode", async () => {
 			const episode = await materializeEpisode({
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -984,6 +1027,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should retrieve episodes by time range", async () => {
 			const episodes = await getEpisodesByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -999,6 +1044,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should retrieve episodes by type", async () => {
 			const dailyEpisodes = await getEpisodesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1007,6 +1054,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			expect(dailyEpisodes.length).toBeGreaterThanOrEqual(1)
 
 			const decisionEpisodes = await getEpisodesByType({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1017,6 +1066,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should search episodes by keyword", async () => {
 			const results = await searchEpisodes({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "pipeline",
@@ -1033,6 +1084,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 	describe("Phase 5: Consolidation Lifecycle", () => {
 		it("should have unconsolidated events", async () => {
 			const events = await getUnconsolidatedEvents({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1043,6 +1096,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should mark events as consolidated", async () => {
 			const events = await getUnconsolidatedEvents({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1063,6 +1118,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 		it("should have fewer unconsolidated events after marking", async () => {
 			const remaining = await getUnconsolidatedEvents({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1084,6 +1141,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 	describe("Phase 6: Auto Episode Triggers", () => {
 		it("should detect trigger conditions on unconsolidated events", async () => {
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1108,6 +1167,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		it("should respect rate limiting", async () => {
 			// Second call within 60min should be rate-limited (if first triggered)
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1473,6 +1534,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			// Search from our agent should NOT find it
 			const ourEvents = await getEventsByTimeRange({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -1499,6 +1562,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			})
 
 			const results = await findEntitiesByName({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				query: "SecretOtherAgent",
@@ -1524,6 +1589,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			// Our agent should not find the other agent's entity
 			const result = await expandGraph({
+				scope: "agent",
+				scopeRef: `agent:${AGENT_ID}`,
 				db,
 				prefix: PREFIX,
 				entityId: otherEntityId,

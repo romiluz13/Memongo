@@ -100,6 +100,8 @@ export type SearchConfig = {
 }
 
 export type MemongoConversationRecallInput = {
+	scope: MemongoScope
+	scopeRef: string
 	query?: string
 	sessionId?: string
 	roles?: Array<"user" | "assistant" | "system" | "tool">
@@ -110,8 +112,6 @@ export type MemongoConversationRecallInput = {
 	includeToolMessages?: boolean
 	limit?: number
 	agentId?: string
-	scope?: MemongoScope
-	scopeRef?: string
 }
 
 export type MemongoConversationImportInput = {
@@ -346,6 +346,8 @@ export type MemongoDiscoveryProjectionInput = {
 export type MemongoTraceChainInput = {
 	factId: string
 	collection: string
+	scope: MemongoScope
+	scopeRef: string
 	agentId?: string
 	maxDepth?: number
 }

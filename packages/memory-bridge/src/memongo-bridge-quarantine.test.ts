@@ -80,6 +80,8 @@ describe("bridge quarantine review (C-004)", () => {
 	it("lists the authorized agent's review queue with status and limit filters", async () => {
 		const entries = await memongoBridgeListQuarantined({
 			agentId: "agent-A",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			status: "pending-review",
 			limit: 10,
 		})
@@ -88,6 +90,8 @@ describe("bridge quarantine review (C-004)", () => {
 			expect.objectContaining({ agentId: "agent-A" }),
 		)
 		expect(listQuarantined).toHaveBeenCalledWith({
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			status: "pending-review",
 			limit: 10,
 		})

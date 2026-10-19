@@ -106,6 +106,22 @@ function readScopeArg(
 }
 
 /**
+ * M2 T13: tenant-confined reads take the full tenant identity from the tool
+ * arguments; an absent part is a tool error, never a read across every scope.
+ */
+function readTenantArgs(args: Record<string, unknown>): {
+	scope: MemoryScopeValue
+	scopeRef: string
+} {
+	const scope = readScopeArg(args)
+	const scopeRef = typeof args.scopeRef === "string" ? args.scopeRef.trim() : ""
+	if (!scope || !scopeRef) {
+		throw new Error("scope and scopeRef are required")
+	}
+	return { scope, scopeRef }
+}
+
+/**
  * WS-08 / C-013: validate a raw `mode` argument against the canonical
  * context-bundle modes (single contract source, @memongo/lib) BEFORE it
  * reaches the client call. The previous ternary (`args.mode === "wake-up" ?
@@ -700,8 +716,7 @@ export async function handleToolCall(
 			const out = await memongo.recallConversation({
 				query: typeof args.query === "string" ? args.query : undefined,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope: readScopeArg(args),
-				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
+				...readTenantArgs(args),
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
 				roles,
@@ -859,6 +874,7 @@ export async function handleToolCall(
 			const out = await memongo.traceChain({
 				factId: args.factId,
 				collection: readChainCollectionArg(args),
+				...readTenantArgs(args),
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				maxDepth: typeof args.maxDepth === "number" ? args.maxDepth : undefined,
 			})
@@ -1054,6 +1070,7 @@ export async function handleToolCall(
 				)
 			}
 			const out = await memongo.listQuarantined({
+				...readTenantArgs(args),
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				status:
 					args.status === "pending-review" ||

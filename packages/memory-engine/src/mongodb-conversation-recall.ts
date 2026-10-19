@@ -15,6 +15,7 @@ import {
 	splitAtlasSearchFilter,
 } from "./mongodb-search.js"
 import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	resolveSearchBudgetLimits,
 	runWithSearchBudget,
@@ -280,13 +281,10 @@ function buildStandardFilter(params: {
 	endDate?: Date
 	asOf?: Date
 }): Document {
-	const filter: Document = { agentId: params.request.agentId }
-	// Tenant isolation: restrict to the caller's scope/scopeRef when provided.
-	if (params.request.scope) {
-		filter.scope = params.request.scope
-	}
-	if (params.request.scopeRef) {
-		filter.scopeRef = params.request.scopeRef
+	const filter: Document = {
+		agentId: params.request.agentId,
+		scope: params.request.scope,
+		scopeRef: params.request.scopeRef,
 	}
 	if (params.request.sessionId) {
 		filter.sessionId = params.request.sessionId
@@ -324,13 +322,8 @@ function buildVectorFilter(params: {
 }): Document {
 	const filter: Document = {
 		agentId: { $eq: params.request.agentId },
-	}
-	// Tenant isolation: restrict to the caller's scope/scopeRef when provided.
-	if (params.request.scope) {
-		filter.scope = { $eq: params.request.scope }
-	}
-	if (params.request.scopeRef) {
-		filter.scopeRef = { $eq: params.request.scopeRef }
+		scope: { $eq: params.request.scope },
+		scopeRef: { $eq: params.request.scopeRef },
 	}
 	if (params.request.sessionId) {
 		filter.sessionId = { $eq: params.request.sessionId }
@@ -721,6 +714,7 @@ export async function recallConversation(params: {
 	 */
 	onLaneFailure?: (lane: string, error: unknown) => void
 }): Promise<ConversationRecallResponse> {
+	const tenant = requireTenantIdentity("recallConversation", params.request)
 	const startedAt = Date.now()
 	const effectiveLimit = clampLimit(params.request.limit)
 	const asOf = params.request.asOf
@@ -729,10 +723,11 @@ export async function recallConversation(params: {
 	const resolvedTimeZone = normalizeTimeZone(params.request.timezone)
 	const trimmedQuery = params.request.query?.trim()
 	const queryText = trimmedQuery ? clampSearchQuery(trimmedQuery) : trimmedQuery
-	const request =
-		queryText === params.request.query
-			? params.request
-			: { ...params.request, query: queryText }
+	const request: ConversationRecallRequest = {
+		...params.request,
+		scopeRef: tenant.scopeRef,
+		...(queryText === params.request.query ? {} : { query: queryText }),
+	}
 	if (trimmedQuery && queryText !== trimmedQuery) {
 		emitTelemetry(params.db, params.prefix, {
 			meta: {
