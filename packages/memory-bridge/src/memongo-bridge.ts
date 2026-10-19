@@ -719,6 +719,7 @@ export async function memongoBridgeSearchDetailed(params: {
 			end?: string
 		}
 		needExactEvidence?: boolean
+		rerank?: boolean
 		allowConstraintRelaxation?: boolean
 		numCandidates?: number
 		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
@@ -798,6 +799,7 @@ export async function memongoBridgeSearchDetailed(params: {
 						end?: string
 					}
 					needExactEvidence?: boolean
+					rerank?: boolean
 					allowConstraintRelaxation?: boolean
 					numCandidates?: number
 					fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"

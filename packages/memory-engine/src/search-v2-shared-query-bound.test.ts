@@ -216,13 +216,6 @@ describe("shared-budget search input bounds", () => {
 			admission: { kind: "admission", agentId: "a1", epoch: 19 },
 			availablePaths: new Set(["structured"]),
 			searchOptions: {
-				rerankConfig: {
-					enabled: true,
-					model: "rerank-2.5",
-					topN: 10,
-					minScore: 0.1,
-					voyageApiKey: "mock-key",
-				},
 				queryRewriteConfig: {
 					enabled,
 					method: "synonym-expansion",
@@ -230,15 +223,11 @@ describe("shared-budget search input bounds", () => {
 				},
 			},
 		})
-		expect(emitTelemetry).toHaveBeenCalledWith(
-			expect.any(Object),
-			"test_",
-			expect.objectContaining({
-				meta: { agentId: "a1", operation: "rerank" },
-				rerankSkipped: "no-results",
-			}),
-			{ admission: { kind: "admission", agentId: "a1", epoch: 19 } },
-		)
+		expect(
+			vi
+				.mocked(emitTelemetry)
+				.mock.calls.filter((call) => call[2].meta.operation === "rerank"),
+		).toHaveLength(0)
 		expect(vi.mocked(searchStructuredMemory).mock.lastCall?.[1]).toBe(
 			enabled ? expandSynonyms(query) : query,
 		)

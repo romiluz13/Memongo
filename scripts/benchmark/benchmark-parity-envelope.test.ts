@@ -236,25 +236,12 @@ describe("resolveBenchmarkEmbeddingConfig", () => {
 })
 
 describe("resolveBenchmarkRerankerConfig", () => {
-	it("projects enabled + model + topN + stage from reranking config", () => {
-		const cfg = resolveBenchmarkRerankerConfig({
-			enabled: true,
-			model: "rerank-2.5",
-			topN: 20,
+	it("always reports no reranker (the HTTP reranker was removed in M2)", () => {
+		expect(resolveBenchmarkRerankerConfig()).toEqual({
+			model: "none",
+			version: null,
+			stage: "none",
 		})
-		expect(cfg.model).toBe("rerank-2.5")
-		// Current engine wiring applies rerank AFTER hybrid fusion
-		expect(cfg.stage).toBe("post-fusion")
-		expect(cfg.version).toBeNull()
-	})
-
-	it("marks stage 'none' when reranking is disabled", () => {
-		const cfg = resolveBenchmarkRerankerConfig({
-			enabled: false,
-			model: "rerank-2.5",
-			topN: 20,
-		})
-		expect(cfg.stage).toBe("none")
 	})
 })
 

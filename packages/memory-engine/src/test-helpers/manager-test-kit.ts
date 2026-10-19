@@ -67,7 +67,7 @@ export function kitMongoConfig(overrides?: Record<string, unknown>) {
 			kb: { enabled: false },
 			episodes: { enabled: true, minEventsForEpisode: 6 },
 			graph: { enabled: false },
-			reranking: { enabled: false },
+			reranking: {},
 			queryRewriting: { enabled: false },
 			// RET-21: every recordRecallTrace site reads the diagnostic
 			// privacy mode from the resolved relevance telemetry config —
@@ -487,20 +487,6 @@ export function queryRewriterModuleMock() {
 			rewrittenQuery: query,
 			rewritten: false,
 			method: "synonym-expansion",
-			latencyMs: 0,
-		})),
-	}
-}
-
-export function rerankerModuleMock() {
-	return {
-		// C-031: mongodb-search-v2.ts reads this constant at module scope, so
-		// the mock must carry the real value (mongodb-reranker.ts) or every
-		// manager test file fails at import time.
-		RERANK_TIMEOUT_MS: 2_000,
-		crossEncoderRerank: vi.fn(async ({ results }) => ({
-			results,
-			reranked: false,
 			latencyMs: 0,
 		})),
 	}

@@ -253,14 +253,6 @@ vi.mock(
 		).queryRewriterModuleMock(),
 )
 
-vi.mock("../../packages/memory-engine/src/mongodb-reranker.js", async () =>
-	(
-		await import(
-			"../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
-		)
-	).rerankerModuleMock(),
-)
-
 vi.mock("../../packages/memory-engine/src/mongodb-lane-coverage.js", async () =>
 	(
 		await import(
@@ -340,12 +332,7 @@ describe("benchmark run configuration identity", () => {
 						kbTtlSec: 600,
 						similarityThreshold: 0.92,
 					},
-					reranking: {
-						enabled: false,
-						model: "rerank-2.5",
-						topN: 20,
-						minScore: 0.01,
-					},
+					reranking: { temporalProximityBoost: 0.1 },
 					queryRewriting: {
 						enabled: false,
 						method: "rules",
@@ -394,10 +381,10 @@ describe("benchmark run configuration identity", () => {
 					searchBudgetMaxAggregations: 12,
 					searchBudgetMaxEmbeds: 5,
 					userSearchMaxTimeMs: 4321,
-					// B12: the recorded weights come from the benchmark override
-					// (always 0), not the host reranking config.
-					rerankerRecencyBoost: 0,
-					rerankerAccessBoost: 0,
+					rerankerEnabled: false,
+					rerankerModel: "none",
+					rerankerRecencyBoost: null,
+					rerankerAccessBoost: null,
 				}),
 			)
 			expect(JSON.stringify(configuration)).not.toContain("secret")

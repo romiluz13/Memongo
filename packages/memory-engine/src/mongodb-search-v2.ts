@@ -39,11 +39,6 @@ import { resolveUserfactEvidenceMode } from "./mongodb-userfact-evidence.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveEnrichmentMode } from "./mongodb-llm-enrichment.js"
 import {
-	crossEncoderRerank,
-	RERANK_TIMEOUT_MS,
-	type RerankConfig,
-} from "./mongodb-reranker.js"
-import {
 	planRetrieval,
 	type RetrievalPath,
 	type RetrievalPlan,
@@ -62,7 +57,6 @@ import {
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { mongoSearch, vectorSearch } from "./mongodb-search.js"
 import {
-	DEFAULT_USER_SEARCH_MAX_TIME_MS,
 	findCompletedSearchRetrieval,
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
@@ -127,9 +121,7 @@ import {
 // so the v2 public surface keeps its name.
 export type { SearchLaneOutcome } from "./search-outcomes.js"
 import {
-	applyPreferenceEvidenceBoostAfterRerank,
 	clampSearchQuery,
-	applyRecencyAccessBoostAfterRerank,
 	deduplicateSearchResults,
 	isBenchmarkStrictMode,
 	isBenchmarkTurnPrecisionMode,
@@ -163,7 +155,7 @@ import { extractTemporalWindow } from "./mongodb-retrieval-planner.js"
 const log = createSubsystemLogger("memory:mongodb")
 
 // P4.4.4: default temporal-proximity weight for the raw-window lane when the
-// resolved rerank config does not carry one (direct searchV2 callers).
+// resolved reranking config does not carry one (direct searchV2 callers).
 const DEFAULT_TEMPORAL_PROXIMITY_BOOST = 0.1
 
 // ---------------------------------------------------------------------------
@@ -185,6 +177,7 @@ export type V2SearchMetadata = {
 	laneOutcomes?: SearchLaneOutcome[]
 	/** #101 section 5: complete, partial or failed, computed from the rows. */
 	outcomeStatus?: SearchOutcomeStatus
+	/** Always false: M2 has no reranker. Native $rerank arrives in M4. */
 	reranked?: boolean
 	queryRewritten?: boolean
 	laneControls?: ReturnType<typeof applyLaneAwareResultControls>["summary"]
@@ -305,17 +298,6 @@ export function renderGraphRelationSnippet(
 	}
 	return edge
 }
-
-/**
- * WS-16 (C-031): the end-to-end tail budget one search may spend — the
- * documented 12s worst-case composition (10s maxTimeMS aggregate + 2s
- * rerank timeout) pinned by
- * mongodb-search-latency-composition.test.ts. searchV2 stamps its start
- * time and hands rerank the REMAINDER of this budget, so the provider call
- * can never stack its full 2s cap on top of an already-consumed tail.
- */
-export const SEARCH_TAIL_COMPOSITION_BUDGET_MS =
-	DEFAULT_USER_SEARCH_MAX_TIME_MS + RERANK_TIMEOUT_MS
 
 /**
  * searchV2 entry point: opens the per-request cost budget (P3.2) that every
@@ -474,7 +456,8 @@ export type SearchV2Context = {
 		scope?: MemoryScope
 		scopeRef?: string
 		allowHybridBackstop?: boolean
-		rerankConfig?: RerankConfig
+		/** The `reranking` config; only the raw-window lane's boost is left. */
+		rerankConfig?: { temporalProximityBoost?: number }
 		queryRewriteConfig?: QueryRewriteConfig
 		projection?: "full" | "ids-only"
 		sourcePreference?: MemorySearchRequest["sourcePreference"]
@@ -533,10 +516,6 @@ async function searchV2WithBudget(
 	agentId: string,
 	context: SearchV2Context,
 ): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
-	// WS-16 (C-031): wall-clock start of the whole search. The rerank stage
-	// derives its provider timeout from what REMAINS of the tail budget, so
-	// the last stage is bounded by the composition, not just by its own cap.
-	const searchStartedAt = Date.now()
 	try {
 		const graphQueryCandidates =
 			context.knownEntityNames && context.knownEntityNames.length > 0
@@ -2251,7 +2230,7 @@ async function searchV2WithBudget(
 			Date.now() - heuristicRerankStartedAt
 
 		// Post-retrieval scoring: keyword, temporal, entity, quoted-phrase boosts
-		// Applied AFTER heuristic rerank, BEFORE cross-encoder rerank
+		// Applied AFTER the heuristic rerank
 		const postRetrievalScoringStartedAt = Date.now()
 		const postScored = applyPostRetrievalScoring(query, heuristicReranked, {
 			questionDate: context.searchOptions?.questionDate,
@@ -2361,7 +2340,7 @@ async function searchV2WithBudget(
 					: postScored
 		latencyByPath["phase:precision-merge"] =
 			Date.now() - precisionMergeStartedAt
-		const preRerankLaneControlsStartedAt = Date.now()
+		const laneControlsStartedAt = Date.now()
 		const laneControlled = applyLaneAwareResultControls({
 			query,
 			results: precisionScored,
@@ -2375,109 +2354,14 @@ async function searchV2WithBudget(
 			}),
 			planPaths: plan.paths,
 		})
-		latencyByPath["phase:lane-controls-pre-rerank"] =
-			Date.now() - preRerankLaneControlsStartedAt
+		latencyByPath["phase:lane-controls"] = Date.now() - laneControlsStartedAt
 
-		// Cross-encoder re-ranking via Voyage API (after heuristic, before final slice)
-		const rerankCfg = context.searchOptions?.rerankConfig
-		let finalResults = laneControlled.results
-		let laneControlSummary = laneControlled.summary
-		let wasReranked = false
-		if (rerankCfg?.enabled) {
-			const rerankInputStartedAt = Date.now()
-			const timelineResults = finalResults.filter(
-				(result) => result.provenance?.temporalTimeline === true,
-			)
-			const rerankInput = finalResults.filter(
-				(result) => result.provenance?.temporalTimeline !== true,
-			)
-			latencyByPath["phase:rerank-input"] = Date.now() - rerankInputStartedAt
-			const rerankResult = await timeLane("phase:rerank", () =>
-				crossEncoderRerank({
-					admission: context.admission,
-					db,
-					prefix,
-					agentId,
-					query,
-					results: rerankInput.length > 0 ? rerankInput : precisionScored,
-					config: rerankCfg,
-					// WS-16 (C-031): the provider call gets only what the
-					// search has left of its tail budget, never its own full
-					// 2s cap stacked on an already-slow tail.
-					remainingBudgetMs: Math.max(
-						0,
-						SEARCH_TAIL_COMPOSITION_BUDGET_MS - (Date.now() - searchStartedAt),
-					),
-					onProviderCall: (outcome) => {
-						const accounting =
-							context.searchOptions?.operationRunContext?.accounting
-						if (!accounting) return
-						const metadata = { provider: "voyage", model: rerankCfg.model }
-						if (outcome === "attempted") {
-							accounting.recordAttempt("rerank", metadata)
-						} else if (outcome === "succeeded") {
-							accounting.recordSuccess("rerank", metadata)
-						} else {
-							accounting.recordFailure("rerank", metadata)
-						}
-					},
-				}),
-			)
-			if (rerankResult.reranked) {
-				const postRerankLaneControlsStartedAt = Date.now()
-				// RET-08: post-CE boosts refine only the CE-scored partition
-				// (they are cross-encoder refinements, not retrieval-score
-				// corrections), and the untouched partitions keep their
-				// original retrieval order behind the CE head. Composing in
-				// partition order — then sorting segment-stable in lane
-				// controls — keeps CE-ranked results ahead of higher-scoring
-				// unreranked overflow instead of comparing uncalibrated score
-				// domains.
-				const boostedReranked = applyPreferenceEvidenceBoostAfterRerank(
-					query,
-					applyRecencyAccessBoostAfterRerank(rerankResult.partitions.reranked, {
-						recencyBoost: rerankCfg.recencyBoost,
-						accessBoost: rerankCfg.accessBoost,
-					}),
-				)
-				const composedTimeline = orderTimelineAfterSourceEvidence(
-					deduplicateSearchResults([
-						...boostedReranked,
-						...rerankResult.partitions.emptySnippet,
-						...rerankResult.partitions.overflow,
-						...rerankResult.partitions.below,
-						...timelineResults,
-					]),
-				)
-				const postRerankLaneControlled = applyLaneAwareResultControls({
-					query,
-					results: composedTimeline,
-					// RET-08: the rerank input was deduplicated upstream and
-					// timeline items are appended behind the partitions, so the
-					// CE-scored partition is exactly the first
-					// `boostedReranked.length` composed results.
-					rerankPartitionCount: boostedReranked.length,
-					classification: classifyExecutorSearch({
-						query,
-						timeRange: context.searchOptions?.timeRange,
-						conversationScope: context.searchOptions?.conversationScope,
-						structuredScope: context.searchOptions?.structuredScope,
-						referenceScope: context.searchOptions?.referenceScope,
-						proceduralScope: context.searchOptions?.proceduralScope,
-					}),
-					planPaths: plan.paths,
-				})
-				latencyByPath["phase:lane-controls-post-rerank"] =
-					Date.now() - postRerankLaneControlsStartedAt
-				finalResults = postRerankLaneControlled.results
-				laneControlSummary = postRerankLaneControlled.summary
-				wasReranked = true
-			}
-		}
+		const finalResults = laneControlled.results
+		const laneControlSummary = laneControlled.summary
 
 		// Ranking boosts run after lane normalization and can compound above 1.
 		// Preserve their ordering and relative score gaps while enforcing the
-		// public searchV2 score contract for every lane and reranker branch.
+		// public searchV2 score contract for every lane.
 		const finalNormalizeStartedAt = Date.now()
 		const sliced = normalizeFinalSearchScores(finalResults).slice(0, maxResults)
 		latencyByPath["phase:final-normalize"] =
@@ -2498,7 +2382,7 @@ async function searchV2WithBudget(
 				plan,
 				pathsExecuted,
 				resultsByPath,
-				reranked: wasReranked,
+				reranked: false,
 				queryRewritten: wasQueryRewritten,
 				laneControls: laneControlSummary,
 				latencyByPath,

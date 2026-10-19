@@ -64,6 +64,7 @@ export type SearchFailureReason =
 	| "dependency-unavailable"
 	| "query-error"
 	| "internal-error"
+	| "rerank-unsupported"
 
 export type SearchBudgetReason =
 	| "budget-aggregations"

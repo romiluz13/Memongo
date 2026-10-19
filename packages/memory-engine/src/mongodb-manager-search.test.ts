@@ -10,12 +10,10 @@ import {
 	scorePreferenceGroundingSignalBoost,
 	searchV2,
 } from "./mongodb-manager.js"
-import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
 import { SearchLaneError } from "./search-outcomes.js"
 import {
 	mocked,
-	testOperationRunContext,
 	fakeDb,
 	fakePrefix,
 	captureManagerPrototype,
@@ -63,10 +61,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	(
 		await import("./test-helpers/manager-test-kit.js")
 	).queryRewriterModuleMock(),
-)
-
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
 )
 
 vi.mock("./mongodb-lane-coverage.js", async () =>
@@ -442,11 +436,6 @@ describe("getActiveSourcesForStatus", () => {
 describe("searchV2", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-			results,
-			reranked: false,
-			latencyMs: 0,
-		}))
 	})
 
 	it("uses retrieval planner and executes paths, returning results + metadata", async () => {
@@ -1225,73 +1214,6 @@ describe("searchV2", () => {
 		expect(result.results.length).toBeGreaterThan(0)
 	})
 
-	it("records a failed reranker provider attempt in the supplied benchmark context", async () => {
-		mocked(planRetrieval).mockReturnValue({
-			paths: ["raw-window"],
-			confidence: "high",
-			reasoning: "direct evidence",
-		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
-			{
-				_id: "evt-1",
-				eventId: "evt-1",
-				body: "first matching memory",
-				role: "user",
-				timestamp: new Date("2026-01-01T00:00:00Z"),
-				agentId: "agent-1",
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-				sessionId: "session-1",
-				channel: "default",
-			},
-			{
-				_id: "evt-2",
-				eventId: "evt-2",
-				body: "second matching memory",
-				role: "user",
-				timestamp: new Date("2026-01-02T00:00:00Z"),
-				agentId: "agent-1",
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-				sessionId: "session-2",
-				channel: "default",
-			},
-		])
-		mocked(crossEncoderRerank).mockImplementation(
-			async ({ results, onProviderCall }) => {
-				onProviderCall?.("attempted")
-				onProviderCall?.("failed")
-				return { results, reranked: false, latencyMs: 1 }
-			},
-		)
-		const runContext = testOperationRunContext("rerank-failure")
-
-		await searchV2(fakeDb, fakePrefix, "matching memory", "agent-1", {
-			availablePaths: new Set(["raw-window"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				rerankConfig: {
-					enabled: true,
-					model: "rerank-2.5",
-					topN: 10,
-					minScore: 0,
-					voyageApiKey: "test-key",
-				},
-				operationRunContext: runContext,
-			},
-		})
-
-		expect(runContext.accounting.snapshot().operations).toContainEqual({
-			operation: "rerank",
-			observability: "measured",
-			attempted: 1,
-			succeeded: 0,
-			failed: 1,
-			provider: "voyage",
-			model: "rerank-2.5",
-		})
-	})
-
 	it("uses MongoDB Search temporal coverage lane for temporal questions", async () => {
 		const previousMode = process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
 		process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = "enabled"
@@ -1301,21 +1223,6 @@ describe("searchV2", () => {
 				confidence: "high",
 				reasoning: "temporal coverage query",
 			})
-			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
-				const reranked = [...results].toReversed()
-				return {
-					results: reranked,
-					reranked: true,
-					latencyMs: 1,
-					partitions: {
-						reranked,
-						emptySnippet: [],
-						overflow: [],
-						below: [],
-					},
-				}
-			})
-
 			mocked(getEventsByTimeRange).mockResolvedValue([
 				{
 					_id: "evt-direct",
@@ -1390,13 +1297,6 @@ describe("searchV2", () => {
 					searchOptions: {
 						allowHybridBackstop: false,
 						questionDate,
-						rerankConfig: {
-							enabled: true,
-							model: "rerank-2.5-lite",
-							topN: 10,
-							minScore: 0,
-							voyageApiKey: "test-key",
-						},
 					},
 				},
 			)
@@ -1426,15 +1326,6 @@ describe("searchV2", () => {
 				path: "timestamp",
 				origin: questionDate,
 			})
-			expect(crossEncoderRerank).toHaveBeenCalledOnce()
-			const rerankInput = mocked(crossEncoderRerank).mock.calls[0]?.[0] as
-				| { results: MemorySearchResult[] }
-				| undefined
-			expect(
-				rerankInput?.results.some(
-					(entry) => entry.provenance?.temporalTimeline === true,
-				),
-			).toBe(false)
 			const timeline = result.results.find(
 				(entry) => entry.provenance?.temporalTimeline === true,
 			)
@@ -1456,254 +1347,5 @@ describe("searchV2", () => {
 				process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = previousMode
 			}
 		}
-	})
-
-	it("boosts user-authored compatibility evidence for recommendation memory queries", async () => {
-		const previousMode = process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
-		process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = "enabled"
-		try {
-			mocked(planRetrieval).mockReturnValue({
-				paths: ["raw-window"],
-				confidence: "high",
-				reasoning: "recommendation memory query",
-			})
-			mocked(getEventsByTimeRange).mockResolvedValue([
-				{
-					_id: "evt-seed",
-					eventId: "evt-seed",
-					body: "Photography setup context for Sony A7R IV accessories.",
-					role: "user",
-					timestamp: new Date("2023-05-30T10:00:00Z"),
-					agentId: "agent-1",
-					scope: "agent",
-					scopeRef: "agent:agent-1",
-					sessionId: "photo-session",
-					channel: "default",
-				},
-			])
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([
-					{
-						eventId: "evt-user-distractor",
-						body: "What are good external battery packs for my Sony A7R IV?",
-						role: "user",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:01:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.9,
-					},
-					{
-						eventId: "evt-user-compatible",
-						body: "I'm looking to upgrade my camera flash. Can you recommend options compatible with my Sony A7R IV?",
-						role: "user",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:02:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.8,
-					},
-					{
-						eventId: "evt-assistant-recommendation",
-						body: "The Godox V1 comes with a soft case, but a padded pouch would complement your photography setup.",
-						role: "assistant",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:03:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.7,
-					},
-				]),
-			})
-			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
-				const reranked = results
-					.map((entry) => ({
-						...entry,
-						score:
-							entry.path === "events/evt-assistant-recommendation"
-								? 0.63
-								: entry.path === "events/evt-user-compatible"
-									? 0.57
-									: 0.52,
-					}))
-					.toSorted((left, right) => right.score - left.score)
-				return {
-					results: reranked,
-					reranked: true,
-					latencyMs: 1,
-					partitions: {
-						reranked,
-						emptySnippet: [],
-						overflow: [],
-						below: [],
-					},
-				}
-			})
-			mocked(eventsCollection).mockReturnValue({ aggregate } as never)
-
-			const result = await searchV2(
-				fakeDb,
-				fakePrefix,
-				"Can you suggest accessories that complement my photography setup?",
-				"agent-1",
-				{
-					availablePaths: new Set(["raw-window"]),
-					searchOptions: {
-						allowHybridBackstop: false,
-						capabilities: {
-							vectorSearch: false,
-							textSearch: true,
-							scoreFusion: false,
-							rankFusion: false,
-							storedSource: false,
-							vectorIndexMethod: false,
-						},
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						rerankConfig: {
-							enabled: true,
-							model: "rerank-2.5-lite",
-							topN: 10,
-							minScore: 0,
-							voyageApiKey: "test-key",
-							// P3.7: isolate the preference-evidence behavior under test
-							// from the orthogonal post-CE recency/access boost.
-							recencyBoost: 0,
-							accessBoost: 0,
-						},
-					},
-				},
-			)
-
-			expect(crossEncoderRerank).toHaveBeenCalledOnce()
-			expect(result.results[0]?.path).toBe("events/evt-user-compatible")
-			expect(result.results[0]?.provenance?.eventRole).toBe("user")
-		} finally {
-			if (previousMode === undefined) {
-				delete process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
-			} else {
-				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = previousMode
-			}
-		}
-	})
-
-	it("keeps CE-ranked results ahead of unreranked overflow through the composed pipeline (RET-08)", async () => {
-		mocked(planRetrieval).mockReturnValue({
-			paths: ["raw-window"],
-			confidence: "high",
-			reasoning: "overflow displacement probe",
-		})
-		const makeEvent = (
-			eventId: string,
-			body: string,
-			sessionId: string,
-			hour: number,
-		) => ({
-			_id: eventId,
-			eventId,
-			body,
-			role: "user" as const,
-			timestamp: new Date(`2023-06-04T${String(hour).padStart(2, "0")}:00:00Z`),
-			agentId: "agent-1",
-			scope: "agent" as const,
-			scopeRef: "agent:agent-1",
-			sessionId,
-			channel: "default",
-		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
-			makeEvent(
-				"evt-ce-a",
-				"espresso machine calibration notes alpha",
-				"session-a",
-				10,
-			),
-			makeEvent(
-				"evt-ce-b",
-				"espresso machine calibration notes bravo",
-				"session-b",
-				9,
-			),
-			makeEvent(
-				"evt-overflow-c",
-				"espresso machine calibration notes charlie",
-				"session-c",
-				8,
-			),
-			makeEvent(
-				"evt-overflow-d",
-				"espresso machine calibration notes delta",
-				"session-d",
-				7,
-			),
-		])
-		// The mock cross-encoder scores only the top-2 (topN) candidates,
-		// weakly (.2/.1); the overflow pair keeps its higher retrieval scores.
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
-			const isCeRanked = (path: string) =>
-				path === "events/evt-ce-a" || path === "events/evt-ce-b"
-			const reranked = results
-				.filter((entry) => isCeRanked(entry.path))
-				.map((entry) => ({
-					...entry,
-					score: entry.path === "events/evt-ce-a" ? 0.2 : 0.1,
-				}))
-				.toSorted((left, right) => right.score - left.score)
-			const overflow = results.filter((entry) => !isCeRanked(entry.path))
-			return {
-				results: [...reranked, ...overflow],
-				reranked: true,
-				latencyMs: 1,
-				partitions: {
-					reranked,
-					emptySnippet: [],
-					overflow,
-					below: [],
-				},
-			}
-		})
-
-		const result = await searchV2(
-			fakeDb,
-			fakePrefix,
-			"espresso machine calibration",
-			"agent-1",
-			{
-				availablePaths: new Set(["raw-window"]),
-				searchOptions: {
-					allowHybridBackstop: false,
-					rerankConfig: {
-						enabled: true,
-						model: "rerank-2.5-lite",
-						topN: 2,
-						minScore: 0,
-						voyageApiKey: "test-key",
-						// Isolate the partition-ordering behavior under test
-						// from the orthogonal post-CE recency/access boost.
-						recencyBoost: 0,
-						accessBoost: 0,
-					},
-				},
-			},
-		)
-
-		expect(crossEncoderRerank).toHaveBeenCalledOnce()
-		const rerankInput = mocked(crossEncoderRerank).mock.calls[0]?.[0] as
-			| { results: MemorySearchResult[] }
-			| undefined
-		expect(rerankInput?.results).toHaveLength(4)
-		expect(result.metadata.reranked).toBe(true)
-		// Audit proof, end to end: CE-scored .2/.1 stay ahead of untouched
-		// overflow even though the overflow items keep higher retrieval
-		// scores. Pre-RET-08 the post-rerank score sorts displaced the
-		// CE-ranked pair behind the overflow pair.
-		expect(result.results.map((entry) => entry.path)).toEqual([
-			"events/evt-ce-a",
-			"events/evt-ce-b",
-			"events/evt-overflow-c",
-			"events/evt-overflow-d",
-		])
-		expect(result.results[2]?.score).toBeGreaterThan(
-			result.results[0]?.score ?? 0,
-		)
 	})
 })

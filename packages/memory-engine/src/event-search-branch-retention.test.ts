@@ -259,13 +259,6 @@ it.each([
 			searchOptions: {
 				capabilities,
 				allowHybridBackstop: false,
-				rerankConfig: {
-					enabled: false,
-					model: "rerank-2.5",
-					topN: 10,
-					minScore: 0,
-					voyageApiKey: "unused-fixture",
-				},
 			},
 		},
 	)

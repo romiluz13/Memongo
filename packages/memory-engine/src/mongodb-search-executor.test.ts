@@ -603,69 +603,6 @@ describe("lane-aware result controls", () => {
 		).toHaveLength(1)
 	})
 
-	it("sorts segment-stable so unreranked overflow cannot displace CE-ranked results (RET-08)", () => {
-		// Audit proof: cross-encoder scored .2/.1 on the reranked partition,
-		// while untouched overflow keeps a high retrieval score. A global
-		// score sort puts overflow first; the partition boundary keeps the
-		// CE-ranked results ahead even though their scores are lower.
-		const ceRanked = [
-			makeResult({
-				path: "events/evt-ce1",
-				canonicalId: "event:evt-ce1",
-				score: 0.2,
-				sessionId: "session-ce1",
-				sourceEventIds: ["evt-ce1"],
-			}),
-			makeResult({
-				path: "events/evt-ce2",
-				canonicalId: "event:evt-ce2",
-				score: 0.1,
-				sessionId: "session-ce2",
-				sourceEventIds: ["evt-ce2"],
-			}),
-		]
-		const overflowGraph = makeResult({
-			path: "relation:overflow",
-			canonicalId: "relation:overflow",
-			score: 0.9,
-			source: "structured",
-			provenance: { lane: "graph" },
-		})
-		const results = [...ceRanked, overflowGraph]
-
-		const controlled = applyLaneAwareResultControls({
-			query: "What did I say I prefer in the last conversation?",
-			results,
-			classification: "direct",
-			planPaths: ["hybrid", "raw-window", "graph"],
-			topK: 3,
-			rerankPartitionCount: 2,
-		})
-
-		expect(controlled.summary.applied).toBe(true)
-		expect(controlled.results.map((result) => result.path)).toEqual([
-			"events/evt-ce1",
-			"events/evt-ce2",
-			"relation:overflow",
-		])
-		// The CE-ranked head stays ahead DESPITE the overflow item's higher
-		// (uncalibrated) retrieval score.
-		expect(controlled.results[0].score).toBeLessThan(
-			controlled.results[2].score,
-		)
-
-		// Without a partition boundary the default global sort applies
-		// (pre-rerank and non-reranked callers) — overflow first.
-		const globalSorted = applyLaneAwareResultControls({
-			query: "What did I say I prefer in the last conversation?",
-			results,
-			classification: "direct",
-			planPaths: ["hybrid", "raw-window", "graph"],
-			topK: 3,
-		})
-		expect(globalSorted.results[0].path).toBe("relation:overflow")
-	})
-
 	it("boosts newer session evidence for current personal setup queries", () => {
 		const oldSession = makeResult({
 			path: "",
@@ -782,17 +719,14 @@ describe("lane-aware result controls", () => {
 		).toContain("session-b")
 	})
 
-	it("never re-applies the per-session cap after the reranker (B10)", () => {
-		// Multi-session phrasing ("how many", "across sessions") earns the
-		// breadth cap of 1 pre-rerank — but never post-rerank, where it would
-		// override the cross-encoder's ordering of same-session turns.
-		const ceRankedSameSession = Array.from({ length: 3 }, (_, index) =>
+	it("caps multi-session breadth phrasing at one turn per session (B10)", () => {
+		const sameSession = Array.from({ length: 3 }, (_, index) =>
 			makeResult({
-				path: `events/ce-${index}`,
-				canonicalId: `event:ce-${index}`,
+				path: `events/same-${index}`,
+				canonicalId: `event:same-${index}`,
 				score: 0.5 - index * 0.01,
 				sessionId: "session-a",
-				sourceEventIds: [`ce-${index}`],
+				sourceEventIds: [`same-${index}`],
 			}),
 		)
 		const otherSessions = ["b", "c", "d", "e"].map((id, index) =>
@@ -804,36 +738,16 @@ describe("lane-aware result controls", () => {
 				sourceEventIds: [`${id}-1`],
 			}),
 		)
-		const query = "How many times did we discuss the apartment across sessions?"
 
-		const postRerank = applyLaneAwareResultControls({
-			query,
-			results: [...ceRankedSameSession, ...otherSessions],
-			classification: "direct",
-			planPaths: ["hybrid"],
-			topK: 5,
-			rerankPartitionCount: 3,
-		})
-		expect(postRerank.summary.sessionCapped).toBe(0)
-		expect(
-			postRerank.results.slice(0, 3).map((result) => result.sessionId),
-		).toEqual(["session-a", "session-a", "session-a"])
-		expect(
-			postRerank.results
-				.slice(0, 5)
-				.filter((result) => result.sessionId === "session-a"),
-		).toHaveLength(3)
-
-		// Pre-rerank, the same query keeps the breadth cap of 1.
-		const preRerank = applyLaneAwareResultControls({
-			query,
-			results: [...ceRankedSameSession, ...otherSessions],
+		const controlled = applyLaneAwareResultControls({
+			query: "How many times did we discuss the apartment across sessions?",
+			results: [...sameSession, ...otherSessions],
 			classification: "direct",
 			planPaths: ["hybrid"],
 			topK: 5,
 		})
 		expect(
-			preRerank.results
+			controlled.results
 				.slice(0, 5)
 				.filter((result) => result.sessionId === "session-a"),
 		).toHaveLength(1)

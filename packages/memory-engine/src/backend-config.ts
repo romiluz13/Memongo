@@ -11,11 +11,6 @@ import {
 	createSubsystemLogger,
 	resolveUserPath,
 } from "@memongo/lib"
-import {
-	DEFAULT_HTTP_RERANK_MODEL,
-	DEFAULT_HTTP_RERANK_TOP_N,
-	resolveEffectiveRerankTopN,
-} from "./http-rerank-config.js"
 import { resolveSearchBudgetLimits } from "./mongodb-search-budget.js"
 import {
 	type ConversationEvidenceMode,
@@ -149,15 +144,11 @@ export type ResolvedMongoDBConfig = {
 		method: "synonym-expansion"
 		maxTokens: number
 	}
+	/**
+	 * M2: no reranker exists, so only the raw-window lane's temporal-proximity
+	 * weight is left under this key. Native $rerank arrives in M4.
+	 */
 	reranking: {
-		enabled: boolean
-		model: "rerank-3" | "rerank-3-lite" | "rerank-2.5" | "rerank-2.5-lite"
-		topN: number
-		minScore: number
-		voyageApiKey: string
-		instruction?: string
-		recencyBoost: number
-		accessBoost: number
 		temporalProximityBoost: number
 	}
 	/** @deprecated Persisted search-result serving is disabled. */
@@ -265,6 +256,7 @@ export function resolveMemoryBackendConfig(params: {
 	if (backend === "mongodb") {
 		const mongoCfg = params.cfg.memory?.mongodb
 		rejectRemovedEnvSettings()
+		rejectRerankSettings(mongoCfg?.reranking)
 		// P2.6: one URI precedence rule, shared with the bridge via
 		// applyMongoDbForceUriOverride (@memongo/lib): MEMONGO_FORCE_MONGODB_URI
 		// wins over every other URI source, in every layer. Among the
@@ -649,39 +641,9 @@ export function resolveMemoryBackendConfig(params: {
 							: 128,
 				},
 				reranking: {
-					enabled: resolveEnvBoolean(
-						"MEMONGO_RERANKING_ENABLED",
-						mongoCfg?.reranking?.enabled !== false,
-					),
-					model: mongoCfg?.reranking?.model ?? DEFAULT_HTTP_RERANK_MODEL,
-					topN:
-						typeof mongoCfg?.reranking?.topN === "number" &&
-						Number.isFinite(mongoCfg.reranking.topN) &&
-						mongoCfg.reranking.topN > 0
-							? resolveEffectiveRerankTopN(mongoCfg.reranking.topN)
-							: DEFAULT_HTTP_RERANK_TOP_N,
-					minScore:
-						typeof mongoCfg?.reranking?.minScore === "number" &&
-						Number.isFinite(mongoCfg.reranking.minScore)
-							? Math.min(1, Math.max(0, mongoCfg.reranking.minScore))
-							: resolveEnvFloat("MEMONGO_RERANK_MIN_SCORE", 0.01),
-					voyageApiKey:
-						mongoCfg?.reranking?.voyageApiKey ??
-						process.env.VOYAGE_API_KEY ??
-						"",
-					instruction: mongoCfg?.reranking?.instruction,
-					// P3.7: post-cross-encoder recency/access boost weights. 0 is
-					// the off-switch; non-finite or negative values fall back to
-					// the default so a misconfigured weight cannot invert ranking.
-					recencyBoost: resolveRerankBoostWeight(
-						mongoCfg?.reranking?.recencyBoost,
-					),
-					accessBoost: resolveRerankBoostWeight(
-						mongoCfg?.reranking?.accessBoost,
-					),
 					// P4.4.4: raw-window lane temporal-proximity weight. 0 is the
-					// off-switch; the 0.1 default is deliberately smaller than
-					// the post-CE boosts — it nudges ordering in one lane only.
+					// off-switch; non-finite or negative values fall back to the 0.1
+					// default so a misconfigured weight cannot invert ranking.
 					temporalProximityBoost: resolveRerankBoostWeight(
 						mongoCfg?.reranking?.temporalProximityBoost,
 						0.1,
@@ -845,20 +807,11 @@ function resolveOptionalMongoServerMonitoringMode(
 	return undefined
 }
 
-function resolveEnvFloat(envKey: string, fallback: number): number {
-	const raw = process.env[envKey]
-	if (raw === undefined || raw === "") return fallback
-	const parsed = Number.parseFloat(raw)
-	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
-		? parsed
-		: fallback
-}
-
-// P3.7: boost weights must be finite and non-negative; anything else falls
-// back to the default so a bad config cannot invert ranking.
+// Boost weights must be finite and non-negative; anything else falls back to
+// the default so a bad config cannot invert ranking.
 function resolveRerankBoostWeight(
 	value: number | undefined,
-	fallback = 0.2,
+	fallback: number,
 ): number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0
 		? value
@@ -955,6 +908,82 @@ function rejectRemovedEnvSettings(): void {
 				"config-removed",
 			)
 		}
+	}
+}
+
+const REMOVED_RERANKING_KEYS = [
+	"model",
+	"topN",
+	"minScore",
+	"voyageApiKey",
+	"instruction",
+	"recencyBoost",
+	"accessBoost",
+] as const
+
+const RERANK_REMOVED_REASON =
+	"the client-side Voyage cross-encoder reranker was removed, so there is nothing to configure"
+
+const RERANK_UNSUPPORTED_REASON =
+	"this release cannot rerank: the client-side Voyage cross-encoder reranker was removed and native $rerank (Atlas only) is not implemented yet"
+
+/**
+ * M2 (#114): reranking is off and cannot be enabled. `reranking.enabled: true`
+ * and `MEMONGO_RERANKING_ENABLED=true` fail boot as `rerank-unsupported`; the
+ * removed keys and `MEMONGO_RERANK_MIN_SCORE` fail as `config-removed`. Values
+ * are never echoed, because `voyageApiKey` was a secret.
+ * `reranking.temporalProximityBoost` stays: it belongs to the raw-window lane.
+ */
+function rejectRerankSettings(raw: unknown): void {
+	if (
+		raw !== undefined &&
+		(typeof raw !== "object" || raw === null || Array.isArray(raw))
+	) {
+		throw bootConfigError(
+			"memory.mongodb.reranking",
+			"memory.mongodb.reranking must be an object",
+		)
+	}
+	const reranking = (raw ?? {}) as Record<string, unknown>
+	for (const key of REMOVED_RERANKING_KEYS) {
+		if (reranking[key] !== undefined) {
+			const setting = `memory.mongodb.reranking.${key}`
+			throw bootConfigError(
+				setting,
+				`${setting} was removed: ${RERANK_REMOVED_REASON}. Remove ${setting}.`,
+				"config-removed",
+			)
+		}
+	}
+	if (process.env.MEMONGO_RERANK_MIN_SCORE?.trim()) {
+		throw bootConfigError(
+			"MEMONGO_RERANK_MIN_SCORE",
+			`MEMONGO_RERANK_MIN_SCORE was removed: ${RERANK_REMOVED_REASON}. Unset MEMONGO_RERANK_MIN_SCORE.`,
+			"config-removed",
+		)
+	}
+	if (
+		reranking.enabled !== undefined &&
+		typeof reranking.enabled !== "boolean"
+	) {
+		throw bootConfigError(
+			"memory.mongodb.reranking.enabled",
+			"memory.mongodb.reranking.enabled must be a boolean; only false is supported",
+		)
+	}
+	if (resolveEnvBoolean("MEMONGO_RERANKING_ENABLED", false)) {
+		throw bootConfigError(
+			"MEMONGO_RERANKING_ENABLED",
+			`MEMONGO_RERANKING_ENABLED is true, but ${RERANK_UNSUPPORTED_REASON}. Unset it or set it to false.`,
+			"rerank-unsupported",
+		)
+	}
+	if (reranking.enabled === true) {
+		throw bootConfigError(
+			"memory.mongodb.reranking.enabled",
+			`memory.mongodb.reranking.enabled is true, but ${RERANK_UNSUPPORTED_REASON}. Remove it or set it to false.`,
+			"rerank-unsupported",
+		)
 	}
 }
 

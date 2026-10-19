@@ -46,7 +46,6 @@ import {
 } from "../../packages/memory-engine/src/mongodb-evidence-mirror.js"
 import { updateLaneCoverage } from "../../packages/memory-engine/src/mongodb-lane-coverage.js"
 import {
-	BENCHMARK_RERANK_BOOST_OVERRIDES,
 	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
 	benchmarkConvergenceFilter,
 	benchmarkSearchEqualsFilters,
@@ -217,28 +216,14 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
 			embeddingDimensions: mongoCfg.numDimensions,
 			embeddingQuantization: mongoCfg.quantization,
-			rerankerEnabled: mongoCfg.reranking?.enabled ?? false,
-			rerankerModel: mongoCfg.reranking?.model ?? null,
-			rerankerTopN: mongoCfg.reranking?.topN ?? null,
-			rerankerMinScore: mongoCfg.reranking?.minScore ?? null,
-			// B12: benchmark scenario runs force the post-rerank recency and
-			// access boosts off (BENCHMARK_RERANK_BOOST_OVERRIDES zeroes them
-			// on every scenario manager), so the recorded weights come from
-			// the override, not the host config.
-			rerankerRecencyBoost: BENCHMARK_RERANK_BOOST_OVERRIDES.recencyBoost,
-			rerankerAccessBoost: BENCHMARK_RERANK_BOOST_OVERRIDES.accessBoost,
-			rerankerInstructionSha256: mongoCfg.reranking?.instruction
-				? createHash("sha256")
-						.update(mongoCfg.reranking.instruction)
-						.digest("hex")
-				: null,
-			rerankerApiKeyHmac: mongoCfg.reranking?.voyageApiKey
-				? benchmarkCredentialFingerprint(
-						fingerprintKey,
-						"reranking.voyageApiKey",
-						mongoCfg.reranking.voyageApiKey,
-					)
-				: null,
+			rerankerEnabled: false,
+			rerankerModel: "none",
+			rerankerTopN: 0,
+			rerankerMinScore: null,
+			rerankerRecencyBoost: null,
+			rerankerAccessBoost: null,
+			rerankerInstructionSha256: null,
+			rerankerApiKeyHmac: null,
 			credentialFingerprintKeyId: benchmarkCredentialKeyId(fingerprintKey),
 			queryRewritingEnabled: mongoCfg.queryRewriting.enabled,
 			queryRewritingMethod: mongoCfg.queryRewriting.method,

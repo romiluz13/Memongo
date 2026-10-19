@@ -252,6 +252,7 @@ export const searchConfigSchema = z
 		sourcePreference: sourcePreferenceSchema.optional(),
 		timeRange: timeRangeSchema.optional(),
 		needExactEvidence: z.boolean().optional(),
+		rerank: z.boolean().optional(),
 		allowConstraintRelaxation: z.boolean().optional(),
 		numCandidates: z.number().int().positive().optional(),
 		fusionMethod: z.enum(["scoreFusion", "rankFusion"]).optional(),

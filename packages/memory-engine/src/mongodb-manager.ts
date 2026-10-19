@@ -163,7 +163,6 @@ import {
 	decomposeQuery,
 	mergeMultiQueryResults,
 } from "./mongodb-query-decomposition.js"
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
 import {
 	planRetrieval,
 	type RetrievalPath,
@@ -344,7 +343,6 @@ import { MongoDBManagerSearchOps } from "./mongodb-manager-search.js"
 export {
 	MAX_SEARCH_MAX_RESULTS,
 	MAX_SEARCH_QUERY_LENGTH,
-	applyRecencyAccessBoostAfterRerank,
 	clampSearchMaxResults,
 	clampSearchQuery,
 	deduplicateSearchResults,
