@@ -59,6 +59,9 @@ import { MongoDBManagerReadOps } from "./mongodb-manager-read.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import { withFencedWrite } from "./mongodb-write-fence.js"
 
+// M2 T13: every tenant locator names its tenant.
+const TENANT_QUERY = "scope=agent&scopeRef=agent%3Aagent-1"
+
 // ---------------------------------------------------------------------------
 // File-local fakes (vi.hoisted so the vi.mock factories below can close over
 // them)
@@ -653,8 +656,8 @@ const STRUCTURED_LIVE = {
 
 const SUPPRESSED_STRUCTURED = {
 	text: "",
-	path: "structured:fact:sky",
-	locator: "structured:fact:sky",
+	path: `structured:fact:sky?${TENANT_QUERY}`,
+	locator: `structured:fact:sky?${TENANT_QUERY}`,
 	source: "structured",
 	sourceType: "structured",
 }
@@ -678,40 +681,60 @@ const SHAPE_TABLE: ReadonlyArray<{
 	source: ManagerReadResult["source"]
 }> = [
 	{
-		relPath: "structured:fact:sky",
-		path: "structured:fact:sky",
+		relPath: `structured:fact:sky?${TENANT_QUERY}`,
+		path: `structured:fact:sky?${TENANT_QUERY}`,
 		source: "structured",
 	},
-	{ relPath: "entity:ent-1", path: "entity:ent-1", source: "conversation" },
-	{ relPath: "procedure:p1", path: "procedure:p1", source: "structured" },
-	{ relPath: "event:evt-1", path: "event:evt-1", source: "conversation" },
-	{ relPath: "episode:ep-1", path: "episode:ep-1", source: "conversation" },
-	{ relPath: "relation:a-b", path: "relation:a-b", source: "conversation" },
+	{
+		relPath: `entity:ent-1?${TENANT_QUERY}`,
+		path: `entity:ent-1?${TENANT_QUERY}`,
+		source: "conversation",
+	},
+	{
+		relPath: `procedure:p1?${TENANT_QUERY}`,
+		path: `procedure:p1?${TENANT_QUERY}`,
+		source: "structured",
+	},
+	{
+		relPath: `event:evt-1?${TENANT_QUERY}`,
+		path: `event:evt-1?${TENANT_QUERY}`,
+		source: "conversation",
+	},
+	{
+		relPath: `episode:ep-1?${TENANT_QUERY}`,
+		path: `episode:ep-1?${TENANT_QUERY}`,
+		source: "conversation",
+	},
+	{
+		relPath: `relation:a-b?${TENANT_QUERY}`,
+		path: `relation:a-b?${TENANT_QUERY}`,
+		source: "conversation",
+	},
 	{ relPath: "kb:docs/x.md", path: "kb:docs/x.md", source: "reference" },
 	{ relPath: "reference:x.md", path: "reference:x.md", source: "reference" },
 	{
-		relPath: "conversation:s/1",
-		path: "conversation:s/1",
+		relPath: `conversation:s/1?${TENANT_QUERY}`,
+		path: `conversation:s/1?${TENANT_QUERY}`,
 		source: "conversation",
 	},
 	{
-		relPath: "events/evt-1",
-		path: "conversation:events/evt-1",
+		relPath: `events/evt-1?${TENANT_QUERY}`,
+		path: `conversation:events/evt-1?${TENANT_QUERY}`,
 		source: "conversation",
 	},
 	{
-		relPath: "conversation:events/evt-1",
-		path: "conversation:events/evt-1",
+		relPath: `conversation:events/evt-1?${TENANT_QUERY}`,
+		path: `conversation:events/evt-1?${TENANT_QUERY}`,
 		source: "conversation",
 	},
 	{
-		relPath: "conversation: sessions/x",
-		path: "conversation:sessions/x",
+		relPath: `conversation: sessions/x?${TENANT_QUERY}`,
+		path: `conversation:sessions/x?${TENANT_QUERY}`,
 		source: "conversation",
 	},
 	{
-		relPath: "sessions/x",
-		path: "conversation:sessions/x",
+		relPath: `sessions/x?${TENANT_QUERY}`,
+		path: `conversation:sessions/x?${TENANT_QUERY}`,
 		source: "conversation",
 	},
 	{
@@ -720,13 +743,13 @@ const SHAPE_TABLE: ReadonlyArray<{
 		source: "reference",
 	},
 	{
-		relPath: "  structured:fact:sky  ",
-		path: "structured:fact:sky",
+		relPath: `  structured:fact:sky?${TENANT_QUERY}  `,
+		path: `structured:fact:sky?${TENANT_QUERY}`,
 		source: "structured",
 	},
 	{
-		relPath: "  events/evt-1  ",
-		path: "conversation:events/evt-1",
+		relPath: `  events/evt-1?${TENANT_QUERY}  `,
+		path: `conversation:events/evt-1?${TENANT_QUERY}`,
 		source: "conversation",
 	},
 ]
@@ -754,7 +777,7 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 
 		// M2 T10 (G2-69): a denied read is a typed rejection, never an empty miss.
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		// The denial happens at admission — no tenant-data read at all.
 		expectZeroTenantAccess()
@@ -769,7 +792,7 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expectZeroTenantAccess()
 		// C1: the capture admitted the PRE-FLIP snapshot (open epoch 5) —
@@ -797,7 +820,7 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expectZeroTenantAccess()
 		// exactly one admission — a reopened gate must not trigger a fresh capture
@@ -822,7 +845,9 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 		collections.tenants.structured.seed({ _id: "s1", openedCount: 0 })
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
+		const result = await ops.readFile({
+			relPath: `structured:fact:sky?${TENANT_QUERY}`,
+		})
 
 		// Passing-control half: both old and new bytes serve the live record.
 		expect(result.text).toContain("value: blue")
@@ -848,7 +873,7 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toBeInstanceOf(MalformedGateError)
 
 		expectZeroTenantAccess()
@@ -863,7 +888,7 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toBeInstanceOf(MalformedGateError)
 
 		expectZeroTenantAccess()
@@ -932,7 +957,9 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 		collections.tenants.structured.seed({ _id: "s1", openedCount: 0 })
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
+		const result = await ops.readFile({
+			relPath: `structured:fact:sky?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toContain("value: blue")
@@ -967,7 +994,9 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 		])
 		collections.tenants.procedures.seed({ _id: "p1", openedCount: 0 })
 
-		const result = await ops.readFile({ relPath: "procedure:p1" })
+		const result = await ops.readFile({
+			relPath: `procedure:p1?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toContain("procedureId: p1")
@@ -990,7 +1019,9 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 			{ _id: "e1", agentId: "agent-1", entityId: "ent-1", name: "Milky Way" },
 		])
 
-		const result = await ops.readFile({ relPath: "entity:ent-1" })
+		const result = await ops.readFile({
+			relPath: `entity:ent-1?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toContain("name: Milky Way")
@@ -1052,7 +1083,9 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 			},
 		])
 
-		const result = await ops.readFile({ relPath: "episode:ep-1" })
+		const result = await ops.readFile({
+			relPath: `episode:ep-1?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toContain("episodeId: ep-1")
@@ -1085,7 +1118,9 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 			],
 		])
 
-		const result = await ops.readFile({ relPath: "episode:ep-1?expand=events" })
+		const result = await ops.readFile({
+			relPath: `episode:ep-1?expand=events&${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toContain("sourceEvents:")
@@ -1111,11 +1146,13 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 			[{ path: "s/1", text: "hello transcript", startLine: 1, endLine: 5 }],
 		])
 
-		const result = await ops.readFile({ relPath: "conversation:s/1" })
+		const result = await ops.readFile({
+			relPath: `conversation:s/1?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toBe("hello transcript")
-		expect(result.path).toBe("conversation:s/1")
+		expect(result.path).toBe(`conversation:s/1?${TENANT_QUERY}`)
 		expect(collections.tenants.chunks.calls.find).toHaveLength(1)
 		expectSessionOn(collections.tenants.chunks.calls.find, session)
 		const filter = collections.tenants.chunks.calls.find[0]?.filter as Record<
@@ -1139,13 +1176,15 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 		collections.tenants.chunks.scriptFind([[]])
 		collections.tenants.events.scriptFindOne([null])
 
-		const result = await ops.readFile({ relPath: "events/evt-1" })
+		const result = await ops.readFile({
+			relPath: `events/evt-1?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result).toStrictEqual({
 			text: "",
-			path: "conversation:events/evt-1",
-			locator: "conversation:events/evt-1",
+			path: `conversation:events/evt-1?${TENANT_QUERY}`,
+			locator: `conversation:events/evt-1?${TENANT_QUERY}`,
 			source: "conversation",
 			sourceType: "conversation",
 		})
@@ -1219,7 +1258,9 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 			},
 		])
 
-		const result = await ops.readFile({ relPath: "relation:ent-a-ent-b" })
+		const result = await ops.readFile({
+			relPath: `relation:ent-a-ent-b?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toContain("fromEntityId: ent-a")
@@ -1233,7 +1274,7 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 		expect(filter).toMatchObject({
 			agentId: "agent-1",
 			scope: "agent",
-			scopeRef: "agent-1",
+			scopeRef: "agent:agent-1",
 		})
 	})
 
@@ -1249,7 +1290,9 @@ describe("fenced locator reads — per-lane session identity (U6 i)", () => {
 			},
 		])
 
-		const result = await ops.readFile({ relPath: "event:evt-1" })
+		const result = await ops.readFile({
+			relPath: `event:evt-1?${TENANT_QUERY}`,
+		})
 
 		const session = expectSingleFencedSession()
 		expect(result.text).toBe("user: hello")
@@ -1291,7 +1334,9 @@ describe("fenced locator reads — transient retry (U7)", () => {
 		])
 		fenceSeam.knobs.transientOnce = true
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
+		const result = await ops.readFile({
+			relPath: `structured:fact:sky?${TENANT_QUERY}`,
+		})
 
 		expect(fenceSeam.state.fenceCalls).toHaveLength(1)
 		expect(fenceSeam.state.attempts).toBe(2)
@@ -1336,7 +1381,7 @@ describe("fenced locator reads — transient retry (U7)", () => {
 		}
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expect(fenceSeam.state.attempts).toBe(2)
 		expect(captureCalls()).toHaveLength(1)
@@ -1394,7 +1439,7 @@ describe("fenced locator reads — transient retry (U7)", () => {
 		}
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expect(fenceSeam.state.attempts).toBe(2)
 		expect(captureCalls()).toHaveLength(1)
@@ -1474,7 +1519,7 @@ describe("fenced locator reads — legacy miss-shape controls (U8)", () => {
 		])
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toThrow("branch read boom")
 	})
 })
@@ -1550,7 +1595,7 @@ describe("fenced locator reads — indeterminate commits (U9)", () => {
 
 		const error = await ops
 			.readFile({
-				relPath: "structured:fact:sky",
+				relPath: `structured:fact:sky?${TENANT_QUERY}`,
 			})
 			.then(
 				() => null,
@@ -1581,9 +1626,9 @@ describe("fenced locator reads — indeterminate commits (U9)", () => {
 		const injected = new Error("driver connection failure during commit")
 		fenceSeam.knobs.failCommitOnce = { error: injected, applyStaged: false }
 
-		await expect(ops.readFile({ relPath: "structured:fact:sky" })).rejects.toBe(
-			injected,
-		)
+		await expect(
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
+		).rejects.toBe(injected)
 
 		expect(captureCalls()).toHaveLength(1)
 		// C5: the injected commit fault fired once and was consumed
@@ -1598,7 +1643,7 @@ describe("fenced locator reads — indeterminate commits (U9)", () => {
 		)
 
 		await expect(
-			ops.readFile({ relPath: "structured:fact:sky" }),
+			ops.readFile({ relPath: `structured:fact:sky?${TENANT_QUERY}` }),
 		).rejects.toThrow("driver error during admission capture")
 
 		expectZeroTenantAccess()
@@ -1682,7 +1727,9 @@ describe("fenced locator reads — harness controls (C1/C2/C4)", () => {
 		collections.reset()
 
 		const ops = makeOps()
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
+		const result = await ops.readFile({
+			relPath: `structured:fact:sky?${TENANT_QUERY}`,
+		})
 
 		// the scripted live record did NOT survive the reset — the natural
 		// miss shape comes back, and no stale call records remain

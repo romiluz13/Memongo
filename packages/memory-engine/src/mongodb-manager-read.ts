@@ -15,6 +15,49 @@ import { withFencedWrite } from "./mongodb-write-fence.js"
 import type { MemoryScope } from "@memongo/lib"
 import type { ClientSession, Document } from "mongodb"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import {
+	requireTenantIdentity,
+	type TenantIdentity,
+} from "./mongodb-tenant-identity.js"
+
+/**
+ * M2 T13 (#120): every locator that reads a tenant-owned document carries the
+ * tenant in its query string (`?scope=...&scopeRef=...`). A locator without
+ * the full identity is a typed failure, never a read across every scope of the
+ * agent. The kb locator keeps its documented default identity (C-035) and the
+ * bridge lane is confined to the workspace identity of the host.
+ */
+const TENANT_LOCATOR_PREFIXES = [
+	"structured:",
+	"entity:",
+	"procedure:",
+	"event:",
+	"episode:",
+	"relation:",
+	"conversation:",
+	"events/",
+	"sessions/",
+] as const
+
+function isTenantLocator(rawPath: string): boolean {
+	return TENANT_LOCATOR_PREFIXES.some((prefix) => rawPath.startsWith(prefix))
+}
+
+function locatorQuery(rawPath: string): URLSearchParams {
+	return new URLSearchParams(rawPath.split("?", 2)[1] ?? "")
+}
+
+function requireLocatorTenant(
+	agentId: string,
+	rawPath: string,
+): TenantIdentity {
+	const query = locatorQuery(rawPath)
+	return requireTenantIdentity("readFile", {
+		agentId,
+		scope: query.get("scope"),
+		scopeRef: query.get("scopeRef"),
+	})
+}
 
 /**
  * Read seam extracted from `mongodb-manager.ts` (P4.3): locator-based reads
@@ -45,6 +88,9 @@ export class MongoDBManagerReadOps {
 		const rawPath = params.relPath.trim()
 		if (!rawPath) {
 			throw new Error("path required") // ordinary validation, before any gate work
+		}
+		if (isTenantLocator(rawPath)) {
+			requireLocatorTenant(this.host.agentId, rawPath)
 		}
 
 		// M2 T10 (G2-69): an erasure conflict at admission or inside the fence
@@ -81,25 +127,21 @@ export class MongoDBManagerReadOps {
 		session: ClientSession,
 	): Promise<ManagerReadResult> {
 		if (rawPath.startsWith("structured:")) {
-			const [basePath, queryString] = rawPath.split("?", 2)
+			const [basePath] = rawPath.split("?", 2)
 			const [, type, ...keyParts] = basePath.split(":")
 			const key = keyParts.join(":").trim()
 			if (!type || !key) {
 				throw new Error("path required")
 			}
-			const query = new URLSearchParams(queryString ?? "")
-			const scope = query.get("scope")
-			const scopeRef = query.get("scopeRef")
+			const tenant = requireLocatorTenant(this.host.agentId, rawPath)
 			const record = await structuredMemCollection(
 				this.host.db,
 				this.host.prefix,
 			).findOne(
 				{
-					agentId: this.host.agentId,
+					...tenant,
 					type,
 					key,
-					...(scope ? { scope } : {}),
-					...(scopeRef ? { scopeRef } : {}),
 					// P4.4.1 (B1): an expired record reads as gone even before the
 					// TTL sweep removes it.
 					...buildUnexpiredClause(),
@@ -191,23 +233,19 @@ export class MongoDBManagerReadOps {
 		}
 
 		if (rawPath.startsWith("entity:")) {
-			const [basePath, queryString] = rawPath.split("?", 2)
+			const [basePath] = rawPath.split("?", 2)
 			const entityId = basePath.slice("entity:".length).trim()
 			if (!entityId) {
 				throw new Error("path required")
 			}
-			const query = new URLSearchParams(queryString ?? "")
-			const scope = query.get("scope")
-			const scopeRef = query.get("scopeRef")
+			const tenant = requireLocatorTenant(this.host.agentId, rawPath)
 			const record = await entitiesCollection(
 				this.host.db,
 				this.host.prefix,
 			).findOne(
 				{
-					agentId: this.host.agentId,
+					...tenant,
 					entityId,
-					...(scope ? { scope } : {}),
-					...(scopeRef ? { scopeRef } : {}),
 				},
 				{ session },
 			)
@@ -249,23 +287,19 @@ export class MongoDBManagerReadOps {
 		}
 
 		if (rawPath.startsWith("procedure:")) {
-			const [basePath, queryString] = rawPath.split("?", 2)
+			const [basePath] = rawPath.split("?", 2)
 			const procedureId = basePath.slice("procedure:".length).trim()
 			if (!procedureId) {
 				throw new Error("path required")
 			}
-			const query = new URLSearchParams(queryString ?? "")
-			const scope = query.get("scope")
-			const scopeRef = query.get("scopeRef")
+			const tenant = requireLocatorTenant(this.host.agentId, rawPath)
 			const record = await proceduresCollection(
 				this.host.db,
 				this.host.prefix,
 			).findOne(
 				{
-					agentId: this.host.agentId,
+					...tenant,
 					procedureId,
-					...(scope ? { scope } : {}),
-					...(scopeRef ? { scopeRef } : {}),
 				},
 				{ session },
 			)
@@ -327,7 +361,7 @@ export class MongoDBManagerReadOps {
 		}
 
 		if (rawPath.startsWith("event:")) {
-			const eventId = rawPath.slice("event:".length).trim()
+			const eventId = rawPath.split("?", 2)[0].slice("event:".length).trim()
 			if (!eventId) {
 				throw new Error("path required")
 			}
@@ -357,8 +391,10 @@ export class MongoDBManagerReadOps {
 				throw new Error("path required")
 			}
 			const query = new URLSearchParams(queryString ?? "")
-			const scope = (query.get("scope") ?? "agent") as MemoryScope
-			const scopeRef = query.get("scopeRef") ?? this.host.agentScopeRef
+			const { scope, scopeRef } = requireLocatorTenant(
+				this.host.agentId,
+				rawPath,
+			)
 			// C-025: the locator is typed ("from-to-type"). A path carrying the
 			// typed locator resolves without extra parameters; ?type= lets a
 			// caller that holds only the bare pair disambiguate same-pair
@@ -523,12 +559,16 @@ export class MongoDBManagerReadOps {
 		lines?: number,
 		session?: ClientSession,
 	): Promise<ManagerReadResult> {
-		const normalizedPath = rawPath.startsWith("conversation:")
-			? rawPath.slice("conversation:".length).trim()
-			: rawPath
+		const [locatorPath] = rawPath.split("?", 2)
+		const tenant = requireLocatorTenant(this.host.agentId, rawPath)
+		const identitySuffix = rawPath.slice(locatorPath.length)
+		const normalizedPath = locatorPath.startsWith("conversation:")
+			? locatorPath.slice("conversation:".length).trim()
+			: locatorPath
 		if (!normalizedPath) {
 			throw new Error("path required")
 		}
+		const locator = `conversation:${normalizedPath}${identitySuffix}`
 		const start = Math.max(1, from ?? 1)
 		const count = Math.max(1, lines ?? Number.MAX_SAFE_INTEGER)
 		const end = start + count - 1
@@ -537,7 +577,7 @@ export class MongoDBManagerReadOps {
 				{
 					path: normalizedPath,
 					source: { $in: ["sessions", "conversation"] },
-					agentId: this.host.agentId,
+					...tenant,
 					// C-005: expired chunks (sweep lagging up to ~60s) are hidden
 					// here; the events/ miss falls through to readCanonicalEvent,
 					// which applies the same guard to the event document.
@@ -565,17 +605,13 @@ export class MongoDBManagerReadOps {
 			if (normalizedPath.startsWith("events/")) {
 				const eventId = normalizedPath.slice("events/".length).trim()
 				if (eventId) {
-					return await this.host.readCanonicalEvent(
-						eventId,
-						`conversation:${normalizedPath}`,
-						session,
-					)
+					return await this.host.readCanonicalEvent(eventId, locator, session)
 				}
 			}
 			return {
 				text: "",
-				path: `conversation:${normalizedPath}`,
-				locator: `conversation:${normalizedPath}`,
+				path: locator,
+				locator,
 				source: "conversation" as const,
 				sourceType: "conversation" as const,
 			}
@@ -585,8 +621,8 @@ export class MongoDBManagerReadOps {
 				.map((doc: Document) => (typeof doc.text === "string" ? doc.text : ""))
 				.filter(Boolean)
 				.join("\n"),
-			path: `conversation:${normalizedPath}`,
-			locator: `conversation:${normalizedPath}`,
+			path: locator,
+			locator,
 			source: "conversation" as const,
 			sourceType: "conversation" as const,
 		}
@@ -597,12 +633,13 @@ export class MongoDBManagerReadOps {
 		rawPath: string,
 		session?: ClientSession,
 	): Promise<ManagerReadResult> {
+		const tenant = requireLocatorTenant(this.host.agentId, rawPath)
 		const event = await eventsCollection(
 			this.host.db,
 			this.host.prefix,
 		).findOne(
 			{
-				agentId: this.host.agentId,
+				...tenant,
 				eventId,
 				...buildUnexpiredClause(),
 			},
@@ -701,12 +738,13 @@ export class MongoDBManagerReadOps {
 		session?: ClientSession
 	}): Promise<ManagerReadResult> {
 		const { rawPath, episodeId, expandEvents, session } = params
+		const tenant = requireLocatorTenant(this.host.agentId, rawPath)
 		const episode = await episodesCollection(
 			this.host.db,
 			this.host.prefix,
 		).findOne(
 			{
-				agentId: this.host.agentId,
+				...tenant,
 				episodeId,
 				status: { $ne: "deleted" },
 			},
@@ -750,7 +788,7 @@ export class MongoDBManagerReadOps {
 				? `sourceEventCount: ${episode.sourceEventCount}`
 				: `sourceEventCount: ${sourceEventIds.length}`,
 			sourceEventIds.length > 0 && !expandEvents
-				? `expandLocator: episode:${episodeId}?expand=events`
+				? `expandLocator: episode:${episodeId}?expand=events&scope=${tenant.scope}&scopeRef=${encodeURIComponent(tenant.scopeRef)}`
 				: null,
 		].filter(Boolean)
 
@@ -758,7 +796,7 @@ export class MongoDBManagerReadOps {
 			const events = await eventsCollection(this.host.db, this.host.prefix)
 				.find(
 					{
-						agentId: this.host.agentId,
+						...tenant,
 						eventId: { $in: sourceEventIds },
 						...buildUnexpiredClause(),
 					},
