@@ -36,6 +36,11 @@ import {
 	runWithSearchBudget,
 } from "./mongodb-search-budget.js"
 import { toTypedSearchError } from "./search-outcomes.js"
+import {
+	attachCommitReport,
+	type CommitState,
+} from "./mongodb-commit-report.js"
+import { isUncertainCommitError } from "./mongodb-search-barrier.js"
 import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
 import {
 	buildEventLifecycleClause,
@@ -704,13 +709,35 @@ async function runConsolidation(
 		leaseMs,
 		renew: () => runFencedWrite(async () => {}),
 	})
+	// M2 review D3: what this run has committed so far, for the commit report
+	// on whatever error ends it. Every write after the gate claim goes through
+	// trackCommit; a write that rejects with an uncertain commit outcome is
+	// counted apart, because it may or may not have landed.
+	const commits = { committed: 0, uncertain: 0 }
+	let factsPromoted = 0
+	let factsInferred = 0
+	let factsMerged = 0
+	let prunedCount = 0
+	let eventsAcknowledged = 0
+	const trackCommit = async <T>(write: () => Promise<T>): Promise<T> => {
+		try {
+			const value = await write()
+			commits.committed += 1
+			return value
+		} catch (err) {
+			if (isUncertainCommitError(err)) commits.uncertain += 1
+			throw err
+		}
+	}
 	const withConsolidationWrite = <T>(
 		fn: (session: ClientSession) => Promise<T>,
 	): Promise<T> =>
-		heartbeat.enqueue(() => {
-			heartbeat.throwIfFailed()
-			return runFencedWrite(fn)
-		})
+		trackCommit(() =>
+			heartbeat.enqueue(() => {
+				heartbeat.throwIfFailed()
+				return runFencedWrite(fn)
+			}),
+		)
 	// Set once the run row holds its terminal state, so the catch below marks a
 	// run failed only when nothing else already did.
 	let runFinished = false
@@ -960,8 +987,6 @@ async function runConsolidation(
 		// ===================================================================
 
 		const structuredCol = db.collection(`${prefix}structured_mem`)
-		let factsPromoted = 0
-		let factsInferred = 0
 		let conflictsResolved = 0
 		const failedEventIds = new Set<string>()
 		let firstCandidateError: unknown
@@ -1590,7 +1615,6 @@ async function runConsolidation(
 		// unacknowledged.
 		// ===================================================================
 
-		let factsMerged = 0
 		if (llmDedupEnabled) {
 			if (!llmProvider) {
 				log.info("llm-dedup phase: no LLM configured, skipping")
@@ -1859,7 +1883,6 @@ async function runConsolidation(
 		// Phase 5 — Prune + Profile (near-duplicate merge)
 		// ===================================================================
 
-		let prunedCount = 0
 		try {
 			// Find recently promoted facts and check for near-duplicates
 			// Use $vectorSearch to find pairs with similarity > 0.92
@@ -2046,35 +2069,37 @@ async function runConsolidation(
 		const usage = llmUsage.slice()
 		const embeds = embeddingUsage.slice()
 		if (usage.length > 0 || embeds.length > 0) {
-			await heartbeat.enqueue(() =>
-				withFencedWrite({
-					db,
-					prefix,
-					token: admission,
-					fn: async (session) => {
-						for (const spend of usage) {
-							await recordLLMSpendInSession({
-								db,
-								prefix,
-								agentId,
-								spend,
-								at: spend.at,
-								session,
-							})
-						}
-						for (const spend of embeds) {
-							await recordEmbeddingSpendInSession({
-								db,
-								prefix,
-								agentId,
-								kind: "consolidation",
-								units: 1,
-								at: spend.at,
-								session,
-							})
-						}
-					},
-				}),
+			await trackCommit(() =>
+				heartbeat.enqueue(() =>
+					withFencedWrite({
+						db,
+						prefix,
+						token: admission,
+						fn: async (session) => {
+							for (const spend of usage) {
+								await recordLLMSpendInSession({
+									db,
+									prefix,
+									agentId,
+									spend,
+									at: spend.at,
+									session,
+								})
+							}
+							for (const spend of embeds) {
+								await recordEmbeddingSpendInSession({
+									db,
+									prefix,
+									agentId,
+									kind: "consolidation",
+									units: 1,
+									at: spend.at,
+									session,
+								})
+							}
+						},
+					}),
+				),
 			)
 			llmUsage.splice(0, usage.length)
 			embeddingUsage.splice(0, embeds.length)
@@ -2094,6 +2119,7 @@ async function runConsolidation(
 					session,
 				}),
 			)
+			eventsAcknowledged = successfulEventIds.length
 		}
 
 		// ===================================================================
@@ -2186,7 +2212,28 @@ async function runConsolidation(
 				})
 			})
 		}
-		throw err
+		// M2 review D3: the typed failure keeps its class and status and gains
+		// the run's identity and what it is known to have committed. `none`
+		// only when no write committed and none is uncertain; an uncertain
+		// write makes the whole report `unknown`, never zero.
+		const commitState: CommitState =
+			commits.uncertain > 0
+				? "unknown"
+				: commits.committed > 0
+					? "committed"
+					: "none"
+		throw attachCommitReport(err, {
+			commitState,
+			commit: {
+				operation: "consolidate",
+				runId,
+				eventsProcessed: eventsAcknowledged,
+				factsPromoted,
+				factsInferred,
+				factsMerged,
+				factsPruned: prunedCount,
+			},
+		})
 	} finally {
 		await heartbeat.stop()
 	}

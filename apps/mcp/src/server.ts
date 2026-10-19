@@ -404,6 +404,9 @@ function toolErrorPayload(err: unknown) {
 			status: err.status,
 			...(err.code ? { code: err.code } : {}),
 			...(err.outcomes ? { outcomes: err.outcomes } : {}),
+			// M2 review D3: what the failed operation had already committed.
+			...(err.commitState ? { commitState: err.commitState } : {}),
+			...(err.commit ? { commit: err.commit } : {}),
 		}
 	}
 	if (err instanceof McpArgumentError) {

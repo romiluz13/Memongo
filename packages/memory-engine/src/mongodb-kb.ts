@@ -883,6 +883,12 @@ export async function ingestFilesToKB(params: {
 	assertKBAdmission(params.scope, params.admission)
 	const { paths, recursive = true, tags, category, importedBy } = params
 
+	// M2 review D2: a configured source that cannot be scanned or read is a
+	// failed input, recorded in the import's errors beside the documents that
+	// did succeed. Unsupported extensions, symlinks and unchanged content stay
+	// intentional skips.
+	const inputErrors: string[] = []
+
 	// Collect all files
 	const filePaths: string[] = []
 	for (const inputPath of paths) {
@@ -902,6 +908,7 @@ export async function ingestFilesToKB(params: {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`KB file scan failed for ${inputPath}: ${msg}`)
+			inputErrors.push(`${inputPath}: KB file scan failed: ${msg}`)
 		}
 	}
 
@@ -929,13 +936,15 @@ export async function ingestFilesToKB(params: {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`KB file read failed for ${filePath}: ${msg}`)
+			inputErrors.push(`${filePath}: KB file read failed: ${msg}`)
 		}
 	}
 
-	return ingestToKB({
+	const imported = await ingestToKB({
 		...params,
 		documents,
 	})
+	return { ...imported, errors: [...inputErrors, ...imported.errors] }
 }
 
 // ---------------------------------------------------------------------------

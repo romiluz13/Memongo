@@ -135,7 +135,9 @@ export const maintenancePaths = {
 			},
 			responses: {
 				"200": { description: "Consolidation result" },
-				...nonSearchFailureResponses("CONSOLIDATE_FAILED"),
+				...nonSearchFailureResponses("CONSOLIDATE_FAILED", {
+					reportsCommitState: true,
+				}),
 			},
 		},
 	},

@@ -150,14 +150,24 @@ export const searchFailureResponses = {
  * search route but runs engine Search underneath. `routeCode` is the route's
  * own generic code for every other failure.
  */
-export function nonSearchFailureResponses(routeCode: string) {
+export function nonSearchFailureResponses(
+	routeCode: string,
+	options: { reportsCommitState?: boolean } = {},
+) {
+	// M2 review D3: a route whose operation can fail after it committed work
+	// (consolidation) says its error body carries the commit state.
+	const commitNote500 = options.reportsCommitState
+		? " An operation that had already committed work (a consolidation run that committed candidates before a later Search failure) keeps this status and code and adds error.commitState (none, committed or unknown) and error.commit (the run's identity and the work known to be committed) to the body; a body without error.commitState makes no commit claim."
+		: ""
+	const commitNote503 = options.reportsCommitState
+		? " An operation that had already committed work keeps this status and code and adds error.commitState and error.commit to the body, as on 500."
+		: ""
 	return {
 		"500": {
-			description: `SEARCH_LANES_FAILED: the search this operation runs failed with a defect (query-error or internal-error). The body adds \`outcomes\` (status failed, the failing row). Other unexpected failures return ${routeCode}.`,
+			description: `SEARCH_LANES_FAILED: the search this operation runs failed with a defect (query-error or internal-error). The body adds \`outcomes\` (status failed, the failing row). Other unexpected failures return ${routeCode}.${commitNote500}`,
 		},
 		"503": {
-			description:
-				"SEARCH_LANES_UNAVAILABLE: the search this operation runs could not run (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable). SEARCH_BUDGET_EXHAUSTED: a search budget denial; an admission-bucket denial also sets the Retry-After header. The body adds `outcomes`. SERVICE_UNAVAILABLE: the database is unreachable.",
+			description: `SEARCH_LANES_UNAVAILABLE: the search this operation runs could not run (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable). SEARCH_BUDGET_EXHAUSTED: a search budget denial; an admission-bucket denial also sets the Retry-After header. The body adds \`outcomes\`. SERVICE_UNAVAILABLE: the database is unreachable.${commitNote503}`,
 			headers: searchFailureResponses["503"].headers,
 		},
 	} as const

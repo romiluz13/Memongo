@@ -117,7 +117,11 @@ exist.
 The two routes that are not search routes but run engine Search underneath,
 `/v1/consolidate` and `/v1/probes/vector`, answer a typed Search failure with
 the same statuses, codes and `outcomes` body. Any other error on them stays the
-route's own generic 500.
+route's own generic 500. A `/v1/consolidate` failure after the run had committed
+work, and a `/v1/sync` failure after the file sync committed (`KB_REFRESH_FAILED`),
+keep their status and code and add `error.commitState` (`none`, `committed` or
+`unknown`) and a bounded `error.commit` detail; an error body without
+`commitState` makes no claim.
 
 A partial answer keeps every row: a lane that failed stays visible as a failed
 row beside the lanes that answered, and the response `outcomes.status` is
