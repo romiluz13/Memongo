@@ -86,3 +86,69 @@ KB search (`searchKB`, the `kb` lane of `searchV2`, `/v1/search-kb`) now runs on
 - **Reservation cost.** The KB lane reserves one aggregation and one embed up front (previously up to three aggregations and two embeds, depending on capabilities). A request budget of exactly one aggregation and one embed now runs the lane. `kbLaneCost` takes only `{ embeddingMode }`.
 - **Explain.** Only the `fusionExplain` artifact is produced for KB search; the vector, keyword and `$text` explain artifacts are gone with their tiers.
 - **`/v1/search-kb` validates `fusionMethod`.** An unknown value used to be silently ignored. `js-merge`, any other string, `null` and non-string values now return `400 VALIDATION_ERROR` ("fusionMethod must be scoreFusion or rankFusion") and the engine is not called. Omitting the field keeps the configured fusion.
+
+## T7: store lanes on Search (#116)
+
+Procedure exact match, entity exact-name and prefix lookup, episode search and the derived-memory supporting-event lookup now run on `$search`. The `$regex` tiers and the global `textSearch` capability gate are gone from these lanes. Each lane is one operation: a Search failure, a missing index or a budget denial is a typed failure (`SearchLaneError` or `SearchBudgetDeniedError`), never a different lookup and never an empty result.
+
+A Search stage only proposes candidates. Each lane applies owner, scope and lifecycle again on the hydrated document, before its limit, so a document that changed after it was indexed cannot return. Search is eventually consistent: a document written moments ago is not found until mongot has indexed it. The regex tiers read the collection and saw it at once. The opt-in write barrier (`searchWriteToken`) is unchanged and is the way to wait for visibility.
+
+### Procedure exact match
+
+- `findExactProcedureMatches` runs `$search` `equals` on `name` and `triggerQueries` (`should`, `minimumShouldMatch: 1`), with owner, scope, state and `intentTags` in `compound.filter` where expressible. The whole filter, including the validity window, is applied again with `$match` after the Search stage. It keeps the previous `updatedAt` ordering, the limit and the score of 1.
+  - Previously it ran an anchored, case-insensitive `$regex` find (`^value$`, flag `i`) on the same two fields. The match is still the whole value in any case; only the matcher changed.
+- `textIndexName` is now a required option. `searchV2` passes `<prefix>procedures_text`.
+- The backstop now needs `procedures_text` to be queryable. A missing or unready index fails the `backstop:procedural-exact` lane typed (stage `exact-match`) and the answer is `partial`. Previously the find needed no index.
+- The backstop now counts one aggregation against the request's search budget. Previously the find was uncounted. A denial is a `budget-denied` lane row, not zero hits.
+- **Declared, unverified difference: case folding of non-ASCII names.** The `lowercase` normalizer on a `token` field is documented only as "lowercase"; the documentation does not say which characters it maps. The old matcher was PCRE caseless matching. They agree for ASCII. For a few characters they can disagree, for example the Greek final sigma (`ς` versus `Σ`) and the Turkish dotted capital `İ`. This was not checked against a live cluster, and the unit tests use a stand-in for the normalizer.
+- Token values longer than 8181 characters are truncated by the index, so a name or trigger query that long cannot match.
+
+### Entity lookups
+
+- `findEntitiesByName` now matches the whole name or alias: `$search` `equals` on the lowercase `name` and `aliases` tokens, owner and scope in `compound.filter` and again in `$match`, newest first, limit 50 by default.
+  - Previously it ran an unanchored, case-insensitive substring `$regex`. A query of `github.com` matched a URL entity named `https://github.com/...`, and `rom` matched `romiluz`. Neither matches now. Callers that want partial names use `searchEntitiesAutocomplete`.
+  - A blank query returns `[]` without a database call. A failure is a typed `SearchLaneError` at stage `entity-lookup`.
+- `searchEntitiesAutocomplete` no longer takes `textSearchAvailable`. Previously a deployment without the `textSearch` capability ran the substring `$regex` of `findEntitiesByName` instead. It is now always `$search` `autocomplete` (edgeGram) on `name` and `aliases`, and a blank query returns `[]`.
+- The previous entity and episode `autocomplete` pipelines put `should` clauses next to a `filter`. In that shape Search treats `should` as optional (`minimumShouldMatch` defaults to 0), so a lookup could return tenant documents that matched neither field. `searchEntitiesAutocomplete` and the new `equals` lookups set `minimumShouldMatch: 1`, and episode search puts its `text` clause in `must`.
+- The graph lane of `searchV2` no longer reads `capabilities.textSearch`. A deployment without Search, or without a queryable `entity_autocomplete` index, now fails that lane typed. Previously it fell to the regex.
+
+### Episode search
+
+- `searchEpisodes` runs one `$search` `text` query over `title` and `summary`, with owner and scope in `compound.filter`. Status (`deleted` excluded) and the time window are applied again with `$match` before the limit (50 by default).
+  - Previously, with `textSearch`, it ran `autocomplete` on both fields. Otherwise it ran a keyword regex: terms of three or more characters, query stopwords removed, joined with `|`, as an unanchored substring match, newest first.
+- Matching is now on whole analyzed terms, any one of them. Results are ordered by relevance.
+  - A partial word no longer matches: `pipe` does not find `pipeline`. Typing a prefix no longer finds the episode either, as the `autocomplete` tier used to.
+  - Query stopwords are no longer removed. A summary-style query such as `what happened in the pipeline` also matches episodes that contain `the` or `in`. The limit keeps the most relevant.
+- A blank query still returns `[]` with an `episode-search` `not-applicable` row. Hits and healthy zero hits report as stage `atlas-search` (`ok`, `ok-empty`). A failure is a typed `SearchLaneError` at stage `atlas-search`. The stage `episode-search` no longer reports a failure.
+- The episodic lane of `searchV2` no longer reads `capabilities.textSearch`.
+- `buildEpisodeSearchRegex` and `EPISODE_QUERY_STOPWORDS` are removed.
+
+### Derived-memory supporting events
+
+- A full LLM claim is a `$search` `phrase` over `events.body`, with the two forms the verifier accepts (`My ...` and `The user's ...`) as the query. Any other value is a `text` query with `matchCriteria: "all"`. Tenant (`agentId`, `scope`, `scopeRef`) is in `compound.filter`.
+  - Previously it was an unanchored case-insensitive `$regex` find on `body`, ordered newest first, limit 3.
+- Unchanged: the verifier runs on every hit (the anchored full-claim pattern, or the literal value). A Search hit alone never counts as corroboration. The event being promoted is still excluded, and at most 3 events are kept, newest first.
+- Tenant and lifecycle are revalidated with `$match` after the Search stage (bitemporal validity and expiry on the hydrated event, plus the exclusion of the current event). They are not in `compound.filter`: the events text index does not map `validAt`, `invalidAt` or `expiresAt`, and the Search documentation does not say how a missing date field behaves in a filter. This differs from the ticket text; see the Return.
+- The lookup reads a window of 25 Search candidates, then keeps the 3 newest that pass the verifier. Previously the scan saw every matching event. If more than 25 events match, the 3 newest are chosen within the 25 best by relevance.
+- A value now has to share every analyzed term with an event, and still appear literally. A value that is only a fragment of a longer word no longer corroborates.
+- A supporting event that mongot has not yet indexed does not corroborate. The candidate stays unpromoted and a later repeat can promote it.
+- A Search failure now throws a typed `SearchLaneError` (stage `atlas-search`) out of `resolveStructuredCandidatesForPromotion` and `prepareDerivedMemoryPromotion`. It is never read as "no supporting events".
+
+### Index definitions
+
+Three manifest definitions changed. Boot reads each as drift and updates it in place; it never drops. The first boot after the upgrade rebuilds these three indexes, and a user without update privilege fails with `search-privileges-denied`.
+
+| Index | Field | Before | Now |
+|---|---|---|---|
+| `<prefix>procedures_text` | `name` | `string` | `string` and lowercase `token` |
+| `<prefix>procedures_text` | `triggerQueries` | not mapped | lowercase `token` |
+| `entity_autocomplete` | `name`, `aliases` | `autocomplete` | `autocomplete` and lowercase `token` |
+| `episode_autocomplete` | `title`, `summary` | `autocomplete` | `string` with the configured text analyzer |
+
+The two graph index names stay unprefixed and `episode_autocomplete` keeps its name although it no longer holds an `autocomplete` mapping; a rename would build a new index. The LongMemEval index profile builds neither graph index, so the entity and episode lanes fail typed there instead of using the regex.
+
+### Removed
+
+- The `$regex` tiers of `findEntitiesByName`, `searchEntitiesAutocomplete`, `searchEpisodes`, `findExactProcedureMatches` and `findSupportingEventIds`.
+- The `textSearchAvailable` option of `searchEntitiesAutocomplete` and `searchEpisodes`, and the two `textSearch` reads in `searchV2`.
+- `procedure-exact-search-timeout.test.ts`; the lane test `mongodb-procedures-exact-search.test.ts` covers the same processing limit.
