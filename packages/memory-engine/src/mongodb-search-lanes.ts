@@ -5,7 +5,7 @@
  */
 
 import type { Db, Document } from "mongodb"
-import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
+import type { MemoryScope } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { Entity, RelationType } from "./mongodb-graph.js"
 import type { MemorySearchExecutorTimeRange } from "./mongodb-search-executor.js"
@@ -15,18 +15,14 @@ import {
 	consumeSearchAggregationOrThrow,
 	resolveUserSearchMaxTimeMs,
 	type SearchBudgetReservation,
-	searchBudgetDenialReason,
 	searchWorkDenialReason,
-	tryConsumeSearchAggregation,
 	tryConsumeSearchWork,
 } from "./mongodb-search-budget.js"
 import type { MemorySearchResult } from "./types.js"
 import {
 	buildSearchFilterEquals,
 	deduplicateSearchResults,
-	isBenchmarkStrictMode,
 	mapEventSearchDocToResult,
-	mergeTurnPrecisionResults,
 	scorePreferenceGroundingSignalBoost,
 } from "./mongodb-search-ranking.js"
 import {
@@ -39,7 +35,11 @@ import {
 	orderTemporalCoverageByTimeBucket,
 	scoreTemporalCoverageSessionEvent,
 } from "./mongodb-search-temporal.js"
-import { freshnessRevalidationStages } from "./mongodb-search.js"
+import type { CanonicalEvent } from "./mongodb-events.js"
+import {
+	freshnessRevalidationStages,
+	runSearchAggregateWithRetry,
+} from "./mongodb-search.js"
 import {
 	buildEventLifecycleClause,
 	mergeQueryClauses,
@@ -48,95 +48,145 @@ import {
 	type SearchBudgetReason,
 	SearchBudgetDeniedError,
 	type SearchTierOutcomeSink,
-	searchFailureLogFields,
-	searchFailureTierRow,
 	toTypedSearchError,
 } from "./search-outcomes.js"
 
-type EventSearchBranch = "turn-vector" | "turn-text"
-type EventBranchSearch = {
-	branch: EventSearchBranch
-	results: Promise<MemorySearchResult[]>
-}
-const branchLog = createSubsystemLogger("memory:mongodb:search")
-
 /**
- * #101 L1: each branch reports its own row; a failed branch never discards
- * a sibling's evidence (the lane is partial), unless every branch failed or
- * strict mode is on — then the first failure is the lane's typed throw.
+ * M2 decision 5: the turn-precision and conversation-evidence event lanes
+ * are one native `$rankFusion` aggregate on events, vector and text inputs.
+ * The weights are the former JavaScript RRF's equal weights, and the
+ * server's fixed rank constant 60 is that RRF's k (mongodb-hybrid.ts
+ * rrfScore), so the fusion policy is unchanged. One aggregate means one
+ * outcome: a failure or a denial fails the lane, and no branch survives
+ * alone. https://www.mongodb.com/docs/manual/reference/operator/aggregation/rankFusion/
  */
-async function settleEventBranches(
-	searches: EventBranchSearch[],
-	onTierOutcome?: SearchTierOutcomeSink,
-): Promise<MemorySearchResult[][]> {
-	const outcomes = await Promise.allSettled(
-		searches.map((search) => search.results),
-	)
-	const failures = outcomes.flatMap((outcome, index) =>
-		outcome.status === "rejected"
-			? [toTypedSearchError(outcome.reason, searches[index].branch)]
-			: [],
-	)
+const EVENT_FUSION_WEIGHTS = { vector: 1, text: 1 } as const
+
+/** One fused aggregate plus the embed of its autoEmbed vector input. */
+const EVENT_FUSION_COST = { aggregations: 1, embeds: 1 } as const
+
+const EVENT_RESULT_PROJECTION: Document = {
+	_id: 0,
+	eventId: 1,
+	body: 1,
+	role: 1,
+	sessionId: 1,
+	timestamp: 1,
+	scope: 1,
+	scopeRef: 1,
+	accessCount: 1,
+}
+
+async function runEventRankFusion(params: {
+	db: Db
+	prefix: string
+	query: string
+	maxResults: number
+	numCandidates: number
+	capabilities: DetectedCapabilities
+	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
+	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
+	/** The canonical identity/time predicate: the vector prefilter and the post-stage revalidation of both inputs. */
+	canonicalFilter: Document
+	textFilters: Document[]
+	textShould?: Document[]
+	lifecycleMatch: Document
+	consumeWork: (cost: typeof EVENT_FUSION_COST) => boolean
+	denialReason: (cost: typeof EVENT_FUSION_COST) => SearchBudgetReason
+	onTierOutcome?: SearchTierOutcomeSink
+}): Promise<MemorySearchResult[]> {
 	if (
-		failures.length > 0 &&
-		(isBenchmarkStrictMode() || failures.length === outcomes.length)
+		!params.capabilities.vectorSearch ||
+		!params.capabilities.textSearch ||
+		!params.capabilities.rankFusion ||
+		params.embeddingMode !== "automated"
 	) {
-		for (const failure of failures.slice(1)) {
-			onTierOutcome?.(searchFailureTierRow(failure.stage, failure))
-		}
-		throw failures[0]
-	}
-	const results: MemorySearchResult[][] = []
-	for (const [index, outcome] of outcomes.entries()) {
-		const branch = searches[index].branch
-		if (outcome.status === "fulfilled") {
-			const count = outcome.value.length
-			onTierOutcome?.({
-				stage: branch,
-				outcome: count > 0 ? "ok" : "ok-empty",
-				...(count > 0 ? {} : { reason: "zero-hits" as const }),
-				resultCount: count,
-			})
-			results.push(outcome.value)
-			continue
-		}
-		const typed = toTypedSearchError(outcome.reason, branch)
-		branchLog.warn("event search branch failed", {
-			branch,
-			...searchFailureLogFields(typed),
+		params.onTierOutcome?.({
+			stage: "rank-fusion",
+			outcome: "not-applicable",
+			reason: "capability-absent",
 		})
-		onTierOutcome?.(searchFailureTierRow(branch, typed))
+		return []
 	}
-	return results
-}
-
-/**
- * #101 L8-L10/L13-L15: a refused branch is a budget-denied row, never a
- * silent skip. When no branch could run at all, the first denial is the
- * lane's typed throw; otherwise every denial is reported as its own row.
- */
-function settleBranchDenials(
-	denials: SearchBudgetDeniedError[],
-	branchesStarted: number,
-	onTierOutcome?: SearchTierOutcomeSink,
-): void {
-	const throwFirst = branchesStarted === 0 && denials.length > 0
-	for (const denial of throwFirst ? denials.slice(1) : denials) {
-		onTierOutcome?.(searchFailureTierRow(denial.stage, denial))
+	// P3.2 / decision 18: the inline $vectorSearch input bypasses
+	// buildVectorSearchStage, so the fused aggregate and its embed are
+	// charged here as one pair; a refusal runs nothing.
+	if (!params.consumeWork(EVENT_FUSION_COST)) {
+		throw new SearchBudgetDeniedError({
+			stage: "rank-fusion",
+			reason: params.denialReason(EVENT_FUSION_COST),
+		})
 	}
-	if (throwFirst) {
-		throw denials[0]
+	// Both inputs carry the same identity, time and lifecycle predicate
+	// before their bounds: the Search stages read the indexed copy, which can
+	// lag an owner/scope/session mutation, a retraction or an expiry, so the
+	// hydrated document is re-checked inside each input.
+	const pipeline: Document[] = [
+		{
+			$rankFusion: {
+				input: {
+					pipelines: {
+						vector: [
+							{
+								$vectorSearch: {
+									index: `${params.prefix}events_vector`,
+									path: "body",
+									query: { text: params.query },
+									model: params.queryEmbeddingModel,
+									filter: params.canonicalFilter,
+									numCandidates: params.numCandidates,
+									limit: params.maxResults,
+									returnStoredSource: false,
+								},
+							},
+							...freshnessRevalidationStages(params.canonicalFilter),
+							{ $match: params.lifecycleMatch },
+						],
+						text: [
+							{
+								$search: {
+									index: `${params.prefix}events_text`,
+									compound: {
+										filter: params.textFilters,
+										must: [{ text: { query: params.query, path: "body" } }],
+										...(params.textShould && params.textShould.length > 0
+											? { should: params.textShould }
+											: {}),
+									},
+								},
+							},
+							...freshnessRevalidationStages(params.canonicalFilter),
+							{ $match: params.lifecycleMatch },
+							{ $limit: params.maxResults },
+						],
+					},
+				},
+				combination: { weights: EVENT_FUSION_WEIGHTS },
+			},
+		},
+		// Each input is bounded at maxResults, so the fused set holds at most
+		// twice that; the lane's composition below trims to maxResults.
+		{ $limit: params.maxResults * 2 },
+		{ $project: { ...EVENT_RESULT_PROJECTION, score: { $meta: "score" } } },
+	]
+	let docs: Document[]
+	try {
+		docs = await eventsCollection(params.db, params.prefix)
+			// P3.8: user-driven Search pipelines carry a maxTimeMS ceiling.
+			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
+			.toArray()
+	} catch (err) {
+		throw toTypedSearchError(err, "rank-fusion")
 	}
-}
-
-/** An inline autoEmbed $vectorSearch branch: one aggregation and its embed. */
-const VECTOR_BRANCH_COST = { aggregations: 1, embeds: 1 } as const
-
-function branchDenial(
-	stage: EventSearchBranch,
-	reason: SearchBudgetReason,
-): SearchBudgetDeniedError {
-	return new SearchBudgetDeniedError({ stage, reason })
+	params.onTierOutcome?.({
+		stage: "rank-fusion",
+		outcome: docs.length > 0 ? "ok" : "ok-empty",
+		...(docs.length > 0 ? {} : { reason: "zero-hits" as const }),
+		resultCount: docs.length,
+	})
+	return docs
+		.map((doc) => mapEventSearchDocToResult(doc, "turn-fusion"))
+		.filter((result): result is MemorySearchResult => Boolean(result))
 }
 
 async function expandTemporalCoverageSessionEvents(params: {
@@ -477,7 +527,6 @@ export async function searchTurnEventsWithinSessions(params: {
 		return []
 	}
 
-	const events = eventsCollection(params.db, params.prefix)
 	// The Search stages run against the indexed copy, which can lag a
 	// retraction (invalidAt), an expiry (expiresAt), or an owner/scope/
 	// session mutation. Post-stage, the full request filter AND the
@@ -521,126 +570,23 @@ export async function searchTurnEventsWithinSessions(params: {
 		buildSearchFilterEquals("sessionId", sessionIds),
 	].filter((value): value is Document => Boolean(value))
 
-	const searches: EventBranchSearch[] = []
-	const denials: SearchBudgetDeniedError[] = []
-	const canVectorBranch =
-		params.capabilities.vectorSearch && params.embeddingMode === "automated"
-	if (!canVectorBranch) {
-		params.onTierOutcome?.({
-			stage: "turn-vector",
-			outcome: "not-applicable",
-			reason: "capability-absent",
-		})
-	} else if (!tryConsumeSearchWork(VECTOR_BRANCH_COST)) {
-		// P3.2: these inline $vectorSearch pipelines bypass
-		// buildVectorSearchStage, so they consume the per-request aggregation +
-		// server-side embed budget here — decision 18: as one pair, so a
-		// refused embed never strands a spent aggregation.
-		denials.push(
-			branchDenial("turn-vector", searchWorkDenialReason(VECTOR_BRANCH_COST)),
-		)
-	} else {
-		const vectorPipeline: Document[] = [
-			{
-				$vectorSearch: {
-					index: `${params.prefix}events_vector`,
-					path: "body",
-					query: { text: params.query },
-					model: params.queryEmbeddingModel,
-					filter: vectorFilter,
-					numCandidates: params.numCandidates,
-					limit: params.maxResults,
-					returnStoredSource: false,
-				},
-			},
-			...freshnessRevalidationStages(vectorFilter),
-			{ $match: lifecycleMatch },
-			{
-				$project: {
-					_id: 0,
-					eventId: 1,
-					body: 1,
-					role: 1,
-					sessionId: 1,
-					timestamp: 1,
-					scope: 1,
-					scopeRef: 1,
-					accessCount: 1,
-					score: { $meta: "vectorSearchScore" },
-				},
-			},
-		]
-		searches.push({
-			branch: "turn-vector",
-			results: events
-				// P3.8: user-driven $vectorSearch pipelines carry a maxTimeMS ceiling.
-				.aggregate(vectorPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-				.toArray()
-				.then((docs) =>
-					docs
-						.map((doc) => mapEventSearchDocToResult(doc, "turn-vector"))
-						.filter((result): result is MemorySearchResult => Boolean(result)),
-				),
-		})
-	}
-	// P3.2: direct aggregates consume the per-request budget here.
-	if (!params.capabilities.textSearch) {
-		params.onTierOutcome?.({
-			stage: "turn-text",
-			outcome: "not-applicable",
-			reason: "capability-absent",
-		})
-	} else if (!tryConsumeSearchAggregation()) {
-		denials.push(
-			branchDenial("turn-text", searchBudgetDenialReason("aggregations")),
-		)
-	} else {
-		const textPipeline: Document[] = [
-			{
-				$search: {
-					index: `${params.prefix}events_text`,
-					compound: {
-						must: [{ text: { query: params.query, path: "body" } }],
-						filter: textFilters,
-					},
-				},
-			},
-			...freshnessRevalidationStages(vectorFilter),
-			{ $match: lifecycleMatch },
-			{ $limit: params.maxResults },
-			{
-				$project: {
-					_id: 0,
-					eventId: 1,
-					body: 1,
-					role: 1,
-					sessionId: 1,
-					timestamp: 1,
-					scope: 1,
-					scopeRef: 1,
-					accessCount: 1,
-					score: { $meta: "searchScore" },
-				},
-			},
-		]
-		searches.push({
-			branch: "turn-text",
-			results: events
-				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-				.aggregate(textPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-				.toArray()
-				.then((docs) =>
-					docs
-						.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
-						.filter((result): result is MemorySearchResult => Boolean(result)),
-				),
-		})
-	}
-
-	settleBranchDenials(denials, searches.length, params.onTierOutcome)
-	if (searches.length === 0) return []
-	const results = await settleEventBranches(searches, params.onTierOutcome)
-	return mergeTurnPrecisionResults(results)
+	const fused = await runEventRankFusion({
+		db: params.db,
+		prefix: params.prefix,
+		query: params.query,
+		maxResults: params.maxResults,
+		numCandidates: params.numCandidates,
+		capabilities: params.capabilities,
+		embeddingMode: params.embeddingMode,
+		queryEmbeddingModel: params.queryEmbeddingModel,
+		canonicalFilter: vectorFilter,
+		textFilters,
+		lifecycleMatch,
+		consumeWork: tryConsumeSearchWork,
+		denialReason: searchWorkDenialReason,
+		onTierOutcome: params.onTierOutcome,
+	})
+	return fused
 		.map((result, index) => ({
 			...result,
 			score:
@@ -677,17 +623,6 @@ export async function searchConversationEvidenceEvents(params: {
 		})
 		return []
 	}
-	// R1: an optional phase this deployment cannot serve is capability-absent.
-	if (!params.capabilities.textSearch && !params.capabilities.vectorSearch) {
-		params.onTierOutcome?.({
-			stage: "lane",
-			outcome: "not-applicable",
-			reason: "capability-absent",
-		})
-		return []
-	}
-
-	const events = eventsCollection(params.db, params.prefix)
 	const queryTime =
 		params.questionDate && !Number.isNaN(params.questionDate.getTime())
 			? params.questionDate
@@ -764,159 +699,40 @@ export async function searchConversationEvidenceEvents(params: {
 				: null,
 	].filter((value): value is Document => Boolean(value))
 
-	const searches: EventBranchSearch[] = []
-	const denials: SearchBudgetDeniedError[] = []
 	const reservation = params.budgetReservation
-	const denialReason = (kind: "aggregations" | "embeds"): SearchBudgetReason =>
-		reservation ? "budget-reservation" : searchBudgetDenialReason(kind)
-	const consumeAggregation = (): boolean =>
-		reservation
-			? reservation.tryConsumeAggregation()
-			: tryConsumeSearchAggregation()
-	const canVectorBranch =
-		params.capabilities.vectorSearch && params.embeddingMode === "automated"
-	if (!canVectorBranch) {
-		params.onTierOutcome?.({
-			stage: "turn-vector",
-			outcome: "not-applicable",
-			reason: "capability-absent",
-		})
-	} else if (
-		!(reservation
-			? reservation.tryConsumeWork(VECTOR_BRANCH_COST)
-			: tryConsumeSearchWork(VECTOR_BRANCH_COST))
-	) {
-		// P3.2: these inline $vectorSearch pipelines bypass
-		// buildVectorSearchStage, so they consume the per-request aggregation +
-		// server-side embed budget here — decision 18: as one pair.
-		denials.push(
-			branchDenial(
-				"turn-vector",
-				reservation
-					? "budget-reservation"
-					: searchWorkDenialReason(VECTOR_BRANCH_COST),
-			),
-		)
-	} else {
-		const vectorPipeline: Document[] = [
-			{
-				$vectorSearch: {
-					index: `${params.prefix}events_vector`,
-					path: "body",
-					query: { text: params.query },
-					model: params.queryEmbeddingModel,
-					filter: vectorFilter,
-					numCandidates: params.numCandidates,
-					limit: params.maxResults,
-					returnStoredSource: false,
-				},
+	const textShould: Document[] = []
+	if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
+		textShould.push({
+			near: {
+				path: "timestamp",
+				origin: params.questionDate,
+				pivot: 180 * 24 * 60 * 60 * 1000,
+				score: { boost: { value: 2 } },
 			},
-			...freshnessRevalidationStages(vectorFilter),
-			{ $match: lifecycleMatch },
-			{
-				$project: {
-					_id: 0,
-					eventId: 1,
-					body: 1,
-					role: 1,
-					sessionId: 1,
-					timestamp: 1,
-					scope: 1,
-					scopeRef: 1,
-					accessCount: 1,
-					score: { $meta: "vectorSearchScore" },
-				},
-			},
-		]
-		searches.push({
-			branch: "turn-vector",
-			results: events
-				// P3.8: user-driven $vectorSearch pipelines carry a maxTimeMS ceiling.
-				.aggregate(vectorPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-				.toArray()
-				.then((docs) =>
-					docs
-						.map((doc) => mapEventSearchDocToResult(doc, "turn-vector"))
-						.filter((result): result is MemorySearchResult => Boolean(result)),
-				),
 		})
 	}
-
-	// P3.2: direct aggregates consume the per-request budget here.
-	if (!params.capabilities.textSearch) {
-		params.onTierOutcome?.({
-			stage: "turn-text",
-			outcome: "not-applicable",
-			reason: "capability-absent",
-		})
-	} else if (!consumeAggregation()) {
-		denials.push(branchDenial("turn-text", denialReason("aggregations")))
-	} else {
-		const should: Document[] = []
-		if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
-			should.push({
-				near: {
-					path: "timestamp",
-					origin: params.questionDate,
-					pivot: 180 * 24 * 60 * 60 * 1000,
-					score: { boost: { value: 2 } },
-				},
-			})
-		}
-		const textPipeline: Document[] = [
-			{
-				$search: {
-					index: `${params.prefix}events_text`,
-					compound: {
-						filter: searchFilters,
-						must: [{ text: { query: params.query, path: "body" } }],
-						...(should.length > 0 ? { should } : {}),
-					},
-				},
-			},
-			...freshnessRevalidationStages(vectorFilter),
-			{ $match: lifecycleMatch },
-			{ $limit: params.maxResults },
-			{
-				$project: {
-					_id: 0,
-					eventId: 1,
-					body: 1,
-					role: 1,
-					sessionId: 1,
-					timestamp: 1,
-					scope: 1,
-					scopeRef: 1,
-					accessCount: 1,
-					score: { $meta: "searchScore" },
-				},
-			},
-		]
-		searches.push({
-			branch: "turn-text",
-			results: events
-				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-				.aggregate(textPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-				.toArray()
-				.then((docs) =>
-					docs
-						.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
-						.filter((result): result is MemorySearchResult => Boolean(result))
-						.map((result) => ({
-							...result,
-							provenance: {
-								...(result.provenance ?? {}),
-								conversationEvidence: true,
-							},
-						})),
-				),
-		})
-	}
-
-	settleBranchDenials(denials, searches.length, params.onTierOutcome)
-	if (searches.length === 0) return []
-	const results = await settleEventBranches(searches, params.onTierOutcome)
-	return mergeTurnPrecisionResults(results)
+	const fused = await runEventRankFusion({
+		db: params.db,
+		prefix: params.prefix,
+		query: params.query,
+		maxResults: params.maxResults,
+		numCandidates: params.numCandidates,
+		capabilities: params.capabilities,
+		embeddingMode: params.embeddingMode,
+		queryEmbeddingModel: params.queryEmbeddingModel,
+		canonicalFilter: vectorFilter,
+		textFilters: searchFilters,
+		textShould,
+		lifecycleMatch,
+		consumeWork: (cost) =>
+			reservation
+				? reservation.tryConsumeWork(cost)
+				: tryConsumeSearchWork(cost),
+		denialReason: (cost) =>
+			reservation ? "budget-reservation" : searchWorkDenialReason(cost),
+		onTierOutcome: params.onTierOutcome,
+	})
+	return fused
 		.map((result, index) => ({
 			...result,
 			score: Math.max(result.score, 1.1 - index * 0.01),
@@ -1132,6 +948,91 @@ export function extractRawWindowQueryTerms(query: string): string[] {
 				),
 		),
 	)
+}
+
+/**
+ * M2 (G1-28): raw-window candidates come from one `$search` on events:
+ * `text` on the body over the query's content terms, with the tenant
+ * identity and the [start, end] window (`range` on the `date`-mapped
+ * timestamp) in `compound.filter`. The caller's term scoring,
+ * temporal-proximity boost and ordering stay composition over these
+ * candidates. Search hits are candidates, not proof: identity, window and
+ * lifecycle (validity at the reference clock, retention at wall-now) are
+ * re-checked against the hydrated document before the bound. A query with
+ * no content terms selects nothing; no chronological listing stands in.
+ */
+export async function searchRawWindowEvents(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	start: Date
+	end: Date
+	referenceDate: Date
+	queryTerms: string[]
+	limit: number
+	onTierOutcome?: SearchTierOutcomeSink
+}): Promise<CanonicalEvent[]> {
+	if (params.queryTerms.length === 0) {
+		params.onTierOutcome?.({
+			stage: "atlas-search",
+			outcome: "not-applicable",
+			reason: "query-shape",
+		})
+		return []
+	}
+	const canonicalFilter: Document = {
+		agentId: params.agentId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+		timestamp: { $gte: params.start, $lte: params.end },
+	}
+	const pipeline: Document[] = [
+		{
+			$search: {
+				index: `${params.prefix}events_text`,
+				compound: {
+					filter: [
+						{ equals: { path: "agentId", value: params.agentId } },
+						{ equals: { path: "scope", value: params.scope } },
+						{ equals: { path: "scopeRef", value: params.scopeRef } },
+						{
+							range: {
+								path: "timestamp",
+								gte: params.start,
+								lte: params.end,
+							},
+						},
+					],
+					must: [{ text: { query: params.queryTerms, path: "body" } }],
+				},
+			},
+		},
+		...freshnessRevalidationStages(canonicalFilter),
+		{ $match: buildEventLifecycleClause({ asOf: params.referenceDate }) },
+		{ $limit: params.limit },
+		{ $project: EVENT_RESULT_PROJECTION },
+	]
+	let docs: Document[]
+	try {
+		// One aggregation charged to the request ledger; maxTimeMS and the
+		// typed warmup retry come from the shared runner.
+		docs = await runSearchAggregateWithRetry(
+			eventsCollection(params.db, params.prefix),
+			pipeline,
+			{ stage: "atlas-search" },
+		)
+	} catch (err) {
+		throw toTypedSearchError(err, "atlas-search")
+	}
+	params.onTierOutcome?.({
+		stage: "atlas-search",
+		outcome: docs.length > 0 ? "ok" : "ok-empty",
+		...(docs.length > 0 ? {} : { reason: "zero-hits" as const }),
+		resultCount: docs.length,
+	})
+	return docs as unknown as CanonicalEvent[]
 }
 
 export function computeRawWindowEventQueryScore(

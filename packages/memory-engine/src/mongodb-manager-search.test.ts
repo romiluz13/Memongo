@@ -19,6 +19,7 @@ import {
 	fakeDb,
 	fakePrefix,
 	captureManagerPrototype,
+	rawWindowEventsCollection,
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
@@ -91,7 +92,6 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-const { getEventsByTimeRange } = await import("./mongodb-events.js")
 const { planRetrieval, resolveTimeRangePreset, extractTemporalWindow } =
 	await import("./mongodb-retrieval-planner.js")
 const { searchEpisodes } = await import("./mongodb-episodes.js")
@@ -108,6 +108,11 @@ const {
 	kbChunksCollection,
 } = await import("./mongodb-schema.js")
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
+// M2 T6: raw-window candidates come from its $search aggregate.
+const seedRawWindow = (events: object[]) =>
+	mocked(eventsCollection).mockReturnValue(
+		rawWindowEventsCollection(events) as never,
+	)
 
 describe("conversation evidence query detection", () => {
 	it("routes advice and recommendation queries through conversation evidence", () => {
@@ -548,10 +553,14 @@ describe("searchV2", () => {
 
 		let rawWindowStarted = false
 		let rawWindowStartedBeforeEpisodicResolved = false
-		mocked(getEventsByTimeRange).mockImplementation(async () => {
-			rawWindowStarted = true
-			return []
-		})
+		mocked(eventsCollection).mockReturnValue({
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					rawWindowStarted = true
+					return []
+				}),
+			})),
+		} as never)
 		mocked(searchEpisodes).mockImplementation(async () => {
 			for (let i = 0; i < 20 && !rawWindowStarted; i++) {
 				await new Promise((resolve) => setTimeout(resolve, 5))
@@ -579,7 +588,7 @@ describe("searchV2", () => {
 		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
 
 		// Raw-window succeeds
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				eventId: "e-1",
 				body: "recent event",
@@ -897,7 +906,7 @@ describe("searchV2", () => {
 		)
 	})
 
-	it("applies maxTimeMS to the user-driven conversation-evidence $search pipeline (P3.8)", async () => {
+	it("applies maxTimeMS to the user-driven conversation-evidence $rankFusion pipeline (P3.8)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -918,10 +927,10 @@ describe("searchV2", () => {
 				searchOptions: {
 					allowHybridBackstop: false,
 					capabilities: {
-						vectorSearch: false,
+						vectorSearch: true,
 						textSearch: true,
 						scoreFusion: false,
-						rankFusion: false,
+						rankFusion: true,
 						storedSource: false,
 						vectorIndexMethod: false,
 					},
@@ -930,7 +939,7 @@ describe("searchV2", () => {
 		)
 
 		// The conversation-evidence lane matches "did we" and runs a direct
-		// $search aggregate that bypasses runSearchAggregateWithRetry.
+		// $rankFusion aggregate that bypasses runSearchAggregateWithRetry.
 		expect(aggregate.mock.calls.length).toBeGreaterThan(0)
 		for (const call of aggregate.mock.calls) {
 			const options = call[1] as { maxTimeMS?: number } | undefined
@@ -946,7 +955,7 @@ describe("searchV2", () => {
 			reasoning: "conversation scope requested",
 		})
 
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				eventId: "evt-recent",
 				body: "I will keep concise updates and track the Phoenix deploy checklist.",
@@ -1178,7 +1187,7 @@ describe("searchV2", () => {
 		const recentTimestamp = new Date("2024-03-14T00:00:00Z")
 		const oldTimestamp = new Date("2023-01-01T00:00:00Z")
 
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				_id: "evt-old",
 				eventId: "evt-old",
@@ -1231,7 +1240,7 @@ describe("searchV2", () => {
 			confidence: "high",
 			reasoning: "direct evidence",
 		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				_id: "evt-1",
 				eventId: "evt-1",
@@ -1316,7 +1325,7 @@ describe("searchV2", () => {
 				}
 			})
 
-			mocked(getEventsByTimeRange).mockResolvedValue([
+			seedRawWindow([
 				{
 					_id: "evt-direct",
 					eventId: "evt-direct",
@@ -1467,7 +1476,7 @@ describe("searchV2", () => {
 				confidence: "high",
 				reasoning: "recommendation memory query",
 			})
-			mocked(getEventsByTimeRange).mockResolvedValue([
+			const seed = [
 				{
 					_id: "evt-seed",
 					eventId: "evt-seed",
@@ -1480,41 +1489,46 @@ describe("searchV2", () => {
 					sessionId: "photo-session",
 					channel: "default",
 				},
-			])
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([
-					{
-						eventId: "evt-user-distractor",
-						body: "What are good external battery packs for my Sony A7R IV?",
-						role: "user",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:01:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.9,
-					},
-					{
-						eventId: "evt-user-compatible",
-						body: "I'm looking to upgrade my camera flash. Can you recommend options compatible with my Sony A7R IV?",
-						role: "user",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:02:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.8,
-					},
-					{
-						eventId: "evt-assistant-recommendation",
-						body: "The Godox V1 comes with a soft case, but a padded pouch would complement your photography setup.",
-						role: "assistant",
-						sessionId: "photo-session",
-						timestamp: new Date("2023-05-30T10:03:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.7,
-					},
-				]),
-			})
+			]
+			const fused = [
+				{
+					eventId: "evt-user-distractor",
+					body: "What are good external battery packs for my Sony A7R IV?",
+					role: "user",
+					sessionId: "photo-session",
+					timestamp: new Date("2023-05-30T10:01:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					score: 0.9,
+				},
+				{
+					eventId: "evt-user-compatible",
+					body: "I'm looking to upgrade my camera flash. Can you recommend options compatible with my Sony A7R IV?",
+					role: "user",
+					sessionId: "photo-session",
+					timestamp: new Date("2023-05-30T10:02:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					score: 0.8,
+				},
+				{
+					eventId: "evt-assistant-recommendation",
+					body: "The Godox V1 comes with a soft case, but a padded pouch would complement your photography setup.",
+					role: "assistant",
+					sessionId: "photo-session",
+					timestamp: new Date("2023-05-30T10:03:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					score: 0.7,
+				},
+			]
+			const aggregate = vi.fn((pipeline: Array<Record<string, unknown>>) => ({
+				toArray: vi.fn(async () =>
+					pipeline[0]?.$rankFusion
+						? fused
+						: rawWindowEventsCollection(seed).aggregate(pipeline).toArray(),
+				),
+			}))
 			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
 				const reranked = results
 					.map((entry) => ({
@@ -1551,10 +1565,10 @@ describe("searchV2", () => {
 					searchOptions: {
 						allowHybridBackstop: false,
 						capabilities: {
-							vectorSearch: false,
+							vectorSearch: true,
 							textSearch: true,
 							scoreFusion: false,
-							rankFusion: false,
+							rankFusion: true,
 							storedSource: false,
 							vectorIndexMethod: false,
 						},
@@ -1610,7 +1624,7 @@ describe("searchV2", () => {
 			sessionId,
 			channel: "default",
 		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			makeEvent(
 				"evt-ce-a",
 				"espresso machine calibration notes alpha",

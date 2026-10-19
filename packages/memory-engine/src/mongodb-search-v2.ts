@@ -13,7 +13,6 @@ import { resolveDefaultScope } from "./backend-config.js"
 import { resolveConversationEvidenceMode } from "./mongodb-conversation-evidence-mode.js"
 import { searchEpisodes } from "./mongodb-episodes.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
-import { getEventsByTimeRange } from "./mongodb-events.js"
 import { searchEntitiesAutocomplete, expandGraph } from "./mongodb-graph.js"
 import type { GraphExpansionResult } from "./mongodb-graph.js"
 import { derivationFromRole } from "./memory-derivation.js"
@@ -83,6 +82,7 @@ import {
 	kbLaneCost,
 	mongoSearchTierCost,
 	NO_SEARCH_COST,
+	rawWindowLaneCost,
 	structuredLaneCost,
 	vectorLeafCost,
 } from "./search-lane-cost.js"
@@ -153,6 +153,7 @@ import {
 	isTrustedPlannerEntityCandidate,
 	pickBestEntityMatch,
 	searchConversationEvidenceEvents,
+	searchRawWindowEvents,
 	searchTemporalCoverageEvents,
 	searchTurnEventsWithinSessions,
 } from "./mongodb-search-lanes.js"
@@ -1133,21 +1134,34 @@ async function searchV2WithBudget(
 					break
 				}
 				case "raw-window": {
+					if (!capabilities.textSearch) {
+						pathResults = notApplicable(
+							"raw-window",
+							"lane",
+							"capability-absent",
+						)
+						break
+					}
 					// M2 audit fix: cap raw-window events at 50 to avoid unbounded result sets
 					const rawWindowLimit = 50
-					const events = await getEventsByTimeRange({
+					const queryTerms = extractRawWindowQueryTerms(query)
+					// M2 (G1-28): candidates come from one $search over the
+					// window; the scoring below is composition over them.
+					const events = await searchRawWindowEvents({
 						db,
 						prefix,
 						agentId,
+						scope,
+						scopeRef: agentScopeRef,
 						start:
 							timeRange?.start ??
 							new Date(referenceDate.getTime() - 24 * 60 * 60 * 1000),
 						end: timeRange?.end ?? referenceDate,
-						scope,
-						scopeRef: agentScopeRef,
+						referenceDate,
+						queryTerms,
 						limit: rawWindowLimit,
+						onTierOutcome,
 					})
-					const queryTerms = extractRawWindowQueryTerms(query)
 					// P4.4.4 temporal proximity scoring (hindsight): when the
 					// query implies a temporal window, events nearer the window
 					// midpoint (origin ± scaleDays) outrank equally matched far
@@ -1188,9 +1202,13 @@ async function searchV2WithBudget(
 							if (right.temporalProximity !== left.temporalProximity) {
 								return right.temporalProximity - left.temporalProximity
 							}
-							return (
+							const byTime =
 								right.event.timestamp.getTime() - left.event.timestamp.getTime()
-							)
+							// Search returns candidates in score order; the event id
+							// makes equal-time ties deterministic.
+							return byTime !== 0
+								? byTime
+								: left.event.eventId.localeCompare(right.event.eventId)
 						})
 					pathResults = rankedEvents.map(
 						({ event: e, matchScore, temporalProximity }, i) => ({
@@ -1860,6 +1878,8 @@ async function searchV2WithBudget(
 				}
 				case "conversation-evidence":
 					return conversationEvidenceLaneCost({ capabilities, embeddingMode })
+				case "raw-window":
+					return rawWindowLaneCost({ capabilities })
 				default:
 					return NO_SEARCH_COST
 			}

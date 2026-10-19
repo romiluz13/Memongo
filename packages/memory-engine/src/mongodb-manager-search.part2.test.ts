@@ -21,6 +21,7 @@ import {
 	fakePrefix,
 	captureManagerPrototype,
 	kitMongoConfig,
+	rawWindowEventsCollection,
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
@@ -102,7 +103,6 @@ vi.mock("./mongodb-write-fence.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
 )
 
-const { getEventsByTimeRange } = await import("./mongodb-events.js")
 const { planRetrieval, resolveTimeRangePreset, extractTemporalWindow } =
 	await import("./mongodb-retrieval-planner.js")
 const { searchEpisodes } = await import("./mongodb-episodes.js")
@@ -118,6 +118,12 @@ const {
 	memoryEvidenceCollection,
 } = await import("./mongodb-schema.js")
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
+// M2 T6: raw-window candidates come from its $search aggregate.
+const seedRawWindow = (events: object[]) => {
+	const collection = rawWindowEventsCollection(events)
+	mocked(eventsCollection).mockReturnValue(collection as never)
+	return collection
+}
 const { searchKB } = await import("./mongodb-kb-search.js")
 const { emitTelemetry } = await import("./mongodb-telemetry.js")
 const { captureAdmissionToken } = await import("./mongodb-write-fence.js")
@@ -272,9 +278,9 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 					},
 					capabilities: {
 						vectorSearch: true,
-						textSearch: false,
+						textSearch: true,
 						scoreFusion: false,
-						rankFusion: false,
+						rankFusion: true,
 						storedSource: true,
 						vectorIndexMethod: false,
 					},
@@ -289,7 +295,9 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 
 		await vi.waitFor(() => expect(chunkAggregate).toHaveBeenCalledOnce())
 		expect(evidenceAggregate).toHaveBeenCalledOnce()
-		const evidencePipeline = evidenceAggregate.mock.calls[0]?.[0]
+		const evidencePipeline =
+			evidenceAggregate.mock.calls[0]?.[0]?.[0]?.$rankFusion?.input?.pipelines
+				?.vector
 		expect(evidencePipeline?.[0].$vectorSearch.returnStoredSource).toBe(false)
 		expect(evidencePipeline).toEqual(
 			expect.arrayContaining([
@@ -589,7 +597,7 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 			confidence: "high",
 			reasoning: "accessCount probe",
 		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				eventId: "evt-hot",
 				body: "hot event body",
@@ -626,7 +634,7 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 				confidence: "high",
 				reasoning: "accessCount projection probe",
 			})
-			mocked(getEventsByTimeRange).mockResolvedValue([
+			const seed = [
 				{
 					_id: "evt-seed",
 					eventId: "evt-seed",
@@ -639,22 +647,27 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 					sessionId: "sess-projection",
 					channel: "default",
 				},
-			])
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([
-					{
-						eventId: "evt-turn",
-						body: "turn precision hit with reinforcement",
-						role: "user",
-						sessionId: "sess-projection",
-						timestamp: new Date("2023-05-30T10:01:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.9,
-						accessCount: 11,
-					},
-				]),
-			})
+			]
+			const fused = [
+				{
+					eventId: "evt-turn",
+					body: "turn precision hit with reinforcement",
+					role: "user",
+					sessionId: "sess-projection",
+					timestamp: new Date("2023-05-30T10:01:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					score: 0.9,
+					accessCount: 11,
+				},
+			]
+			const aggregate = vi.fn((pipeline: Array<Record<string, unknown>>) => ({
+				toArray: vi.fn(async () =>
+					pipeline[0]?.$rankFusion
+						? fused
+						: rawWindowEventsCollection(seed).aggregate(pipeline).toArray(),
+				),
+			}))
 			mocked(eventsCollection).mockReturnValue({ aggregate } as never)
 
 			const result = await searchV2(
@@ -667,10 +680,10 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 					searchOptions: {
 						allowHybridBackstop: false,
 						capabilities: {
-							vectorSearch: false,
+							vectorSearch: true,
 							textSearch: true,
 							scoreFusion: false,
-							rankFusion: false,
+							rankFusion: true,
 							storedSource: false,
 							vectorIndexMethod: false,
 						},
@@ -678,6 +691,9 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 				},
 			)
 
+			expect(aggregate.mock.calls.some((call) => call[0][0]?.$rankFusion)).toBe(
+				true,
+			)
 			const pipelines = aggregate.mock.calls.map(
 				(call) => call[0] as Record<string, any>[],
 			)
@@ -1552,7 +1568,7 @@ describe("searchV2 lane latency instrumentation", () => {
 			reasoning: "latency probe",
 		})
 		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
-		mocked(getEventsByTimeRange).mockResolvedValue([])
+		seedRawWindow([])
 
 		const result = await searchV2(
 			fakeDb,
@@ -2570,7 +2586,7 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 			start: new Date("2026-07-01T00:00:00.000Z"),
 			end: new Date("2026-07-08T00:00:00.000Z"),
 		})
-		mocked(getEventsByTimeRange).mockResolvedValue([] as never)
+		const rawWindow = seedRawWindow([])
 
 		await searchWithRange(
 			{
@@ -2582,12 +2598,14 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 
 		// Explicit caller bounds win over both the inferred preset and the
 		// 24h fallback default.
-		expect(getEventsByTimeRange).toHaveBeenCalledWith(
-			expect.objectContaining({
-				agentId: "agent-1",
-				start: RANGE_START,
-				end: RANGE_END,
-			}),
+		const filter = rawWindow.aggregate.mock.calls[0]?.[0][0]?.$search as {
+			compound: { filter: unknown[] }
+		}
+		expect(filter.compound.filter).toEqual(
+			expect.arrayContaining([
+				{ equals: { path: "agentId", value: "agent-1" } },
+				{ range: { path: "timestamp", gte: RANGE_START, lte: RANGE_END } },
+			]),
 		)
 	})
 
@@ -2683,9 +2701,9 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 					},
 					capabilities: {
 						vectorSearch: true,
-						textSearch: false,
+						textSearch: true,
 						scoreFusion: false,
-						rankFusion: false,
+						rankFusion: true,
 						storedSource: true,
 						vectorIndexMethod: false,
 					},
@@ -2702,7 +2720,9 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 
 		expect(evidenceAggregate).toHaveBeenCalledOnce()
 		const pipeline = evidenceAggregate.mock.calls[0]?.[0] as Document[]
-		const evidenceFilter = pipeline[0]?.$vectorSearch?.filter
+		const evidenceFilter =
+			pipeline[0]?.$rankFusion?.input?.pipelines?.vector?.[0]?.$vectorSearch
+				?.filter
 		expect(evidenceFilter).toBeDefined()
 		expect(evidenceFilter.timestamp).toEqual({
 			$gte: RANGE_START,
@@ -2747,9 +2767,9 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 					},
 					capabilities: {
 						vectorSearch: true,
-						textSearch: false,
+						textSearch: true,
 						scoreFusion: false,
-						rankFusion: false,
+						rankFusion: true,
 						storedSource: true,
 						vectorIndexMethod: false,
 					},
@@ -2767,7 +2787,9 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 
 		expect(evidenceAggregate).toHaveBeenCalledOnce()
 		const pipeline = evidenceAggregate.mock.calls[0]?.[0] as Document[]
-		const evidenceFilter = pipeline[0]?.$vectorSearch?.filter
+		const evidenceFilter =
+			pipeline[0]?.$rankFusion?.input?.pipelines?.vector?.[0]?.$vectorSearch
+				?.filter
 		expect(evidenceFilter.timestamp).toEqual({
 			$gte: RANGE_START,
 			$lte: questionDate,

@@ -27,7 +27,7 @@ const CAPS: DetectedCapabilities = {
 	vectorSearch: true,
 	textSearch: true,
 	scoreFusion: false,
-	rankFusion: false,
+	rankFusion: true,
 	storedSource: false,
 	vectorIndexMethod: false,
 }
@@ -88,46 +88,64 @@ function mockEventsCollection(
 } {
 	const pipelines: Document[][] = []
 	const finds: Document[] = []
+	const run = (pipeline: Document[]): Document[] => {
+		let docs = candidates
+		for (const stage of pipeline) {
+			// $rankFusion: run each input over the candidates, then fuse by
+			// reciprocal rank (weight / (60 + rank)), de-duplicated by event.
+			if (stage.$rankFusion) {
+				const inputs = stage.$rankFusion.input.pipelines as Record<
+					string,
+					Document[]
+				>
+				const weights = (stage.$rankFusion.combination?.weights ??
+					{}) as Record<string, number>
+				const fused = new Map<string, { doc: Document; score: number }>()
+				for (const [name, input] of Object.entries(inputs)) {
+					run(input).forEach((doc, index) => {
+						const entry = fused.get(doc.eventId) ?? { doc, score: 0 }
+						entry.score += (weights[name] ?? 1) / (60 + index + 1)
+						fused.set(doc.eventId, entry)
+					})
+				}
+				docs = [...fused.values()]
+					.sort((left, right) => right.score - left.score)
+					.map(({ doc, score }) => ({ ...doc, score }))
+				continue
+			}
+			// Opt-in native text semantics: a $search `must` text clause
+			// matches when the body contains ANY query term (MongoDB text
+			// OR semantics). Off by default so existing stale-index
+			// simulations keep their admit-all Search stage.
+			if (options.applyTextFilter && stage.$search) {
+				const mustClauses = (stage.$search.compound?.must ?? []) as Document[]
+				for (const clause of mustClauses) {
+					const query = clause.text?.query
+					const terms = (Array.isArray(query) ? query : [query]).filter(
+						(term): term is string => typeof term === "string",
+					)
+					if (terms.length > 0) {
+						docs = docs.filter((doc) => {
+							const body =
+								typeof doc.body === "string" ? doc.body.toLowerCase() : ""
+							return terms.some((term) => body.includes(term.toLowerCase()))
+						})
+					}
+				}
+			}
+			if (stage.$match) {
+				docs = docs.filter((doc) => matchesFilter(doc, stage.$match))
+			}
+			if (typeof stage.$limit === "number") {
+				docs = docs.slice(0, stage.$limit)
+			}
+		}
+		return docs
+	}
 	const col = {
 		aggregate: vi.fn((pipeline: Document[]) => {
 			pipelines.push(pipeline)
-			return {
-				toArray: vi.fn(async () => {
-					let docs = candidates
-					for (const stage of pipeline) {
-						// Opt-in native text semantics: a $search `must` text clause
-						// matches when the body contains ANY query term (MongoDB text
-						// OR semantics). Off by default so existing stale-index
-						// simulations keep their admit-all Search stage.
-						if (options.applyTextFilter && stage.$search) {
-							const mustClauses = (stage.$search.compound?.must ??
-								[]) as Document[]
-							for (const clause of mustClauses) {
-								const query = clause.text?.query
-								const terms = (Array.isArray(query) ? query : [query]).filter(
-									(term): term is string => typeof term === "string",
-								)
-								if (terms.length > 0) {
-									docs = docs.filter((doc) => {
-										const body =
-											typeof doc.body === "string" ? doc.body.toLowerCase() : ""
-										return terms.some((term) =>
-											body.includes(term.toLowerCase()),
-										)
-									})
-								}
-							}
-						}
-						if (stage.$match) {
-							docs = docs.filter((doc) => matchesFilter(doc, stage.$match))
-						}
-						if (typeof stage.$limit === "number") {
-							docs = docs.slice(0, stage.$limit)
-						}
-					}
-					return docs
-				}),
-			}
+			return { toArray: vi.fn(async () => run(pipeline)) }
 		}),
 		find: vi.fn((filter: Document, findOptions?: Document) => {
 			finds.push(filter)
@@ -191,7 +209,7 @@ const SESSION_PARAMS = {
 } as const
 
 describe("searchTurnEventsWithinSessions freshness revalidation", () => {
-	it("reapplies the full request filter and the lifecycle window post-stage in BOTH lanes", async () => {
+	it("reapplies the full request filter and the lifecycle window post-stage in BOTH fusion inputs", async () => {
 		const { col, pipelines } = mockEventsCollection([])
 		const results = await searchTurnEventsWithinSessions({
 			db: mockDb(col),
@@ -199,8 +217,9 @@ describe("searchTurnEventsWithinSessions freshness revalidation", () => {
 		})
 
 		expect(results).toEqual([])
-		expect(pipelines).toHaveLength(2)
-		const [vectorPipeline, textPipeline] = pipelines
+		expect(pipelines).toHaveLength(1)
+		const { vector: vectorPipeline, text: textPipeline } = pipelines[0]?.[0]
+			?.$rankFusion?.input?.pipelines as Record<string, Document[]>
 		expect(vectorPipeline[0]?.$vectorSearch).toBeDefined()
 		expect(textPipeline[0]?.$search).toBeDefined()
 		for (const pipeline of [vectorPipeline, textPipeline]) {
@@ -688,9 +707,10 @@ describe("searchConversationEvidenceEvents freshness revalidation", () => {
 		})
 
 		expect(results.map((result) => result.path)).toEqual(["events/ev-control"])
-		// Both evidence lanes ran and carry the same post-stage revalidation.
-		expect(pipelines).toHaveLength(2)
-		expect(pipelines[0]?.[0]?.$vectorSearch).toBeDefined()
-		expect(pipelines[1]?.[0]?.$search).toBeDefined()
+		// One native fusion; both inputs carry the same post-stage revalidation.
+		expect(pipelines).toHaveLength(1)
+		const inputs = pipelines[0]?.[0]?.$rankFusion?.input?.pipelines
+		expect(inputs?.vector?.[0]?.$vectorSearch).toBeDefined()
+		expect(inputs?.text?.[0]?.$search).toBeDefined()
 	})
 })

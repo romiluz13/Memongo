@@ -85,7 +85,7 @@ it("a warmup retry whose re-embed is refused never spends its aggregation", asyn
 	expect(budget.embeds).toBe(1)
 })
 
-it("an inline event vector branch whose embed is refused never spends its aggregation", async () => {
+it("an event fusion whose embed is refused never spends its aggregation", async () => {
 	const pipelines: Document[][] = []
 	const db = {
 		collection: () => ({
@@ -109,16 +109,20 @@ it("an inline event vector branch whose embed is refused never spends its aggreg
 				sessionIds: ["s1"],
 				maxResults: 5,
 				numCandidates: 100,
-				capabilities,
+				capabilities: { ...capabilities, rankFusion: true },
 				embeddingMode: "automated",
 				queryEmbeddingModel: "voyage-4-large",
 			}).catch((err: unknown) => err)
 		},
 	)
-	expect(Array.isArray(failure) || failure instanceof Error).toBe(true)
-	// Only the text branch ran: one aggregation, and no orphaned vector charge.
-	expect(pipelines).toHaveLength(1)
-	expect(pipelines[0]?.[0]?.$search).toBeDefined()
-	expect(budget.aggregations).toBe(1)
+	// M2: the lane is one fused aggregate charged as a pair; a refused embed
+	// is a typed denial, nothing runs, and no text-only branch stands in.
+	expect(failure).toMatchObject({
+		name: "SearchBudgetDeniedError",
+		stage: "rank-fusion",
+		reason: "budget-embeds",
+	})
+	expect(pipelines).toHaveLength(0)
+	expect(budget.aggregations).toBe(0)
 	expect(budget.embeds).toBe(0)
 })
