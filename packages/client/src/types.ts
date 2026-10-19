@@ -1027,7 +1027,8 @@ export type MemongoSearchOutcomes = {
 
 /**
  * M2 review D3: what a failed operation had already committed.
- * - `none`: the operation knows none of its writes committed.
+ * - `none`: the operation knows none of its data writes committed. A
+ *   consolidation run's own run-record row is not counted; `commit.runId` names it.
  * - `committed`: known committed effects, listed in the detail; the operation
  *   as a whole did not complete.
  * - `unknown`: an uncertain commit outcome. Neither committed nor rolled back

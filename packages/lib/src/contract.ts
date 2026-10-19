@@ -157,8 +157,8 @@ export type ApiErrorBody = {
 
 /**
  * M2 review D3: what a failed operation had already committed, on the error
- * body. `commitState` is `none` (the operation knows none of its writes
- * committed), `committed` (known committed effects, listed in `commit`) or
+ * body. `commitState` is `none` (the operation knows none of its data writes
+ * committed; a consolidation run's own run-record row is not counted), `committed` (known committed effects, listed in `commit`) or
  * `unknown` (an uncertain commit outcome: `commit` lists only what is known to
  * be committed and the truth may be more). A body without `commitState` makes
  * no claim, and is not a statement that nothing committed.

@@ -7,7 +7,9 @@ const log = createSubsystemLogger("memory:mongodb:commit-report")
  * The report rides on the error the operation throws, so the typed failure,
  * its class and its status stay exactly as they were.
  *
- * - `none`: the operation knows that none of its own writes committed.
+ * - `none`: the operation knows that none of its data writes committed. A
+ *   consolidation run's own run-record row is bookkeeping and is not counted;
+ *   `commit.runId` names it.
  * - `committed`: known committed effects; the detail lists the work that is
  *   known, and the operation as a whole did not complete.
  * - `unknown`: at least one write's commit outcome is uncertain (an unknown

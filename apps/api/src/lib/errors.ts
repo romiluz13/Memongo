@@ -4,7 +4,8 @@ import type { ContentfulStatusCode } from "hono/utils/http-status"
 
 /**
  * M2 review D3: what a failed operation had already committed. `commitState`
- * is `none` (the operation knows none of its writes committed), `committed`
+ * is `none` (the operation knows none of its data writes committed; a
+ * consolidation run's own run-record row is not counted), `committed`
  * (known committed effects, listed in `commit`) or `unknown` (an uncertain
  * commit outcome; `commit` lists only what is known to be committed). A body
  * without the field makes no claim at all.
