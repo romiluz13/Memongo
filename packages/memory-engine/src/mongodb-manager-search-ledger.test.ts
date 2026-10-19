@@ -1,6 +1,5 @@
 // #101 decision 18: the manager entry points own ONE request ledger. A
-// complete empty v2 answer is final (no second retrieval, even when a stale
-// legacySearchFallback flag is set), and the direct KB route (K12) runs
+// complete empty v2 answer is final (no second retrieval), and the direct KB route (K12) runs
 // inside a ledger with its lane reserved up front. searchV2 and the KB lane
 // are captured; the manager seams and the ledger are real.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -134,7 +133,7 @@ function managerWith(
 ) {
 	return buildMockManager({
 		recordSearchAccess: vi.fn(),
-		config: kitMongoConfig({ legacySearchFallback: true, searchBudget }),
+		config: kitMongoConfig({ searchBudget }),
 		...overrides,
 	})
 }

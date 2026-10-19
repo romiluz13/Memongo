@@ -245,12 +245,6 @@ export interface MongoDBManagerHost {
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
 			/**
-			 * Never called for KB search since M2: admission denial is a typed
-			 * budget-denied failure, not a degraded answer. Kept so existing
-			 * callers still compile.
-			 */
-			onDegradation?: (degradation: MemorySearchDegradation) => void
-			/**
 			 * #101: receives this call's outcome summary ({status, lanes})
 			 * exactly once. Sink-not-state; rows are value-free enums.
 			 */
@@ -304,7 +298,6 @@ export interface MongoDBManagerHost {
 	}): Promise<void>
 	loadPersistedChangeStreamResumeToken(): Promise<unknown>
 	persistChangeStreamResumeToken(token: unknown): Promise<void>
-	clearPersistedChangeStreamResumeToken(): Promise<void>
 	maybeAutoRefreshKB(): Promise<void>
 	ensureWatcher(): void
 	scheduleWatchSync(): void

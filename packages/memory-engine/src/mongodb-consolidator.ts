@@ -2168,9 +2168,10 @@ async function runConsolidation(
 }
 
 /**
- * Batch selection through Search: a `text` query over the entity names on the
- * events body, with the batch window (agent, scope, scopeRef, timestamp) in
- * compound.filter. The index copy can lag a write and does not map
+ * Batch selection through Search: one `phrase` clause per entity name on the
+ * events body (compound.should, minimumShouldMatch 1), so a multi-word entity
+ * matches as a whole and never on one of its words, with the batch window
+ * (agent, scope, scopeRef, timestamp) in compound.filter. The index copy can lag a write and does not map
  * dreamerProcessedAt, so the canonical filter is re-applied right after the
  * Search stage. A failure throws a typed SearchLaneError; it never becomes an
  * empty batch.
@@ -2208,7 +2209,10 @@ async function searchEntityBatch(params: {
 						index: `${prefix}events_text`,
 						compound: {
 							filter: windowFilter,
-							must: [{ text: { query: entitySet, path: "body" } }],
+							should: entitySet.map((entity) => ({
+								phrase: { query: entity, path: "body" },
+							})),
+							minimumShouldMatch: 1,
 						},
 					},
 				},

@@ -379,7 +379,7 @@ describe("request scope", () => {
 		expect(listReads()).toHaveLength(0)
 	})
 
-	it("raw-window reads the events and chunks indexes it depends on", async () => {
+	it("raw-window reads only the events index it depends on", async () => {
 		const { source, listReads } = harness()
 		await runWithIndexHealth(source, () =>
 			assertLaneIndexesHealthy("raw-window"),
@@ -388,7 +388,7 @@ describe("request scope", () => {
 			listReads()
 				.map((call) => (call as { collection: string }).collection)
 				.sort(),
-		).toEqual([CHUNKS, `${PREFIX}events`].sort())
+		).toEqual([`${PREFIX}events`])
 	})
 
 	it("hybrid vector-only mode needs only the vector index", async () => {

@@ -95,6 +95,22 @@ const rows: Array<{
 		setting: "memory.mongodb.graph.entityExtraction.method",
 	},
 	{
+		row: "the removed legacySearchFallback key, even when false",
+		mongodb: { legacySearchFallback: false },
+		setting: "memory.mongodb.legacySearchFallback",
+		code: "config-removed",
+	},
+	{
+		row: "an unsupported embeddingMode",
+		mongodb: { embeddingMode: "managed" },
+		setting: "memory.mongodb.embeddingMode",
+	},
+	{
+		row: "an unsupported queryRewriting.method",
+		mongodb: { queryRewriting: { enabled: true, method: "hyde" } },
+		setting: "memory.mongodb.queryRewriting.method",
+	},
+	{
 		row: "the removed MEMONGO_STRICT_SEARCH_INDEX_READY",
 		env: { MEMONGO_STRICT_SEARCH_INDEX_READY: "1" },
 		setting: "MEMONGO_STRICT_SEARCH_INDEX_READY",
@@ -171,6 +187,11 @@ describe("boot config rejections never echo the rejected value", () => {
 		{ row: "memoryTtlDays", mongodb: { memoryTtlDays: HOSTILE } },
 		{ row: "numDimensions", mongodb: { numDimensions: HOSTILE } },
 		{ row: "a boolean env value", env: { MEMONGO_RERANKING_ENABLED: HOSTILE } },
+		{ row: "embeddingMode", mongodb: { embeddingMode: HOSTILE } },
+		{
+			row: "queryRewriting.method",
+			mongodb: { queryRewriting: { enabled: true, method: HOSTILE } },
+		},
 	]
 
 	it.each(echoRows)("keeps $row out of the message and fields", (row) => {

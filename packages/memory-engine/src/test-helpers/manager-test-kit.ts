@@ -49,7 +49,7 @@ export const fakePrefix = "test_"
 /**
  * The canonical resolved `config.mongodb` shape for kit-based tests. Trace
  * and verdict seams read deep fields (`relevance.telemetry.queryPrivacyMode`,
- * `legacySearchFallback`, …), so partial configs crash — spread overrides on
+ * `searchBudget`, …), so partial configs crash — spread overrides on
  * top of this instead of building ad-hoc config objects.
  */
 export function kitMongoConfig(overrides?: Record<string, unknown>) {
@@ -442,7 +442,6 @@ export function schemaModuleMock() {
 		ensureSchemaValidation: vi.fn(),
 		ensureSearchIndexes: vi.fn(),
 		ensureStandardIndexes: vi.fn(),
-		waitForSearchCapabilities: vi.fn(),
 		listSearchIndexes: vi.fn(),
 		isSearchIndexReadyWithFilterFields: vi.fn(),
 		isEventsVectorBitemporalPrefilterReady: vi.fn(),

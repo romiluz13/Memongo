@@ -713,13 +713,6 @@ export async function recallConversation(params: {
 	textIndexName?: string
 	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 	nativeBitemporalVectorPrefilter?: boolean
-	/**
-	 * RET-13: the hybrid lane's failure is reported at its seam
-	 * ("recall:hybrid") so the manager can re-poll index readiness, then
-	 * rethrown typed. M2: recall with a query is one `$rankFusion` lane; no
-	 * weaker tier answers in its place.
-	 */
-	onLaneFailure?: (lane: string, error: unknown) => void
 }): Promise<ConversationRecallResponse> {
 	const startedAt = Date.now()
 	const effectiveLimit = clampLimit(params.request.limit)
@@ -824,6 +817,7 @@ export async function recallConversation(params: {
 				lane: "recall",
 				stage: "request",
 				reason: "budget-embeds",
+				retryAfterMs: admission.retryAfterMs,
 			})
 		}
 		// Task 35 root fix: run the temporal-window extractor once at the
@@ -861,9 +855,6 @@ export async function recallConversation(params: {
 			)
 			results = value
 		} catch (error) {
-			if (!(error instanceof SearchBudgetDeniedError)) {
-				params.onLaneFailure?.("recall:hybrid", error)
-			}
 			throw toTypedSearchError(error, "rank-fusion", "recall")
 		}
 		searchMethod = "hybrid"

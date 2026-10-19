@@ -1,14 +1,10 @@
 /**
- * MongoDB-specific hybrid search merge with RRF score fusion.
+ * Score helpers for the MongoDB backend: RRF rank scoring and the per-method
+ * normalization of search scores onto [0, 1].
  *
- * Replaces upstream hybrid.ts for the MongoDB backend to fix:
- * - Weighted average scoring that penalizes vector results when BM25=0
- * - Score normalization gap when merging results from different search methods
- *
- * WS-16 hygiene fold: the dead `buildOrJoinFtsQuery` helper (zero production
- * callers, ASCII-only tokenizer that would silently return null for
- * non-Latin queries) was removed. Production text search uses the
- * full-query `must` clause (buildTextSearchCompound, mongodb-search.ts).
+ * A collection's text and vector inputs are fused by the server
+ * (`$rankFusion` / `$scoreFusion`); this module merges no result lists.
+ * `rrfScore` only ranks results across different lanes.
  *
  * @module memory:mongodb:hybrid
  */
@@ -100,251 +96,6 @@ export function normalizeRRFScore(
 }
 
 // ---------------------------------------------------------------------------
-// Hybrid merge with RRF (drop-in replacement for upstream mergeHybridResults)
-// ---------------------------------------------------------------------------
-
-/**
- * Merge vector and keyword search results using Reciprocal Rank Fusion (RRF).
- *
- * Unlike the upstream weighted average (`w*vector + (1-w)*text`), RRF:
- * - Does not penalize results that appear in only one list
- * - Handles incompatible score scales naturally (rank-based, not score-based)
- * - Boosts results that appear in BOTH lists (sum of RRF scores)
- *
- * This replaces upstream `mergeHybridResults()` for the MongoDB backend.
- */
-export function mergeHybridResultsMongoDB(params: {
-	vector: MemorySearchResult[]
-	keyword: MemorySearchResult[]
-	maxResults: number
-	/**
-	 * Optional RRF weights for the vector and keyword streams. When omitted,
-	 * defaults to equal weights (1:1). Pass the same weights the server-side
-	 * $rankFusion/$scoreFusion would use (e.g. 0.7/0.3) so the JS fallback
-	 * matches the fused ranking.
-	 */
-	vectorWeight?: number
-	textWeight?: number
-}): MemorySearchResult[] {
-	const { vector, keyword, maxResults } = params
-	const vectorWeight = params.vectorWeight ?? 1
-	const textWeight = params.textWeight ?? 1
-
-	if (vector.length === 0 && keyword.length === 0) {
-		return []
-	}
-
-	const deriveEventIdFromPath = (path: string): string | null => {
-		if (!path.startsWith("events/")) {
-			return null
-		}
-		const eventId = path.slice("events/".length).trim()
-		return eventId.length > 0 ? eventId : null
-	}
-
-	const deriveCanonicalId = (
-		result: MemorySearchResult,
-	): string | undefined => {
-		if (result.canonicalId?.trim()) {
-			return result.canonicalId
-		}
-		const eventId = deriveEventIdFromPath(result.path)
-		return eventId ? `event:${eventId}` : undefined
-	}
-
-	const collectSourceEventIds = (result: MemorySearchResult): string[] => {
-		const ids = new Set<string>()
-		for (const eventId of result.sourceEventIds ?? []) {
-			if (typeof eventId === "string" && eventId.trim().length > 0) {
-				ids.add(eventId.trim())
-			}
-		}
-		const derivedEventId = deriveEventIdFromPath(result.path)
-		if (derivedEventId) {
-			ids.add(derivedEventId)
-		}
-		return Array.from(ids)
-	}
-
-	const mergeResultMetadata = (
-		current: MemorySearchResult,
-		incoming: MemorySearchResult,
-	): MemorySearchResult => {
-		const sourceEventIds = new Set<string>()
-		for (const eventId of collectSourceEventIds(current)) {
-			if (typeof eventId === "string" && eventId.trim().length > 0) {
-				sourceEventIds.add(eventId.trim())
-			}
-		}
-		for (const eventId of collectSourceEventIds(incoming)) {
-			if (typeof eventId === "string" && eventId.trim().length > 0) {
-				sourceEventIds.add(eventId.trim())
-			}
-		}
-		return {
-			...current,
-			...(current.filePath
-				? {}
-				: incoming.filePath
-					? { filePath: incoming.filePath }
-					: {}),
-			...(current.sourceType
-				? {}
-				: incoming.sourceType
-					? { sourceType: incoming.sourceType }
-					: {}),
-			...(current.citation
-				? {}
-				: incoming.citation
-					? { citation: incoming.citation }
-					: {}),
-			...(deriveCanonicalId(current)
-				? { canonicalId: deriveCanonicalId(current) }
-				: deriveCanonicalId(incoming)
-					? { canonicalId: deriveCanonicalId(incoming) }
-					: {}),
-			...(current.sessionId
-				? {}
-				: incoming.sessionId
-					? { sessionId: incoming.sessionId }
-					: {}),
-			...(current.timestamp
-				? {}
-				: incoming.timestamp
-					? { timestamp: incoming.timestamp }
-					: {}),
-			...(current.scope ? {} : incoming.scope ? { scope: incoming.scope } : {}),
-			...(current.scopeRef
-				? {}
-				: incoming.scopeRef
-					? { scopeRef: incoming.scopeRef }
-					: {}),
-			...(current.state ? {} : incoming.state ? { state: incoming.state } : {}),
-			...(current.provenance
-				? {}
-				: incoming.provenance
-					? { provenance: incoming.provenance }
-					: {}),
-			...(sourceEventIds.size > 0
-				? { sourceEventIds: Array.from(sourceEventIds) }
-				: {}),
-			...(current.sourceReliability !== undefined
-				? {}
-				: incoming.sourceReliability !== undefined
-					? { sourceReliability: incoming.sourceReliability }
-					: {}),
-			...(current.reinforcementCount !== undefined
-				? {}
-				: incoming.reinforcementCount !== undefined
-					? { reinforcementCount: incoming.reinforcementCount }
-					: {}),
-			...(current.validFrom
-				? {}
-				: incoming.validFrom
-					? { validFrom: incoming.validFrom }
-					: {}),
-			...(current.validTo
-				? {}
-				: incoming.validTo
-					? { validTo: incoming.validTo }
-					: {}),
-			...(current.factLineage
-				? {}
-				: incoming.factLineage
-					? { factLineage: incoming.factLineage }
-					: {}),
-			...(current.sourceRef
-				? {}
-				: incoming.sourceRef
-					? { sourceRef: incoming.sourceRef }
-					: {}),
-			...(current.reviewAt
-				? {}
-				: incoming.reviewAt
-					? { reviewAt: incoming.reviewAt }
-					: {}),
-			...(current.lastConfirmedAt
-				? {}
-				: incoming.lastConfirmedAt
-					? { lastConfirmedAt: incoming.lastConfirmedAt }
-					: {}),
-			...(current.confidence !== undefined
-				? {}
-				: incoming.confidence !== undefined
-					? { confidence: incoming.confidence }
-					: {}),
-			...(current.trust ? {} : incoming.trust ? { trust: incoming.trust } : {}),
-		}
-	}
-
-	const resultIdentity = (result: MemorySearchResult): string =>
-		deriveCanonicalId(result) ??
-		`${result.path}:${result.startLine}:${result.endLine}`
-
-	// Build a map of id -> accumulated RRF score + metadata
-	const byId = new Map<
-		string,
-		{
-			result: MemorySearchResult
-			rrfSum: number
-		}
-	>()
-
-	// Assign RRF scores based on rank in vector results (scaled by vectorWeight)
-	for (let rank = 0; rank < vector.length; rank++) {
-		const r = vector[rank]
-		const id = resultIdentity(r)
-		const existing = byId.get(id)
-		const rScore = rrfScore(rank + 1) * vectorWeight // 1-based rank
-		if (existing) {
-			existing.rrfSum += rScore
-			existing.result = mergeResultMetadata(existing.result, r)
-		} else {
-			byId.set(id, {
-				result: { ...r },
-				rrfSum: rScore,
-			})
-		}
-	}
-
-	// Assign RRF scores based on rank in keyword results (scaled by textWeight)
-	for (let rank = 0; rank < keyword.length; rank++) {
-		const r = keyword[rank]
-		const id = resultIdentity(r)
-		const existing = byId.get(id)
-		const rScore = rrfScore(rank + 1) * textWeight // 1-based rank
-		if (existing) {
-			existing.rrfSum += rScore
-			existing.result = mergeResultMetadata(existing.result, r)
-			// Prefer keyword snippet (usually has better relevance highlighting)
-			if (r.snippet && r.snippet.length > 0) {
-				existing.result.snippet = r.snippet
-			}
-		} else {
-			byId.set(id, {
-				result: { ...r },
-				rrfSum: rScore,
-			})
-		}
-	}
-
-	// Normalize RRF scores to [0,1] and sort descending
-	// Maximum possible sum is (vectorWeight + textWeight) * rrfScore(1) when a
-	// result is ranked #1 in both lists
-	const maxPossibleSum = (vectorWeight + textWeight) * rrfScore(1)
-
-	const merged = Array.from(byId.values())
-		.map((entry) => ({
-			...entry.result,
-			score: Number(Math.min(1, entry.rrfSum / maxPossibleSum).toFixed(6)),
-		}))
-		.toSorted((a, b) => b.score - a.score)
-		.slice(0, maxResults)
-
-	return merged
-}
-
-// ---------------------------------------------------------------------------
 // Cross-source score normalization
 // ---------------------------------------------------------------------------
 
@@ -355,10 +106,10 @@ export function mergeHybridResultsMongoDB(params: {
  * This is the key function for fixing the score normalization gap (F23).
  * Different search methods produce scores on different scales:
  * - vector ($vectorSearch): cosine similarity [0, 1]
- * - text ($search, $text): BM25/TF-IDF [0, inf)
+ * - text ($search): BM25 [0, inf)
  * - hybrid ($rankFusion/$scoreFusion): depends on fusion method
- * - structured: same as vector (uses $vectorSearch or $text fallback)
- * - kb: same as vector (uses $vectorSearch or $text fallback)
+ * - structured: same as vector
+ * - kb: same as vector
  *
  * After normalization, results from all methods can be merged and sorted
  * on a common [0,1] scale.
@@ -387,14 +138,13 @@ function getNormalizer(method: SearchMethod): (score: number) => number {
 			// These use $vectorSearch or server-side fusion, scores are [0,1]-ish
 			return normalizeVectorScore
 		case "text":
-			// BM25/TF-IDF scores are unbounded [0, inf)
+			// BM25 scores are unbounded [0, inf)
 			return normalizeBM25Score
 		case "hybrid":
 			// Every hybrid producer reports in ~[0,1] by the time results reach
-			// here: $scoreFusion normalizes with sigmoid, mergeHybridResultsMongoDB
-			// divides by its own RRF ceiling, and hybridSearchRankFusion divides
-			// raw $rankFusion output by sum(weights)/61 at the source. Rescaling
-			// again here would be a second, wrong division — clamp only.
+			// here: $scoreFusion normalizes with sigmoid and hybridSearchRankFusion
+			// divides raw $rankFusion output by sum(weights)/61 at the source.
+			// Rescaling again here would be a second, wrong division — clamp only.
 			return normalizeVectorScore
 		default:
 			return normalizeVectorScore

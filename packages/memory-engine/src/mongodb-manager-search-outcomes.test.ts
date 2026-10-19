@@ -1,7 +1,7 @@
 // #101 section 1g: the manager's per-call outcome sinks (onOutcomes on
 // search and searchKB), the visible throttle, and the typed request failure.
-// A stale legacySearchFallback flag re-runs nothing. searchV2 is captured; the
-// manager seams are real.
+// A complete empty answer re-runs nothing. searchV2 is captured; the manager
+// seams are real.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import type { MemorySearchResult } from "./types.js"
@@ -167,10 +167,10 @@ function v2Response(
 	}
 }
 
-function managerWithStaleLegacyFlag(legacySearch: ReturnType<typeof vi.fn>) {
+function managerWithLegacyStub(legacySearch: ReturnType<typeof vi.fn>) {
 	return buildMockManager({
 		recordSearchAccess: vi.fn(),
-		config: kitMongoConfig({ legacySearchFallback: true }),
+		config: kitMongoConfig(),
 		legacySearch,
 	})
 }
@@ -245,11 +245,11 @@ describe("manager search outcome sink (#101 section 1g)", () => {
 		})
 	})
 
-	it("M4: a stale legacySearchFallback flag re-runs nothing after a complete empty", async () => {
+	it("M4: a complete empty re-runs nothing", async () => {
 		searchV2State.responses.push(v2Response("complete"))
 		const legacySearch = vi.fn(async () => [v2Hit])
 		const onOutcomes = vi.fn()
-		const results = await managerWithStaleLegacyFlag(legacySearch).search(
+		const results = await managerWithLegacyStub(legacySearch).search(
 			"payment notes",
 			{ onOutcomes },
 		)
@@ -274,7 +274,7 @@ describe("manager search outcome sink (#101 section 1g)", () => {
 		searchV2State.responses.push(v2Response("partial", partialRows))
 		const legacySearch = vi.fn(async () => [v2Hit])
 		const onOutcomes = vi.fn()
-		const results = await managerWithStaleLegacyFlag(legacySearch).search(
+		const results = await managerWithLegacyStub(legacySearch).search(
 			"payment notes",
 			{ onOutcomes },
 		)
@@ -290,7 +290,7 @@ describe("manager search outcome sink (#101 section 1g)", () => {
 		searchV2State.responses.push(new Error("planner PRIVATE exploded"))
 		const legacySearch = vi.fn(async () => [v2Hit])
 		const onOutcomes = vi.fn()
-		const failure = await managerWithStaleLegacyFlag(legacySearch)
+		const failure = await managerWithLegacyStub(legacySearch)
 			.search("payment notes", { onOutcomes })
 			.catch((err: unknown) => err)
 		expect(failure).toBeInstanceOf(SearchLaneError)
@@ -376,7 +376,7 @@ describe("direct KB search outcome collector (#101 K12)", () => {
 		vi.mocked(searchKB).mockRejectedValue(
 			new SearchLaneError({
 				lane: "kb",
-				stage: "keyword",
+				stage: "atlas-search",
 				reason: "query-error",
 				cause: new Error("PRIVATE"),
 			}),
@@ -391,7 +391,7 @@ describe("direct KB search outcome collector (#101 K12)", () => {
 			lanes: [
 				{
 					lane: "kb",
-					stage: "keyword",
+					stage: "atlas-search",
 					outcome: "failed",
 					reason: "query-error",
 				},

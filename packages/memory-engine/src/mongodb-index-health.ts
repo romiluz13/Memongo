@@ -359,8 +359,8 @@ export function runWithIndexHealth<T>(
 // ---------------------------------------------------------------------------
 
 // The collections whose manifest indexes each lane's native operation uses.
-// The `chunks` entries on the structured, procedure, session, evidence, raw
-// window and events lanes are the capability flags' own reads: those lanes
+// The `chunks` entries on the structured, procedure, session, evidence and
+// events lanes are the capability flags' own reads: those lanes
 // decide whether they run from the chunk flags, so a lane is admitted only
 // when the chunk indexes are healthy too. A lane whose flags no longer read
 // the chunk indexes drops its `chunks` entry.
@@ -373,7 +373,7 @@ const LANE_COLLECTIONS: Partial<Record<SearchLane, readonly string[]>> = {
 	graph: ["entities"],
 	episodic: ["episodes"],
 	kb: ["kb_chunks"],
-	"raw-window": ["events", "chunks"],
+	"raw-window": ["events"],
 	"hybrid:chunks": ["chunks"],
 	"hybrid:session_chunks": ["session_chunks", "chunks"],
 	"hybrid:memory_evidence": ["memory_evidence", "chunks"],
@@ -401,6 +401,26 @@ export async function assertLaneIndexesHealthy(
 			options.vectorOnly ? ["vectorSearch"] : undefined,
 		),
 		lane,
+	)
+}
+
+/**
+ * True when this request's manifest declares no index for the lane's
+ * collections: a deployment profile that builds none (the LongMemEval
+ * search-index profile builds no entity or episode index). The lane has
+ * nothing to query, so it is declared not-applicable before it runs instead
+ * of querying an index that does not exist. False outside a request scope,
+ * for a lane that uses no Search index, and for an empty manifest, which
+ * declares nothing and so gates nothing.
+ */
+export function laneHasNoManifestIndex(lane: SearchLane): boolean {
+	const health = activeIndexHealth()
+	const collections = LANE_COLLECTIONS[lane]
+	return (
+		health !== undefined &&
+		collections !== undefined &&
+		health.entries().length > 0 &&
+		health.select(collections).length === 0
 	)
 }
 

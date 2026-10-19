@@ -907,7 +907,11 @@ describe("mongodb-derived-memory", () => {
 			skipped: false,
 		})
 		expect(loggerMocks.warn).toHaveBeenCalledWith(
-			expect.stringContaining("projection-run failed: ops unavailable"),
+			"best-effort structured promotion-projection-run failed",
+			{},
+		)
+		expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain(
+			"ops unavailable",
 		)
 		expect(getBestEffortFailureCounts()).toMatchObject({
 			"structured promotion-projection-run": 1,

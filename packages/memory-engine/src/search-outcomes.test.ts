@@ -111,13 +111,13 @@ describe("typed errors carry no provider text", () => {
 				"kb",
 				"lane",
 				new SearchBudgetDeniedError({
-					stage: "keyword",
+					stage: "atlas-search",
 					reason: "budget-deadline",
 				}),
 			),
 		).toEqual({
 			lane: "kb",
-			stage: "keyword",
+			stage: "atlas-search",
 			outcome: "budget-denied",
 			reason: "budget-deadline",
 		})

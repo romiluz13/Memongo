@@ -19,6 +19,7 @@ import {
 	filesCollection,
 	metaCollection,
 } from "./mongodb-schema.js"
+import { bestEffort } from "./best-effort.js"
 import { syncToMongoDB } from "./mongodb-sync.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
@@ -516,26 +517,19 @@ export class MongoDBManagerSyncOps {
 				progress: params?.progress,
 			})
 
-			// Query actual totals from MongoDB (not just the delta from this sync)
-			try {
-				// W13: host.fileCount/chunkCount describe the TENANT, not the
-				// shared deployment — count this agent's rows only.
-				const tenantFilter = { agentId: this.host.agentId }
-				this.host.fileCount = await filesCollection(
-					this.host.db,
-					this.host.prefix,
-				).countDocuments(tenantFilter)
-				this.host.chunkCount = await chunksCollection(
-					this.host.db,
-					this.host.prefix,
-				).countDocuments(tenantFilter)
-			} catch {
-				// Fallback to delta counts if count query fails
-				this.host.fileCount =
-					result.filesProcessed + result.sessionFilesProcessed
-				this.host.chunkCount =
-					result.chunksUpserted + result.sessionChunksUpserted
-			}
+			// Query actual totals from MongoDB (not just the delta from this sync).
+			// W13: host.fileCount/chunkCount describe the TENANT, not the shared
+			// deployment — count this agent's rows only. A failed count fails the
+			// sync: the delta of one run is not a total.
+			const tenantFilter = { agentId: this.host.agentId }
+			this.host.fileCount = await filesCollection(
+				this.host.db,
+				this.host.prefix,
+			).countDocuments(tenantFilter)
+			this.host.chunkCount = await chunksCollection(
+				this.host.db,
+				this.host.prefix,
+			).countDocuments(tenantFilter)
 
 			// W14: only a fully-successful sync may clear the dirty flag. With
 			// failed files or an incomplete source enumeration, chunks are
@@ -565,46 +559,25 @@ export class MongoDBManagerSyncOps {
 	}
 
 	async loadPersistedChangeStreamResumeToken(): Promise<unknown> {
-		try {
-			const meta = metaCollection(this.host.db, this.host.prefix)
-			const doc = await meta.findOne({
-				_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
-			} as Record<string, unknown>)
-			if (!doc || !("token" in doc)) {
-				return null
-			}
-			return (doc as Record<string, unknown>).token ?? null
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to load persisted change stream resume token: ${msg}`)
+		const meta = metaCollection(this.host.db, this.host.prefix)
+		const doc = await meta.findOne({
+			_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
+		} as Record<string, unknown>)
+		if (!doc || !("token" in doc)) {
 			return null
 		}
+		return (doc as Record<string, unknown>).token ?? null
 	}
 
 	async persistChangeStreamResumeToken(token: unknown): Promise<void> {
-		try {
+		await bestEffort("change-stream-resume-token", async () => {
 			const meta = metaCollection(this.host.db, this.host.prefix)
 			await meta.updateOne(
 				{ _id: CHANGE_STREAM_RESUME_TOKEN_META_KEY } as Record<string, unknown>,
 				{ $set: { token, updatedAt: new Date() } },
 				{ upsert: true },
 			)
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to persist change stream resume token: ${msg}`)
-		}
-	}
-
-	async clearPersistedChangeStreamResumeToken(): Promise<void> {
-		try {
-			const meta = metaCollection(this.host.db, this.host.prefix)
-			await meta.deleteOne({
-				_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
-			} as Record<string, unknown>)
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to clear stale change stream resume token: ${msg}`)
-		}
+		})
 	}
 
 	async maybeAutoRefreshKB(): Promise<void> {

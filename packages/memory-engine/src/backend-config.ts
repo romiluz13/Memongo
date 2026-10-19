@@ -49,16 +49,11 @@ export type ResolvedMongoDBConfig = {
 	quantization: "none" | "scalar" | "binary"
 	watchDebounceMs: number
 	/**
-	 * Dead knob under autoEmbed (fix-plan-2026-08-03 P3.2): Atlas/Voyage
-	 * decide the dimensions server-side; this value only flows into validator
-	 * warnings and the generic index preset. Setting it logs an error.
+	 * Under autoEmbed, Atlas/Voyage decide the dimensions server-side. The
+	 * configured value must be unset or equal to the autoEmbed model's
+	 * dimension; any other value fails boot with `config-invalid`.
 	 */
 	numDimensions: number
-	/**
-	 * P3.2: opt-in legacySearch re-run after searchV2 returns empty or
-	 * errors. Default OFF — "empty ≠ error": the v2 empty answer stands.
-	 */
-	legacySearchFallback: boolean
 	/**
 	 * P3.2: resolved per-search cost budget (mongodb-search-budget.ts) —
 	 * user overrides applied over DEFAULT_SEARCH_BUDGET, always populated.
@@ -257,6 +252,7 @@ export function resolveMemoryBackendConfig(params: {
 		const mongoCfg = params.cfg.memory?.mongodb
 		rejectRemovedEnvSettings()
 		rejectRerankSettings(mongoCfg?.reranking)
+		rejectRemovedMongoKeys(mongoCfg)
 		// P2.6: one URI precedence rule, shared with the bridge via
 		// applyMongoDbForceUriOverride (@memongo/lib): MEMONGO_FORCE_MONGODB_URI
 		// wins over every other URI source, in every layer. Among the
@@ -308,10 +304,10 @@ export function resolveMemoryBackendConfig(params: {
 			)
 		}
 		if (rawEmbeddingMode !== "automated") {
-			const unsupportedEmbeddingMode = String(mongoCfg?.embeddingMode)
-			throw new Error(
+			throw bootConfigError(
+				"memory.mongodb.embeddingMode",
 				[
-					`embeddingMode "${unsupportedEmbeddingMode}" is not supported in Memongo.`,
+					"memory.mongodb.embeddingMode is not supported in Memongo.",
 					'Use embeddingMode "automated" with atlas-local-preview or atlas-managed.',
 				].join(" "),
 			)
@@ -325,9 +321,10 @@ export function resolveMemoryBackendConfig(params: {
 			typeof mongoCfg?.queryRewriting?.method === "string" &&
 			mongoCfg.queryRewriting.method !== "synonym-expansion"
 		) {
-			throw new Error(
+			throw bootConfigError(
+				"memory.mongodb.queryRewriting.method",
 				[
-					`queryRewriting.method "${mongoCfg.queryRewriting.method}" is not supported in Memongo.`,
+					"memory.mongodb.queryRewriting.method is not supported in Memongo.",
 					'Use queryRewriting.method "synonym-expansion" or disable query rewriting.',
 				].join(" "),
 			)
@@ -390,9 +387,6 @@ export function resolveMemoryBackendConfig(params: {
 					"MEMONGO_MONGODB_RECALL_PROFILE",
 					mongoCfg?.recallProfile ?? "balanced",
 				),
-				// P3.2: legacySearch re-runs the whole retrieval stack after
-				// searchV2 — opt-in only, off by default (empty ≠ error).
-				legacySearchFallback: mongoCfg?.legacySearchFallback ?? false,
 				searchBudget: resolveSearchBudgetLimits(mongoCfg?.searchBudget),
 				quantization: mongoCfg?.quantization ?? "none",
 				watchDebounceMs:
@@ -982,6 +976,26 @@ function rejectRerankSettings(raw: unknown): void {
 			"memory.mongodb.reranking.enabled",
 			`memory.mongodb.reranking.enabled is true, but ${RERANK_UNSUPPORTED_REASON}. Remove it or set it to false.`,
 			"rerank-unsupported",
+		)
+	}
+}
+
+/**
+ * M2 (T11): `legacySearchFallback` re-ran retrieval after an empty answer.
+ * That re-run no longer exists, so the key fails boot instead of being
+ * ignored.
+ */
+function rejectRemovedMongoKeys(raw: unknown): void {
+	if (
+		typeof raw === "object" &&
+		raw !== null &&
+		(raw as Record<string, unknown>).legacySearchFallback !== undefined
+	) {
+		const setting = "memory.mongodb.legacySearchFallback"
+		throw bootConfigError(
+			setting,
+			`${setting} was removed: the legacy search re-run no longer exists, so an empty answer is final. Remove ${setting}.`,
+			"config-removed",
 		)
 	}
 }

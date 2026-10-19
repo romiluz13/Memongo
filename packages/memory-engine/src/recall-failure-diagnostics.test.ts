@@ -63,12 +63,11 @@ function collection(hybrid: unknown, healthy = false) {
 	return { find, aggregate }
 }
 
-function recall(onLaneFailure = vi.fn()) {
+function recall() {
 	return recallConversation({
 		db: {} as Db,
 		prefix: "test_",
 		request: { agentId: "a1", query, limit: 10 },
-		onLaneFailure,
 	})
 }
 
@@ -85,17 +84,13 @@ describe("recall lane structural failure diagnostics", () => {
 			get: messageRead,
 		})
 		const col = collection(hybrid)
-		const callback = vi.fn()
-		const failure = await recall(callback).catch((error: unknown) => error)
+		const failure = await recall().catch((error: unknown) => error)
 		// The shared warmup classifier still reads message before recall types it.
 		expect(messageRead).toHaveBeenCalledTimes(1)
 		expect(failure).toBeInstanceOf(SearchLaneError)
 		expect((failure as SearchLaneError).lane).toBe("recall")
 		expect((failure as SearchLaneError).reason).toBe("internal-error")
 		expect((failure as Error).message).not.toContain(query)
-		expect(callback).toHaveBeenCalledTimes(1)
-		expect(callback.mock.calls[0]?.[0]).toBe("recall:hybrid")
-		expect(callback.mock.calls[0]?.[1]).toBe(hybrid)
 		expect(col.find).not.toHaveBeenCalled()
 		expect(warn).not.toHaveBeenCalled()
 	})
@@ -106,8 +101,7 @@ describe("recall lane structural failure diagnostics", () => {
 			errInfo: { private: query },
 		})
 		const col = collection(hybrid)
-		const callback = vi.fn()
-		const failure = await recall(callback).catch((error: unknown) => error)
+		const failure = await recall().catch((error: unknown) => error)
 		expect(failure).toMatchObject({
 			name: "SearchLaneError",
 			lane: "recall",
@@ -117,7 +111,6 @@ describe("recall lane structural failure diagnostics", () => {
 		expect((failure as Error).message).not.toContain(query)
 		expect(col.aggregate).toHaveBeenCalledTimes(1)
 		expect(col.find).not.toHaveBeenCalled()
-		expect(callback.mock.calls).toEqual([["recall:hybrid", hybrid]])
 		expect(warn).not.toHaveBeenCalled()
 	})
 	it("does not stringify the error at the catch seam", async () => {
@@ -137,10 +130,8 @@ describe("recall lane structural failure diagnostics", () => {
 			code: { value: 7 },
 		})
 		collection(error)
-		const callback = vi.fn()
-		const failure = await recall(callback).catch((caught: unknown) => caught)
+		const failure = await recall().catch((caught: unknown) => caught)
 		expect(failure).toBeInstanceOf(SearchLaneError)
-		expect(callback.mock.calls[0]).toEqual(["recall:hybrid", error])
 		expect(messageRead).not.toHaveBeenCalled()
 		expect(stringify).not.toHaveBeenCalled()
 		expect(toJSON).not.toHaveBeenCalled()
@@ -152,16 +143,5 @@ describe("recall lane structural failure diagnostics", () => {
 		expect(response.results[0]?.citation.eventId).toBe("event1")
 		expect(col.find).not.toHaveBeenCalled()
 		expect(warn).not.toHaveBeenCalled()
-	})
-	it("preserves the existing callback-throw behavior", async () => {
-		collection(new Error("hybrid failed"))
-		const callbackError = new Error("callback failed")
-		await expect(
-			recall(
-				vi.fn(() => {
-					throw callbackError
-				}),
-			),
-		).rejects.toBe(callbackError)
 	})
 })

@@ -11,7 +11,7 @@ import type { SearchWorkCost } from "./mongodb-search-budget.js"
 // reservation. A lane's cost is the sum, over every tier it can reach on this
 // deployment, of that tier's first-attempt charges, assuming zero hits at
 // every tier: an autoEmbed vector stage is one aggregation and one embed; a
-// $search, $text or fusion aggregate is one aggregation (plus the embed of
+// $search or fusion aggregate is one aggregation (plus the embed of
 // each vector input). The chunk lanes have one tier: a native fusion
 // aggregate. It is the lane's upper bound without warmup retries,
 // which pay from the unreserved remainder. search-lane-cost.test.ts runs the
@@ -94,8 +94,6 @@ export function conversationEvidenceLaneCost(
 }
 
 /** `raw-window`: one `$search` aggregate over the window; no embed. */
-export function rawWindowLaneCost(
-	context: Pick<LaneCostContext, "capabilities">,
-): SearchWorkCost {
-	return context.capabilities.textSearch ? TEXT_TIER : NO_SEARCH_COST
+export function rawWindowLaneCost(): SearchWorkCost {
+	return TEXT_TIER
 }

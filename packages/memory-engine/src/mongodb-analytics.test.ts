@@ -12,7 +12,6 @@ vi.mock("./mongodb-schema.js", () => ({
 import {
 	getMemoryStats,
 	measureEmbeddingCoverage,
-	reconcileEmbeddingStatus,
 } from "./mongodb-analytics.js"
 import {
 	chunksCollection,
@@ -256,25 +255,6 @@ describe("getMemoryStats", () => {
 			unknown: 16,
 			basis: "search-index",
 		})
-	})
-
-	it("#26: reconcileEmbeddingStatus advances only docs carrying a vector", async () => {
-		const updateMany = vi.fn(async () => ({ modifiedCount: 3 }))
-		const cols = [mockChunks, mockKbChunks, mockStructuredMem]
-		for (const col of cols) {
-			;(col as unknown as { updateMany: unknown }).updateMany = updateMany
-		}
-
-		const res = await reconcileEmbeddingStatus(db, "test_")
-
-		expect(res.advanced).toBe(9) // 3 per collection × 3 collections
-		expect(updateMany).toHaveBeenCalledWith(
-			{
-				"embedding.0": { $exists: true },
-				embeddingStatus: { $ne: "success" },
-			},
-			{ $set: { embeddingStatus: "success" } },
-		)
 	})
 
 	it("returns per-source breakdown for memory + sessions", async () => {
@@ -580,6 +560,87 @@ describe("getMemoryStats W13 tenant scoping", () => {
 			expect(pipeline[0]).toEqual({ $match: { agentId: "agent-a" } })
 		}
 		expect(seenPipelines.length).toBeGreaterThanOrEqual(2)
+	})
+})
+
+describe("measureEmbeddingCoverage rejects a failed read (T11, G3-78)", () => {
+	const failure = new Error("injected coverage read failure")
+
+	it("client mode: a failed stored-vector aggregation rejects instead of reporting zero coverage", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => 3),
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw failure
+				}),
+			})),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "client",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("automated mode: a failed total count rejects instead of reporting an empty collection", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => {
+				throw failure
+			}),
+			aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "automated",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("automated mode: a failed index listing rejects instead of reporting unknown coverage of a zero total", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => 3),
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw failure
+				}),
+			})),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "automated",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("a healthy empty collection is zero coverage, not a failure", async () => {
+		const collection = {
+			countDocuments: vi.fn(async () => 0),
+			aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as unknown as Collection
+
+		await expect(
+			measureEmbeddingCoverage({
+				collection,
+				indexName: "vec_idx",
+				embeddingMode: "client",
+			}),
+		).resolves.toEqual({
+			total: 0,
+			success: 0,
+			failed: 0,
+			pending: 0,
+			unknown: 0,
+			basis: "stored-vector",
+		})
 	})
 })
 

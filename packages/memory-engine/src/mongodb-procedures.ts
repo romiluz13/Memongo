@@ -1784,10 +1784,7 @@ export async function searchProcedures(
 	},
 ): Promise<MemorySearchResult[]> {
 	const minScore = opts.minScore ?? 0.1
-	const canVector =
-		opts.embeddingMode === "automated"
-			? opts.capabilities.vectorSearch
-			: queryVector != null && opts.capabilities.vectorSearch
+	const canVector = opts.capabilities.vectorSearch
 	const numCandidates = Math.min(
 		opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		MONGODB_MAX_NUM_CANDIDATES,

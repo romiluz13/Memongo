@@ -337,7 +337,7 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 			searchOptions: {
 				scope: "agent",
 				scopeRef: "agent:agent-1",
-				fusionMethod: "js-merge",
+				fusionMethod: "rankFusion",
 				allowHybridBackstop: false,
 			},
 		})
@@ -347,7 +347,7 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 			undefined,
 			"MongoDB index guide",
 			null,
-			expect.objectContaining({ fusionMethod: "js-merge" }),
+			expect.objectContaining({ fusionMethod: "rankFusion" }),
 		)
 	})
 
@@ -731,24 +731,12 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 	})
 })
 
-function managerWithStaleLegacyFlag() {
-	const base = buildMockManager()
-	const baseCfg = (
-		base as unknown as { config: { mongodb: Record<string, unknown> } }
-	).config.mongodb
-	return buildMockManager({
-		config: {
-			mongodb: { ...baseCfg, legacySearchFallback: true },
-		},
-	})
-}
-
-describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", () => {
+describe("no legacy re-run (a complete empty answer is final)", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 	})
 
-	it("search() keeps the v2 empty answer final with and without the flag", async () => {
+	it("search() keeps the v2 empty answer final", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -760,18 +748,11 @@ describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", ()
 		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
 
 		const results = await buildMockManager().search("qzx legacy opt-out marker")
-		const callsWithoutFlag = aggregate.mock.calls.length
-		aggregate.mockClear()
-		const flagged = await managerWithStaleLegacyFlag().search(
-			"qzx legacy opt-in marker",
-		)
 
 		// Empty is not an error: the v2 empty answer stands and no second
-		// retrieval runs, so the flag adds no aggregate.
+		// retrieval runs.
 		expect(results).toEqual([])
-		expect(flagged).toEqual([])
-		expect(callsWithoutFlag).toBe(1)
-		expect(aggregate).toHaveBeenCalledTimes(callsWithoutFlag)
+		expect(aggregate).toHaveBeenCalledTimes(1)
 	})
 
 	it("searchDetailed() with kbRestricted keeps the v2 verdict and adds no legacy row", async () => {
@@ -792,7 +773,7 @@ describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", ()
 			}),
 		} as never)
 
-		const response = await managerWithStaleLegacyFlag().searchDetailed({
+		const response = await buildMockManager().searchDetailed({
 			query: "authorization probe",
 			kbRestricted: true,
 		})
@@ -825,7 +806,7 @@ describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", ()
 			}),
 		} as never)
 
-		const response = await managerWithStaleLegacyFlag().searchDetailed({
+		const response = await buildMockManager().searchDetailed({
 			query: "authorization probe",
 		})
 		// Later suites in this file rely on a healthy procedures mock.
@@ -1612,7 +1593,7 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 			resetSearchAdmissionForTests(Date.now())
 			tryConsumeSearchAdmission(Date.now())
 			const aggregate = primeEmptySearch()
-			const manager = managerWithStaleLegacyFlag()
+			const manager = buildMockManager()
 
 			const results = await manager.search("qzx single token envelope")
 
@@ -1661,7 +1642,7 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 			resetSearchAdmissionForTests(Date.now())
 			tryConsumeSearchAdmission(Date.now())
 			const aggregate = primeEmptySearch()
-			const manager = managerWithStaleLegacyFlag()
+			const manager = buildMockManager()
 
 			const response = await manager.searchDetailed({
 				query: "qzx detailed single token",
@@ -1848,7 +1829,7 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 		expect(degradations).toHaveLength(0)
 	})
 
-	it("searchKB() leaves the degradation sink silent on denial: denial is a typed failure, not a degraded answer", async () => {
+	it("searchKB() denial is a typed budget denial that carries the bucket's retry hint", async () => {
 		exhaustBucket()
 		mocked(searchKB).mockResolvedValue([])
 		const manager = buildMockManager({
@@ -1861,37 +1842,19 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 				scoreFusion: false,
 			},
 		})
-		const degradations: Array<Record<string, unknown>> = []
 
-		await expect(
-			manager.searchKB("qzx sink kb lane", {
-				onDegradation: (degradation) => degradations.push(degradation),
-			} as Parameters<typeof manager.searchKB>[1]),
-		).rejects.toBeInstanceOf(SearchBudgetDeniedError)
+		const denial = await manager
+			.searchKB("qzx sink kb lane")
+			.catch((err: unknown) => err)
 
-		expect(degradations).toHaveLength(0)
-		expect(searchKB).not.toHaveBeenCalled()
-	})
-
-	it("searchKB() leaves the sink silent when admission grants the vector lane", async () => {
-		mocked(searchKB).mockResolvedValue([])
-		const manager = buildMockManager({
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
+		expect(denial).toBeInstanceOf(SearchBudgetDeniedError)
+		expect(denial).toMatchObject({
+			lane: "kb",
+			stage: "request",
+			reason: "budget-embeds",
 		})
-		const degradations: Array<Record<string, unknown>> = []
-
-		await manager.searchKB("qzx sink kb admitted", {
-			onDegradation: (degradation) => degradations.push(degradation),
-		} as Parameters<typeof manager.searchKB>[1])
-
-		expect(degradations).toHaveLength(0)
+		expect((denial as SearchBudgetDeniedError).retryAfterMs).toBeGreaterThan(0)
+		expect(searchKB).not.toHaveBeenCalled()
 	})
 })
 

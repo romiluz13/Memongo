@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "@memongo/lib"
+import { settledFailureMeta } from "./query-diagnostics.js"
 
 const log = createSubsystemLogger("memory:mongodb:best-effort")
 
@@ -21,11 +22,14 @@ export async function bestEffort(
 	}
 }
 
+/**
+ * Counts the failure and logs the label with the driver's numeric code only.
+ * The message is never logged: a driver message can carry a query, a
+ * document value or a host.
+ */
 export function recordBestEffortFailure(label: string, err: unknown): void {
 	failureCounts.set(label, (failureCounts.get(label) ?? 0) + 1)
-	log.warn(
-		`best-effort ${label} failed: ${err instanceof Error ? err.message : String(err)}`,
-	)
+	log.warn(`best-effort ${label} failed`, settledFailureMeta(err))
 }
 
 /** In-process failure counts per best-effort label since process start. */

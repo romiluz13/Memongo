@@ -76,12 +76,12 @@ describe("S1-S3 runSearchAggregateWithRetry", () => {
 		await expect(
 			runWithSearchBudget({ maxAggregations: 0, maxEmbeds: 5 }, () =>
 				runSearchAggregateWithRetry(collection, [{ $search: {} }], {
-					stage: "keyword",
+					stage: "atlas-search",
 				}),
 			),
 		).rejects.toMatchObject({
 			name: "SearchBudgetDeniedError",
-			stage: "keyword",
+			stage: "atlas-search",
 			reason: "budget-aggregations",
 		})
 		expect(pipelines).toHaveLength(0)
@@ -111,13 +111,16 @@ describe("S1-S3 runSearchAggregateWithRetry", () => {
 			collection,
 			[{ $search: {} }],
 			{
-				stage: "keyword",
+				stage: "atlas-search",
 				maxAttempts: 2,
 				initialDelayMs: 0,
 			},
 		).catch((e: unknown) => e)
 		expect(err).toBeInstanceOf(SearchLaneError)
-		expect(err).toMatchObject({ stage: "keyword", reason: "index-not-ready" })
+		expect(err).toMatchObject({
+			stage: "atlas-search",
+			reason: "index-not-ready",
+		})
 		expect((err as Error).message).not.toContain("secret")
 	})
 

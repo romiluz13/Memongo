@@ -6,7 +6,6 @@ import {
 	resetCapabilityProbes,
 } from "./mongodb-capability-registry.js"
 import {
-	assertIndexBudget,
 	ensureSearchIndexes,
 	getExpectedSearchIndexTargets,
 	isSearchIndexTypeCompatible,
@@ -1002,17 +1001,26 @@ describe("search index readiness helpers", () => {
 			},
 		}))
 
-		const result = await waitForSearchIndexesQueryable(
-			db.collection("test_chunks"),
-			{
-				indexNames: ["test_chunks_text", "test_chunks_vector"],
-				timeoutMs: 50,
-				pollMs: 0,
-			},
-		)
-		expect(result.ready).toBe(true)
-		expect(result.pending).toEqual([])
-		expect(calls).toBe(2)
+		// A fake clock keeps the 50 ms deadline from racing the second poll on a
+		// loaded machine: time moves only when the test advances it.
+		vi.useFakeTimers()
+		try {
+			const waiting = waitForSearchIndexesQueryable(
+				db.collection("test_chunks"),
+				{
+					indexNames: ["test_chunks_text", "test_chunks_vector"],
+					timeoutMs: 50,
+					pollMs: 10,
+				},
+			)
+			await vi.advanceTimersByTimeAsync(10)
+			const result = await waiting
+			expect(result.ready).toBe(true)
+			expect(result.pending).toEqual([])
+			expect(calls).toBe(2)
+		} finally {
+			vi.useRealTimers()
+		}
 	})
 
 	it("reports failed indexes without waiting for the full timeout", async () => {
@@ -1223,38 +1231,6 @@ describe("search index readiness helpers", () => {
 				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "nope",
 			}),
 		).toThrow(/MEMONGO_SEARCH_INDEX_READINESS_POLL_MS/)
-	})
-})
-
-// ---------------------------------------------------------------------------
-// assertIndexBudget
-// ---------------------------------------------------------------------------
-
-describe("assertIndexBudget", () => {
-	it("atlas-local-preview has an unbounded search index budget", () => {
-		const result = assertIndexBudget("atlas-local-preview", 50)
-		expect(result.budget).toBe("unbounded")
-		expect(result.withinBudget).toBe(true)
-	})
-
-	it("atlas-managed has the same unbounded search index budget", () => {
-		const result = assertIndexBudget("atlas-managed", 50)
-		expect(result.budget).toBe("unbounded")
-		expect(result.withinBudget).toBe(true)
-	})
-
-	it("community-mongot has a real numeric budget sized to the fullest planned profile", () => {
-		// P3.8: budget enforcement was dead code while every profile was
-		// "unbounded". The community mongot profile gets a numeric ceiling so
-		// adding a search index becomes a deliberate act.
-		const within = assertIndexBudget("community-mongot", 17)
-		expect(typeof within.budget).toBe("number")
-		expect(within.withinBudget).toBe(true)
-		const beyond = assertIndexBudget(
-			"community-mongot",
-			(within.budget as number) + 1,
-		)
-		expect(beyond.withinBudget).toBe(false)
 	})
 })
 

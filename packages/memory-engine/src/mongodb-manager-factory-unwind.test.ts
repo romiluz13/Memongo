@@ -13,6 +13,11 @@ import type { MongoClient } from "mongodb"
 import type { MemongoConfig } from "@memongo/lib"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { ChangeStreamUnavailableError } from "./mongodb-change-stream.js"
+import { MemongoBootError } from "./mongodb-boot-errors.js"
+import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
 import * as schemaModule from "./mongodb-schema.js"
 import { resolveSearchIndexReadinessTiming } from "./mongodb-schema-search-definitions.js"
@@ -99,6 +104,7 @@ vi.mock("./mongodb-telemetry.js", async () =>
 const mongoDriverHarness = vi.hoisted(() => {
 	class FakeMongoClient {
 		static instances: FakeMongoClient[] = []
+		static connectError: Error | null = null
 		uri: string
 		closeCalls = 0
 		closeError: Error | null = null
@@ -107,6 +113,9 @@ const mongoDriverHarness = vi.hoisted(() => {
 			FakeMongoClient.instances.push(this)
 		}
 		async connect(): Promise<FakeMongoClient> {
+			if (FakeMongoClient.connectError) {
+				throw FakeMongoClient.connectError
+			}
 			return this
 		}
 		db(name?: string): unknown {
@@ -266,9 +275,107 @@ beforeEach(() => {
 		delete process.env[key]
 	}
 	mongoDriverHarness.FakeMongoClient.instances.length = 0
+	mongoDriverHarness.FakeMongoClient.connectError = null
 	accessTrackerHarness.state.constructorError = null
 	accessTrackerHarness.state.instances.length = 0
 	resetFactoryMocks()
+})
+
+// ---------------------------------------------------------------------------
+// T11 (review F5): the pre-contract connect path is a typed boot failure
+// ---------------------------------------------------------------------------
+
+describe("pre-contract connect failure is a typed server-unreachable boot error", () => {
+	const SENTINELS = [
+		"SENTINEL-password-4471",
+		"private-host.example.net",
+		"tenant-db-sentinel",
+		"mongodb://",
+		"10.1.2.3",
+	]
+	const SENTINEL_URI =
+		"mongodb://dbuser:SENTINEL-password-4471@private-host.example.net:27017/tenant-db-sentinel"
+
+	function captured(spies: Array<ReturnType<typeof vi.spyOn>>): string {
+		return spies
+			.flatMap((spy) =>
+				spy.mock.calls.map((call) => call.map(String).join(" ")),
+			)
+			.join("\n")
+	}
+
+	it("throws MemongoBootError server-unreachable with no URI, host, address, database or secret anywhere", async () => {
+		const spies = [
+			vi.spyOn(console, "log").mockImplementation(() => {}),
+			vi.spyOn(console, "info").mockImplementation(() => {}),
+			vi.spyOn(console, "warn").mockImplementation(() => {}),
+			vi.spyOn(console, "error").mockImplementation(() => {}),
+			vi.spyOn(console, "debug").mockImplementation(() => {}),
+		]
+		mongoDriverHarness.FakeMongoClient.connectError = Object.assign(
+			new Error(
+				`connect ECONNREFUSED 10.1.2.3:27017 for ${SENTINEL_URI} (db tenant-db-sentinel)`,
+			),
+			{ name: "MongoNetworkError" },
+		)
+		const cfg: MemongoConfig = {
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: SENTINEL_URI, database: "tenant-db-sentinel" },
+			},
+		}
+
+		const failure = await MongoDBMemoryManager.create({
+			cfg,
+			agentId: "t11-unit",
+			resolved: resolveMemoryBackendConfig({ cfg, agentId: "t11-unit" }),
+		}).catch((err: unknown) => err)
+
+		expect(failure).toBeInstanceOf(MemongoBootError)
+		expect(failure).toMatchObject({
+			name: "MemongoBootError",
+			code: "server-unreachable",
+		})
+		const surfaces = [
+			(failure as Error).message,
+			JSON.stringify((failure as MemongoBootError).failures),
+			captured(spies),
+		].join("\n")
+		for (const sentinel of SENTINELS) {
+			expect(surfaces).not.toContain(sentinel)
+		}
+		expect(surfaces).toContain("MongoNetworkError")
+		expect(mongoDriverHarness.FakeMongoClient.instances).toHaveLength(1)
+		expect(mongoDriverHarness.FakeMongoClient.instances[0].closeCalls).toBe(1)
+	})
+
+	it("the success path logs no URI, host or database either", async () => {
+		const spies = [
+			vi.spyOn(console, "log").mockImplementation(() => {}),
+			vi.spyOn(console, "info").mockImplementation(() => {}),
+		]
+		const cfg: MemongoConfig = {
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: SENTINEL_URI, database: "tenant-db-sentinel" },
+			},
+		}
+		vi.mocked(schemaModule.ensureCollections).mockRejectedValueOnce(
+			new Error("stop after connect"),
+		)
+
+		await MongoDBMemoryManager.create({
+			cfg,
+			agentId: "t11-unit",
+			resolved: resolveMemoryBackendConfig({ cfg, agentId: "t11-unit" }),
+		}).catch(() => undefined)
+
+		const logged = captured(spies)
+		expect(logged).toContain("connecting to MongoDB")
+		for (const sentinel of SENTINELS) {
+			expect(logged).not.toContain(sentinel)
+		}
+	})
 })
 
 // ---------------------------------------------------------------------------
@@ -514,6 +621,54 @@ describe("W17 factory happy path under the unwind wrap", () => {
 		expect(mongoDriverHarness.FakeMongoClient.instances[0].closeCalls).toBe(1)
 		expect(accessTrackerHarness.state.instances[0].closed).toBe(true)
 		expect(onClosed).toHaveBeenCalledTimes(1)
+	})
+})
+
+describe("startup sync and projection repair are declared best-effort (J-09)", () => {
+	it("counts a failed startup sync and a failed projection repair by label, logs no driver text, and still returns the manager", async () => {
+		resetBestEffortFailureCounts()
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		vi.mocked(prototypeSeams.sync).mockRejectedValueOnce(
+			new Error("sync failed at mongodb://user:SENTINEL-sync@db.example:27017"),
+		)
+		vi.mocked(prototypeSeams.repairEventProjections).mockRejectedValueOnce(
+			new Error("repair failed at mongodb://user:SENTINEL-repair@db.example"),
+		)
+
+		const manager = await MongoDBMemoryManager.create({
+			cfg: buildCfg(),
+			agentId: "j09-unit",
+			resolved: resolveMemoryBackendConfig({
+				cfg: buildCfg(),
+				agentId: "j09-unit",
+			}),
+		})
+
+		expect(manager).toBeInstanceOf(MongoDBMemoryManager)
+		expect(getBestEffortFailureCounts()).toEqual({
+			"startup-sync": 1,
+			"startup-projection-repair": 1,
+		})
+		const logged = warn.mock.calls.map((call) => call.map(String).join(" "))
+		expect(logged.join("\n")).not.toContain("SENTINEL")
+		await manager.close()
+		warn.mockRestore()
+	})
+
+	it("counts nothing when both startup tasks succeed", async () => {
+		resetBestEffortFailureCounts()
+
+		const manager = await MongoDBMemoryManager.create({
+			cfg: buildCfg(),
+			agentId: "j09-unit-ok",
+			resolved: resolveMemoryBackendConfig({
+				cfg: buildCfg(),
+				agentId: "j09-unit-ok",
+			}),
+		})
+
+		expect(getBestEffortFailureCounts()).toEqual({})
+		await manager.close()
 	})
 })
 

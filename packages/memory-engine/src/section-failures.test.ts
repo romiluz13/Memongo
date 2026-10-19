@@ -9,11 +9,8 @@ import {
 } from "./search-outcomes.js"
 import {
 	SectionFailureCollector,
-	bestEffortFailureCount,
 	nestSectionFailures,
-	noteBestEffortFailure,
 	representativeSectionError,
-	resetBestEffortFailureCounts,
 	sectionFailureFromError,
 	sectionFailuresFromLaneOutcomes,
 } from "./section-failures.js"
@@ -35,8 +32,6 @@ const driverError = () =>
 		code: 2,
 		codeName: "BadValue",
 	})
-
-beforeEach(() => resetBestEffortFailureCounts())
 
 describe("sectionFailureFromError", () => {
 	it("types a driver error as a failed row with enum fields only", () => {
@@ -420,29 +415,5 @@ describe("sectionFailuresFromLaneOutcomes", () => {
 		expect(
 			sectionFailuresFromLaneOutcomes({ section: "query-evidence" }),
 		).toEqual([])
-	})
-})
-
-describe("best-effort failure counter", () => {
-	it("counts each failure per label and logs the numeric code only", () => {
-		const log = makeLog()
-		expect(bestEffortFailureCount("run-record")).toBe(0)
-		noteBestEffortFailure(log, "run-record", driverError())
-		noteBestEffortFailure(log, "run-record", new Error(QUERY))
-		noteBestEffortFailure(log, "other", driverError())
-		expect(bestEffortFailureCount("run-record")).toBe(2)
-		expect(bestEffortFailureCount("other")).toBe(1)
-		expect(log.warn).toHaveBeenCalledTimes(3)
-		expect(log.warn.mock.calls[0]).toEqual([
-			"run-record: best-effort write failed",
-			{ code: 2 },
-		])
-		expect(JSON.stringify(log.warn.mock.calls)).not.toContain("SECRETTAIL")
-	})
-
-	it("resets for isolated tests", () => {
-		noteBestEffortFailure(makeLog(), "run-record", new Error("x"))
-		resetBestEffortFailureCounts()
-		expect(bestEffortFailureCount("run-record")).toBe(0)
 	})
 })

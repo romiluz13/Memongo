@@ -300,8 +300,8 @@ describe("raw-window selects through $search", () => {
 		expect(result.metadata.outcomeStatus).toBe("failed")
 	})
 
-	it("is not-applicable without Search: no find replaces it", async () => {
-		const { db, pipelines, find } = database([event("e1")])
+	it("is never skipped on a capability flag: it runs one $search, and a Search failure fails the lane", async () => {
+		const { db, pipelines, find } = database([event("e1")], "fail")
 		const result = await searchV2(db, "test_", "deploy rollback", "agent-1", {
 			availablePaths: new Set(["raw-window"]),
 			searchOptions: {
@@ -313,17 +313,18 @@ describe("raw-window selects through $search", () => {
 			},
 		})
 		expect(find).not.toHaveBeenCalled()
-		expect(pipelines).toHaveLength(0)
+		expect(pipelines).toHaveLength(1)
 		expect(
 			result.metadata.laneOutcomes?.filter((row) => row.lane === "raw-window"),
 		).toEqual([
 			{
 				lane: "raw-window",
-				stage: "lane",
-				outcome: "not-applicable",
-				reason: "capability-absent",
+				stage: "atlas-search",
+				outcome: "failed",
+				reason: "query-error",
 			},
 		])
+		expect(result.metadata.outcomeStatus).toBe("failed")
 	})
 
 	it("fails the request typed in strict mode", async () => {
