@@ -742,7 +742,7 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("fenced locator reads — gate state machine (U1-U5)", () => {
-	it("U1: a gate already erasing at admission suppresses the read with zero tenant-data access", async () => {
+	it("U1: a gate already erasing at admission rejects the read with zero tenant-data access", async () => {
 		const ops = makeOps()
 		seedGate("agent-1", {
 			epoch: 1,
@@ -752,12 +752,11 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		})
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
-
-		// Behavior first: unchanged bytes serve the live record; fenced bytes
-		// return the classifier miss shape with no title/type/key extras.
-		expect(result).toStrictEqual(SUPPRESSED_STRUCTURED)
-		// The suppression happens at admission — no tenant-data read at all.
+		// M2 T10 (G2-69): a denied read is a typed rejection, never an empty miss.
+		await expect(
+			ops.readFile({ relPath: "structured:fact:sky" }),
+		).rejects.toBeInstanceOf(ErasureGateConflictError)
+		// The denial happens at admission — no tenant-data read at all.
 		expectZeroTenantAccess()
 		expect(captureCalls()).toHaveLength(1)
 		expect(fenceSeam.state.fenceCalls).toHaveLength(0)
@@ -769,9 +768,9 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		metaFake.setFlipOnCapture(flipToErasing(6, "run-2"))
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
-
-		expect(result).toStrictEqual(SUPPRESSED_STRUCTURED)
+		await expect(
+			ops.readFile({ relPath: "structured:fact:sky" }),
+		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expectZeroTenantAccess()
 		// C1: the capture admitted the PRE-FLIP snapshot (open epoch 5) —
 		// the token carries epoch 5 — and the stored gate the fence
@@ -797,9 +796,9 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 		metaFake.setFlipOnCapture(flipToReopened(7))
 		collections.tenants.structured.scriptFindOne([STRUCTURED_LIVE])
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
-
-		expect(result).toStrictEqual(SUPPRESSED_STRUCTURED)
+		await expect(
+			ops.readFile({ relPath: "structured:fact:sky" }),
+		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expectZeroTenantAccess()
 		// exactly one admission — a reopened gate must not trigger a fresh capture
 		expect(captureCalls()).toHaveLength(1)
@@ -900,21 +899,13 @@ describe("fenced locator reads — gate state machine (U1-U5)", () => {
 			},
 		])
 
-		const result = await ops.readFile({ relPath: "kb:docs/handbook.md" })
-
-		// Unchanged bytes serve the record with its title — the empty-text
-		// leak class. Fenced bytes return the reference miss shape.
-		expect(result).toStrictEqual({
-			text: "",
-			path: "kb:docs/handbook.md",
-			locator: "kb:docs/handbook.md",
-			source: "reference",
-			sourceType: "reference",
-		})
+		await expect(
+			ops.readFile({ relPath: "kb:docs/handbook.md" }),
+		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expect(collections.tenants.kb.calls.findOne).toHaveLength(0)
 		expectZeroTenantAccess()
 		// C1: the capture admitted the PRE-FLIP snapshot (open epoch 0); the
-		// kb read was suppressed by the in-fence re-check of the flipped
+		// kb read was denied by the in-fence re-check of the flipped
 		// stored gate — nothing ever read the document or its title.
 		expect(captureCalls()).toHaveLength(1)
 		expect(fenceSeam.state.fenceCalls).toHaveLength(1)
@@ -1321,7 +1312,7 @@ describe("fenced locator reads — transient retry (U7)", () => {
 		expect(fenceSeam.state.sessions).toHaveLength(1)
 	})
 
-	it("U7b: a retry that observes the gate erasing conflicts — the read is suppressed, the discarded touch never counts", async () => {
+	it("U7b: a retry that observes the gate erasing conflicts — the read is rejected, the discarded touch never counts", async () => {
 		const ops = makeOps()
 		seedGate("agent-1", { epoch: 5, state: "open", serial: 0 })
 		collections.tenants.structured.seed({ _id: "s1", openedCount: 0 })
@@ -1344,9 +1335,9 @@ describe("fenced locator reads — transient retry (U7)", () => {
 			}
 		}
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
-
-		expect(result).toStrictEqual(SUPPRESSED_STRUCTURED)
+		await expect(
+			ops.readFile({ relPath: "structured:fact:sky" }),
+		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expect(fenceSeam.state.attempts).toBe(2)
 		expect(captureCalls()).toHaveLength(1)
 		// C3: the retry conflicts against the ORIGINAL token — the stored
@@ -1402,9 +1393,9 @@ describe("fenced locator reads — transient retry (U7)", () => {
 			}
 		}
 
-		const result = await ops.readFile({ relPath: "structured:fact:sky" })
-
-		expect(result).toStrictEqual(SUPPRESSED_STRUCTURED)
+		await expect(
+			ops.readFile({ relPath: "structured:fact:sky" }),
+		).rejects.toBeInstanceOf(ErasureGateConflictError)
 		expect(fenceSeam.state.attempts).toBe(2)
 		expect(captureCalls()).toHaveLength(1)
 		// C3: the retry conflicts against the ORIGINAL token — the stored
@@ -1430,7 +1421,7 @@ describe("fenced locator reads — transient retry (U7)", () => {
 			collections.tenants.structured.store.get("s1")?.openedCount ?? 0,
 		).toBe(0)
 		// C3: attempt 1 DID attempt its touch once (updateOne fired) even
-		// though the reopened-epoch retry conflict suppressed the read —
+		// though the reopened-epoch retry conflict rejected the read —
 		// pin it exactly like U7b so "no touch" can never pass vacuously
 		expect(collections.tenants.structured.calls.updateOne).toHaveLength(1)
 		// C3: the ONE injected transient was spent (knob consumed), and both
@@ -1489,20 +1480,18 @@ describe("fenced locator reads — legacy miss-shape controls (U8)", () => {
 })
 
 // ---------------------------------------------------------------------------
-// C6: the SAME SHAPE_TABLE under erasure conflict — suppressed output must
-// equal the legacy miss shape, with zero tenant access, across every
-// branch family. The admission rows conflict at capture (erasing gate
+// C6: the SAME SHAPE_TABLE under erasure conflict — every branch family
+// rejects with the typed erasure error (never the legacy miss shape), with
+// zero tenant access. The admission rows conflict at capture (erasing gate
 // stored); the in-fence rows conflict at the gate re-check (the stored
 // gate flips after the capture admitted the pre-flip snapshot).
 // ---------------------------------------------------------------------------
 
-describe("fenced locator reads — miss shapes under erasure conflict (C6)", () => {
+describe("fenced locator reads — erasure conflict is a typed rejection (C6)", () => {
 	it.each(
 		SHAPE_TABLE,
-	)("admission conflict: $relPath suppresses with the family miss shape and zero tenant access", async ({
+	)("admission conflict: $relPath rejects with the typed erasure error and zero tenant access", async ({
 		relPath,
-		path,
-		source,
 	}) => {
 		const ops = makeOps()
 		seedGate("agent-1", {
@@ -1512,39 +1501,25 @@ describe("fenced locator reads — miss shapes under erasure conflict (C6)", () 
 			erase: { runId: "run-c6-a", startedAt: new Date() },
 		})
 
-		const result = await ops.readFile({ relPath })
-
-		expect(result).toStrictEqual({
-			text: "",
-			path,
-			locator: path,
-			source,
-			sourceType: source,
-		})
+		await expect(ops.readFile({ relPath })).rejects.toBeInstanceOf(
+			ErasureGateConflictError,
+		)
 		expectZeroTenantAccess()
 		expect(captureCalls()).toHaveLength(1)
 	})
 
 	it.each(
 		SHAPE_TABLE,
-	)("in-fence conflict: $relPath suppresses with the family miss shape and zero tenant access", async ({
+	)("in-fence conflict: $relPath rejects with the typed erasure error and zero tenant access", async ({
 		relPath,
-		path,
-		source,
 	}) => {
 		const ops = makeOps()
 		seedGate("agent-1", { epoch: 3, state: "open", serial: 0 })
 		metaFake.setFlipOnCapture(flipToErasing(4, "run-c6-b"))
 
-		const result = await ops.readFile({ relPath })
-
-		expect(result).toStrictEqual({
-			text: "",
-			path,
-			locator: path,
-			source,
-			sourceType: source,
-		})
+		await expect(ops.readFile({ relPath })).rejects.toBeInstanceOf(
+			ErasureGateConflictError,
+		)
 		expectZeroTenantAccess()
 		expect(captureCalls()).toHaveLength(1)
 		expect(fenceSeam.state.fenceCalls).toHaveLength(1)
