@@ -81,6 +81,10 @@ import {
 	type BenchmarkJudgedAnswerMaterial,
 } from "./benchmark-answer-quality.js"
 import {
+	buildPass0ContextDiagnostics,
+	captureContextDiagnostics,
+} from "./benchmark-context-diagnostics.js"
+import {
 	prepareOfficialQa,
 	resolveBenchmarkQaProtocol,
 	scoreOfficialScenario,
@@ -1841,10 +1845,11 @@ export class MongoDBManagerBenchmarkOps {
 								// preview. B9: the role labels the speaking turn
 								// (User:/Assistant:) in the dated answer prompt.
 								const passagesWithDates = results
-									.map((result) => ({
+									.map((result, index) => ({
 										passage: result.text ?? result.snippet,
 										dates: sessionDatesForResult(result),
 										role: result.role,
+										retrievedRank: index + 1,
 									}))
 									.filter(
 										(entry) =>
@@ -1866,6 +1871,31 @@ export class MongoDBManagerBenchmarkOps {
 											: undefined,
 									passageDates: passagesWithDates.map((entry) => entry.dates),
 									passageRoles: passagesWithDates.map((entry) => entry.role),
+									...(benchmarkQaProtocol === "custom-v1"
+										? captureContextDiagnostics(() =>
+												buildPass0ContextDiagnostics({
+													results,
+													keptRanks: passagesWithDates.map(
+														(entry) => entry.retrievedRank,
+													),
+													evidence: eventEvidence,
+													collectSourceEventIds: (result) =>
+														this.collectBenchmarkResultSourceEventIds(result),
+													resolveSessionIds: (result) =>
+														this.resolveBenchmarkResultSessionIds(
+															result,
+															eventEvidence,
+														),
+													resolveTurnIds: (result) =>
+														this.resolveBenchmarkResultTurnIds(
+															result,
+															eventEvidence,
+														),
+													evaluation,
+													conversations: scenario.conversations,
+												}),
+											)
+										: {}),
 								})
 							}
 							// Track expected IDs for miss ledger

@@ -22,6 +22,7 @@ import {
 	benchmarkAnswerModelName,
 	resolveBenchmarkAnswerProvider,
 } from "./benchmark-answer-provider.js"
+import type { Pass0ContextDiagnostics } from "./benchmark-context-diagnostics.js"
 import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
 import type { E2eQaCase } from "../mongodb-e2e-qa.js"
 import { runE2eQa } from "../mongodb-e2e-qa.js"
@@ -58,6 +59,12 @@ export type BenchmarkJudgedAnswerMaterial = {
 	questionDate?: string
 	passageDates?: string[][]
 	passageRoles?: Array<MemoryResultRole | undefined>
+	/**
+	 * Legacy custom-v1 path only: read-only context diagnostics, or the reason
+	 * they could not be captured. Neither reaches a prompt or a verdict.
+	 */
+	diagnostics?: Pass0ContextDiagnostics
+	diagnosticsError?: string
 }
 
 /** All-null envelope with the reason accuracy was not measured. */
@@ -175,6 +182,10 @@ export function buildJudgedAnswerCases(
 			...(material.abstention ? { abstention: true } : {}),
 			...(material.upstreamFailure
 				? { upstreamFailure: material.upstreamFailure }
+				: {}),
+			...(material.diagnostics ? { diagnostics: material.diagnostics } : {}),
+			...(material.diagnosticsError
+				? { diagnosticsError: material.diagnosticsError }
 				: {}),
 		})
 	}

@@ -1782,6 +1782,115 @@ export type BenchmarkCostAccounting = {
 	operations: BenchmarkOperationAccounting[]
 }
 
+/** Diagnostics truth value: `"unknown"` propagates and is never read as false. */
+export type BenchmarkDiagnosticTruth = boolean | "unknown"
+
+/**
+ * How completely a retrieved passage traces back to ingested source events:
+ * `complete` when it has source event ids and every one resolves to a session
+ * and a benchmark turn, `partial` when some resolve, `none` when no id exists
+ * or none resolves.
+ */
+export type BenchmarkContextProvenance = "complete" | "partial" | "none"
+
+/** One passage the answerer actually received, in the order it was numbered. */
+export type BenchmarkContextPassageDiagnostic = {
+	/** 1-based position in the list sent to the answerer. */
+	sentRank: number
+	/** 1-based position in the search results. */
+	retrievedRank: number
+	memoryId: string
+	sessionIds: string[]
+	turnIds: string[]
+	provenance: BenchmarkContextProvenance
+	score: number
+	/** sha256 (hex) of the full passage text sent. */
+	sha256: string
+	/** First 200 characters of the text sent. */
+	preview: string
+}
+
+/**
+ * Whether a gold target reached the answerer. `present`: a sent passage holds
+ * the full text. `absent`: proven, because every sent passage has complete
+ * provenance, none maps to the target and none holds its text. `unknown`:
+ * anything else; absence is never inferred from a failed text match or an
+ * empty id list.
+ */
+export type BenchmarkGoldSentStatus = "present" | "absent" | "unknown"
+
+export type BenchmarkGoldSessionDiagnostic = {
+	/** Zero-based position among the scenario's admitted conversations. */
+	admittedSessionIndex: number
+	sessionId: string
+	/** Some search result resolves to this session. */
+	retrieved: boolean
+	sentStatus: BenchmarkGoldSentStatus
+}
+
+export type BenchmarkGoldTurnDiagnostic = {
+	/** Zero-based position among the scenario's admitted conversations. */
+	admittedSessionIndex: number
+	sessionId: string
+	/** Zero-based turn index in the source session. */
+	turnIndex: number
+	turnId: string
+	/** Some search result resolves to this turn. */
+	retrieved: boolean
+	/** First search result that resolves to this turn, 1-based. */
+	retrievedRank: number | null
+	/** First sent passage that holds this turn's text or resolves to it, 1-based. */
+	sentRank: number | null
+	sentStatus: BenchmarkGoldSentStatus
+	/** The turn's own gold session occurrence appears in the search results. */
+	sessionRetrieved: boolean
+	/** The session was retrieved and the turn is proven absent from what was sent. */
+	candidateDefect: boolean
+}
+
+export type BenchmarkGoldDiagnostics =
+	| {
+			status: "not-applicable"
+			reason: "abstention" | "no-has-answer-marker"
+			sessions: []
+			turns: []
+	  }
+	| {
+			status: "applicable"
+			sessions: BenchmarkGoldSessionDiagnostic[]
+			turns: BenchmarkGoldTurnDiagnostic[]
+			/** Gold turns by status; the four never overlap. */
+			counts: {
+				candidate: number
+				present: number
+				unknown: number
+				/** Proven absent while the turn's session was not retrieved. */
+				absentSessionNotRetrieved: number
+			}
+	  }
+
+/**
+ * Optional per-case context diagnostics (legacy custom-v1 path). Read-only
+ * observations: they never feed the answer, the verdict or any provider call.
+ */
+export type BenchmarkCaseContextDiagnostics = {
+	contextPassages?: BenchmarkContextPassageDiagnostic[]
+	passagesSentCount?: number
+	gold?: BenchmarkGoldDiagnostics
+	goldSessionInContext?: {
+		any: BenchmarkDiagnosticTruth
+		all: BenchmarkDiagnosticTruth
+	}
+	goldTurnInContext?: {
+		any: BenchmarkDiagnosticTruth
+		all: BenchmarkDiagnosticTruth
+	}
+	/** Version of the sent-status rule, e.g. `containment-v2`. */
+	matchRule?: string
+	/** Set when computing the diagnostics failed; the case verdict is unaffected. */
+	diagnosticsError?: string
+}
+
 /** Gate-5 extension. Populated by Task 5.E2E / Task 5.adv; null at Phase 1. */
 export type BenchmarkE2eQaEnvelope = {
 	answerModel: string | null
@@ -1801,14 +1910,16 @@ export type BenchmarkE2eQaEnvelope = {
 		answerJudge: number
 		decoyJudge: number
 	}
-	caseResults: Array<{
-		caseId: string
-		candidateAnswer: string
-		correct: boolean
-		abstention: boolean
-		latencyMs: number
-		error?: string
-	}>
+	caseResults: Array<
+		{
+			caseId: string
+			candidateAnswer: string
+			correct: boolean
+			abstention: boolean
+			latencyMs: number
+			error?: string
+		} & BenchmarkCaseContextDiagnostics
+	>
 	unavailableReason?: string
 	/**
 	 * Slice B: official QA protocol summary (separate judge provider, dated

@@ -3,7 +3,14 @@ import type {
 	EnrichmentChatUsage,
 	EnrichmentProvider,
 } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
-import type { BenchmarkE2eQaEnvelope } from "../packages/memory-engine/src/types.js"
+import type {
+	BenchmarkCaseContextDiagnostics,
+	BenchmarkE2eQaEnvelope,
+} from "../packages/memory-engine/src/types.js"
+import {
+	buildCaseContextDiagnostics,
+	type Pass0ContextDiagnostics,
+} from "./benchmark/benchmark-context-diagnostics.js"
 
 /**
  * End-to-end QA: answer generation + LLM judge (issue #24 / Wave 4).
@@ -211,6 +218,33 @@ export type E2eQaCase = {
 	contextPassages: string[]
 	abstention?: boolean
 	upstreamFailure?: string
+	/** Read-only pass-0 observations; they never reach a prompt or a verdict. */
+	diagnostics?: Pass0ContextDiagnostics
+	/** Why the pass-0 diagnostics could not be captured; recorded on the case. */
+	diagnosticsError?: string
+}
+
+// A diagnostics failure is recorded on the case and never reaches the answer,
+// the verdict or the provider calls.
+function caseDiagnostics(testCase: E2eQaCase): BenchmarkCaseContextDiagnostics {
+	if (testCase.diagnosticsError !== undefined) {
+		return { diagnosticsError: testCase.diagnosticsError }
+	}
+	if (!testCase.diagnostics) return {}
+	try {
+		return buildCaseContextDiagnostics({
+			contextPassages: testCase.contextPassages,
+			maxPassages: MAX_CONTEXT_PASSAGES,
+			diagnostics: testCase.diagnostics,
+		})
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error)
+		log.warn("case context diagnostics failed", {
+			caseId: testCase.caseId,
+			error: message,
+		})
+		return { diagnosticsError: message }
+	}
 }
 
 // Common phrasings for "I have no answer" — the correct response to an
@@ -337,6 +371,7 @@ export async function runE2eQa(params: {
 				abstention: true,
 				latencyMs,
 				...(caseError ? { error: caseError } : {}),
+				...caseDiagnostics(testCase),
 			})
 			continue
 		}
@@ -394,6 +429,7 @@ export async function runE2eQa(params: {
 			abstention: false,
 			latencyMs,
 			...(caseError ? { error: caseError } : {}),
+			...caseDiagnostics(testCase),
 		})
 	}
 
