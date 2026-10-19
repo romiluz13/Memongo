@@ -647,6 +647,7 @@ export const searchPaths = {
 					"application/json": {
 						schema: {
 							type: "object",
+							required: ["scope", "scopeRef"],
 							properties: {
 								agentId: { type: "string" },
 								scope: {
@@ -656,7 +657,7 @@ export const searchPaths = {
 								scopeRef: {
 									type: "string",
 									description:
-										"Optional scope reference used for tenant isolation.",
+										"Scope reference of the tenant whose conversation is recalled. Required: a recall without scope and scopeRef is refused rather than widened to the agent.",
 								},
 								query: {
 									type: "string",

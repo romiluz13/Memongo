@@ -2,7 +2,8 @@ import type { Collection, Db, Document } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }))
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		warn,
 		info: vi.fn(),
@@ -26,6 +27,7 @@ async function recall(timezone?: string) {
 		prefix: "test_",
 		request: {
 			agentId: "a1",
+			...TENANT,
 			timezone,
 			startTime: "2026-04-08",
 			endTime: "2026-04-08",
@@ -34,6 +36,8 @@ async function recall(timezone?: string) {
 	})
 	return { response, filter: find.mock.calls[0]?.[0] as Document | undefined }
 }
+
+const TENANT = { scope: "agent", scopeRef: "agent:a1" } as const
 
 describe("invalid recall timezone diagnostics", () => {
 	beforeEach(() => vi.clearAllMocks())

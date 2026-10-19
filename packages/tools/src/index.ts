@@ -121,8 +121,8 @@ const contextBundleSchema = z.object({
 const recallConversationSchema = z.object({
 	query: z.string().optional(),
 	agentId: z.string().optional(),
-	scope: memoryScopeSchema.optional(),
-	scopeRef: z.string().optional(),
+	scope: memoryScopeSchema,
+	scopeRef: z.string().min(1),
 	sessionId: z.string().optional(),
 	roles: z.array(z.enum(["user", "assistant", "system", "tool"])).optional(),
 	startTime: z.string().optional(),

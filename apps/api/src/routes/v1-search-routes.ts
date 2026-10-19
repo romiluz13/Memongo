@@ -176,6 +176,16 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 		}
 		const scopeError = await readScopeInputError(c)
 		if (scopeError) return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		const scope = await readScope(c)
+		const scopeRef = await readScopeRef(c)
+		if (!scope || !scopeRef) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"scope and scopeRef are required",
+			)
+		}
 		for (const field of [
 			"query",
 			"startTime",
@@ -205,8 +215,8 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 		try {
 			const result = await memongoBridgeRecallConversation({
 				agentId: await readAgentId(c),
-				scope: await readScope(c),
-				scopeRef: await readScopeRef(c),
+				scope,
+				scopeRef,
 				query: typeof body.query === "string" ? body.query : undefined,
 				sessionId: await readSessionCoordinate(c),
 				roles,

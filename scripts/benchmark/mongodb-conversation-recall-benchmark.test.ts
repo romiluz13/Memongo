@@ -82,6 +82,10 @@ function matchesFilter(doc: BenchmarkEvent, filter: Document): boolean {
 		switch (key) {
 			case "agentId":
 				return matchesScalarFilter(doc.agentId, value)
+			case "scope":
+				return matchesScalarFilter(doc.scope, value)
+			case "scopeRef":
+				return matchesScalarFilter(doc.scopeRef, value)
 			case "sessionId":
 				return matchesScalarFilter(doc.sessionId, value)
 			case "role":
@@ -124,6 +128,10 @@ function makeCorpusCollection(docs: BenchmarkEvent[]): Collection {
 			toArray: vi.fn(async () => []),
 		})),
 	} as unknown as Collection
+}
+
+function tenantOf(agentId: string) {
+	return { scope: "agent" as const, scopeRef: `agent:${agentId}` }
 }
 
 function makeEvent(params: {
@@ -199,6 +207,7 @@ describe("conversation recall regression suite", () => {
 			// on the chronological listing instead.
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				sessionId: "C",
 				asOf: new Date("2026-04-12T00:00:00.000Z"),
 				limit: 20,
@@ -209,6 +218,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				sessionId: "B",
 				limit: 20,
 			},
@@ -261,17 +271,22 @@ describe("conversation recall regression suite", () => {
 		const defaultRecall = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId, limit: 20 },
+			request: { agentId, ...tenantOf(agentId), limit: 20 },
 		})
 		const includeTools = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId, includeToolMessages: true, limit: 20 },
+			request: {
+				agentId,
+				...tenantOf(agentId),
+				includeToolMessages: true,
+				limit: 20,
+			},
 		})
 		const usersOnly = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId, roles: ["user"], limit: 20 },
+			request: { agentId, ...tenantOf(agentId), roles: ["user"], limit: 20 },
 		})
 
 		expect(defaultRecall.results).toHaveLength(8)
@@ -329,6 +344,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				startTime: "2026-04-08",
 				endTime: "2026-04-08",
 				limit: 10,
@@ -382,6 +398,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				startTime: "2026-04-08",
 				endTime: "2026-04-08",
 				timezone: "America/New_York",
@@ -430,6 +447,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				asOf: new Date("2026-04-08T11:00:00.000Z"),
 				limit: 10,
 			},
@@ -469,6 +487,7 @@ describe("conversation recall regression suite", () => {
 			prefix: "mem_",
 			request: {
 				agentId,
+				...tenantOf(agentId),
 				limit: 10,
 			},
 		})

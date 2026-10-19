@@ -823,6 +823,14 @@ describe("structuredContent envelopes (P1.2)", () => {
 			scope: "workspace",
 			scopeRef: "workspace:demo",
 		},
+		memongo_recall_conversation: {
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
+		memongo_recall_messages: {
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
 		memongo_quarantine_promote: { quarantineId: "q-1" },
 		memongo_quarantine_reject: { quarantineId: "q-1" },
 		memongo_get_job: { jobId: "job-1" },
@@ -1014,6 +1022,8 @@ describe("handleToolCall B2a contract field forwarding", () => {
 			}),
 		)
 
+		expect(recallTool?.inputSchema.required).toEqual(["scope", "scopeRef"])
+
 		const recallConversation = vi.fn().mockResolvedValue({ results: [] })
 		const out = await handleToolCall(
 			"memongo_recall_conversation",
@@ -1033,6 +1043,23 @@ describe("handleToolCall B2a contract field forwarding", () => {
 				scopeRef: "session-1",
 			}),
 		)
+	})
+
+	it.each([
+		["memongo_recall_conversation", { query: "q" }],
+		["memongo_recall_conversation", { query: "q", scope: "agent" }],
+		["memongo_recall_conversation", { query: "q", scopeRef: "agent:a1" }],
+		["memongo_recall_messages", { query: "q" }],
+	])("refuses %s without its full tenant %j instead of recalling every scope", async (name, args) => {
+		const recallConversation = vi.fn()
+
+		const out = await handleToolCall(name, args, { recallConversation } as any)
+
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "scope and scopeRef are required",
+		})
+		expect(recallConversation).not.toHaveBeenCalled()
 	})
 
 	it("exposes and forwards scope/scopeRef on memongo_profile", async () => {
@@ -1527,18 +1554,17 @@ describe("untrusted-memory provenance label on retrieval results (C-040)", () =>
 			name: "memongo_recall_conversation",
 			method: "recallConversation",
 			payload: { results: [], metadata: {} },
+			args: { scope: "agent", scopeRef: "agent:a1" },
 		},
 	] as const
 
 	it.each(
 		RETRIEVAL_SURFACES,
-	)("$name labels its serialized payload as untrusted memory, label first", async ({
-		name,
-		method,
-		payload,
-	}) => {
+	)("$name labels its serialized payload as untrusted memory, label first", async (surface) => {
+		const { name, method, payload } = surface
+		const args = "args" in surface ? surface.args : {}
 		const client = { [method]: vi.fn().mockResolvedValue(payload) }
-		const out = await handleToolCall(name, {}, client as any)
+		const out = await handleToolCall(name, args, client as any)
 
 		expect(out.isError).toBeUndefined()
 		const text = parseTextPayload(out) as Record<string, unknown>
@@ -1557,7 +1583,7 @@ describe("untrusted-memory provenance label on retrieval results (C-040)", () =>
 		const recallConversation = vi.fn().mockResolvedValue({ results: [] })
 		const out = await handleToolCall(
 			"memongo_recall_messages",
-			{ query: "rollback plan" },
+			{ query: "rollback plan", scope: "agent", scopeRef: "agent:a1" },
 			{ recallConversation } as any,
 		)
 		expect(parseTextPayload(out)).toEqual({

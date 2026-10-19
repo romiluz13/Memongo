@@ -716,8 +716,7 @@ export async function handleToolCall(
 			const out = await memongo.recallConversation({
 				query: typeof args.query === "string" ? args.query : undefined,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope: readScopeArg(args),
-				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
+				...readTenantArgs(args),
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
 				roles,

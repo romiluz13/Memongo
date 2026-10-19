@@ -74,12 +74,16 @@ describe("additional read POST retries", () => {
 	})
 	it("retries silent recall before returning a successful response", async () => {
 		const { client, fetchMock } = prepare([503, 200], 1, true)
-		expect(await client.recallConversation({})).toEqual({ marker: "response" })
+		expect(
+			await client.recallConversation({ scope: "agent", scopeRef: "agent:a1" }),
+		).toEqual({ marker: "response" })
 		expect(fetchMock).toHaveBeenCalledTimes(2)
 	})
 	it("returns silent recall degradation only after retry exhaustion", async () => {
 		const { client, fetchMock } = prepare([429], 1, true)
-		expect(await client.recallConversation({})).toMatchObject({
+		expect(
+			await client.recallConversation({ scope: "agent", scopeRef: "agent:a1" }),
+		).toMatchObject({
 			results: [],
 			degradation: { kind: "throttled", status: 429 },
 		})

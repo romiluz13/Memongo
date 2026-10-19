@@ -401,6 +401,8 @@ describe("createApp", () => {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				agentId: "agent-42",
+				scope: "agent",
+				scopeRef: "agent:agent-42",
 				query: "phoenix",
 				sessionId: "session-9",
 				roles: ["assistant"],
@@ -443,8 +445,8 @@ describe("createApp", () => {
 		})
 		expect(bridgeMocks.memongoBridgeRecallConversation).toHaveBeenCalledWith({
 			agentId: "agent-42",
-			scope: undefined,
-			scopeRef: undefined,
+			scope: "agent",
+			scopeRef: "agent:agent-42",
 			query: "phoenix",
 			sessionId: "session-9",
 			roles: ["assistant"],

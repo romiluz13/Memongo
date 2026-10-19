@@ -28,6 +28,7 @@ vi.mock(
 			},
 		}),
 )
+const TENANT = { scope: "agent", scopeRef: "agent:agent1" } as const
 beforeEach(() => vi.clearAllMocks())
 afterEach(() => vi.restoreAllMocks())
 async function post(path: string, body: Record<string, unknown>) {
@@ -48,8 +49,13 @@ describe("recall advertised limit", () => {
 		[0.5, 1],
 	] as const)("forwards %s as %s", async (limit, expected) => {
 		expect(
-			(await post("/v1/recall-conversation", { agentId: "agent1", limit }))
-				.status,
+			(
+				await post("/v1/recall-conversation", {
+					agentId: "agent1",
+					...TENANT,
+					limit,
+				})
+			).status,
 		).toBe(200)
 		expect(
 			bridge.memongoBridgeRecallConversation,
@@ -62,7 +68,9 @@ describe("recall advertised limit", () => {
 		{ limit: "200" },
 		{ limit: null },
 	])("preserves default for %j", async (body) => {
-		expect((await post("/v1/recall-conversation", body)).status).toBe(200)
+		expect(
+			(await post("/v1/recall-conversation", { ...TENANT, ...body })).status,
+		).toBe(200)
 		expect(bridge.memongoBridgeRecallConversation.mock.calls[0]?.[0]).toEqual(
 			expect.objectContaining({ limit: undefined }),
 		)
@@ -88,7 +96,9 @@ describe("recall advertised limit", () => {
 		[{ limit: 120, maxResults: 180 }, 120],
 		[{ limit: "5", maxResults: 150 }, 150],
 	] as const)("preserves alias and precedence for %j", async (body, expected) => {
-		expect((await post("/v1/recall-conversation", body)).status).toBe(200)
+		expect(
+			(await post("/v1/recall-conversation", { ...TENANT, ...body })).status,
+		).toBe(200)
 		expect(
 			bridge.memongoBridgeRecallConversation,
 		).toHaveBeenCalledExactlyOnceWith(
@@ -101,7 +111,7 @@ describe("recall advertised limit", () => {
 			.request("/v1/recall-conversation", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: '{"agentId":"agent1","limit":1e400}',
+				body: '{"agentId":"agent1","scope":"agent","scopeRef":"agent:agent1","limit":1e400}',
 			})
 		expect(response.status).toBe(200)
 		expect(

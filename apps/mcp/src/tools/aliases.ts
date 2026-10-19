@@ -57,6 +57,7 @@ const recallMessagesInputSchema = {
 			description: "Maximum results to return. Default 50, max 200.",
 		},
 	},
+	required: ["scope", "scopeRef"],
 } as const
 
 // Semantic alias tools (P1.2): pure duplicates of canonical tools kept for

@@ -9,6 +9,7 @@ import { eventsCollection } from "./mongodb-schema.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { MAX_SEARCH_QUERY_LENGTH } from "./mongodb-search-ranking.js"
 
+const TENANT = { scope: "agent", scopeRef: "agent:a1" } as const
 const head = "a".repeat(MAX_SEARCH_QUERY_LENGTH)
 const longQuery = `  ${head} TAILMARK  `
 let pipelines: Document[][] = []
@@ -44,7 +45,7 @@ describe("recall query execution bounds", () => {
 		const response = await recallConversation({
 			db: {} as Db,
 			prefix: "test_",
-			request: { agentId: "a1", query: longQuery },
+			request: { agentId: "a1", ...TENANT, query: longQuery },
 		})
 		expect(response.metadata.searchMethod).toBe("hybrid")
 		expect(response.metadata.queryUsed).toBe(head)
@@ -73,7 +74,7 @@ describe("recall query execution bounds", () => {
 		const response = await recallConversation({
 			db: {} as Db,
 			prefix: "test_",
-			request: { agentId: "a1", query },
+			request: { agentId: "a1", ...TENANT, query },
 		})
 		expect(response.metadata.queryUsed).toBe(query?.trim() || undefined)
 		if (!query?.trim()) expect(filters[0]).not.toHaveProperty("body")
@@ -85,6 +86,7 @@ describe("recall query execution bounds", () => {
 			prefix: "test_",
 			request: {
 				agentId: "a1",
+				...TENANT,
 				query: longQuery,
 				startTime: "2026-01-02T00:00:00Z",
 				endTime: "2026-01-01T00:00:00Z",
@@ -97,7 +99,11 @@ describe("recall query execution bounds", () => {
 		expect(emitTelemetry).toHaveBeenCalledTimes(1)
 	})
 	it("measures trimmed input and leaves the caller request untouched", async () => {
-		const request = Object.freeze({ agentId: "a1", query: `  ${head}x  ` })
+		const request = Object.freeze({
+			agentId: "a1",
+			...TENANT,
+			query: `  ${head}x  `,
+		})
 		const response = await recallConversation({
 			db: {} as Db,
 			prefix: "test_",

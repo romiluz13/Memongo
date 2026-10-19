@@ -2607,6 +2607,8 @@ describeIfMongo(
 						await MongoDBMemoryManager.prototype.recallConversation.call(
 							manager,
 							{
+								scope: "agent",
+								scopeRef: `agent:${AGENT_ID}`,
 								sessionId,
 								roles: ["user", "assistant"],
 								limit: 10,

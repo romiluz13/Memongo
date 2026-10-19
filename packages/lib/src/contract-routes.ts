@@ -124,12 +124,10 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		operationId: "recallConversation",
 		summary:
 			"Recall prior conversation events by content, session, role, and exact time range",
-		requiredFields: [],
+		requiredFields: ["scope", "scopeRef"],
 		optionalFields: [
 			"agentId",
 			"query",
-			"scope",
-			"scopeRef",
 			"sessionId",
 			"roles",
 			"startTime",

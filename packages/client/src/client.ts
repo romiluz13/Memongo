@@ -950,7 +950,7 @@ export class MemongoClient {
 	}
 
 	async recallConversation(
-		input: MemongoConversationRecallInput = {},
+		input: MemongoConversationRecallInput,
 	): Promise<MemongoConversationRecallResponse> {
 		return this._silently<MemongoConversationRecallResponse>(
 			{

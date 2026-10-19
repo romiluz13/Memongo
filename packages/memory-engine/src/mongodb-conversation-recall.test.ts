@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // `vi.mock` is hoisted above `const` declarations at module scope, so we
 // use `vi.hoisted` to declare the spy in the same phase.
 const { warnSpy } = vi.hoisted(() => ({ warnSpy: vi.fn() }))
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		info: vi.fn(),
 		warn: warnSpy,
@@ -22,6 +23,8 @@ vi.mock("./mongodb-schema.js", () => ({
 import { recallConversation } from "./mongodb-conversation-recall.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { eventsCollection } from "./mongodb-schema.js"
+
+const TENANT = { scope: "agent", scopeRef: "agent:agent-1" } as const
 
 function mockDb(): Db {
 	return {} as Db
@@ -134,6 +137,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				sessionId: "sess-1",
 				startTime: "2026-04-08",
 				endTime: "2026-04-11",
@@ -145,6 +149,7 @@ describe("recallConversation", () => {
 
 		expect(col.find).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			...TENANT,
 			sessionId: "sess-1",
 			role: { $ne: "tool" },
 			timestamp: {
@@ -207,6 +212,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				roles: ["tool"],
 				includeToolMessages: false,
 			},
@@ -236,6 +242,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				startTime: "2026-04-08",
 				endTime: "2026-04-08",
 				timezone: "America/New_York",
@@ -245,6 +252,7 @@ describe("recallConversation", () => {
 
 		expect(col.find).toHaveBeenCalledWith({
 			agentId: "agent-1",
+			...TENANT,
 			role: { $ne: "tool" },
 			timestamp: {
 				$gte: new Date("2026-04-08T04:00:00.000Z"),
@@ -277,6 +285,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "deployment timeline",
 				sessionId: "sess-7",
 			},
@@ -335,6 +344,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "deployment telemetry",
 			},
 		})
@@ -379,6 +389,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 			},
 		})
 
@@ -419,6 +430,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				limit: 1,
 			},
 		})
@@ -436,6 +448,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				roles: ["user"],
 				includeToolMessages: true,
 			},
@@ -464,6 +477,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				startTime: "2026-04-10T12:00:00.000Z",
 				endTime: "2026-04-09T12:00:00.000Z",
 			},
@@ -496,6 +510,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 			},
 		})
 
@@ -544,7 +559,7 @@ describe("recallConversation", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "anything" },
+			request: { agentId: "agent-1", ...TENANT, query: "anything" },
 		})
 
 		const malformedWarns = warnSpy.mock.calls.filter((c: unknown[]) =>
@@ -574,7 +589,7 @@ describe("recallConversation", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "anything" },
+			request: { agentId: "agent-1", ...TENANT, query: "anything" },
 		})
 
 		const malformedWarns = warnSpy.mock.calls.filter((c: unknown[]) =>
@@ -600,6 +615,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "hybrid query",
 				asOf: new Date("2026-05-12T10:00:00.000Z"),
 				limit,
@@ -628,6 +644,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "hybrid query",
 				asOf,
 				limit: 5,
@@ -744,6 +761,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "hybrid query",
 				asOf,
 			},
@@ -805,6 +823,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "how many doctor's appointments in March",
 				asOf: new Date("2026-05-12T00:00:00.000Z"),
 			},
@@ -854,6 +873,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "deployment timeline for the service",
 			},
 		})
@@ -881,6 +901,7 @@ describe("recallConversation", () => {
 			prefix: "mem_",
 			request: {
 				agentId: "agent-1",
+				...TENANT,
 				query: "what did we decide last week",
 				asOf: new Date("2026-05-12T00:00:00.000Z"),
 			},
@@ -1003,7 +1024,7 @@ describe("recallConversation", () => {
 		const response = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", asOf, limit: 10 },
+			request: { agentId: "agent-1", ...TENANT, asOf, limit: 10 },
 		})
 
 		expect(response.results).toHaveLength(1)
@@ -1027,7 +1048,7 @@ describe("recallConversation TTL expiration (P4.4.1)", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", sessionId: "sess-1" },
+			request: { agentId: "agent-1", ...TENANT, sessionId: "sess-1" },
 		})
 
 		const filter = vi.mocked(col.find).mock.calls[0]?.[0] as Document
@@ -1041,7 +1062,7 @@ describe("recallConversation TTL expiration (P4.4.1)", () => {
 		await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "launch" },
+			request: { agentId: "agent-1", ...TENANT, query: "launch" },
 		})
 
 		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
@@ -1114,7 +1135,12 @@ describe("recallConversation search admission (WS-11)", () => {
 		const response = await recallConversation({
 			db: mockDb(),
 			prefix: "mem_",
-			request: { agentId: "agent-1", query: "deploy runbook", limit: 10 },
+			request: {
+				agentId: "agent-1",
+				...TENANT,
+				query: "deploy runbook",
+				limit: 10,
+			},
 		})
 
 		expect(col.aggregate).toHaveBeenCalled()

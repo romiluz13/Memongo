@@ -238,7 +238,11 @@ describe("index-health reasons (M2)", () => {
 	it("silent recallConversation keeps the code and both rows on an index-health failure", async () => {
 		stubResponse(503, indexHealthBody)
 
-		const out = await silentClient().recallConversation({ query: "q" })
+		const out = await silentClient().recallConversation({
+			scope: "agent",
+			scopeRef: "agent:a1",
+			query: "q",
+		})
 
 		expect(out.results).toEqual([])
 		expect(out.degradation).toEqual({
@@ -257,7 +261,11 @@ describe("index-health reasons (M2)", () => {
 		})
 
 		await expect(
-			client.recallConversation({ query: "q" }),
+			client.recallConversation({
+				scope: "agent",
+				scopeRef: "agent:a1",
+				query: "q",
+			}),
 		).rejects.toMatchObject({
 			name: "MemongoClientError",
 			status: 503,

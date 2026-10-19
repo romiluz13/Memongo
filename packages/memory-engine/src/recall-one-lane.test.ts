@@ -7,7 +7,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }))
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		warn,
 		info: vi.fn(),
@@ -26,6 +27,8 @@ import {
 	tryConsumeSearchAdmission,
 } from "./mongodb-search-admission.js"
 import { SearchBudgetDeniedError, SearchLaneError } from "./search-outcomes.js"
+
+const TENANT = { scope: "agent", scopeRef: "agent:a1" } as const
 
 const event = {
 	eventId: "event-1",
@@ -58,7 +61,7 @@ function recall(
 	return recallConversation({
 		db: {} as Db,
 		prefix: "test_",
-		request: { agentId: "a1", query: "deploy failed", ...request },
+		request: { agentId: "a1", ...TENANT, query: "deploy failed", ...request },
 		onLaneFailure,
 	})
 }

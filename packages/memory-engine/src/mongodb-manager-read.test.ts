@@ -141,7 +141,11 @@ describe("MongoDBMemoryManager conversation recall", () => {
 			},
 		) as MongoDBMemoryManager
 
-		await manager.recallConversation({ query: "deployment" })
+		await manager.recallConversation({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			query: "deployment",
+		})
 
 		expect(recallConversation).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -187,7 +191,11 @@ describe("MongoDBMemoryManager conversation recall", () => {
 			},
 		) as MongoDBMemoryManager
 
-		await manager.recallConversation({ query: "deployment" })
+		await manager.recallConversation({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			query: "deployment",
+		})
 
 		expect(recallConversation).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -228,7 +236,11 @@ describe("MongoDBMemoryManager conversation recall", () => {
 		) as MongoDBMemoryManager
 
 		await expect(
-			manager.recallConversation({ query: "deployment" }),
+			manager.recallConversation({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				query: "deployment",
+			}),
 		).rejects.toThrow("$listSearchIndexes failed on test_events")
 		expect(recallConversation).not.toHaveBeenCalled()
 	})

@@ -10,7 +10,8 @@ const { warn, retry } = vi.hoisted(() => ({
 	warn: vi.fn(),
 	retry: { passthrough: true },
 }))
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		warn,
 		info: vi.fn(),
@@ -36,6 +37,7 @@ import { eventsCollection } from "./mongodb-schema.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { SearchLaneError } from "./search-outcomes.js"
 
+const TENANT = { scope: "agent", scopeRef: "agent:a1" } as const
 const query = "private-recall-query-marker"
 const document = {
 	eventId: "event1",
@@ -67,7 +69,7 @@ function recall(onLaneFailure = vi.fn()) {
 	return recallConversation({
 		db: {} as Db,
 		prefix: "test_",
-		request: { agentId: "a1", query, limit: 10 },
+		request: { agentId: "a1", ...TENANT, query, limit: 10 },
 		onLaneFailure,
 	})
 }

@@ -248,6 +248,7 @@ function restoreIndex(
 	]
 }
 
+const RECALL_TENANT = { scope: "agent", scopeRef: "agent:agent-1" } as const
 const STALE = { status: "STALE" } as const
 const BUILDING = { status: "BUILDING", queryable: false } as const
 const READY = { status: "READY", queryable: true } as const
@@ -563,7 +564,10 @@ describe("running manager: recallConversation gates on the events indexes", () =
 		patchIndex(indexes, "events_vector", patch)
 
 		const failure = await failureOf(
-			manager.recallConversation({ query: "what did we say" } as never),
+			manager.recallConversation({
+				...RECALL_TENANT,
+				query: "what did we say",
+			} as never),
 		)
 
 		expect(failure).toBeInstanceOf(SearchLaneError)
@@ -576,7 +580,10 @@ describe("running manager: recallConversation gates on the events indexes", () =
 
 		restoreIndex(indexes, saved)
 		await expect(
-			manager.recallConversation({ query: "what did we say" } as never),
+			manager.recallConversation({
+				...RECALL_TENANT,
+				query: "what did we say",
+			} as never),
 		).resolves.toEqual({ results: [] })
 		expect(recallConversationCore).toHaveBeenCalledTimes(1)
 	})
@@ -586,13 +593,29 @@ describe("running manager: recallConversation gates on the events indexes", () =
 		patchIndex(indexes, "events_vector", STALE)
 
 		await expect(
-			manager.recallConversation({ limit: 5 } as never),
+			manager.recallConversation({ ...RECALL_TENANT, limit: 5 } as never),
 		).resolves.toEqual({ results: [] })
 
 		expect(recallConversationCore).toHaveBeenCalledTimes(1)
 		expect(
 			vi.mocked(recallConversationCore).mock.calls[0]?.[0],
 		).not.toHaveProperty("capabilities")
+	})
+
+	it("a recall without its tenant identity fails typed before the health gate and the core", async () => {
+		const { manager, indexes } = await boot()
+		patchIndex(indexes, "events_vector", STALE)
+
+		const failure = await failureOf(
+			manager.recallConversation({ query: "what did we say" } as never),
+		)
+
+		expect(failure).toMatchObject({
+			code: "TENANT_IDENTITY_REQUIRED",
+			operation: "recallConversation",
+			missing: ["scope", "scopeRef"],
+		})
+		expect(recallConversationCore).not.toHaveBeenCalled()
 	})
 })
 

@@ -590,8 +590,8 @@ export async function memongoBridgeBuildContextBundle(params: {
 
 export async function memongoBridgeRecallConversation(params: {
 	agentId?: string
-	scope?: string
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	query?: string
 	sessionId?: string
 	roles?: Array<"user" | "assistant" | "system" | "tool">
@@ -605,8 +605,6 @@ export async function memongoBridgeRecallConversation(params: {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const asOf = params.asOf ? new Date(params.asOf) : undefined
 	return m.recallConversation({
-		// Tenant isolation: forward the authorized scope/scopeRef so recall is
-		// filtered to the caller's tenant, never all scopes under the agent.
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		query: params.query,

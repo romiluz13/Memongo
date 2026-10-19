@@ -54,12 +54,29 @@ describe("createMemongoTools", () => {
 			recallConversation,
 		} as unknown as MemongoClient)
 		const recallTool = tools.memongo_recall_conversation as ExecutableTool
-		const input = { query: "deployment", asOf: "2026-04-09T12:00:00.000Z" }
+		const input = {
+			query: "deployment",
+			scope: "agent",
+			scopeRef: "agent:a1",
+			asOf: "2026-04-09T12:00:00.000Z",
+		}
 
 		expect(recallTool.inputSchema.parse(input)).toEqual(input)
 		await recallTool.execute(input, {})
 
 		expect(recallConversation).toHaveBeenCalledWith(input)
+	})
+
+	it.each([
+		{ query: "deployment" },
+		{ query: "deployment", scope: "agent" },
+		{ query: "deployment", scopeRef: "agent:a1" },
+		{ query: "deployment", scope: "agent", scopeRef: "" },
+	])("rejects a recall without its full tenant %j before it reaches the client", (input) => {
+		const tools = createMemongoTools({} as unknown as MemongoClient)
+		const recallTool = tools.memongo_recall_conversation as ExecutableTool
+
+		expect(recallTool.inputSchema.safeParse(input).success).toBe(false)
 	})
 
 	it("accepts scopeRef and control flags on consolidation schemas (P2.8, B8)", async () => {
