@@ -158,7 +158,9 @@ function evaluate(
 			const paths = asArray<string>(spec.path)
 			for (const path of paths) requireMapping(definition, path, "string", name)
 			if (spec.slop !== undefined && spec.slop !== 0) {
-				throw new Error("search double: phrase slop other than 0 is not modeled")
+				throw new Error(
+					"search double: phrase slop other than 0 is not modeled",
+				)
 			}
 			return asArray<string>(spec.query).some((phrase) =>
 				paths.some((path) =>
@@ -176,9 +178,7 @@ function evaluate(
 				tokens(String(value)),
 			)
 			return terms.every((term) =>
-				fieldTokens.some(
-					(token) => term.length >= 2 && token.startsWith(term),
-				),
+				fieldTokens.some((token) => term.length >= 2 && token.startsWith(term)),
 			)
 		}
 		default:
@@ -246,7 +246,9 @@ function applyStage(docs: Document[], stage: Document): Document[] {
 					) {
 						out[key] = 1
 					} else {
-						throw new Error(`search double: projection of ${key} is not modeled`)
+						throw new Error(
+							`search double: projection of ${key} is not modeled`,
+						)
 					}
 				}
 				if (projection._id !== 0) out._id = doc._id
@@ -317,7 +319,10 @@ export function createSearchStageFake(params: {
  * The definition boot requires for one manifest index, so a lane test queries
  * the mapping the engine will actually have built.
  */
-export function manifestDefinition(prefix: string, indexName: string): Document {
+export function manifestDefinition(
+	prefix: string,
+	indexName: string,
+): Document {
 	const entry = buildRequiredIndexManifest({
 		prefix,
 		serverVersionArray: [8, 3, 0, 0],

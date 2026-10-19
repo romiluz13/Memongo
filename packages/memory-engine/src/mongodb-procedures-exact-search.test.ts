@@ -124,8 +124,15 @@ describe("findExactProcedureMatches on $search equals", () => {
 					name: "Deploy Blue-Green Rollback",
 				}),
 			},
-			{ indexed: procedure({ procedureId: "inner", name: "Redeploy Blue-Green" }) },
-			{ indexed: procedure({ procedureId: "exact", name: "Deploy Blue-Green" }) },
+			{
+				indexed: procedure({
+					procedureId: "inner",
+					name: "Redeploy Blue-Green",
+				}),
+			},
+			{
+				indexed: procedure({ procedureId: "exact", name: "Deploy Blue-Green" }),
+			},
 		]
 		expect(await ids(entries, "Deploy Blue-Green")).toEqual(["procedure:exact"])
 	})
@@ -172,14 +179,18 @@ describe("findExactProcedureMatches on $search equals", () => {
 	it("never returns another scope, owner or state", async () => {
 		const entries = [
 			{ indexed: procedure({ procedureId: "mine" }) },
-			{ indexed: procedure({ procedureId: "other-owner", agentId: "stranger" }) },
+			{
+				indexed: procedure({ procedureId: "other-owner", agentId: "stranger" }),
+			},
 			{
 				indexed: procedure({
 					procedureId: "other-ref",
 					scopeRef: "agent:stranger",
 				}),
 			},
-			{ indexed: procedure({ procedureId: "other-scope", scope: "workspace" }) },
+			{
+				indexed: procedure({ procedureId: "other-scope", scope: "workspace" }),
+			},
 			{ indexed: procedure({ procedureId: "retired", state: "invalidated" }) },
 		]
 		expect(await ids(entries, "Deploy Blue-Green")).toEqual(["procedure:mine"])
@@ -190,7 +201,10 @@ describe("findExactProcedureMatches on $search equals", () => {
 			{ indexed: procedure({ procedureId: "kept" }) },
 			{
 				indexed: procedure({ procedureId: "moved" }),
-				current: procedure({ procedureId: "moved", scopeRef: "agent:stranger" }),
+				current: procedure({
+					procedureId: "moved",
+					scopeRef: "agent:stranger",
+				}),
 			},
 			{
 				indexed: procedure({ procedureId: "retired" }),

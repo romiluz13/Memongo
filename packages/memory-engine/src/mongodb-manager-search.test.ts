@@ -820,7 +820,7 @@ describe("searchV2", () => {
 		}
 	})
 
-	it("threads the textSearch capability into the episodic lane lookup (P3.8)", async () => {
+	it("T7: the episodic lane runs the same Search lookup whatever the textSearch capability reports", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
@@ -828,47 +828,31 @@ describe("searchV2", () => {
 		})
 		mocked(searchEpisodes).mockResolvedValue([])
 
-		await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
-			availablePaths: new Set(["episodic"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				capabilities: {
-					vectorSearch: false,
-					textSearch: true,
-					scoreFusion: false,
-					rankFusion: false,
-					storedSource: false,
-					vectorIndexMethod: false,
+		for (const textSearch of [true, false]) {
+			mocked(searchEpisodes).mockClear()
+			await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
+				availablePaths: new Set(["episodic"]),
+				searchOptions: {
+					allowHybridBackstop: false,
+					capabilities: {
+						vectorSearch: false,
+						textSearch,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: false,
+						vectorIndexMethod: false,
+					},
 				},
-			},
-		})
+			})
 
-		expect(searchEpisodes).toHaveBeenCalledWith(
-			expect.objectContaining({ textSearchAvailable: true }),
-		)
-
-		mocked(searchEpisodes).mockClear()
-		await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
-			availablePaths: new Set(["episodic"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				capabilities: {
-					vectorSearch: false,
-					textSearch: false,
-					scoreFusion: false,
-					rankFusion: false,
-					storedSource: false,
-					vectorIndexMethod: false,
-				},
-			},
-		})
-
-		expect(searchEpisodes).toHaveBeenCalledWith(
-			expect.objectContaining({ textSearchAvailable: false }),
-		)
+			expect(searchEpisodes).toHaveBeenCalledOnce()
+			expect(mocked(searchEpisodes).mock.calls[0][0]).not.toHaveProperty(
+				"textSearchAvailable",
+			)
+		}
 	})
 
-	it("threads the textSearch capability into the graph lane entity lookup (P3.8)", async () => {
+	it("T7: the graph lane entity lookup is not gated by the textSearch capability", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["graph"],
 			confidence: "high",
@@ -876,25 +860,29 @@ describe("searchV2", () => {
 		})
 		mocked(searchEntitiesAutocomplete).mockResolvedValue([])
 
-		await searchV2(fakeDb, fakePrefix, "what does Alice work on", "agent-1", {
-			availablePaths: new Set(["graph"]),
-			knownEntityNames: ["Alice"],
-			searchOptions: {
-				allowHybridBackstop: false,
-				capabilities: {
-					vectorSearch: false,
-					textSearch: true,
-					scoreFusion: false,
-					rankFusion: false,
-					storedSource: false,
-					vectorIndexMethod: false,
+		for (const textSearch of [true, false]) {
+			mocked(searchEntitiesAutocomplete).mockClear()
+			await searchV2(fakeDb, fakePrefix, "what does Alice work on", "agent-1", {
+				availablePaths: new Set(["graph"]),
+				knownEntityNames: ["Alice"],
+				searchOptions: {
+					allowHybridBackstop: false,
+					capabilities: {
+						vectorSearch: false,
+						textSearch,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: false,
+						vectorIndexMethod: false,
+					},
 				},
-			},
-		})
+			})
 
-		expect(searchEntitiesAutocomplete).toHaveBeenCalledWith(
-			expect.objectContaining({ textSearchAvailable: true }),
-		)
+			expect(searchEntitiesAutocomplete).toHaveBeenCalled()
+			expect(
+				mocked(searchEntitiesAutocomplete).mock.calls[0][0],
+			).not.toHaveProperty("textSearchAvailable")
+		}
 	})
 
 	it("applies maxTimeMS to the user-driven conversation-evidence $search pipeline (P3.8)", async () => {

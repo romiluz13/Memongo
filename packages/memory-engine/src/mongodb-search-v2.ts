@@ -1247,9 +1247,6 @@ async function searchV2WithBudget(
 										scope,
 										scopeRef: agentScopeRef,
 										limit: 5,
-										// P3.8: route through entity_autocomplete $search only when
-										// mongot is present; otherwise the escaped $regex fallback.
-										textSearchAvailable: capabilities.textSearch,
 									}),
 								),
 							)
@@ -1349,9 +1346,6 @@ async function searchV2WithBudget(
 						scope,
 						scopeRef: agentScopeRef,
 						...(timeRange ? { timeRange } : {}),
-						// P3.8: route through episode_autocomplete $search only when
-						// mongot is present; otherwise the escaped $regex tier.
-						textSearchAvailable: capabilities.textSearch,
 						onTierOutcome,
 					})
 					pathResults = episodes.map((ep, i) => ({

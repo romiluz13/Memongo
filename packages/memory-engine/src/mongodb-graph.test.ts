@@ -12,7 +12,6 @@ import {
 	upsertEntityLink,
 	setEntityLinkStatus,
 	getEntityLinks,
-	findEntitiesByName,
 	getEntitiesByType,
 	expandGraph,
 	deleteEntity,
@@ -636,46 +635,6 @@ describe("mongodb-graph", () => {
 				{ fromEntityId: "ent-1" },
 				{ toEntityId: "ent-1" },
 			])
-		})
-	})
-
-	describe("findEntitiesByName", () => {
-		it("returns matching entities", async () => {
-			const entityDoc = {
-				entityId: "ent-1",
-				name: "Alice",
-				type: "person",
-				agentId: "agent-1",
-				scope: "agent",
-				updatedAt: new Date("2026-01-01"),
-			}
-			const findResult = {
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn().mockResolvedValue([entityDoc]),
-					}),
-				}),
-			}
-			const entitiesCol = createMockCollection({
-				find: vi.fn().mockReturnValue(findResult),
-			})
-			const db = createMockDb({ [`${PREFIX}entities`]: entitiesCol })
-
-			const results = await findEntitiesByName({
-				db,
-				prefix: PREFIX,
-				query: "Alice",
-				agentId: "agent-1",
-			})
-
-			expect(results).toHaveLength(1)
-			expect(results[0].entityId).toBe("ent-1")
-			expect(results[0].name).toBe("Alice")
-			// Verify regex search on name/aliases
-			const [filter] = (entitiesCol.find as ReturnType<typeof vi.fn>).mock
-				.calls[0]
-			expect(filter.agentId).toBe("agent-1")
-			expect(filter.$or).toBeDefined()
 		})
 	})
 
