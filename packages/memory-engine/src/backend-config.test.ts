@@ -26,7 +26,7 @@ describe("resolveMemoryBackendConfig", () => {
 			memory: { backend: "custom" as never },
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/Unsupported memory\.backend "custom"/,
+			/Unsupported memory\.backend\./,
 		)
 	})
 
@@ -130,7 +130,9 @@ describe("resolveMemoryBackendConfig", () => {
 				} as unknown as MemongoConfig,
 				agentId: "main",
 			})
-		expect(resolve).toThrow(/queryEmbeddingModel "voyage-code-3"/)
+		expect(resolve).toThrow(
+			/memory\.mongodb\.queryEmbeddingModel is not supported/,
+		)
 	})
 
 	describe("embedding pipeline supported-target contract (C-007 / EL-002 F1)", () => {

@@ -15,6 +15,6 @@ export function resolveConversationEvidenceMode(
 		return normalized
 	}
 	throw new Error(
-		`MEMONGO_CONVERSATION_EVIDENCE_MODE must be "parallel", "serial", or "disabled"; received "${value}"`,
+		'MEMONGO_CONVERSATION_EVIDENCE_MODE must be "parallel", "serial", or "disabled"',
 	)
 }

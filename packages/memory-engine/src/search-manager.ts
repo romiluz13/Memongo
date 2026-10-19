@@ -8,6 +8,7 @@ import {
 	resolveAgentWorkspaceDir,
 } from "./agent-config.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
+import { safeBootText } from "./mongodb-boot-errors.js"
 import { normalizeExtraMemoryPaths } from "./internal.js"
 import {
 	acquireSharedMongoClient,
@@ -303,7 +304,12 @@ export async function getMemorySearchManager(params: {
 	try {
 		resolved = resolveMemoryBackendConfig(params)
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
+		// A configuration refusal can carry an operator-typed value, which may
+		// be a connection string: nothing logged or returned past this point
+		// keeps a URI, host or address.
+		const message = safeBootText(
+			err instanceof Error ? err.message : String(err),
+		)
 		log.warn(`memory backend resolution failed: ${message}`)
 		return { manager: null, error: message, cause: err }
 	}

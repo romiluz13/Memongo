@@ -222,7 +222,7 @@ export function assertEmbeddingPipelineSupport(params: {
 		throw new Error(
 			[
 				`embedding pipeline supported-target contract v${EMBEDDING_PIPELINE_SUPPORT.contractVersion} violated:`,
-				`deploymentProfile "${params.deploymentProfile}" with embeddingMode "${params.embeddingMode}".`,
+				"the resolved deploymentProfile and embeddingMode are outside it.",
 				`Supported: embeddingMode "${EMBEDDING_PIPELINE_SUPPORT.embeddingMode}" on deploymentProfile ${EMBEDDING_PIPELINE_SUPPORT.deploymentProfiles.map((profile) => `"${profile}"`).join(" or ")} — Atlas Automated Embeddings (${EMBEDDING_PIPELINE_SUPPORT.featureStage}); no client-side fallback exists.`,
 			].join(" "),
 		)
@@ -244,7 +244,7 @@ export function resolveMemoryBackendConfig(params: {
 
 	if (backend !== "mongodb") {
 		throw new Error(
-			`Unsupported memory.backend "${String(backend)}". Memongo supports only the MongoDB memory backend.`,
+			"Unsupported memory.backend. Memongo supports only the MongoDB memory backend.",
 		)
 	}
 
@@ -675,7 +675,7 @@ export function resolveMemoryBackendConfig(params: {
 		return result
 	}
 
-	throw new Error(`Unsupported memory backend: ${String(backend)}`)
+	throw new Error("Unsupported memory backend")
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,7 +1016,7 @@ function resolveQueryEmbeddingModel(
 		return value
 	}
 	throw new Error(
-		`memory.mongodb.queryEmbeddingModel "${String(value)}" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"`,
+		`${envValue?.trim() ? "MEMONGO_QUERY_EMBEDDING_MODEL" : "memory.mongodb.queryEmbeddingModel"} is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"`,
 	)
 }
 
@@ -1064,7 +1064,7 @@ export function resolveSearchDefaultScope(
 		return raw as MemoryScope
 	}
 	throw new Error(
-		`MEMONGO_SEARCH_DEFAULT_SCOPE "${envValue}" is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
+		`MEMONGO_SEARCH_DEFAULT_SCOPE is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
 	)
 }
 
@@ -1112,14 +1112,14 @@ export function resolveDefaultScope(params: {
 				if (lastDefaultScopeConflictWarned !== conflictKey) {
 					lastDefaultScopeConflictWarned = conflictKey
 					params.warn?.(
-						`MEMONGO_DEFAULT_SCOPE ("${raw}") and legacy MEMONGO_SEARCH_DEFAULT_SCOPE ("${legacyRaw}") disagree; MEMONGO_DEFAULT_SCOPE wins. Remove the legacy name to silence this warning.`,
+						`MEMONGO_DEFAULT_SCOPE ("${raw}") and legacy MEMONGO_SEARCH_DEFAULT_SCOPE disagree; MEMONGO_DEFAULT_SCOPE wins. Remove the legacy name to silence this warning.`,
 					)
 				}
 			}
 			return raw as MemoryScope
 		}
 		throw new Error(
-			`MEMONGO_DEFAULT_SCOPE "${params.value}" is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
+			`MEMONGO_DEFAULT_SCOPE is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
 		)
 	}
 	if (params.applyTo === "read") {
