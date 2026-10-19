@@ -141,6 +141,16 @@ const UNSCORED_NOVELTY = 0.5
 // similarity probes, 50 dedup probes, 50 prune probes) plus slack: it is
 // accounting with a runaway cap, not a throttle on normal work.
 const CONSOLIDATION_PROBE_CEILING = 200
+
+export function consolidationSearchBudgetLimits(maxEvents: number): {
+	maxAggregations: number
+	maxEmbeds: number
+} {
+	return {
+		maxAggregations: maxEvents + CONSOLIDATION_PROBE_CEILING,
+		maxEmbeds: maxEvents + CONSOLIDATION_PROBE_CEILING,
+	}
+}
 // Cap the facts fed to the reasoning phases so a large memory does not blow the
 // LLM context window or token budget on a single consolidation run.
 const REASONING_MAX_FACTS = 40
@@ -467,10 +477,7 @@ export async function consolidateMemory(
 ): Promise<ConsolidationResult> {
 	const maxEvents = resolveConsolidationMaxEvents(params.options?.maxEvents)
 	const { value } = await runWithSearchBudget(
-		{
-			maxAggregations: maxEvents + CONSOLIDATION_PROBE_CEILING,
-			maxEmbeds: maxEvents + CONSOLIDATION_PROBE_CEILING,
-		},
+		consolidationSearchBudgetLimits(maxEvents),
 		() => runConsolidation(params, maxEvents),
 	)
 	return value

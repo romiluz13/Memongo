@@ -2,6 +2,7 @@
 import type { Collection } from "mongodb"
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import {
+	ChangeStreamUnavailableError,
 	MongoDBChangeStreamWatcher,
 	type ChangeStreamCallback,
 	isResumeTokenInvalid,
@@ -176,19 +177,42 @@ describe("MongoDBChangeStreamWatcher", () => {
 		expect(mockStream.close).toHaveBeenCalledTimes(1)
 	})
 
-	it("returns false on start when change streams not supported", async () => {
+	it("throws a typed error on start when change streams are not supported", async () => {
+		const cause = new Error(
+			"The $changeStream stage is only supported on replica sets",
+		)
 		const col = {
 			watch: vi.fn(() => {
-				throw new Error(
-					"The $changeStream stage is only supported on replica sets",
-				)
+				throw cause
 			}),
 		} as unknown as Collection
 
 		const watcher = new MongoDBChangeStreamWatcher(col, callback)
-		const started = await watcher.start()
+		const outcome = watcher.start()
 
-		expect(started).toBe(false)
+		await expect(outcome).rejects.toBeInstanceOf(ChangeStreamUnavailableError)
+		await expect(outcome).rejects.toMatchObject({
+			code: "CHANGE_STREAM_UNAVAILABLE",
+			cause,
+		})
+		expect(watcher.isActive).toBe(false)
+	})
+
+	it("throws a typed error on start for any other open failure, never false", async () => {
+		const cause = new Error("not authorized on admin to execute watch")
+		const col = {
+			watch: vi.fn(() => {
+				throw cause
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback)
+
+		await expect(watcher.start()).rejects.toMatchObject({
+			name: "ChangeStreamUnavailableError",
+			message: expect.stringContaining("not authorized"),
+			cause,
+		})
 		expect(watcher.isActive).toBe(false)
 	})
 

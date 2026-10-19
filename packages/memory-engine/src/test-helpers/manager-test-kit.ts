@@ -423,7 +423,9 @@ export function schemaModuleMock() {
 		proceduresCollection: vi.fn(),
 		chunksCollection: vi.fn(),
 		filesCollection: vi.fn(),
-		metaCollection: vi.fn(),
+		// The erasure-epoch read has no failure fallback: the default meta
+		// collection answers with no gate document (epoch 0).
+		metaCollection: vi.fn(() => ({ findOne: vi.fn(async () => null) })),
 		kbCollection: vi.fn(),
 		kbChunksCollection: vi.fn(),
 		relevanceRunsCollection: vi.fn(),
@@ -556,6 +558,10 @@ export function memoryJobsModuleMock() {
 export function consolidatorModuleMock() {
 	return {
 		consolidateMemory: vi.fn(),
+		consolidationSearchBudgetLimits: (maxEvents: number) => ({
+			maxAggregations: maxEvents + 200,
+			maxEmbeds: maxEvents + 200,
+		}),
 	}
 }
 

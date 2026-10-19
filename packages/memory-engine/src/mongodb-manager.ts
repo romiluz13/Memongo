@@ -923,24 +923,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					},
 					mongoCfg.changeStreamDebounceMs,
 				)
-				let started = await csWatcher.start(persistedResumeToken ?? undefined)
-				if (!started && persistedResumeToken) {
-					log.warn(
-						"change stream resume failed with persisted token; retrying from latest position",
-					)
-					started = await csWatcher.start()
-					if (started) {
-						await manager.clearPersistedChangeStreamResumeToken()
-					}
-				}
-				if (started) {
-					manager.changeStreamWatcher = csWatcher
-					log.info("change stream watcher enabled for cross-instance sync")
-				} else {
-					log.info(
-						"change streams not available — falling back to file watcher only",
-					)
-				}
+				// start() throws ChangeStreamUnavailableError when the stream
+				// cannot open; the factory unwinds and rethrows it. There is no
+				// file-watcher-only fallback and no silent restart from "latest".
+				await csWatcher.start(persistedResumeToken ?? undefined)
+				manager.changeStreamWatcher = csWatcher
+				log.info("change stream watcher enabled for cross-instance sync")
 			}
 
 			log.info(
