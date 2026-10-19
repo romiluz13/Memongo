@@ -477,3 +477,35 @@ Discovery briefs and the context bundle's episode summary now select content wit
 
 - The three routes above can return the typed non-2xx described above. OpenAPI adds `failures` to the three metadata objects, `laneOutcomes`, `outcomeStatus` and `throttled` to the bundle metadata, and the 500 and 503 responses.
 - `@memongo/client` adds the optional `failures` (and, on the bundle, `laneOutcomes`, `outcomeStatus`, `throttled`) to the slate, projection and bundle response types, and exports `MemongoSectionFailure`.
+
+## T13: tenant and lifecycle gaps (#120)
+
+A tenant is `(agentId, scope, scopeRef)`. The reads below used to filter by `agentId` alone, accept `scope` and `scopeRef` as optional narrowing, or skip the store's lifecycle clause. They now require the full identity and fail typed without it. Nothing widens to the agent, and no failure is relabeled as an empty success. No index or collection is dropped.
+
+### Typed failure for a missing tenant identity
+
+- **New error.** `TenantIdentityRequiredError` (`code: "TENANT_IDENTITY_REQUIRED"`, with `operation` and the `missing` parts) is thrown before any collection is read, any admission token is captured or any health snapshot is taken. `scope` counts as missing when it is not one of `session|user|agent|workspace|tenant|global`; a whitespace-only `scopeRef` counts as missing, and a present `scopeRef` is trimmed.
+- **HTTP.** A route that can see the omission answers `400 VALIDATION_ERROR` ("scope and scopeRef are required"). The error itself, raised below a route, answers `400 TENANT_IDENTITY_REQUIRED` instead of a 500 and is not logged as a server fault.
+
+### Reads that now require `scope` and `scopeRef`
+
+- **Conversation recall.** `POST /v1/recall-conversation`, `recallConversation` in the client, `memongo_recall_conversation`, `memongo_recall_messages` and the AI SDK tool of the same name require `scope` and `scopeRef`. They used to recall every scope of the agent when the caller sent neither. The chronological listing and both hybrid lanes (vector filter, text filter and both hydrated re-checks) carry the tenant. A caller that sent only `scope: "session"` and a `sessionId` must now also send `scopeRef` (`session:<id>`); the route no longer derives it. The identity check runs before the index-health gate, so a recall without a tenant is a 400 even when an index is STALE.
+- **`readFile` locators.** `structured:`, `entity:`, `procedure:`, `event:`, `episode:` (also `?expand=events`), `relation:`, `conversation:`, `events/…` and `sessions/…` locators must carry `?scope=<scope>&scopeRef=<scopeRef>`. Without both, `readFile` throws `TenantIdentityRequiredError` before the erasure gate is touched, and `POST /v1/read-file` answers `400 TENANT_IDENTITY_REQUIRED`. A locator that names another tenant's document reads as a miss. `kb:` and bridge paths are not tenant locators and are unchanged. A path returned by search carries no identity; the caller appends the result's own `scope` and `scopeRef` (`scripts/real-capability-stress.ts` does this).
+- **Reasoning chain.** `POST /v1/chain-trace`, `traceChain`, `memongo_chain_trace` and the AI SDK tool require `scope` and `scopeRef`; the trace follows a fact and its premises only inside that tenant, and its leaf events honor expiry.
+- **Quarantine list.** `GET /v1/admin/quarantine` (and the client's `listQuarantined`, `memongo_quarantine_list` and the web console) takes `scope` and `scopeRef` and lists only that tenant's review queue. Quarantine rows written without a scope belong to no tenant and are no longer listed.
+- **Engine reads and deletes** (no HTTP route of their own) throw the typed error without the full identity: graph reads and `deleteEntity` / `deleteEntityConservative`, entity lookup by name, event reads (`getEventsBySession`, `getEventsByTimeRange`, `getSessionEventsWithBound`, `getUnconsolidatedEvents`), episode reads and status writes (`getEpisodesByIds`, `getEpisodesByTimeRange`, `getEpisodesByType`, `searchEpisodes`, `updateEpisodeStatus`, `hasRecentEpisodeWrite`, `materializeEpisode`) and the session-evidence expiry lookup. The consolidator's best-effort `traceReasoningChain` call, whose result nothing reads, now runs only for a candidate event that carries its own scope and scopeRef; it used to trace by `agentId` alone.
+
+### Lifecycle clauses added
+
+- **Events.** Novelty candidates and their k-NN neighbors, the consolidator batch, the `extractEvent` ownership check and the profile activity window now exclude expired, invalidated and not-yet-valid events. `extractEvent` now runs its ownership check for every caller, so an event that is expired or invalidated is `EventNotInScopeError` even when the caller named no scope.
+- **Relations.** Profile relation counts and the discovery what-changed procedure and relation lanes count live, currently valid rows only (a superseded, invalidated or expired edge is history, not a relation of the entity today).
+
+### KB expiry and erasure
+
+- **Expired chunks are excluded.** Both KB fusion branches (`$scoreFusion` and `$rankFusion`) and the hydrated re-check drop a `kb_chunks` row whose `expiresAt` is past. `expiresAt` is not an indexed filter field, so the check runs on the hydrated document after Search; an expired chunk can occupy a candidate slot, so a result may hold fewer rows than `limit`. The documented scopeRef-shared global and tenant KB semantics are unchanged, with no `agentId` restriction added.
+- **Erasure closes during Search.** Direct `searchKB` re-checks the erasure gate against its admission token at the return boundary. An erasure that began during the aggregate yields the typed `ErasureGateConflictError`, and the search routes answer `409 ERASURE_IN_PROGRESS` (the read paths already did), with no results and no outcome summary.
+
+### Index health on the T8 reads
+
+- **Discovery.** Each discovery content read checks the section's `*_text` Search index through the request-local snapshot and fails typed `index-stale` or `index-unavailable` (a section failure row per T8; a total failure throws). `hydrateActiveSlate` and `buildDiscoveryProjection` open a request scope. The check names the Search index type, so a text-only read is not refused for an unrelated vector index.
+- **Slate and context expansion are not gated.** They read plain `find`s and no Search index, so there is no index to be stale; this is pinned by tests. The brief expected them to read through Search.
