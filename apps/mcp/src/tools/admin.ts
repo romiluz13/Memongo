@@ -62,7 +62,8 @@ export const adminTools: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "memongo_read_file",
-		description: "Read memory file by path (memory_get parity)",
+		description:
+			"Read memory file by path (memory_get parity). Tenant locators (structured:, entity:, procedure:, event:, episode:, relation:, conversation:, events/, sessions/) need ?scope=<scope>&scopeRef=<scopeRef> on relPath.",
 		inputSchema: {
 			type: "object",
 			properties: {

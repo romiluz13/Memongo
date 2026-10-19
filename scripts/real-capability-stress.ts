@@ -128,6 +128,22 @@ function asReadFileResponse(value: unknown): ReadFileResponse {
 	return asRecord(value) as ReadFileResponse
 }
 
+function tenantLocator(
+	locator: string,
+	tenant: { scope?: string; scopeRef?: string },
+): string {
+	assert(
+		tenant.scope && tenant.scopeRef,
+		`no tenant identity to reopen ${locator}`,
+	)
+	const joiner = locator.includes("?") ? "&" : "?"
+	const identity = new URLSearchParams({
+		scope: tenant.scope,
+		scopeRef: tenant.scopeRef,
+	})
+	return `${locator}${joiner}${identity.toString()}`
+}
+
 function asStatusResponse(value: unknown): StatusResponse {
 	return asRecord(value) as StatusResponse
 }
@@ -735,7 +751,10 @@ async function main() {
 			)
 		assert(eventResult, "conversation search did not return an event locator")
 		const eventRead = asReadFileResponse(
-			await client.readFile({ agentId, relPath: eventResult.path }),
+			await client.readFile({
+				agentId,
+				relPath: tenantLocator(eventResult.path, eventResult),
+			}),
 		)
 		assert(
 			eventRead.text?.includes(marker),
@@ -793,7 +812,10 @@ async function main() {
 			"structured search did not return a structured locator",
 		)
 		const structuredRead = asReadFileResponse(
-			await client.readFile({ agentId, relPath: structuredResult.path }),
+			await client.readFile({
+				agentId,
+				relPath: tenantLocator(structuredResult.path, structuredResult),
+			}),
 		)
 		assert(
 			structuredRead.text?.includes(decisionKey) ||
@@ -844,7 +866,10 @@ async function main() {
 			"procedural search did not return a procedure locator",
 		)
 		const procedureRead = asReadFileResponse(
-			await client.readFile({ agentId, relPath: procedureResult.path }),
+			await client.readFile({
+				agentId,
+				relPath: tenantLocator(procedureResult.path, procedureResult),
+			}),
 		)
 		assert(
 			procedureRead.text?.includes("Run real agent smoke"),
@@ -897,7 +922,13 @@ async function main() {
 		)
 		const relationLocator = `relation:${firstConnection.relation.fromEntityId}-${firstConnection.relation.toEntityId}`
 		const relationRead = asReadFileResponse(
-			await client.readFile({ agentId, relPath: relationLocator }),
+			await client.readFile({
+				agentId,
+				relPath: tenantLocator(relationLocator, {
+					scope: "agent",
+					scopeRef: scopeRefAgent,
+				}),
+			}),
 		)
 		assert(
 			relationRead.text?.includes(firstConnection.relation.fromEntityId) ||
@@ -946,7 +977,14 @@ async function main() {
 				),
 			)
 		}
-		const episodeLocator = `episode:${episode.episodeId}`
+		const episodeTenant = {
+			scope: "session",
+			scopeRef: resolveScopeRef({ scope: "session", agentId, sessionId }),
+		}
+		const episodeLocator = tenantLocator(
+			`episode:${episode.episodeId}`,
+			episodeTenant,
+		)
 		const episodeRead = asReadFileResponse(
 			await client.readFile({ agentId, relPath: episodeLocator }),
 		)
@@ -957,7 +995,10 @@ async function main() {
 		const episodeExpanded = asReadFileResponse(
 			await client.readFile({
 				agentId,
-				relPath: `${episodeLocator}?expand=events`,
+				relPath: tenantLocator(
+					`episode:${episode.episodeId}?expand=events`,
+					episodeTenant,
+				),
 			}),
 		)
 		assert(

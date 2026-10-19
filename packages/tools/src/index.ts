@@ -357,7 +357,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 		}),
 		memongo_read_file: tool({
 			description:
-				"Read a memory file path or structured: URI (memory_get parity).",
+				"Read a memory file path or structured: URI (memory_get parity). Tenant locators need ?scope=<scope>&scopeRef=<scopeRef> on relPath.",
 			inputSchema: readFileSchema,
 			execute: async (input) =>
 				withUntrustedMemoryProvenance(await client.readFile(input)),

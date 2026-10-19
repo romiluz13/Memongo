@@ -255,6 +255,20 @@ describe("POST /v1/read-file (G2-69)", () => {
 		expect(JSON.stringify(body)).not.toContain("private")
 	})
 
+	it("maps a tenant locator without its identity to a typed 400, not a widened read", async () => {
+		bridge.memongoBridgeReadFile.mockRejectedValue(
+			Object.assign(new Error("readFile requires scope, scopeRef"), {
+				name: "TenantIdentityRequiredError",
+				code: "TENANT_IDENTITY_REQUIRED",
+			}),
+		)
+
+		const response = await post("/v1/read-file", { relPath: "entity:ent-1" })
+
+		expect(response.status).toBe(400)
+		expect((await json(response)).error?.code).toBe("TENANT_IDENTITY_REQUIRED")
+	})
+
 	it("keeps an untyped failure on the route's internal error code", async () => {
 		bridge.memongoBridgeReadFile.mockRejectedValue(new Error("private text"))
 

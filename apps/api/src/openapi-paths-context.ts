@@ -508,7 +508,12 @@ export const contextPaths = {
 							type: "object",
 							required: ["relPath"],
 							properties: {
-								relPath: { type: "string", minLength: 1 },
+								relPath: {
+									type: "string",
+									minLength: 1,
+									description:
+										"Locator to reopen. Tenant locators (structured:, entity:, procedure:, event:, episode:, relation:, conversation:, events/, sessions/) must carry the tenant they were written under as `?scope=<scope>&scopeRef=<scopeRef>`; without both the read fails with 400 TENANT_IDENTITY_REQUIRED. kb: and bridge paths are not tenant locators.",
+								},
 								agentId: {
 									type: "string",
 									description: AGENT_ID_FIELD_DESCRIPTION,
@@ -522,6 +527,10 @@ export const contextPaths = {
 			},
 			responses: {
 				"200": { description: "File read result" },
+				"400": {
+					description:
+						"VALIDATION_ERROR or TENANT_IDENTITY_REQUIRED: a tenant locator without a valid scope and scopeRef is refused rather than widened to the agent.",
+				},
 				"409": {
 					description:
 						"ERASURE_IN_PROGRESS: an erasure is in progress for the agent, so the read is refused rather than answered with an empty miss. Retry after the erasure finishes.",
