@@ -90,6 +90,13 @@ type HostStatusDetail = HostIndexDetail & {
 	stagedIndex?: HostIndexDetail
 }
 
+// A generation is a finite number; a NaN, an infinity or any other type is
+// unreadable metadata, not an absent generation.
+function generationOf(value: unknown): number | undefined | "invalid" {
+	if (value === undefined || value === null) return undefined
+	return typeof value === "number" && Number.isFinite(value) ? value : "invalid"
+}
+
 function upper(value: unknown): string {
 	return typeof value === "string" ? value.toUpperCase() : ""
 }
@@ -182,11 +189,42 @@ export function assessRequiredIndex(
 			status,
 		)
 	}
-	const latestVersion = (
+	// The definition the listing ties to its latest generation. It proves what a
+	// host serves only for a host whose own comparable generation equals that
+	// latest generation, never for a host with no generation of its own.
+	const latestDefinition: unknown =
+		index.latestDefinition ?? index.definition ?? undefined
+	const rawLatestVersion = (
 		index as { latestDefinitionVersion?: { version?: unknown } }
 	).latestDefinitionVersion?.version
-	let servingDefinition: unknown =
-		index.latestDefinition ?? index.definition ?? undefined
+	const latestVersion = generationOf(rawLatestVersion)
+	if (latestVersion === "invalid") {
+		return terminal(
+			"index-metadata-unknown",
+			"a finite latestDefinitionVersion",
+			`reports latestDefinitionVersion ${safeScalar(rawLatestVersion)}`,
+			status,
+		)
+	}
+	const judge = (proven: unknown): IndexAssessment =>
+		definitionServes(entry.definition, proven)
+			? { state: "serving" }
+			: {
+					state: "drift",
+					autoEmbedMissing:
+						hasAutoEmbedField(entry.definition) && !hasAutoEmbedField(proven),
+				}
+	if (details.length === 0) {
+		if (latestDefinition === undefined) {
+			return terminal(
+				"index-metadata-unknown",
+				"a readable serving definition",
+				"reports no definition",
+				status,
+			)
+		}
+		return judge(latestDefinition)
+	}
 	for (const [position, host] of details.entries()) {
 		// A hostname is deployment topology, so a diagnostic names the host by
 		// its position in statusDetail, never by its reported name.
@@ -223,13 +261,22 @@ export function assessRequiredIndex(
 				status,
 			)
 		}
-		const servingVersion = main.definitionVersion?.version
-		const comparableVersions =
-			typeof latestVersion === "number" && typeof servingVersion === "number"
+		const rawServingVersion = main.definitionVersion?.version
+		const servingVersion = generationOf(rawServingVersion)
+		if (servingVersion === "invalid") {
+			return terminal(
+				"index-metadata-unknown",
+				"a finite definition version on every host",
+				`${hostName} reports definition version ${safeScalar(rawServingVersion)}`,
+				status,
+			)
+		}
+		const comparable =
+			latestVersion !== undefined && servingVersion !== undefined
 		// The requested latestDefinition proves nothing about what a host
 		// serves: each host must report either its own serving definition or a
 		// generation that can be compared with latestDefinitionVersion.
-		if (!comparableVersions && main.definition === undefined) {
+		if (!comparable && main.definition === undefined) {
 			return terminal(
 				"index-metadata-unknown",
 				"evidence that every host serves the intended definition",
@@ -237,7 +284,7 @@ export function assessRequiredIndex(
 				status,
 			)
 		}
-		if (comparableVersions) {
+		if (comparable) {
 			if (servingVersion < latestVersion) {
 				return {
 					state: "pending",
@@ -254,33 +301,21 @@ export function assessRequiredIndex(
 				)
 			}
 		}
-		if (main.definition !== undefined) {
-			if (!definitionServes(entry.definition, main.definition)) {
-				return {
-					state: "drift",
-					autoEmbedMissing:
-						hasAutoEmbedField(entry.definition) &&
-						!hasAutoEmbedField(main.definition),
-				}
-			}
-			servingDefinition = main.definition
+		// Each host is judged on its own proof: the definition it reports, or
+		// else the latest definition its caught-up generation is tied to. A
+		// previous host's definition is never reused for this one.
+		const hostDefinition =
+			main.definition !== undefined ? main.definition : latestDefinition
+		if (hostDefinition === undefined) {
+			return terminal(
+				"index-metadata-unknown",
+				"a readable serving definition",
+				`${hostName} reports a current generation but the listing carries no definition to tie it to`,
+				status,
+			)
 		}
-	}
-	if (servingDefinition === undefined) {
-		return terminal(
-			"index-metadata-unknown",
-			"a readable serving definition",
-			"reports no definition",
-			status,
-		)
-	}
-	if (!definitionServes(entry.definition, servingDefinition)) {
-		return {
-			state: "drift",
-			autoEmbedMissing:
-				hasAutoEmbedField(entry.definition) &&
-				!hasAutoEmbedField(servingDefinition),
-		}
+		const verdict = judge(hostDefinition)
+		if (verdict.state !== "serving") return verdict
 	}
 	return { state: "serving" }
 }

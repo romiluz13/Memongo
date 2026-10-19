@@ -627,6 +627,11 @@ A tenant is `(agentId, scope, scopeRef)`. The reads below used to filter by `age
 
 Fixes for the blocking findings of the final M2 review (ticket #122). R1, R2 and R5 are a separate section.
 
+### R4: each host proves its own serving definition
+
+- **Index assessment.** Boot, preflight and the per-request index health judge each `statusDetail` host on that host's own proof: the `mainIndex.definition` it reports or, for a host whose comparable generation equals `latestDefinitionVersion`, the listing's `latestDefinition`. A previous host's definition is never reused for another host. A host that proves only a generation, beside a drifted `latestDefinition`, is `drift` (boot repairs it; a request sees `index-stale`) even when another host reports the intended definition. It used to be judged serving on that other host's definition. A host that proves a current generation when the listing carries no `latestDefinition` is `index-metadata-unknown`.
+- **Generations must be finite numbers.** A `latestDefinitionVersion.version` or a host `definitionVersion.version` that is NaN, an infinity or any non-number (it used to count as "not comparable" and fall back to a definition) is `index-metadata-unknown`. An absent generation is still "no generation reported".
+
 ### R9: reasoning chain leaves follow the event lifecycle
 
 - **Leaf events.** `POST /v1/chain-trace`, `traceChain`, `memongo_chain_trace` and the AI SDK tool hydrate each leaf event under the store's full event lifecycle at one clock taken when the trace starts: retained (`expiresAt`), already valid (`validAt`) and not retracted (`invalidAt`). The read used to apply expiry only, so a leaf whose `invalidAt` had passed, or whose `validAt` was still in the future, came back with its body. Such a leaf is now a `gap` node (reason `deleted`, the same row an expired leaf already produced) and `chainComplete` is `false`. The starting fact and its premises are unchanged and now use the same clock.
