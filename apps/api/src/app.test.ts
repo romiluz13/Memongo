@@ -47,28 +47,14 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeConsolidate: vi.fn(),
 	memongoBridgeSelfEdit: vi.fn(),
 	memongoBridgePingMongo: vi.fn(),
+	memongoBridgeCheckManifest: vi.fn(),
 	buildMemongoConfig: vi.fn(),
 }))
 
-// #101: the boot capability table derives its classic $text lane from the
-// engine's own index rule, so the real rule rides along with the mocks.
-vi.mock("@memongo/memory-bridge", async (importOriginal) => ({
-	...bridgeMocks,
-	shouldEnsureTextFallbackIndexes: (
-		await importOriginal<typeof import("@memongo/memory-bridge")>()
-	).shouldEnsureTextFallbackIndexes,
-}))
+vi.mock("@memongo/memory-bridge", () => bridgeMocks)
 
 import { createApp, parseScopedApiKeyPolicies } from "./app.js"
 import { MEMONGO_API_VERSION } from "./version.js"
-import {
-	deriveSearchLanes,
-	enforceRequiredVector,
-	formatCapabilityTable,
-	isRequireVectorEnabled,
-	probeBootCapabilities,
-	REQUIRE_VECTOR_FAILURE_MESSAGE,
-} from "./lib/capabilities.js"
 
 describe("createApp", () => {
 	const prevEnv = { ...process.env }
@@ -424,6 +410,11 @@ describe("createApp", () => {
 			bridgeMocks.memongoBridgePingMongo.mockResolvedValue({ ok: true })
 			bridgeMocks.memongoBridgeProbeVector.mockResolvedValue(true)
 			bridgeMocks.memongoBridgeProbeEmbedding.mockResolvedValue({ ok: true })
+			bridgeMocks.memongoBridgeCheckManifest.mockResolvedValue({
+				ok: true,
+				manifest: [],
+				unmet: [],
+			})
 		})
 
 		it("returns 200 with all lanes ok when every probe passes", async () => {
@@ -436,8 +427,70 @@ describe("createApp", () => {
 					mongo: { ok: true },
 					vector: { ok: true },
 					embedding: { ok: true },
+					manifest: { ok: true },
 				},
 			})
+		})
+
+		it("returns 503 naming each unmet manifest index when the startup contract no longer holds (X-08)", async () => {
+			bridgeMocks.memongoBridgeCheckManifest.mockResolvedValue({
+				ok: false,
+				manifest: [],
+				unmet: [
+					{
+						code: "index-stale",
+						requirement: "a READY index",
+						index: "memongo_events_text",
+						collection: "memongo_events",
+						status: "STALE",
+						message: "memongo_events_text is STALE",
+						repairable: false,
+					},
+					{
+						code: "index-absent",
+						requirement: "the index exists",
+						index: "entity_autocomplete",
+						collection: "memongo_entities",
+						message: "entity_autocomplete is absent",
+						repairable: true,
+					},
+				],
+			})
+
+			const res = await createApp().request("/ready")
+			const json = (await res.json()) as {
+				ok: boolean
+				lanes: {
+					vector: { ok: boolean }
+					manifest: { ok: boolean; message?: string }
+				}
+			}
+
+			expect(res.status).toBe(503)
+			expect(json.ok).toBe(false)
+			expect(json.lanes.vector.ok).toBe(true)
+			expect(json.lanes.manifest.ok).toBe(false)
+			expect(json.lanes.manifest.message).toBe(
+				"index-stale memongo_events_text; index-absent entity_autocomplete",
+			)
+		})
+
+		it("returns 503 when the manifest check throws a typed boot failure", async () => {
+			bridgeMocks.memongoBridgeCheckManifest.mockRejectedValue(
+				Object.assign(new Error("boot refused: buildInfo failed"), {
+					name: "MemongoBootError",
+					code: "server-version-unreadable",
+				}),
+			)
+
+			const res = await createApp().request("/ready")
+			const json = (await res.json()) as {
+				lanes: { manifest: { ok: boolean; message?: string } }
+			}
+
+			expect(res.status).toBe(503)
+			expect(json.lanes.manifest.ok).toBe(false)
+			expect(json.lanes.manifest.message).toContain("buildInfo failed")
 		})
 
 		it("returns 503 with lane detail when the vector probe fails", async () => {
@@ -526,114 +579,6 @@ describe("createApp", () => {
 			const { validateBootEnv } = await import("./lib/boot-env.js")
 
 			expect(() => validateBootEnv({})).not.toThrow()
-		})
-	})
-
-	describe("boot search capabilities (P1.9)", () => {
-		const fullCaps = {
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: true,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		}
-
-		it("derives all lanes available from full capabilities", () => {
-			expect(deriveSearchLanes(fullCaps)).toEqual({
-				hybrid: true,
-				vector: true,
-				keyword: true,
-				text: false,
-			})
-		})
-
-		it("degrades hybrid and vector when the vector capability is absent", () => {
-			expect(deriveSearchLanes({ ...fullCaps, vectorSearch: false })).toEqual({
-				hybrid: false,
-				vector: false,
-				keyword: true,
-				text: false,
-			})
-		})
-
-		it("reports every lane unavailable when capabilities are null", () => {
-			expect(deriveSearchLanes(null)).toEqual({
-				hybrid: false,
-				vector: false,
-				keyword: false,
-				text: false,
-			})
-		})
-
-		it("formats a degraded table with lane statuses and a banner", () => {
-			const table = formatCapabilityTable(
-				deriveSearchLanes({ ...fullCaps, vectorSearch: false }),
-			)
-			expect(table).toContain("hybrid:  unavailable")
-			expect(table).toContain("vector:  unavailable")
-			expect(table).toContain("keyword: available")
-			expect(table).toContain("text:    unavailable")
-			expect(table).toContain("DEGRADED")
-		})
-
-		it("formats a healthy table without the degradation banner", () => {
-			const table = formatCapabilityTable(deriveSearchLanes(fullCaps))
-			expect(table).toContain("all retrieval lanes available")
-			expect(table).not.toContain("DEGRADED")
-		})
-
-		it("includes the probe error in the table when the probe failed", () => {
-			const table = formatCapabilityTable(deriveSearchLanes(null), "boom")
-			expect(table).toContain("capability probe failed: boom")
-		})
-
-		it("parses MEMONGO_REQUIRE_VECTOR only for 1/true", () => {
-			expect(isRequireVectorEnabled("1")).toBe(true)
-			expect(isRequireVectorEnabled("true")).toBe(true)
-			expect(isRequireVectorEnabled(" TRUE ")).toBe(true)
-			expect(isRequireVectorEnabled("0")).toBe(false)
-			expect(isRequireVectorEnabled("yes")).toBe(false)
-			expect(isRequireVectorEnabled(undefined)).toBe(false)
-		})
-
-		it("enforceRequiredVector passes when the vector lane is available", () => {
-			expect(() =>
-				enforceRequiredVector(deriveSearchLanes(fullCaps)),
-			).not.toThrow()
-		})
-
-		it("enforceRequiredVector throws a clear message when vector is unavailable", () => {
-			expect(() =>
-				enforceRequiredVector(
-					deriveSearchLanes({ ...fullCaps, vectorSearch: false }),
-				),
-			).toThrow(REQUIRE_VECTOR_FAILURE_MESSAGE)
-		})
-
-		it("enforceRequiredVector includes the probe error when present", () => {
-			expect(() =>
-				enforceRequiredVector(deriveSearchLanes(null), "connection refused"),
-			).toThrow(/Capability probe failed: connection refused/)
-		})
-
-		it("probeBootCapabilities returns derived lanes on success", async () => {
-			const report = await probeBootCapabilities(async () => fullCaps)
-			expect(report.probeError).toBeUndefined()
-			expect(report.lanes.vector).toBe(true)
-		})
-
-		it("probeBootCapabilities degrades lanes and captures probe failures", async () => {
-			const report = await probeBootCapabilities(async () => {
-				throw new Error("mongodb memory unavailable")
-			})
-			expect(report.probeError).toContain("mongodb memory unavailable")
-			expect(report.lanes).toEqual({
-				hybrid: false,
-				vector: false,
-				keyword: false,
-				text: false,
-			})
 		})
 	})
 

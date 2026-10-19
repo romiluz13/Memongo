@@ -1,4 +1,5 @@
 import {
+	memongoBridgeCheckManifest,
 	memongoBridgePingMongo,
 	memongoBridgeProbeEmbedding,
 	memongoBridgeProbeVector,
@@ -17,6 +18,10 @@ import {
  *                error message.
  *   - embedding: live vector-index readiness in automated mode (C-016),
  *                same round trip as the vector lane.
+ *   - manifest:  the M2 startup contract re-checked read-only (X-08): every
+ *                required index READY, queryable and serving its manifest
+ *                definition, plus version and management privileges. The
+ *                message lists each unmet index and requirement.
  *
  * /ready is infra-facing and unauthenticated, so lane messages are sanitized:
  * URI credentials are redacted and messages are length-capped.
@@ -29,6 +34,7 @@ export type ReadinessReport = {
 		mongo: ReadinessLane
 		vector: ReadinessLane
 		embedding: ReadinessLane
+		manifest: ReadinessLane
 	}
 }
 
@@ -57,7 +63,7 @@ async function runLane(
 }
 
 export async function checkReadiness(): Promise<ReadinessReport> {
-	const [mongo, vector, embedding] = await Promise.all([
+	const [mongo, vector, embedding, manifest] = await Promise.all([
 		runLane(async () => {
 			const result = await memongoBridgePingMongo({})
 			if (result.ok) {
@@ -89,9 +95,27 @@ export async function checkReadiness(): Promise<ReadinessReport> {
 						message: result.error ?? "embedding provider is not available",
 					}
 		}),
+		runLane(async () => {
+			const report = await memongoBridgeCheckManifest({})
+			if (report.ok) {
+				return { ok: true }
+			}
+			return {
+				ok: false,
+				message: sanitizeLaneMessage(
+					report.unmet
+						.map((unmet) =>
+							[unmet.code, unmet.index ?? unmet.collection ?? unmet.setting]
+								.filter(Boolean)
+								.join(" "),
+						)
+						.join("; "),
+				),
+			}
+		}),
 	])
 	return {
-		ok: mongo.ok && vector.ok && embedding.ok,
-		lanes: { mongo, vector, embedding },
+		ok: mongo.ok && vector.ok && embedding.ok && manifest.ok,
+		lanes: { mongo, vector, embedding, manifest },
 	}
 }

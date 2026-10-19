@@ -54,13 +54,16 @@ import type {
 	QuarantineStatus,
 } from "@memongo/memory-engine/internal"
 import {
+	type BootPreflightReport,
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
+	isMemongoBootError,
+	MemongoBootError,
 } from "@memongo/memory-engine"
-import { materializeBlocks } from "@memongo/memory-engine/internal"
-// #101 section 3 step 7: the classic $text index rule, re-exported so the
-// API boot table derives its `text` lane from it instead of copying it.
-export { shouldEnsureTextFallbackIndexes } from "@memongo/memory-engine/internal"
+import {
+	materializeBlocks,
+	runMemongoPreflight,
+} from "@memongo/memory-engine/internal"
 import { resolveBridgeConfig } from "./memory-config.js"
 
 /**
@@ -99,13 +102,17 @@ export async function memongoBridgeGetManager(
 ): Promise<MongoDBMemoryManager> {
 	const id = resolveAgentId(agentId)
 	const cfg = resolveBridgeConfig()
-	const { manager, error } = await getMemorySearchManager({
+	const { manager, error, cause } = await getMemorySearchManager({
 		cfg,
 		agentId: id,
 		...(opts?.ownership ? { ownership: opts.ownership } : {}),
 	})
 	if (!manager || error) {
-		throw new Error(error ?? "mongodb memory unavailable")
+		// X-04: a typed boot failure keeps its type (code, index, requirement).
+		if (isMemongoBootError(cause)) {
+			throw cause
+		}
+		throw new Error(error ?? "mongodb memory unavailable", { cause })
 	}
 	return manager as MongoDBMemoryManager
 }
@@ -920,8 +927,9 @@ export type MemongoBridgeCapabilities = DetectedCapabilities
 /**
  * P1.9 boot capability surface: exposes the manager's detected serving
  * capabilities so deploy targets (memongo-api boot) can log a search-lane
- * table and enforce MEMONGO_REQUIRE_VECTOR without re-probing Mongo
- * themselves. B2a: the manager declares `capabilities` publicly, so this is
+ * table without re-probing Mongo themselves. M2: acquiring the manager runs
+ * the startup contract, so a failed boot rejects here with its
+ * MemongoBootError. B2a: the manager declares `capabilities` publicly, so this is
  * a typed read (the `| null` return shape is kept for callers compiled
  * against the pre-typed surface).
  */
@@ -931,6 +939,33 @@ export async function memongoBridgeCapabilities(params: {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.capabilities
 }
+
+/**
+ * M2 /ready manifest lane (X-08): one read-only pass of the startup contract
+ * on the cached manager. Every unmet requirement is listed; nothing writes.
+ */
+export async function memongoBridgeCheckManifest(params: {
+	agentId?: string
+}): Promise<BootPreflightReport> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.checkRequiredIndexManifest()
+}
+
+/**
+ * M2 preflight for deploy targets: config validation plus the read-only boot
+ * checks against the configured deployment, without creating a manager.
+ */
+export async function memongoBridgePreflight(params: {
+	agentId?: string
+}): Promise<BootPreflightReport> {
+	return runMemongoPreflight({
+		cfg: resolveBridgeConfig(),
+		agentId: resolveAgentId(params.agentId),
+	})
+}
+
+export type { BootPreflightReport }
+export { isMemongoBootError, MemongoBootError }
 
 /**
  * Readiness probe for the Mongo lane (P1.7). This probe forces a live,

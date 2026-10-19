@@ -7,6 +7,7 @@
 	"scripts": {
 		"start": "node --import tsx src/server.ts",
 		"dev": "node --import tsx --watch src/server.ts",
+		"preflight": "node --import tsx src/preflight.ts",
 		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit false --rootDir src --outDir dist",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run src"

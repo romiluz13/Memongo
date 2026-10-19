@@ -9,6 +9,8 @@ const blocks = { blocks: [], totalTokenBudget: 80, totalActualTokens: 0 }
 vi.mock("@memongo/memory-engine", () => ({
 	getMemorySearchManager: vi.fn(async () => ({ manager, error: null })),
 	closeAllMemorySearchManagers: vi.fn(),
+	isMemongoBootError: () => false,
+	MemongoBootError: class MemongoBootError extends Error {},
 }))
 vi.mock("@memongo/memory-engine/internal", () => ({
 	materializeBlocks: vi.fn(() => blocks),
