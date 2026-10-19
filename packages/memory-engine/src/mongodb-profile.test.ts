@@ -26,6 +26,7 @@ import {
 	eventsCollection,
 } from "./mongodb-schema.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { matchesFilter } from "./test-helpers/stateful-mongo-fake.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -825,5 +826,75 @@ describe("mongodb-profile", () => {
 				},
 			]),
 		)
+	})
+
+	// M2 T13: lifecycle on the relation counts and the activity window.
+	describe("lifecycle clauses (M2 T13)", () => {
+		const DAY = 24 * 60 * 60 * 1000
+		const ago = (days: number) => new Date(Date.now() - days * DAY)
+		const ahead = (days: number) => new Date(Date.now() + days * DAY)
+
+		it("counts only live, current relations: each $lookup match excludes superseded, invalidated and ended edges", async () => {
+			setupEmptyMocks()
+
+			await synthesizeProfile(defaultParams())
+
+			const entCol = vi.mocked(entitiesCollection).mock.results[0].value
+			const pipeline = vi.mocked(entCol.aggregate).mock
+				.calls[0][0] as Document[]
+			const lookups = pipeline.filter((stage) => stage.$lookup)
+			expect(lookups).toHaveLength(2)
+			const edge = (over: Document): Document => ({
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				...over,
+			})
+			for (const lookup of lookups) {
+				const { $expr, ...match } = (lookup.$lookup.pipeline as Document[])[0]
+					.$match as Document
+				void $expr
+				expect(matchesFilter(edge({ state: "active" }), match)).toBe(true)
+				expect(matchesFilter(edge({ state: "conflicted" }), match)).toBe(true)
+				expect(matchesFilter(edge({}), match)).toBe(true)
+				expect(matchesFilter(edge({ state: "superseded" }), match)).toBe(false)
+				expect(matchesFilter(edge({ state: "invalidated" }), match)).toBe(false)
+				expect(
+					matchesFilter(edge({ state: "active", validTo: ago(1) }), match),
+				).toBe(false)
+				expect(
+					matchesFilter(edge({ state: "active", validFrom: ahead(1) }), match),
+				).toBe(false)
+				expect(
+					matchesFilter(
+						edge({ state: "active", scopeRef: "another-ref" }),
+						match,
+					),
+				).toBe(false)
+			}
+		})
+
+		it("counts activity of live events only: an expired, invalidated or not-yet-valid event is excluded", async () => {
+			setupEmptyMocks()
+
+			await synthesizeProfile(defaultParams())
+
+			const evtCol = vi.mocked(eventsCollection).mock.results[0].value
+			const pipeline = vi.mocked(evtCol.aggregate).mock
+				.calls[0][0] as Document[]
+			const match = pipeline[0].$match as Document
+			const event = (over: Document): Document => ({
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				timestamp: new Date(),
+				...over,
+			})
+			expect(matchesFilter(event({}), match)).toBe(true)
+			expect(matchesFilter(event({ invalidAt: null }), match)).toBe(true)
+			expect(matchesFilter(event({ expiresAt: ago(1) }), match)).toBe(false)
+			expect(matchesFilter(event({ invalidAt: ago(1) }), match)).toBe(false)
+			expect(matchesFilter(event({ validAt: ahead(1) }), match)).toBe(false)
+		})
 	})
 })

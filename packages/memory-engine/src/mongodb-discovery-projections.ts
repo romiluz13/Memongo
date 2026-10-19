@@ -13,8 +13,11 @@ import {
 } from "./mongodb-discovery-search.js"
 import { resolveTimeRangePreset } from "./mongodb-retrieval-planner.js"
 import {
+	buildCurrentValidityClause,
 	buildEventLifecycleClause,
+	buildRelationLifecycleClause,
 	buildUnexpiredClause,
+	mergeQueryClauses,
 } from "./mongodb-temporal.js"
 import {
 	entitiesCollection,
@@ -483,6 +486,8 @@ function searchProcedures(params: {
 	limit: number
 	states?: string[]
 	updatedWindow?: { start: Date; end: Date }
+	/** Re-check validFrom/validTo on the hydrated procedure (not indexed). */
+	currentOnly?: boolean
 }): Promise<Document[]> {
 	const state = params.states ? stateClauses(params.states) : undefined
 	return searchDiscoveryCandidates({
@@ -500,18 +505,21 @@ function searchProcedures(params: {
 				? [windowRange("updatedAt", params.updatedWindow)]
 				: []),
 		],
-		recheck: {
-			...params.tenant,
-			...(state ? { state: state.match } : {}),
-			...(params.updatedWindow
-				? {
-						updatedAt: {
-							$gte: params.updatedWindow.start,
-							$lte: params.updatedWindow.end,
-						},
-					}
-				: {}),
-		},
+		recheck: mergeQueryClauses(
+			{
+				...params.tenant,
+				...(state ? { state: state.match } : {}),
+				...(params.updatedWindow
+					? {
+							updatedAt: {
+								$gte: params.updatedWindow.start,
+								$lte: params.updatedWindow.end,
+							},
+						}
+					: {}),
+			},
+			params.currentOnly ? buildCurrentValidityClause() : undefined,
+		),
 		sort: { updatedAt: -1 },
 		limit: params.limit,
 	})
@@ -899,11 +907,18 @@ async function buildWhatChanged(params: {
 						prefix,
 						tenant: scopeFilter,
 						query,
+						states: ["active"],
+						currentOnly: true,
 						updatedWindow: window,
 						limit: laneQueryLimit,
 					})
 				: proceduresCollection(db, prefix)
-						.find({ ...scopeFilter, updatedAt: dateFilter })
+						.find({
+							...scopeFilter,
+							state: "active",
+							...buildCurrentValidityClause(),
+							updatedAt: dateFilter,
+						})
 						.sort({ updatedAt: -1 })
 						.limit(laneQueryLimit)
 						.toArray(),
@@ -926,11 +941,18 @@ async function buildWhatChanged(params: {
 						tenant: scopeFilter,
 						query,
 						entityLimit: laneQueryLimit,
-						extra: { updatedAt: dateFilter },
+						extra: {
+							...buildRelationLifecycleClause(),
+							updatedAt: dateFilter,
+						},
 						limit: laneQueryLimit,
 					})
 				: relationsCollection(db, prefix)
-						.find({ ...scopeFilter, updatedAt: dateFilter })
+						.find({
+							...scopeFilter,
+							...buildRelationLifecycleClause(),
+							updatedAt: dateFilter,
+						})
 						.sort({ updatedAt: -1 })
 						.limit(laneQueryLimit)
 						.toArray(),

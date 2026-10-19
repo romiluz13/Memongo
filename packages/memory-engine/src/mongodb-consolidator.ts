@@ -37,6 +37,7 @@ import {
 } from "./mongodb-search-budget.js"
 import { toTypedSearchError } from "./search-outcomes.js"
 import {
+	buildEventLifecycleClause,
 	buildUnexpiredClause,
 	buildCurrentValidityClause,
 } from "./mongodb-temporal.js"
@@ -705,9 +706,12 @@ async function runConsolidation(
 	try {
 		// Query un-dreamer-processed events
 		const eventsCol = eventsCollection(db, prefix)
+		// M2 T13: an expired, invalidated or not-yet-valid event is not
+		// consolidated into durable memory.
 		const filter: Document = {
 			agentId,
 			dreamerProcessedAt: { $exists: false },
+			...buildEventLifecycleClause(),
 		}
 		if (options?.scope) {
 			filter.scope = options.scope

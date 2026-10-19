@@ -35,10 +35,8 @@ import {
 } from "./search-outcomes.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
-	buildCurrentValidityClause,
-	buildLiveStateClause,
+	buildRelationLifecycleClause,
 	mergeQueryClauses,
-	resolveTemporalAsOf,
 } from "./mongodb-temporal.js"
 import {
 	typedTransactionError,
@@ -289,17 +287,6 @@ function inferRelationReviewAt(
 		return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
 	}
 	return undefined
-}
-
-function buildRelationTraversalClause(asOf?: Date): Document {
-	const resolvedAsOf = resolveTemporalAsOf(asOf)
-	return mergeQueryClauses(
-		buildLiveStateClause({
-			liveStates: ["active", "conflicted"],
-			includeMissingAsLive: true,
-		}),
-		buildCurrentValidityClause({ asOf: resolvedAsOf }),
-	)
 }
 
 function makeEntityLinkId(params: {
@@ -1068,7 +1055,7 @@ export async function expandGraph(params: {
 		const graphLookupDepth = Math.max(0, (maxDepth ?? 2) - 1)
 		const connectionLimit = maxConnections ?? 100
 		const directRelationLimit = Math.max(1, connectionLimit)
-		const relationTraversalClause = buildRelationTraversalClause(asOf)
+		const relationTraversalClause = buildRelationLifecycleClause({ asOf })
 
 		// 3. Collect all unique relations with their depths
 		// Direct relations are depth 0, transitive relations come from $graphLookup

@@ -754,3 +754,69 @@ describe("the run record is declared best-effort and counted", () => {
 		expect(bestEffortFailureCount("discovery-projection-run")).toBe(1)
 	})
 })
+
+describe("what-changed keeps only live, current procedures and relations (M2 T13)", () => {
+	const procedureTitles = (projection: Awaited<ReturnType<typeof run>>) =>
+		titles(projection, "Procedure changes").sort()
+	const relationTitles = (projection: Awaited<ReturnType<typeof run>>) =>
+		titles(projection, "Relation changes").sort()
+
+	beforeEach(async () => {
+		await model.seed("procedures", [
+			procedure({ procedureId: "p-live", name: "Pager runbook" }),
+			procedure({
+				procedureId: "p-superseded",
+				name: "Pager runbook superseded",
+				state: "superseded",
+			}),
+			procedure({
+				procedureId: "p-ended",
+				name: "Pager runbook ended",
+				validTo: daysAgo(1),
+			}),
+			procedure({
+				procedureId: "p-future",
+				name: "Pager runbook future",
+				validFrom: new Date(Date.now() + DAY),
+			}),
+		])
+		await model.seed("entities", [
+			entity({ entityId: "e1", name: "Redis Cache" }),
+			entity({ entityId: "e2", name: "Ops Team", type: "team" }),
+		])
+		await model.seed("relations", [
+			relation({ fromEntityId: "e1", toEntityId: "e2", type: "owned_by" }),
+			relation({
+				fromEntityId: "e1",
+				toEntityId: "e2",
+				type: "superseded_edge",
+				state: "superseded",
+			}),
+			relation({
+				fromEntityId: "e1",
+				toEntityId: "e2",
+				type: "invalidated_edge",
+				state: "invalidated",
+			}),
+			relation({
+				fromEntityId: "e1",
+				toEntityId: "e2",
+				type: "ended_edge",
+				validTo: daysAgo(1),
+			}),
+		])
+		model.refreshIndexes()
+	})
+
+	it("with a query", async () => {
+		const projection = await run("what-changed", "redis pager")
+		expect(procedureTitles(projection)).toEqual(["Pager runbook"])
+		expect(relationTitles(projection)).toEqual(["e1 owned_by e2"])
+	})
+
+	it("without a query", async () => {
+		const projection = await run("what-changed")
+		expect(procedureTitles(projection)).toEqual(["Pager runbook"])
+		expect(relationTitles(projection)).toEqual(["e1 owned_by e2"])
+	})
+})

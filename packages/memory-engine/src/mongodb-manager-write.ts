@@ -57,7 +57,10 @@ import {
 	type SearchBarrierResult,
 } from "./mongodb-search-barrier.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
-import { resolveWriteExpiresAt } from "./mongodb-temporal.js"
+import {
+	buildEventLifecycleClause,
+	resolveWriteExpiresAt,
+} from "./mongodb-temporal.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import {
 	type AdmissionToken,
@@ -2106,28 +2109,28 @@ export class MongoDBManagerWriteOps {
 		// Tenant isolation: a scope-restricted caller may only extract from an event
 		// within its authorized scope/scopeRef. Enforce ownership SYNCHRONOUSLY here,
 		// before scheduling — the deterministic `extraction-${eventId}` job is often
-		// pre-created by the write path, so a scope check inside the background job
 		// would dedup away and never run.
-		if (params.scope !== undefined || params.scopeRef !== undefined) {
-			const owned = await eventsCollection(
-				this.host.db,
-				this.host.prefix,
-			).findOne(
-				{
-					eventId,
-					agentId: this.host.agentId,
-					...(params.scope !== undefined ? { scope: params.scope } : {}),
-					...(params.scopeRef !== undefined
-						? { scopeRef: params.scopeRef }
-						: {}),
-				},
-				{ projection: { _id: 1 } },
-			)
-			if (!owned) {
-				const err = new Error(`event not found: ${eventId}`)
-				err.name = "EventNotInScopeError"
-				throw err
-			}
+		// M2 T13: the check runs for every caller and applies the event
+		// lifecycle, so an expired, invalidated or not-yet-valid event is never
+		// scheduled for extraction. A caller that names no scope is confined to
+		// the agent's own event; the job takes the event's tenant from the row.
+		const owned = await eventsCollection(
+			this.host.db,
+			this.host.prefix,
+		).findOne(
+			{
+				eventId,
+				agentId: this.host.agentId,
+				...(params.scope !== undefined ? { scope: params.scope } : {}),
+				...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
+				...buildEventLifecycleClause(),
+			},
+			{ projection: { _id: 1 } },
+		)
+		if (!owned) {
+			const err = new Error(`event not found: ${eventId}`)
+			err.name = "EventNotInScopeError"
+			throw err
 		}
 		return this.host.scheduleBackgroundExtraction(
 			eventId,

@@ -25,6 +25,7 @@ import { createSubsystemLogger } from "@memongo/lib"
 import type { NoveltyEvent, NoveltyOptions, NoveltyReport } from "./types.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { consumeSearchWorkOrThrow } from "./mongodb-search-budget.js"
+import { buildEventLifecycleClause } from "./mongodb-temporal.js"
 import { toTypedSearchError } from "./search-outcomes.js"
 
 export type { NoveltyEvent, NoveltyReport, NoveltyOptions }
@@ -118,10 +119,12 @@ export async function scanNovelty(params: {
 		}
 	}
 
-	// 2. Fetch candidate events with body text
+	// 2. Fetch candidate events with body text. An expired, invalidated or
+	// not-yet-valid event is not an observation to score (M2 T13).
 	const eventsCol = db.collection(`${prefix}events`)
+	const lifecycle = buildEventLifecycleClause()
 	const recentEvents = await eventsCol
-		.find(filter)
+		.find({ ...filter, ...lifecycle })
 		.sort({ timestamp: -1 })
 		.limit(MAX_CANDIDATES)
 		.project({ _id: 1, eventId: 1, body: 1, role: 1, timestamp: 1 })
@@ -178,6 +181,9 @@ export async function scanNovelty(params: {
 						filter: vsFilter,
 					},
 				},
+				// `expiresAt` is not a filter field of the events vector index, so
+				// the neighbors' lifecycle is re-checked on the hydrated document.
+				{ $match: lifecycle },
 				{
 					$project: {
 						_id: 1,
