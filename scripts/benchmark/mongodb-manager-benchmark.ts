@@ -1872,7 +1872,7 @@ export class MongoDBManagerBenchmarkOps {
 									passageDates: passagesWithDates.map((entry) => entry.dates),
 									passageRoles: passagesWithDates.map((entry) => entry.role),
 									...(benchmarkQaProtocol === "custom-v1"
-										? captureContextDiagnostics(() =>
+										? captureContextDiagnostics(evaluation.caseId, () =>
 												buildPass0ContextDiagnostics({
 													results,
 													keptRanks: passagesWithDates.map(

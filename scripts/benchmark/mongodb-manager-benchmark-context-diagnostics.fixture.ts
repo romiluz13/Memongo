@@ -1,14 +1,17 @@
+import { vi } from "vitest"
+import { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-manager.js"
+import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
+import {
+	mocked,
+	testOperationRunContext,
+} from "../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
 import type {
+	BenchmarkE2eQaEnvelope,
+	MemoryBenchmarkDataset,
 	MemoryBenchmarkScenario,
 	MemorySearchResult,
 } from "../../packages/memory-engine/src/types.js"
-
-/**
- * Synthetic LongMemEval-shaped cases for the pass-0 context diagnostics. Each
- * case is one scenario: its conversations, one evaluation, the search results
- * the stubbed manager returns and the event evidence that resolves them. No
- * dataset content and no network.
- */
+import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 
 type FixtureTurn = { text: string; hasAnswer?: boolean }
 export type FixtureCase = {
@@ -50,6 +53,7 @@ const GOLD = {
 	unresolved: "My dentist is Dr. Okafor.",
 	partial: "I run five kilometers every morning before work.",
 	cap: "The wifi password is hunter2.",
+	captext: "The garage code is 4417.",
 	mixedA: "I teach pottery on Tuesdays.",
 	mixedB: "My brother is named Tomas.",
 }
@@ -231,6 +235,31 @@ export const fixtureCases: FixtureCase[] = [
 			}),
 		),
 	},
+	...(["captext", "captextunk"] as const).map(
+		(caseId): FixtureCase => ({
+			caseId,
+			sessions: [
+				{
+					id: `${caseId}::s1`,
+					turns: Array.from({ length: 30 }, (_, i) =>
+						i === 2
+							? { text: GOLD.captext, hasAnswer: true }
+							: { text: `filler turn ${i + 1}` },
+					),
+				},
+			],
+			goldSessions: [`${caseId}::s1`],
+			results: Array.from({ length: 25 }, (_, i) =>
+				i === 21
+					? hit(i + 1, `Reminder: ${GOLD.captext}`, 1 - i / 100)
+					: caseId === "captextunk" && i === 6
+						? hit(i + 1, `filler passage ${i + 1}`, 1 - i / 100)
+						: hit(i + 1, `filler passage ${i + 1}`, 1 - i / 100, {
+								sourceEventIds: [eventId(`${caseId}::s1`, i + 5)],
+							}),
+			),
+		}),
+	),
 	{
 		caseId: "mixed",
 		sessions: [
@@ -307,4 +336,104 @@ export function evidenceFor(fixtures: FixtureCase[]) {
 		}
 	}
 	return evidence
+}
+
+const ACKNOWLEDGED_CLEANUP = {
+	status: "acknowledged" as const,
+	agentId: "benchmark-test-agent",
+	registry: { version: 1 as const, digest: "0".repeat(64), collections: 0 },
+	collections: [],
+}
+
+function benchmarkOps(
+	manager: MongoDBMemoryManager,
+): MongoDBManagerBenchmarkOps {
+	const ops = new MongoDBManagerBenchmarkOps(
+		manager as unknown as MongoDBManagerHost,
+	)
+	const managerRecord = manager as unknown as Record<string, unknown>
+	const opsRecord = ops as unknown as Record<string, unknown>
+	for (const method of [
+		"createBenchmarkScenarioManager",
+		"settleBenchmarkScenarioManager",
+		"listBenchmarkEventEvidence",
+		"waitForBenchmarkSearchConvergence",
+		"cleanupBenchmarkScenarioData",
+	]) {
+		const override = managerRecord[method]
+		if (typeof override === "function") {
+			opsRecord[method] = override
+		}
+	}
+	return ops
+}
+
+export async function runFixture(
+	fixtures: FixtureCase[],
+): Promise<BenchmarkE2eQaEnvelope> {
+	vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "synthetic")
+	vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "synthetic-model")
+	vi.stubEnv("MEMONGO_BENCHMARK_JUDGE_MODEL", "synthetic-judge-model")
+	const { ingestBenchmarkConversations } = await import(
+		"./mongodb-benchmark-harness.js"
+	)
+	mocked(ingestBenchmarkConversations).mockResolvedValue({
+		datasetPath: "/tmp/benchmark.json",
+		datasetName: "context-diagnostics",
+		conversationsIngested: 1,
+		turnsIngested: 1,
+		skippedConversations: 0,
+		failedLines: 0,
+		failedTurns: 0,
+		rejectedTurns: 0,
+		rejectedConversations: 0,
+		startedAt: new Date("2026-04-09T12:00:00.000Z"),
+		completedAt: new Date("2026-04-09T12:00:01.000Z"),
+	})
+	const search = vi.fn(async (query: string) => {
+		const fixture = fixtures.find((entry) => queryFor(entry.caseId) === query)
+		if (!fixture) throw new Error(`unexpected query ${query}`)
+		return fixture.results
+	})
+	const scenarioManager = {
+		agentId: "benchmark-context-diagnostics",
+		search,
+		close: vi.fn(async () => {}),
+	} as unknown as MongoDBMemoryManager
+	const evidence = evidenceFor(fixtures)
+	const manager = Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+		db: {
+			collection: vi.fn(() => ({
+				aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+			})),
+		},
+		prefix: "test_",
+		agentId: "benchmark-parent",
+		config: { mongodb: {} },
+		relevance: { persistRegression: vi.fn(async () => []) },
+		createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
+		settleBenchmarkScenarioManager: vi.fn(async () => {}),
+		listBenchmarkEventEvidence: vi.fn(async () => evidence),
+		waitForBenchmarkSearchConvergence: vi.fn(async () => {}),
+		cleanupBenchmarkScenarioData: vi.fn(async () => ACKNOWLEDGED_CLEANUP),
+	}) as MongoDBMemoryManager
+	const dataset: MemoryBenchmarkDataset = {
+		name: "context diagnostics fixture",
+		datasetKind: "longmemeval",
+		conversations: [],
+		evaluations: [],
+		scenarios: fixtures.map(scenarioFor),
+	}
+	const outcome = await benchmarkOps(manager).runScenarioBenchmarkDataset({
+		datasetPath: "/tmp/benchmark.json",
+		dataset,
+		datasetVersion: "context-diagnostics-v1",
+		maxResults: 50,
+		minScore: 0.01,
+		retrievalLane: "native",
+		executionProfile: "shipped",
+		runContext: testOperationRunContext("context-diagnostics"),
+	})
+	if (!outcome.e2eQa) throw new Error("expected a judged answer envelope")
+	return outcome.e2eQa
 }

@@ -9,6 +9,7 @@ import type {
 } from "../packages/memory-engine/src/types.js"
 import {
 	buildCaseContextDiagnostics,
+	describeDiagnosticsFailure,
 	type Pass0ContextDiagnostics,
 } from "./benchmark/benchmark-context-diagnostics.js"
 
@@ -218,14 +219,10 @@ export type E2eQaCase = {
 	contextPassages: string[]
 	abstention?: boolean
 	upstreamFailure?: string
-	/** Read-only pass-0 observations; they never reach a prompt or a verdict. */
 	diagnostics?: Pass0ContextDiagnostics
-	/** Why the pass-0 diagnostics could not be captured; recorded on the case. */
 	diagnosticsError?: string
 }
 
-// A diagnostics failure is recorded on the case and never reaches the answer,
-// the verdict or the provider calls.
 function caseDiagnostics(testCase: E2eQaCase): BenchmarkCaseContextDiagnostics {
 	if (testCase.diagnosticsError !== undefined) {
 		return { diagnosticsError: testCase.diagnosticsError }
@@ -238,7 +235,7 @@ function caseDiagnostics(testCase: E2eQaCase): BenchmarkCaseContextDiagnostics {
 			diagnostics: testCase.diagnostics,
 		})
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error)
+		const message = describeDiagnosticsFailure(error)
 		log.warn("case context diagnostics failed", {
 			caseId: testCase.caseId,
 			error: message,

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { createSubsystemLogger } from "@memongo/lib"
 import type {
 	BenchmarkCaseContextDiagnostics,
 	BenchmarkContextPassageDiagnostic,
@@ -21,9 +22,10 @@ import type {
 /** Version of the sent-status rule; bump when the rule changes. */
 export const CONTEXT_MATCH_RULE = "containment-v2"
 
+const log = createSubsystemLogger("benchmark:context-diagnostics")
+
 const PREVIEW_CHARACTERS = 200
 
-/** Lineage of one search result, captured at pass 0 beside its text. */
 export type ResultLineage = {
 	/** 1-based position in the search results. */
 	retrievedRank: number
@@ -44,14 +46,14 @@ export type GoldTurnTarget = {
 	sessionId: string
 	turnIndex: number
 	turnId: string
-	/** The admitted turn body, the text the containment rule looks for. */
 	text: string
 }
 
 /**
  * Pass-0 observations for one case. `sentCandidates` is index-aligned with the
  * case's `contextPassages`; the rank maps cover every search result, including
- * those without text that were never sent.
+ * those never sent. Session ranks are id-based; turn ranks also count a result
+ * that holds the turn's text.
  */
 export type Pass0ContextDiagnostics = {
 	sentCandidates: ResultLineage[]
@@ -216,7 +218,6 @@ function quantify(statuses: BenchmarkGoldSentStatus[]): {
 	}
 }
 
-/** The part of the event evidence maps that lineage classification reads. */
 export type ContextEvidenceMaps = {
 	sessionIds: Map<string, string>
 	turnIds: Map<string, string>
@@ -372,26 +373,44 @@ export function buildPass0ContextDiagnostics(params: {
 			}
 		},
 	)
-	return {
-		sentCandidates,
-		retrievedSessionRanks,
-		retrievedTurnRanks,
-		gold: buildGold({
-			evaluation: params.evaluation,
-			conversations: params.conversations,
-		}),
+	const gold = buildGold({
+		evaluation: params.evaluation,
+		conversations: params.conversations,
+	})
+	if (gold.applicable) {
+		const resultTexts = params.results.map((result) =>
+			normalizeWhitespace(result.text ?? result.snippet),
+		)
+		for (const turn of gold.turns) {
+			const needle = normalizeWhitespace(turn.text)
+			const index = resultTexts.findIndex((text) => text.includes(needle))
+			const known = retrievedTurnRanks.get(turn.turnId)
+			if (index >= 0 && (known === undefined || index + 1 < known)) {
+				retrievedTurnRanks.set(turn.turnId, index + 1)
+			}
+		}
 	}
+	return { sentCandidates, retrievedSessionRanks, retrievedTurnRanks, gold }
 }
 
-/** A diagnostics failure becomes a recorded error, never a failed case. */
+export function describeDiagnosticsFailure(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error)
+	if (message.trim().length > 0) return message
+	return `diagnostics failed: ${error instanceof Error ? error.constructor.name : typeof error}`
+}
+
 export function captureContextDiagnostics(
+	caseId: string,
 	build: () => Pass0ContextDiagnostics,
 ): { diagnostics: Pass0ContextDiagnostics } | { diagnosticsError: string } {
 	try {
 		return { diagnostics: build() }
 	} catch (error) {
-		return {
-			diagnosticsError: error instanceof Error ? error.message : String(error),
-		}
+		const diagnosticsError = describeDiagnosticsFailure(error)
+		log.warn("pass-0 context diagnostics failed", {
+			caseId,
+			error: diagnosticsError,
+		})
+		return { diagnosticsError }
 	}
 }

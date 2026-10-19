@@ -1793,7 +1793,6 @@ export type BenchmarkDiagnosticTruth = boolean | "unknown"
  */
 export type BenchmarkContextProvenance = "complete" | "partial" | "none"
 
-/** One passage the answerer actually received, in the order it was numbered. */
 export type BenchmarkContextPassageDiagnostic = {
 	/** 1-based position in the list sent to the answerer. */
 	sentRank: number
@@ -1804,9 +1803,7 @@ export type BenchmarkContextPassageDiagnostic = {
 	turnIds: string[]
 	provenance: BenchmarkContextProvenance
 	score: number
-	/** sha256 (hex) of the full passage text sent. */
 	sha256: string
-	/** First 200 characters of the text sent. */
 	preview: string
 }
 
@@ -1823,7 +1820,6 @@ export type BenchmarkGoldSessionDiagnostic = {
 	/** Zero-based position among the scenario's admitted conversations. */
 	admittedSessionIndex: number
 	sessionId: string
-	/** Some search result resolves to this session. */
 	retrieved: boolean
 	sentStatus: BenchmarkGoldSentStatus
 }
@@ -1835,9 +1831,9 @@ export type BenchmarkGoldTurnDiagnostic = {
 	/** Zero-based turn index in the source session. */
 	turnIndex: number
 	turnId: string
-	/** Some search result resolves to this turn. */
+	/** A search result resolves to this turn or holds its text. */
 	retrieved: boolean
-	/** First search result that resolves to this turn, 1-based. */
+	/** 1-based rank of the first such search result. */
 	retrievedRank: number | null
 	/** First sent passage that holds this turn's text or resolves to it, 1-based. */
 	sentRank: number | null
@@ -1869,10 +1865,7 @@ export type BenchmarkGoldDiagnostics =
 			}
 	  }
 
-/**
- * Optional per-case context diagnostics (legacy custom-v1 path). Read-only
- * observations: they never feed the answer, the verdict or any provider call.
- */
+/** Optional per-case context diagnostics, present on the legacy custom-v1 path. */
 export type BenchmarkCaseContextDiagnostics = {
 	contextPassages?: BenchmarkContextPassageDiagnostic[]
 	passagesSentCount?: number
@@ -1887,7 +1880,6 @@ export type BenchmarkCaseContextDiagnostics = {
 	}
 	/** Version of the sent-status rule, e.g. `containment-v2`. */
 	matchRule?: string
-	/** Set when computing the diagnostics failed; the case verdict is unaffected. */
 	diagnosticsError?: string
 }
 

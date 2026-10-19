@@ -59,10 +59,7 @@ export type BenchmarkJudgedAnswerMaterial = {
 	questionDate?: string
 	passageDates?: string[][]
 	passageRoles?: Array<MemoryResultRole | undefined>
-	/**
-	 * Legacy custom-v1 path only: read-only context diagnostics, or the reason
-	 * they could not be captured. Neither reaches a prompt or a verdict.
-	 */
+	/** Legacy custom-v1 path only. */
 	diagnostics?: Pass0ContextDiagnostics
 	diagnosticsError?: string
 }
@@ -184,7 +181,7 @@ export function buildJudgedAnswerCases(
 				? { upstreamFailure: material.upstreamFailure }
 				: {}),
 			...(material.diagnostics ? { diagnostics: material.diagnostics } : {}),
-			...(material.diagnosticsError
+			...(material.diagnosticsError !== undefined
 				? { diagnosticsError: material.diagnosticsError }
 				: {}),
 		})

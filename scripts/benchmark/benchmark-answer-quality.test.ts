@@ -109,6 +109,24 @@ describe("buildJudgedAnswerCases", () => {
 		expect(cases[0]?.abstention).toBe(true)
 		expect(cases[1]?.upstreamFailure).toBe("search timed out")
 	})
+
+	it("carries a diagnostics error through even when its text is empty", () => {
+		const material = new Map<string, BenchmarkJudgedAnswerMaterial>([
+			[
+				"case-1",
+				{
+					caseId: "case-1",
+					question: "what is the project deadline?",
+					goldAnswer: "August 21",
+					abstention: false,
+					contextPassages: ["deadline is August 21"],
+					diagnosticsError: "",
+				},
+			],
+		])
+		const { cases } = buildJudgedAnswerCases(material)
+		expect(cases[0]).toHaveProperty("diagnosticsError", "")
+	})
 })
 
 describe("mergeLongMemEvalAnswerQuality", () => {

@@ -1,26 +1,11 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-manager.js"
-import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
-import type {
-	BenchmarkE2eQaEnvelope,
-	MemoryBenchmarkDataset,
-} from "../../packages/memory-engine/src/types.js"
 import {
-	mocked,
-	testOperationRunContext,
-} from "../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
-import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
-import {
-	type FixtureCase,
-	evidenceFor,
 	fixtureCases,
-	queryFor,
-	scenarioFor,
+	runFixture,
 } from "./mongodb-manager-benchmark-context-diagnostics.fixture.js"
 
-// The answerer always says "violet"; the judge accepts exactly that. The
-// diagnostics under test never reach either prompt.
+// The answerer always says "violet"; the judge accepts exactly that.
 const { answerProbe } = vi.hoisted(() => {
 	const provider = {
 		name: "synthetic-deterministic",
@@ -209,106 +194,6 @@ vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
 	).telemetryModuleMock(),
 )
 
-const ACKNOWLEDGED_CLEANUP = {
-	status: "acknowledged" as const,
-	agentId: "benchmark-test-agent",
-	registry: { version: 1 as const, digest: "0".repeat(64), collections: 0 },
-	collections: [],
-}
-
-function benchmarkOps(
-	manager: MongoDBMemoryManager,
-): MongoDBManagerBenchmarkOps {
-	const ops = new MongoDBManagerBenchmarkOps(
-		manager as unknown as MongoDBManagerHost,
-	)
-	const managerRecord = manager as unknown as Record<string, unknown>
-	const opsRecord = ops as unknown as Record<string, unknown>
-	for (const method of [
-		"createBenchmarkScenarioManager",
-		"settleBenchmarkScenarioManager",
-		"listBenchmarkEventEvidence",
-		"waitForBenchmarkSearchConvergence",
-		"cleanupBenchmarkScenarioData",
-	]) {
-		const override = managerRecord[method]
-		if (typeof override === "function") {
-			opsRecord[method] = override
-		}
-	}
-	return ops
-}
-
-async function runFixture(
-	fixtures: FixtureCase[],
-): Promise<BenchmarkE2eQaEnvelope> {
-	vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "synthetic")
-	vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "synthetic-model")
-	vi.stubEnv("MEMONGO_BENCHMARK_JUDGE_MODEL", "synthetic-judge-model")
-	const { ingestBenchmarkConversations } = await import(
-		"./mongodb-benchmark-harness.js"
-	)
-	mocked(ingestBenchmarkConversations).mockResolvedValue({
-		datasetPath: "/tmp/benchmark.json",
-		datasetName: "context-diagnostics",
-		conversationsIngested: 1,
-		turnsIngested: 1,
-		skippedConversations: 0,
-		failedLines: 0,
-		failedTurns: 0,
-		rejectedTurns: 0,
-		rejectedConversations: 0,
-		startedAt: new Date("2026-04-09T12:00:00.000Z"),
-		completedAt: new Date("2026-04-09T12:00:01.000Z"),
-	})
-	const search = vi.fn(async (query: string) => {
-		const fixture = fixtures.find((entry) => queryFor(entry.caseId) === query)
-		if (!fixture) throw new Error(`unexpected query ${query}`)
-		return fixture.results
-	})
-	const scenarioManager = {
-		agentId: "benchmark-context-diagnostics",
-		search,
-		close: vi.fn(async () => {}),
-	} as unknown as MongoDBMemoryManager
-	const evidence = evidenceFor(fixtures)
-	const manager = Object.assign(Object.create(MongoDBMemoryManager.prototype), {
-		db: {
-			collection: vi.fn(() => ({
-				aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
-			})),
-		},
-		prefix: "test_",
-		agentId: "benchmark-parent",
-		config: { mongodb: {} },
-		relevance: { persistRegression: vi.fn(async () => []) },
-		createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
-		settleBenchmarkScenarioManager: vi.fn(async () => {}),
-		listBenchmarkEventEvidence: vi.fn(async () => evidence),
-		waitForBenchmarkSearchConvergence: vi.fn(async () => {}),
-		cleanupBenchmarkScenarioData: vi.fn(async () => ACKNOWLEDGED_CLEANUP),
-	}) as MongoDBMemoryManager
-	const dataset: MemoryBenchmarkDataset = {
-		name: "context diagnostics fixture",
-		datasetKind: "longmemeval",
-		conversations: [],
-		evaluations: [],
-		scenarios: fixtures.map(scenarioFor),
-	}
-	const outcome = await benchmarkOps(manager).runScenarioBenchmarkDataset({
-		datasetPath: "/tmp/benchmark.json",
-		dataset,
-		datasetVersion: "context-diagnostics-v1",
-		maxResults: 50,
-		minScore: 0.01,
-		retrievalLane: "native",
-		executionProfile: "shipped",
-		runContext: testOperationRunContext("context-diagnostics"),
-	})
-	if (!outcome.e2eQa) throw new Error("expected a judged answer envelope")
-	return outcome.e2eQa
-}
-
 afterEach(() => {
 	vi.unstubAllEnvs()
 })
@@ -375,8 +260,8 @@ describe("pass-0 context diagnostics reach each legacy e2eQa case result", () =>
 					sessionId: "witness::s1",
 					turnIndex: 1,
 					turnId: "witness::s1::turn_2",
-					retrieved: false,
-					retrievedRank: null,
+					retrieved: true,
+					retrievedRank: 3,
 					sentRank: 2,
 					sentStatus: "present",
 					sessionRetrieved: true,
@@ -495,6 +380,31 @@ describe("pass-0 context diagnostics reach each legacy e2eQa case result", () =>
 					sentRank: null,
 					sentStatus: "absent",
 					candidateDefect: true,
+				},
+			],
+		})
+	})
+
+	it.each([
+		["captext", "absent", true],
+		["captextunk", "unknown", false],
+	] as const)("never reads %s as present when the turn's full text appears only in retrieved result 22, beyond the cap", async (caseId, sentStatus, candidateDefect) => {
+		const { get } = await caseResults()
+		const result = get(caseId)
+		expect(result.passagesSentCount).toBe(20)
+		expect(result.contextPassages?.map((p) => p.preview)).not.toContain(
+			"Reminder: The garage code is 4417.",
+		)
+		expect(result.gold).toMatchObject({
+			turns: [
+				{
+					turnId: `${caseId}::s1::turn_3`,
+					retrieved: true,
+					retrievedRank: 22,
+					sentRank: null,
+					sentStatus,
+					sessionRetrieved: true,
+					candidateDefect,
 				},
 			],
 		})

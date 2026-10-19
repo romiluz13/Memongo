@@ -136,6 +136,33 @@ describe("runE2eQa context diagnostics", () => {
 		expect(result.goldSessionInContext).toBeUndefined()
 		expect(result.goldTurnInContext).toBeUndefined()
 	})
+
+	it("names the failure when the diagnostics step throws an error with an empty message", async () => {
+		const envelope = await runE2eQa({
+			provider: answerProvider(),
+			model: "m",
+			cases: [
+				{
+					caseId: "silent",
+					question: "What color?",
+					goldAnswer: "violet",
+					contextPassages: ["the sky is violet"],
+					diagnostics: {
+						get sentCandidates(): never {
+							throw new Error("")
+						},
+						retrievedSessionRanks: new Map(),
+						retrievedTurnRanks: new Map(),
+						gold: { applicable: false, reason: "abstention" },
+					},
+				},
+			],
+		})
+		expect(envelope.caseResults[0]?.diagnosticsError).toBe(
+			"diagnostics failed: Error",
+		)
+		expect(envelope.caseResults[0]?.correct).toBe(true)
+	})
 })
 
 describe("runE2eQa gold sent status (containment-v2)", () => {
