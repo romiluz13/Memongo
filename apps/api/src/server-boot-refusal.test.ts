@@ -55,42 +55,50 @@ afterEach(() => {
 const COLD_IMPORT_TIMEOUT_MS = 30_000
 
 describe("API boot refuses to serve on a boot failure (X-06)", () => {
-	it("exits 1 with the typed reason and never binds when the startup contract fails", async () => {
-		const { MemongoBootError } = await import("@memongo/memory-bridge")
-		seams.capabilities.mockRejectedValue(
-			new MemongoBootError(
-				{
-					code: "index-not-ready",
-					requirement: "READY and serving its manifest definition",
-					index: "memongo_chunks_vector",
-					collection: "memongo_chunks",
-					status: "BUILDING",
-				},
-				"boot refused after the 180 s readiness deadline: memongo_chunks_vector (memongo_chunks) is not ready",
-			),
-		)
+	it(
+		"exits 1 with the typed reason and never binds when the startup contract fails",
+		async () => {
+			const { MemongoBootError } = await import("@memongo/memory-bridge")
+			seams.capabilities.mockRejectedValue(
+				new MemongoBootError(
+					{
+						code: "index-not-ready",
+						requirement: "READY and serving its manifest definition",
+						index: "memongo_chunks_vector",
+						collection: "memongo_chunks",
+						status: "BUILDING",
+					},
+					"boot refused after the 180 s readiness deadline: memongo_chunks_vector (memongo_chunks) is not ready",
+				),
+			)
 
-		await expect(import("./server.js")).rejects.toThrow("process.exit(1)")
+			await expect(import("./server.js")).rejects.toThrow("process.exit(1)")
 
-		expect(seams.serve).not.toHaveBeenCalled()
-		expect(console.error).toHaveBeenCalledWith(
-			expect.stringContaining("boot failure index-not-ready"),
-		)
-	}, COLD_IMPORT_TIMEOUT_MS)
+			expect(seams.serve).not.toHaveBeenCalled()
+			expect(console.error).toHaveBeenCalledWith(
+				expect.stringContaining("boot failure index-not-ready"),
+			)
+		},
+		COLD_IMPORT_TIMEOUT_MS,
+	)
 
-	it("serves once the startup contract passes", async () => {
-		seams.capabilities.mockResolvedValue({
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: true,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		})
+	it(
+		"serves once the startup contract passes",
+		async () => {
+			seams.capabilities.mockResolvedValue({
+				vectorSearch: true,
+				textSearch: true,
+				scoreFusion: true,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+			})
 
-		await import("./server.js")
+			await import("./server.js")
 
-		expect(seams.serve).toHaveBeenCalledOnce()
-		expect(process.exit).not.toHaveBeenCalled()
-	}, COLD_IMPORT_TIMEOUT_MS)
+			expect(seams.serve).toHaveBeenCalledOnce()
+			expect(process.exit).not.toHaveBeenCalled()
+		},
+		COLD_IMPORT_TIMEOUT_MS,
+	)
 })

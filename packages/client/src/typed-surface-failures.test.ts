@@ -89,7 +89,11 @@ describe("state failure rows (G3-75)", () => {
 	})
 })
 
-describe("js-merge is not an accepted fusionMethod (X-05)", () => {
+// Each case type-checks the client sources with the compiler API, which
+// exceeds Vitest's 5 s default on a loaded machine.
+describe("js-merge is not an accepted fusionMethod (X-05)", {
+	timeout: 60_000,
+}, () => {
 	const dir = dirname(fileURLToPath(import.meta.url))
 	const probe = join(dir, "fusion-method-probe.ts")
 
