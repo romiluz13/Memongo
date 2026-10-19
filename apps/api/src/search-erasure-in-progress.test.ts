@@ -10,6 +10,7 @@ const bridge = vi.hoisted(() => ({
 	memongoBridgeSearchKBWithDegradation: vi.fn(),
 	memongoBridgeSearchWithDegradation: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
+	memongoBridgeRecallConversation: vi.fn(),
 }))
 vi.mock(
 	"@memongo/memory-bridge",
@@ -79,6 +80,36 @@ describe("an erasure in progress refuses a search read", () => {
 		expect(JSON.stringify(json)).not.toContain("CANARY-QUERY-TEXT")
 	})
 
+	it.each([
+		["a query recall", { query: QUERY }],
+		["a chronological recall", {}],
+	] as const)("/v1/recall-conversation (%s) answers 409 ERASURE_IN_PROGRESS", async (_label, extra) => {
+		bridge.memongoBridgeRecallConversation.mockRejectedValue(erasureConflict())
+
+		const res = await createApp().request("/v1/recall-conversation", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: "Bearer fixture-admin",
+			},
+			body: JSON.stringify({
+				agentId: "owner",
+				scope: "agent",
+				scopeRef: "agent:owner",
+				...extra,
+			}),
+		})
+
+		expect(res.status).toBe(409)
+		const json = (await res.json()) as {
+			error: { code: string }
+			results?: unknown
+		}
+		expect(json.error.code).toBe("ERASURE_IN_PROGRESS")
+		expect(json.results).toBeUndefined()
+		expect(JSON.stringify(json)).not.toContain("CANARY-QUERY-TEXT")
+	})
+
 	it("keeps an unrelated failure on the route's internal error", async () => {
 		bridge.memongoBridgeSearchKBWithDegradation.mockRejectedValue(
 			new Error("boom"),
@@ -92,13 +123,15 @@ describe("an erasure in progress refuses a search read", () => {
 		})
 	})
 
-	it("documents the 409 on the KB search operation", () => {
+	it("documents the 409 on the KB search and recall operations", () => {
 		const paths = openApiSpec.paths as unknown as Record<
 			string,
 			Record<string, { responses: Record<string, { description: string }> }>
 		>
-		expect(paths["/v1/search-kb"].post.responses["409"].description).toContain(
-			"ERASURE_IN_PROGRESS",
-		)
+		for (const path of ["/v1/search-kb", "/v1/recall-conversation"]) {
+			expect(paths[path].post.responses["409"].description).toContain(
+				"ERASURE_IN_PROGRESS",
+			)
+		}
 	})
 })

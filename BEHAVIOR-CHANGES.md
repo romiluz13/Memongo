@@ -627,6 +627,12 @@ A tenant is `(agentId, scope, scopeRef)`. The reads below used to filter by `age
 
 Fixes for the blocking findings of the final M2 review (ticket #122). R1, R2 and R5 are a separate section.
 
+### R3: conversation recall honors the erasure gate
+
+- **Refused while an erasure runs.** `POST /v1/recall-conversation`, `recallConversation` in the client, `memongo_recall_conversation`, `memongo_recall_messages` and the AI SDK tool of the same name take the erasure admission before they read, as `readFile` and KB search do. While an erasure is in progress for the agent the recall is `409 ERASURE_IN_PROGRESS` (the engine's `ErasureGateConflictError`), for a query recall and for a chronological listing alike. It used to answer with the events the sweep had not reached yet. The refusal comes after the tenant identity check and before the index-health check.
+- **Closed during the read.** The recall re-checks the gate against its admission at the return boundary. An erasure that began while the recall ran is the same 409, and the events it read are not returned.
+- **Cost.** Each recall now writes the gate's admission (a majority-acknowledged upsert) and runs the fence transaction once, as `readFile` and KB search already do.
+
 ### R4: each host proves its own serving definition
 
 - **Index assessment.** Boot, preflight and the per-request index health judge each `statusDetail` host on that host's own proof: the `mainIndex.definition` it reports or, for a host whose comparable generation equals `latestDefinitionVersion`, the listing's `latestDefinition`. A previous host's definition is never reused for another host. A host that proves only a generation, beside a drifted `latestDefinition`, is `drift` (boot repairs it; a request sees `index-stale`) even when another host reports the intended definition. It used to be judged serving on that other host's definition. A host that proves a current generation when the listing carries no `latestDefinition` is `index-metadata-unknown`.
