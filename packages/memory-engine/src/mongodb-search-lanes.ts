@@ -40,10 +40,7 @@ import {
 	freshnessRevalidationStages,
 	runSearchAggregateWithRetry,
 } from "./mongodb-search.js"
-import {
-	buildEventLifecycleClause,
-	mergeQueryClauses,
-} from "./mongodb-temporal.js"
+import { buildEventLifecycleClause } from "./mongodb-temporal.js"
 import {
 	type SearchBudgetReason,
 	SearchBudgetDeniedError,
@@ -211,37 +208,68 @@ async function expandTemporalCoverageSessionEvents(params: {
 		})
 		return []
 	}
-	const docs = await eventsCollection(params.db, params.prefix)
-		.find(
-			mergeQueryClauses(
-				{
-					agentId: params.agentId,
-					scope: params.scope,
-					scopeRef: params.scopeRef,
-					sessionId: { $in: sessionIds },
-					role: "user",
-					timestamp: { $lte: params.questionDate },
+	// M2 (G1-28): the hit sessions' user turns are selected through $search
+	// with the session ids in compound.filter. The lane's terms are an
+	// optional `should`, so a session opener without a term match stays a
+	// candidate while term-bearing turns rank first under the bound. The
+	// indexed copy can lag an owner/scope/session mutation, a retraction or
+	// an expiry, so the hydrated document is re-checked post-stage.
+	const canonicalFilter: Document = {
+		agentId: params.agentId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+		sessionId: { $in: sessionIds },
+		role: "user",
+		timestamp: { $lte: params.questionDate },
+	}
+	const pipeline: Document[] = [
+		{
+			$search: {
+				index: `${params.prefix}events_text`,
+				compound: {
+					filter: [
+						buildSearchFilterEquals("agentId", params.agentId),
+						buildSearchFilterEquals("scope", params.scope),
+						buildSearchFilterEquals("scopeRef", params.scopeRef),
+						buildSearchFilterEquals("sessionId", sessionIds),
+						buildSearchFilterEquals("role", "user"),
+						{ range: { path: "timestamp", lte: params.questionDate } },
+					].filter((value): value is Document => Boolean(value)),
+					should: [{ text: { query: params.terms, path: "body" } }],
 				},
-				// Apply the same lifecycle constraints to neighboring events.
-				buildEventLifecycleClause({ asOf: params.questionDate }),
-			),
-			{
-				projection: {
-					_id: 0,
-					eventId: 1,
-					body: 1,
-					role: 1,
-					sessionId: 1,
-					timestamp: 1,
-					scope: 1,
-					scopeRef: 1,
-					accessCount: 1,
-				},
-				sort: { timestamp: 1 },
-				limit: Math.max(params.maxEvents * 4, sessionIds.length * 6),
 			},
+		},
+		...freshnessRevalidationStages(canonicalFilter),
+		{ $match: buildEventLifecycleClause({ asOf: params.questionDate }) },
+		{ $limit: Math.max(params.maxEvents * 4, sessionIds.length * 6) },
+		{ $project: EVENT_RESULT_PROJECTION },
+	]
+	let searched: Document[]
+	try {
+		searched = await runSearchAggregateWithRetry(
+			eventsCollection(params.db, params.prefix),
+			pipeline,
+			{ stage: "atlas-search" },
 		)
-		.toArray()
+	} catch (err) {
+		throw toTypedSearchError(err, "atlas-search")
+	}
+	params.onTierOutcome?.({
+		stage: "atlas-search",
+		outcome: searched.length > 0 ? "ok" : "ok-empty",
+		...(searched.length > 0 ? {} : { reason: "zero-hits" as const }),
+		resultCount: searched.length,
+	})
+	// The per-session pick below reads each session's turns in time order,
+	// whatever order Search returned them in.
+	const docs = searched.toSorted((left, right) => {
+		const byTime =
+			(left.timestamp instanceof Date ? left.timestamp.getTime() : 0) -
+			(right.timestamp instanceof Date ? right.timestamp.getTime() : 0)
+		return byTime !== 0
+			? byTime
+			: String(left.eventId).localeCompare(String(right.eventId))
+	})
 	const bySession = new Map<string, Document[]>()
 	for (const doc of docs) {
 		if (

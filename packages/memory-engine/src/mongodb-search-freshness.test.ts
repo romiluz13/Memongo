@@ -353,8 +353,10 @@ describe("searchTurnEventsWithinSessions freshness revalidation", () => {
 //   - post-stage, canonical agentId/scope/scopeRef/timestamp AND the
 //     lifecycle window are revalidated against the hydrated document before
 //     limit/projection;
-//   - the expansion find keeps owner/scope/scopeRef/sessionIds/role/
-//     timestamp AND adds the lifecycle window;
+//   - the session expansion (M2 T6: a $search with the hit session ids in
+//     compound.filter, no longer a find) keeps owner/scope/scopeRef/
+//     sessionIds/role/timestamp, re-checks them post-stage, AND adds the
+//     lifecycle window;
 //   - clocks: validity (validAt/invalidAt) at the caller's questionDate,
 //     retention (expiresAt) at wall-now — an expired-since-question record
 //     is awaiting physical TTL deletion and must not resurface.
@@ -395,7 +397,9 @@ describe("searchTemporalCoverageEvents freshness revalidation", () => {
 		const callEnd = new Date()
 
 		expect(results.length).toBeGreaterThan(0)
-		expect(pipelines).toHaveLength(1)
+		// The lane's Search aggregate, then the session expansion's.
+		expect(pipelines).toHaveLength(2)
+		expect(finds).toHaveLength(0)
 		const pipeline = pipelines[0] ?? []
 		// Native Search candidate filters retained verbatim: identity equals +
 		// timestamp range at the question clock, and NO role constraint on the
@@ -460,27 +464,50 @@ describe("searchTemporalCoverageEvents freshness revalidation", () => {
 		expect((expiryGt as Date).getTime()).not.toBe(
 			TEMPORAL_QUESTION_DATE.getTime(),
 		)
-		// The session-expansion find fired (the anchor's session) and carries
-		// the retained canonical constraints plus the lifecycle window.
-		expect(finds).toHaveLength(1)
-		const findFilter = finds[0] ?? {}
-		const findArms = (findFilter.$and ?? [findFilter]) as Document[]
-		const findCanonical = findArms.find((arm) => arm.agentId === "agent-1")
-		expect(findCanonical).toMatchObject({
+		// The session expansion selected through $search (the anchor's
+		// session in compound.filter) and re-checks the retained canonical
+		// constraints plus the lifecycle window after the stage.
+		const expansion = pipelines[1] ?? []
+		const expansionSearch = expansion[0]?.$search?.compound as Document
+		expect(expansionSearch.filter).toEqual([
+			{ equals: { path: "agentId", value: "agent-1" } },
+			{ equals: { path: "scope", value: "agent" } },
+			{ equals: { path: "scopeRef", value: "agent:test" } },
+			{ in: { path: "sessionId", value: ["s-anchor"] } },
+			{ equals: { path: "role", value: "user" } },
+			{ range: { path: "timestamp", lte: TEMPORAL_QUESTION_DATE } },
+		])
+		expect(expansionSearch.should).toEqual([
+			{ text: { query: expect.any(Array), path: "body" } },
+		])
+		expect(expansionSearch.must).toBeUndefined()
+		const expansionLimit = expansion.findIndex(
+			(stage) => typeof stage.$limit === "number",
+		)
+		const expansionCanonical = expansion.findIndex(
+			(stage) => stage.$match?.agentId === "agent-1",
+		)
+		expect(expansionCanonical).toBeGreaterThan(0)
+		expect(expansionCanonical).toBeLessThan(expansionLimit)
+		expect(expansion[expansionCanonical]?.$match).toMatchObject({
 			scope: "agent",
 			scopeRef: "agent:test",
 			role: "user",
+			sessionId: { $in: ["s-anchor"] },
 			timestamp: { $lte: TEMPORAL_QUESTION_DATE },
 		})
-		expect(findCanonical?.sessionId).toEqual({ $in: ["s-anchor"] })
-		const findLifecycle = findArms.find((arm) =>
-			JSON.stringify(arm).includes("expiresAt"),
+		const expansionLifecycle = expansion.findIndex((stage) =>
+			JSON.stringify(stage.$match ?? {}).includes("expiresAt"),
 		)
-		expect(findLifecycle).toBeDefined()
-		const findExpiryGt = (findLifecycle?.$or as Document[])?.[1]?.expiresAt
-			?.$gt as Date | undefined
-		expect(findExpiryGt).toBeInstanceOf(Date)
-		expect((findExpiryGt as Date).getTime()).not.toBe(
+		expect(expansionLifecycle).toBeGreaterThan(expansionCanonical)
+		expect(expansionLifecycle).toBeLessThan(expansionLimit)
+		const expansionExpiry = (
+			(expansion[expansionLifecycle]?.$match?.$and as Document[]).find((arm) =>
+				JSON.stringify(arm).includes("expiresAt"),
+			)?.$or as Document[]
+		)?.[1]?.expiresAt?.$gt as Date | undefined
+		expect(expansionExpiry).toBeInstanceOf(Date)
+		expect((expansionExpiry as Date).getTime()).not.toBe(
 			TEMPORAL_QUESTION_DATE.getTime(),
 		)
 	})
@@ -567,7 +594,8 @@ describe("searchTemporalCoverageEvents freshness revalidation", () => {
 	it("session expansion keeps owner/scope/session/role/timestamp constraints and does not reintroduce expired, invalid, or future-valid records", async () => {
 		// The expansion-only fixtures carry NO query term in their bodies, so
 		// they cannot be native Search candidates — any appearance in results
-		// or timeline evidence arrives through the session-expansion find.
+		// or timeline evidence arrives through the session expansion, whose
+		// Search stage here admits every candidate from a stale index copy.
 		// Each lifecycle victim sits in its OWN expanded session as the
 		// earliest-timestamp doc, so the lane's `sessionDocs[0]` pick admits
 		// every one of them pre-fix (maxPerSession would otherwise cut the
@@ -625,7 +653,7 @@ describe("searchTemporalCoverageEvents freshness revalidation", () => {
 				timestamp: new Date("2026-01-07T00:00:00.000Z"),
 			}),
 		]
-		const { col, finds } = mockEventsCollection(candidates, {
+		const { col, finds, pipelines } = mockEventsCollection(candidates, {
 			applyTextFilter: true,
 		})
 		const results = await searchTemporalCoverageEvents({
@@ -650,13 +678,15 @@ describe("searchTemporalCoverageEvents freshness revalidation", () => {
 		]) {
 			expect(paths).not.toContain(`events/${victim}`)
 		}
-		// The find actually ran against the expanded sessions.
-		expect(finds.length).toBeGreaterThan(0)
-		const findFilter = finds[0] ?? {}
-		const findArms = (findFilter.$and ?? [findFilter]) as Document[]
-		const findCanonical = findArms.find((arm) => arm.agentId === "agent-1")
-		expect(findCanonical?.role).toBe("user")
-		expect(findCanonical?.sessionId).toEqual({
+		// The expansion ran through $search against the expanded sessions;
+		// no find selects them.
+		expect(finds).toHaveLength(0)
+		expect(pipelines).toHaveLength(2)
+		const expansionCanonical = (pipelines[1] ?? []).find(
+			(stage) => stage.$match?.agentId === "agent-1",
+		)?.$match as Document
+		expect(expansionCanonical?.role).toBe("user")
+		expect(expansionCanonical?.sessionId).toEqual({
 			$in: expect.arrayContaining(["s-anchor", "s-other"]),
 		})
 		// Timeline evidence stays clean of every expansion-only victim.
