@@ -22,6 +22,7 @@ import {
 	structuredMemCollection,
 } from "./mongodb-schema.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { SearchLaneError } from "./search-outcomes.js"
 
 const PREFIX = "test_"
 const AGENT_ID = "agent-1"
@@ -389,6 +390,61 @@ describe("mongodb-active-slate", () => {
 		expect(slate.items).toHaveLength(1)
 		expect(slate.items[0]?.kind).toBe("procedure")
 		expect(slate.metadata.partial).toBe(true)
+		expect(slate.metadata.failures).toEqual([
+			{
+				section: "active-critical",
+				stage: "lane",
+				outcome: "failed",
+				reason: "internal-error",
+			},
+		])
+	})
+
+	it("reports a healthy empty slate with no failure rows", async () => {
+		vi.mocked(structuredMemCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		vi.mocked(proceduresCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+
+		const slate = await hydrateActiveSlate(defaultParams())
+
+		expect(slate.items).toEqual([])
+		expect(slate.metadata.partial).toBe(false)
+		expect(slate.metadata.failures).toEqual([])
+	})
+
+	it("throws the typed error when every lane fails instead of returning an empty slate", async () => {
+		const failing = (name: string) =>
+			({
+				find: vi.fn(() => {
+					throw Object.assign(new Error(name), {
+						name: "MongoNetworkError",
+					})
+				}),
+			}) as unknown as Collection
+		vi.mocked(structuredMemCollection).mockImplementation(() =>
+			failing("structured"),
+		)
+		vi.mocked(proceduresCollection).mockImplementation(() =>
+			failing("procedures"),
+		)
+		vi.mocked(eventsCollection).mockImplementation(() => failing("events"))
+
+		const failure = await hydrateActiveSlate(defaultParams()).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect((failure as SearchLaneError).reason).toBe("dependency-unavailable")
+		expect(vi.mocked(emitTelemetry)).toHaveBeenCalledWith(
+			expect.anything(),
+			PREFIX,
+			expect.objectContaining({ ok: false }),
+		)
 	})
 
 	it("excludes TTL-expired structured docs from slate hydration (B1)", async () => {
@@ -569,6 +625,7 @@ describe("materializeBlocks", () => {
 				maxItems: 5,
 				truncated: false,
 				partial: false,
+				failures: [],
 				countsByKind: {},
 				sourceCounts: {},
 			},

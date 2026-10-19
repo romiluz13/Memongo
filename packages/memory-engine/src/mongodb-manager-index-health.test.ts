@@ -550,7 +550,11 @@ describe("running manager: recallConversation gates on the events indexes", () =
 		)
 
 		expect(failure).toBeInstanceOf(SearchLaneError)
-		expect(failure).toMatchObject({ stage: "index-health", reason })
+		expect(failure).toMatchObject({
+			lane: "recall",
+			stage: "index-health",
+			reason,
+		})
 		expect(recallConversationCore).not.toHaveBeenCalled()
 
 		restoreIndex(indexes, saved)
@@ -560,14 +564,18 @@ describe("running manager: recallConversation gates on the events indexes", () =
 		expect(recallConversationCore).toHaveBeenCalledTimes(1)
 	})
 
-	it("hands the recall core the live capability view, not the boot probe", async () => {
-		const { manager } = await boot()
+	it("a recall without a query is a plain find: it reads no Search index and is not gated", async () => {
+		const { manager, indexes } = await boot()
+		patchIndex(indexes, "events_vector", STALE)
 
-		await manager.recallConversation({ query: "what did we say" } as never)
+		await expect(
+			manager.recallConversation({ limit: 5 } as never),
+		).resolves.toEqual({ results: [] })
 
+		expect(recallConversationCore).toHaveBeenCalledTimes(1)
 		expect(
-			vi.mocked(recallConversationCore).mock.calls[0]?.[0].capabilities,
-		).toMatchObject({ vectorSearch: true, textSearch: true })
+			vi.mocked(recallConversationCore).mock.calls[0]?.[0],
+		).not.toHaveProperty("capabilities")
 	})
 })
 

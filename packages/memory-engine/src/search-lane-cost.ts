@@ -12,7 +12,8 @@ import type { SearchWorkCost } from "./mongodb-search-budget.js"
 // deployment, of that tier's first-attempt charges, assuming zero hits at
 // every tier: an autoEmbed vector stage is one aggregation and one embed; a
 // $search, $text or fusion aggregate is one aggregation (plus the embed of
-// its vector input). It is the lane's upper bound without warmup retries,
+// each vector input). The chunk lanes have one tier: a native fusion
+// aggregate. It is the lane's upper bound without warmup retries,
 // which pay from the unreserved remainder. search-lane-cost.test.ts runs the
 // real lane functions against this table.
 // ---------------------------------------------------------------------------
@@ -54,21 +55,17 @@ export function structuredLaneCost(
 	)
 }
 
-/** One `mongoSearch` call (a hybrid sub-lane): exactly one tier runs. */
-export function mongoSearchTierCost(
-	context: LaneCostContext & { fusionMethod: MemoryMongoDBFusionMethod },
-): SearchWorkCost {
-	const { capabilities, fusionMethod } = context
-	if (canVector(context) && capabilities.textSearch) {
-		if (fusionMethod === "scoreFusion" && capabilities.scoreFusion) {
-			return VECTOR_TIER
-		}
-		if (fusionMethod !== "js-merge" && capabilities.rankFusion) {
-			return VECTOR_TIER
-		}
-		return addSearchCosts(VECTOR_TIER, TEXT_TIER)
-	}
-	return canVector(context) ? VECTOR_TIER : TEXT_TIER
+/**
+ * One `mongoSearch` call (a hybrid sub-lane) is one native fusion aggregate:
+ * one aggregation plus each embedded vector input it fuses.
+ */
+export function nativeFusionCost(context: {
+	embeddingMode: MemoryMongoDBEmbeddingMode
+	vectorInputs?: number
+}): SearchWorkCost {
+	return context.embeddingMode === "automated"
+		? { aggregations: 1, embeds: context.vectorInputs ?? 1 }
+		: NO_SEARCH_COST
 }
 
 /** A `vector-only` hybrid sub-lane: one autoEmbed vector stage. */
@@ -85,12 +82,20 @@ export function kbLaneCost(context: {
 	return vectorLeafCost(context)
 }
 
-/** `conversation-evidence`: the inline turn-vector and turn-text branches. */
+/** `conversation-evidence`: one native `$rankFusion` aggregate and the embed of its vector input; nothing when it cannot run. */
 export function conversationEvidenceLaneCost(
 	context: LaneCostContext,
 ): SearchWorkCost {
-	return addSearchCosts(
-		canVector(context) ? VECTOR_TIER : NO_SEARCH_COST,
-		context.capabilities.textSearch ? TEXT_TIER : NO_SEARCH_COST,
-	)
+	return canVector(context) &&
+		context.capabilities.textSearch &&
+		context.capabilities.rankFusion
+		? VECTOR_TIER
+		: NO_SEARCH_COST
+}
+
+/** `raw-window`: one `$search` aggregate over the window; no embed. */
+export function rawWindowLaneCost(
+	context: Pick<LaneCostContext, "capabilities">,
+): SearchWorkCost {
+	return context.capabilities.textSearch ? TEXT_TIER : NO_SEARCH_COST
 }

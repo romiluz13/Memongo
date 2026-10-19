@@ -1,7 +1,7 @@
 /**
  * Search ranking helpers extracted from `mongodb-manager.ts` (P4.3 god-file
- * split): lane fusion and merge utilities, preference/recency/access boosts,
- * result identity/dedupe, reranking, source resolution, and search-request
+ * split): lane fusion and merge utilities, the preference-grounding boost,
+ * result identity/dedupe, heuristic reranking, source resolution, and search-request
  * normalization. Internal seam module — the manager re-exports the public
  * contract; nothing here is added to the package barrels.
  */
@@ -31,6 +31,10 @@ import {
 	resolveProfileNumCandidates,
 	resolveSearchConfig,
 } from "./mongodb-search-executor.js"
+import type {
+	SearchFailureReason,
+	SearchOutcomeSummary,
+} from "./search-outcomes.js"
 import type {
 	MemorySearchManager,
 	MemorySearchRequest,
@@ -76,6 +80,16 @@ export function isBenchmarkStrictMode(): boolean {
 
 export type RelevanceExplainResult = {
 	runId?: string
+	/**
+	 * The diagnostic run could not be stored, so `runId` is absent. The
+	 * explanation itself is intact; the reason is a value-free enum.
+	 */
+	persistFailure?: { reason: SearchFailureReason | "erasure-in-progress" }
+	/**
+	 * This call's lane outcome summary. When its status is not `complete`,
+	 * `health` is `insufficient-data`: failed lanes are not a relevance verdict.
+	 */
+	outcomes?: SearchOutcomeSummary
 	latencyMs: number
 	sourceScope: RelevanceSourceScope
 	health: RelevanceHealth
@@ -118,7 +132,7 @@ export function buildSearchFilterEquals(
 
 export function mapEventSearchDocToResult(
 	doc: Document,
-	lane: "turn-vector" | "turn-text",
+	lane: "turn-vector" | "turn-text" | "turn-fusion",
 ): MemorySearchResult | null {
 	const eventId = typeof doc.eventId === "string" ? doc.eventId.trim() : ""
 	const body = typeof doc.body === "string" ? doc.body : ""
@@ -134,8 +148,8 @@ export function mapEventSearchDocToResult(
 		endLine: 0,
 		score,
 		snippet: body.slice(0, 700),
-		// B5: the full body rides alongside the preview so the reranker and
-		// the reader see past character 700.
+		// B5: the full body rides alongside the preview so the reader sees
+		// past character 700.
 		text: body.slice(0, MAX_RESULT_TEXT_CHARS),
 		source: "conversation",
 		sourceType: "conversation",
@@ -210,12 +224,6 @@ export function mergeRankedResultSets(
 		)
 }
 
-export function mergeTurnPrecisionResults(
-	resultSets: MemorySearchResult[][],
-): MemorySearchResult[] {
-	return mergeRankedResultSets(resultSets)
-}
-
 export const RECOMMENDATION_MEMORY_QUERY_RE =
 	/\b(?:advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?|accessor(?:y|ies)|complement|setup|prefer|preference)\b|(?:\bwhat\s+should\s+i\b|\bany\s+(?:tips?|suggestions?|recommendations?)\b)/i
 
@@ -255,107 +263,6 @@ export function scorePreferenceGroundingSignalBoost(
 		boost += 0.08
 	}
 	return Math.min(boost, 0.32)
-}
-
-export function applyPreferenceEvidenceBoostAfterRerank(
-	query: string,
-	results: MemorySearchResult[],
-): MemorySearchResult[] {
-	if (!RECOMMENDATION_MEMORY_QUERY_RE.test(query)) {
-		return results
-	}
-	return results
-		.map((result, index) => ({
-			result: {
-				...result,
-				score:
-					result.score + scorePreferenceGroundingSignalBoost(query, result),
-			},
-			index,
-		}))
-		.toSorted(
-			(left, right) =>
-				right.result.score - left.result.score || left.index - right.index,
-		)
-		.map(({ result }) => result)
-}
-
-// P3.7: post-cross-encoder recency/access boost. The CE rerank overwrites
-// `score`, erasing every pre-CE boost; this hook reintroduces recency and
-// reinforcement as multiplicative factors on the CE score:
-//   score *= (1 + alpha * (recencyNorm - 0.5)) * (1 + beta * (accessNorm - 0.5))
-// Both norms are min-max normalized to [0,1] across the result set, so the
-// factors are relative to the set and calibration-free. Degenerate sets
-// (single value, missing fields) normalize to 0.5, i.e. a neutral factor.
-const DEFAULT_RECENCY_ACCESS_BOOST_WEIGHT = 0.2
-
-function normalizeRecencyAccessValues(
-	values: (number | undefined)[],
-): (number | undefined)[] {
-	const present = values.filter(
-		(value): value is number => typeof value === "number",
-	)
-	if (present.length <= 1) {
-		// Degenerate set: every present value is neutral.
-		return values.map((value) => (typeof value === "number" ? 0.5 : undefined))
-	}
-	const min = Math.min(...present)
-	const max = Math.max(...present)
-	if (max === min) {
-		return values.map((value) => (typeof value === "number" ? 0.5 : undefined))
-	}
-	return values.map((value) =>
-		typeof value === "number" ? (value - min) / (max - min) : undefined,
-	)
-}
-
-export function applyRecencyAccessBoostAfterRerank(
-	results: MemorySearchResult[],
-	options?: { recencyBoost?: number; accessBoost?: number },
-): MemorySearchResult[] {
-	const recencyBoost =
-		options?.recencyBoost ?? DEFAULT_RECENCY_ACCESS_BOOST_WEIGHT
-	const accessBoost =
-		options?.accessBoost ?? DEFAULT_RECENCY_ACCESS_BOOST_WEIGHT
-	// Zero weights are the off-switch: skip the pass so scores stay
-	// bit-identical to the CE output.
-	if (recencyBoost === 0 && accessBoost === 0) {
-		return results
-	}
-	const recencyNorms = normalizeRecencyAccessValues(
-		results.map((result) =>
-			result.timestamp instanceof Date ? result.timestamp.getTime() : undefined,
-		),
-	)
-	const accessNorms = normalizeRecencyAccessValues(
-		results.map((result) =>
-			typeof result.accessCount === "number" &&
-			Number.isFinite(result.accessCount)
-				? result.accessCount
-				: undefined,
-		),
-	)
-	return results
-		.map((result, index) => {
-			// Missing fields degrade to a neutral factor, never a penalty.
-			const recencyNorm = recencyNorms[index] ?? 0.5
-			const accessNorm = accessNorms[index] ?? 0.5
-			return {
-				result: {
-					...result,
-					score:
-						result.score *
-						(1 + recencyBoost * (recencyNorm - 0.5)) *
-						(1 + accessBoost * (accessNorm - 0.5)),
-				},
-				index,
-			}
-		})
-		.toSorted(
-			(left, right) =>
-				right.result.score - left.result.score || left.index - right.index,
-		)
-		.map(({ result }) => result)
 }
 
 export function stripSessionSummaryTurnProvenance(
@@ -652,7 +559,6 @@ export function resolveRuntimeSearchConfig(
 		fusionMethod: resolved.fusionMethod ?? mongoCfg.fusionMethod,
 		hybridMode: resolved.hybridMode,
 		allowHybridBackstop: resolved.allowHybridBackstop,
-		lexicalPrefilter: resolved.lexicalPrefilter,
 	}
 }
 

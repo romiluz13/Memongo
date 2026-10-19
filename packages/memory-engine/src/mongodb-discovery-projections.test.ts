@@ -1,479 +1,95 @@
-/* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
-import type { Collection, Db, Document } from "mongodb"
-import { beforeEach, describe, expect, it, vi } from "vitest"
-
-vi.mock("./mongodb-schema.js", () => ({
-	entitiesCollection: vi.fn(),
-	episodesCollection: vi.fn(),
-	eventsCollection: vi.fn(),
-	proceduresCollection: vi.fn(),
-	relationsCollection: vi.fn(),
-	structuredMemCollection: vi.fn(),
-	structuredMemRevisionsCollection: vi.fn(),
-}))
-
-vi.mock("./mongodb-ops.js", () => ({
-	recordProjectionRun: vi.fn().mockResolvedValue("run-1"),
-}))
-
+// Projection shapes, provenance and TTL guards. Content matching is modeled
+// through test-helpers/search-model-db.ts; the Search-specific behavior
+// (analyzers, re-checks, typed failure rows) lives in
+// mongodb-discovery-search.test.ts.
+import type { Document } from "mongodb"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
-import { recordProjectionRun } from "./mongodb-ops.js"
 import {
-	entitiesCollection,
-	episodesCollection,
-	eventsCollection,
-	proceduresCollection,
-	relationsCollection,
-	structuredMemCollection,
-	structuredMemRevisionsCollection,
-} from "./mongodb-schema.js"
+	createSearchModelDb,
+	type SearchModelDb,
+} from "./test-helpers/search-model-db.js"
+import type { MemoryDiscoveryProjectionKind } from "./types.js"
 
-const PREFIX = "test_"
 const AGENT_ID = "agent-1"
 const SCOPE = "workspace" as const
 const SCOPE_REF = "workspace:demo"
+const TENANT = { agentId: AGENT_ID, scope: SCOPE, scopeRef: SCOPE_REF }
+const REF = `scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`
 
-function createMockFindCollection(docs: Document[]): Collection {
-	return {
-		find: vi.fn().mockReturnValue({
-			sort: vi.fn().mockReturnValue({
-				limit: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockResolvedValue(docs),
-				}),
-			}),
-		}),
-	} as unknown as Collection
-}
+let model: SearchModelDb
 
-function defaultParams() {
-	return {
-		db: {} as Db,
-		prefix: PREFIX,
+function run(
+	kind: MemoryDiscoveryProjectionKind,
+	extra: { query?: string; maxItems?: number } = {},
+) {
+	return buildDiscoveryProjection({
+		db: model.db,
+		prefix: "test_",
 		agentId: AGENT_ID,
 		scope: SCOPE,
 		scopeRef: SCOPE_REF,
-	}
+		kind,
+		...extra,
+	})
 }
 
+const at = (iso: string) => new Date(iso)
+
+beforeEach(() => {
+	model = createSearchModelDb()
+})
+afterEach(() => {
+	model.expectNoModelErrors()
+	vi.useRealTimers()
+})
+
 describe("mongodb-discovery-projections", () => {
-	beforeEach(() => {
-		vi.clearAllMocks()
-	})
-
-	describe("named contradiction relations", () => {
-		beforeEach(() => {
-			vi.mocked(structuredMemCollection).mockReturnValue(
-				createMockFindCollection([]),
-			)
-			vi.mocked(proceduresCollection).mockReturnValue(
-				createMockFindCollection([]),
-			)
-			vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
-		})
-
-		const relation = {
-			fromEntityId: "2b7384062b18357c",
-			toEntityId: "4613b2d4dfe716c1",
-			type: "depends_on",
-			scope: SCOPE,
-			scopeRef: SCOPE_REF,
-			state: "conflicted",
-			updatedAt: new Date("2026-10-04T12:00:00Z"),
-		}
-
-		function relationCollection(docs: Document[]) {
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue(docs),
-			})
-			const collection = { ...createMockFindCollection([]), aggregate }
-			vi.mocked(relationsCollection).mockReturnValue(
-				collection as unknown as Collection,
-			)
-			return { aggregate, collection }
-		}
-
-		it.each([
-			"Apollo",
-			"Glory",
-			"Selene",
-		])("returns matching relation evidence for endpoint name or alias %s", async (query) => {
-			relationCollection([relation])
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "contradiction-report",
-				query,
-			})
-			expect(result.sections[0]?.evidence[0]?.canonicalId).toBe(
-				`relation:${relation.fromEntityId}:depends_on:${relation.toEntityId}`,
-			)
-			expect(result.metadata.partial).toBe(false)
-		})
-
-		it("scopes both endpoint lookups and filters relevance before the result limit", async () => {
-			const { aggregate } = relationCollection([relation])
-			await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "contradiction-report",
-				query: "Apollo",
-				maxItems: 4,
-			})
-			expect(aggregate).toHaveBeenCalledOnce()
-			const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
-			expect(pipeline[0]?.$match).toEqual({
-				agentId: AGENT_ID,
-				scope: SCOPE,
-				scopeRef: SCOPE_REF,
-				state: { $in: ["conflicted", "invalidated"] },
-			})
-			for (const [index, field] of ["fromEntityId", "toEntityId"].entries()) {
-				const lookup = pipeline[index + 1]?.$lookup
-				expect(lookup).toMatchObject({
-					from: `${PREFIX}entities`,
-					localField: field,
-					foreignField: "entityId",
-					pipeline: [
-						{
-							$match: {
-								agentId: AGENT_ID,
-								scope: SCOPE,
-								scopeRef: SCOPE_REF,
-								$or: [{ name: /Apollo/i }, { aliases: /Apollo/i }],
-							},
-						},
-						{ $limit: 1 },
-						{ $project: { _id: 0, entityId: 1 } },
-					],
-				})
-			}
-			expect(pipeline[3]?.$match).toEqual({
-				$or: [
-					{ "matched_fromEntityId.0": { $exists: true } },
-					{ "matched_toEntityId.0": { $exists: true } },
-					{ type: /Apollo/i },
-				],
-			})
-			expect(pipeline[4]).toEqual({ $sort: { updatedAt: -1 } })
-			expect(pipeline[5]).toEqual({ $limit: 4 })
-			expect(pipeline[6]).toEqual({
-				$project: {
-					matched_fromEntityId: 0,
-					matched_toEntityId: 0,
-				},
-			})
-		})
-
-		it.each([
-			undefined,
-			"   ",
-		])("retains the original cursor when query is %s", async (query) => {
-			const collection = createMockFindCollection([relation])
-			const aggregate = vi.fn()
-			vi.mocked(relationsCollection).mockReturnValue({
-				...collection,
-				aggregate,
-			} as unknown as Collection)
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "contradiction-report",
-				query,
-				maxItems: 4,
-			})
-			expect(aggregate).not.toHaveBeenCalled()
-			expect(collection.find).toHaveBeenCalledWith({
-				agentId: AGENT_ID,
-				scope: SCOPE,
-				scopeRef: SCOPE_REF,
-				state: { $in: ["conflicted", "invalidated"] },
-			})
-			expect(result.sections[0]?.evidence[0]?.canonicalId).toContain(
-				relation.fromEntityId,
-			)
-		})
-
-		it("preserves literal query escaping and empty matches", async () => {
-			const { aggregate } = relationCollection([])
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "contradiction-report",
-				query: "A.p",
-			})
-			expect(aggregate).toHaveBeenCalledOnce()
-			const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
-			expect(pipeline[1]?.$lookup.pipeline[0].$match.$or[0].name).toEqual(
-				/A\.p/i,
-			)
-			expect(result.sections).toEqual([])
-			expect(result.metadata.partial).toBe(false)
-		})
-
-		it("discloses aggregate failure while retaining other contradiction evidence", async () => {
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi
-					.fn()
-					.mockRejectedValue(new Error("synthetic aggregation unavailable")),
-			})
-			vi.mocked(relationsCollection).mockReturnValue({
-				...createMockFindCollection([]),
-				aggregate,
-			} as unknown as Collection)
-			vi.mocked(structuredMemCollection).mockReturnValue(
-				createMockFindCollection([
-					{
-						type: "fact",
-						key: "Apollo",
-						value: "synthetic conflict",
-						state: "conflicted",
-						updatedAt: new Date(),
-						scope: SCOPE,
-						scopeRef: SCOPE_REF,
-					},
-				]),
-			)
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "contradiction-report",
-				query: "Apollo",
-			})
-			expect(result.metadata.partial).toBe(true)
-			expect(result.sections[0]?.title).toBe("Structured contradictions")
-		})
-	})
-
-	describe("named what-changed relations", () => {
-		beforeEach(() => {
-			vi.mocked(structuredMemRevisionsCollection).mockReturnValue(
-				createMockFindCollection([]),
-			)
-			vi.mocked(proceduresCollection).mockReturnValue(
-				createMockFindCollection([]),
-			)
-			vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
-		})
-
-		const relation = {
-			fromEntityId: "2b7384062b18357c",
-			toEntityId: "4613b2d4dfe716c1",
-			type: "depends_on",
-			scope: SCOPE,
-			scopeRef: SCOPE_REF,
-			updatedAt: new Date("2026-10-04T12:00:00Z"),
-		}
-
-		function relationCollection(docs: Document[]) {
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue(docs),
-			})
-			const collection = { ...createMockFindCollection([]), aggregate }
-			vi.mocked(relationsCollection).mockReturnValue(
-				collection as unknown as Collection,
-			)
-			return { aggregate, collection }
-		}
-
-		it.each([
-			"Apollo",
-			"Glory",
-			"Selene",
-		])("returns matching relation evidence for endpoint name or alias %s", async (query) => {
-			relationCollection([relation])
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "what-changed",
-				query,
-			})
-			expect(result.sections[0]?.evidence[0]?.canonicalId).toBe(
-				`relation:${relation.fromEntityId}:depends_on:${relation.toEntityId}`,
-			)
-			expect(result.metadata.partial).toBe(false)
-		})
-
-		it("scopes both endpoint lookups and filters relevance before the result limit", async () => {
-			const { aggregate } = relationCollection([relation])
-			await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "what-changed",
-				query: "Apollo",
-				maxItems: 4,
-			})
-			expect(aggregate).toHaveBeenCalledOnce()
-			const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
-			expect(pipeline[0]?.$match).toEqual({
-				agentId: AGENT_ID,
-				scope: SCOPE,
-				scopeRef: SCOPE_REF,
-				updatedAt: { $gte: expect.any(Date), $lte: expect.any(Date) },
-			})
-			for (const [index, field] of ["fromEntityId", "toEntityId"].entries()) {
-				const lookup = pipeline[index + 1]?.$lookup
-				expect(lookup).toMatchObject({
-					from: `${PREFIX}entities`,
-					localField: field,
-					foreignField: "entityId",
-					pipeline: [
-						{
-							$match: {
-								agentId: AGENT_ID,
-								scope: SCOPE,
-								scopeRef: SCOPE_REF,
-								$or: [{ name: /Apollo/i }, { aliases: /Apollo/i }],
-							},
-						},
-						{ $limit: 1 },
-						{ $project: { _id: 0, entityId: 1 } },
-					],
-				})
-			}
-			expect(pipeline[3]?.$match).toEqual({
-				$or: [
-					{ "matched_fromEntityId.0": { $exists: true } },
-					{ "matched_toEntityId.0": { $exists: true } },
-					{ type: /Apollo/i },
-				],
-			})
-			expect(pipeline[4]).toEqual({ $sort: { updatedAt: -1 } })
-			expect(pipeline[5]).toEqual({ $limit: 12 })
-			expect(pipeline[6]).toEqual({
-				$project: {
-					matched_fromEntityId: 0,
-					matched_toEntityId: 0,
-				},
-			})
-		})
-
-		it.each([
-			undefined,
-			"   ",
-		])("retains the original cursor when query is %s", async (query) => {
-			const collection = createMockFindCollection([relation])
-			const aggregate = vi.fn()
-			vi.mocked(relationsCollection).mockReturnValue({
-				...collection,
-				aggregate,
-			} as unknown as Collection)
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "what-changed",
-				query,
-				maxItems: 4,
-			})
-			expect(aggregate).not.toHaveBeenCalled()
-			expect(collection.find).toHaveBeenCalledWith({
-				agentId: AGENT_ID,
-				scope: SCOPE,
-				scopeRef: SCOPE_REF,
-				updatedAt: { $gte: expect.any(Date), $lte: expect.any(Date) },
-			})
-			expect(result.sections[0]?.evidence[0]?.canonicalId).toContain(
-				relation.fromEntityId,
-			)
-		})
-
-		it("preserves literal query escaping and empty matches", async () => {
-			const { aggregate } = relationCollection([])
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "what-changed",
-				query: "A.p",
-			})
-			expect(aggregate).toHaveBeenCalledOnce()
-			const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
-			expect(pipeline[1]?.$lookup.pipeline[0].$match.$or[0].name).toEqual(
-				/A\.p/i,
-			)
-			expect(result.sections).toEqual([])
-			expect(result.metadata.partial).toBe(false)
-		})
-
-		it("discloses aggregate failure while retaining other change evidence", async () => {
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi
-					.fn()
-					.mockRejectedValue(new Error("synthetic aggregation unavailable")),
-			})
-			vi.mocked(relationsCollection).mockReturnValue({
-				...createMockFindCollection([]),
-				aggregate,
-			} as unknown as Collection)
-			vi.mocked(eventsCollection).mockReturnValue(
-				createMockFindCollection([
-					{
-						eventId: "evt-safe",
-						body: "synthetic anchor",
-						timestamp: new Date(),
-					},
-				]),
-			)
-			const result = await buildDiscoveryProjection({
-				...defaultParams(),
-				kind: "what-changed",
-				query: "Apollo",
-			})
-			expect(result.metadata.partial).toBe(true)
-			expect(result.sections[0]?.title).toBe("Recent anchors")
-		})
-	})
-
 	it("builds an entity brief with entity, relation, and structured provenance", async () => {
-		vi.mocked(entitiesCollection)
-			.mockReturnValueOnce(
-				createMockFindCollection([
-					{
-						entityId: "ent-phoenix",
-						name: "Phoenix",
-						type: "project",
-						updatedAt: new Date("2026-04-05T11:00:00.000Z"),
-						scope: SCOPE,
-						scopeRef: SCOPE_REF,
-						sourceEventIds: ["evt-1"],
-					},
-				]),
-			)
-			.mockReturnValueOnce(
-				createMockFindCollection([
-					{
-						entityId: "ent-alice",
-						name: "Alice",
-						type: "person",
-						updatedAt: new Date("2026-04-05T10:00:00.000Z"),
-						scope: SCOPE,
-						scopeRef: SCOPE_REF,
-						sourceEventIds: ["evt-2"],
-					},
-				]),
-			)
-		vi.mocked(relationsCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					fromEntityId: "ent-phoenix",
-					toEntityId: "ent-alice",
-					type: "owns",
-					state: "active",
-					updatedAt: new Date("2026-04-05T11:05:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-3"],
-				},
-			]),
-		)
-		vi.mocked(structuredMemCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					type: "decision",
-					key: "phoenix-rollout",
-					value: "Phoenix rollout stays behind a feature flag.",
-					state: "active",
-					salience: "high",
-					updatedAt: new Date("2026-04-05T09:30:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-4"],
-				},
-			]),
-		)
+		await model.seed("entities", [
+			{
+				...TENANT,
+				entityId: "ent-phoenix",
+				name: "Phoenix",
+				type: "project",
+				updatedAt: at("2026-04-05T11:00:00.000Z"),
+				sourceEventIds: ["evt-1"],
+			},
+			{
+				...TENANT,
+				entityId: "ent-alice",
+				name: "Alice",
+				type: "person",
+				updatedAt: at("2026-04-05T10:00:00.000Z"),
+				sourceEventIds: ["evt-2"],
+			},
+		])
+		await model.seed("relations", [
+			{
+				...TENANT,
+				fromEntityId: "ent-phoenix",
+				toEntityId: "ent-alice",
+				type: "owns",
+				state: "active",
+				updatedAt: at("2026-04-05T11:05:00.000Z"),
+				sourceEventIds: ["evt-3"],
+			},
+		])
+		await model.seed("structured_mem", [
+			{
+				...TENANT,
+				type: "decision",
+				key: "phoenix-rollout",
+				value: "Phoenix rollout stays behind a feature flag.",
+				state: "active",
+				salience: "high",
+				updatedAt: at("2026-04-05T09:30:00.000Z"),
+				sourceEventIds: ["evt-4"],
+			},
+		])
+		model.refreshIndexes()
 
-		const projection = await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "entity-brief",
+		const projection = await run("entity-brief", {
 			query: "Phoenix",
 			maxItems: 4,
 		})
@@ -486,81 +102,70 @@ describe("mongodb-discovery-projections", () => {
 			"Durable context",
 		])
 		expect(projection.sections[0]?.evidence[0]?.path).toBe(
-			`entity:ent-phoenix?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`entity:ent-phoenix?${REF}`,
 		)
 		expect(projection.sections[1]?.evidence[0]?.path).toBe(
-			`relation:ent-phoenix-ent-alice-owns?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`relation:ent-phoenix-ent-alice-owns?${REF}`,
+		)
+		expect(projection.sections[1]?.evidence[0]?.title).toBe(
+			"Phoenix owns Alice",
 		)
 		expect(projection.sections[2]?.evidence[0]?.path).toBe(
-			`structured:decision:phoenix-rollout?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`structured:decision:phoenix-rollout?${REF}`,
 		)
 		expect(projection.metadata.evidenceCount).toBe(3)
 		expect(projection.metadata.sourceCounts).toEqual({
 			graph: 2,
 			structured: 1,
 		})
-		expect(recordProjectionRun).toHaveBeenCalledWith(
-			expect.objectContaining({
-				run: expect.objectContaining({
-					projectionType: "entity-brief",
-					status: "ok",
-				}),
-			}),
-		)
+		expect(projection.metadata.failures).toEqual([])
+		expect(model.fake.all("projection_runs")).toEqual([
+			expect.objectContaining({ projectionType: "entity-brief", status: "ok" }),
+		])
 	})
 
 	it("builds a topic brief from episodes, procedures, and durable memory", async () => {
-		vi.mocked(episodesCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					episodeId: "ep-1",
-					title: "Rollback planning",
-					summary: "The team reviewed rollback criteria and release safety.",
-					status: "active",
-					timeRange: {
-						start: new Date("2026-04-04T10:00:00.000Z"),
-						end: new Date("2026-04-04T11:00:00.000Z"),
-					},
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-10"],
+		await model.seed("episodes", [
+			{
+				...TENANT,
+				episodeId: "ep-1",
+				title: "Rollback planning",
+				summary: "The team reviewed rollback criteria and release safety.",
+				status: "active",
+				timeRange: {
+					start: at("2026-04-04T10:00:00.000Z"),
+					end: at("2026-04-04T11:00:00.000Z"),
 				},
-			]),
-		)
-		vi.mocked(structuredMemCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					type: "fact",
-					key: "rollback-window",
-					value: "Rollback window remains open for 30 minutes after deploy.",
-					state: "active",
-					updatedAt: new Date("2026-04-04T11:10:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-11"],
-				},
-			]),
-		)
-		vi.mocked(proceduresCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					procedureId: "rollback-runbook",
-					name: "Rollback runbook",
-					steps: ["Disable rollout", "Restore prior stable version"],
-					state: "active",
-					updatedAt: new Date("2026-04-04T11:20:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-12"],
-				},
-			]),
-		)
+				sourceEventIds: ["evt-10"],
+			},
+		])
+		await model.seed("structured_mem", [
+			{
+				...TENANT,
+				type: "fact",
+				key: "rollback-window",
+				value: "Rollback window remains open for 30 minutes after deploy.",
+				state: "active",
+				updatedAt: at("2026-04-04T11:10:00.000Z"),
+				sourceEventIds: ["evt-11"],
+			},
+		])
+		await model.seed("procedures", [
+			{
+				...TENANT,
+				procedureId: "rollback-runbook",
+				name: "Rollback runbook",
+				searchText:
+					"Rollback runbook Disable rollout Restore prior stable version",
+				steps: ["Disable rollout", "Restore prior stable version"],
+				state: "active",
+				updatedAt: at("2026-04-04T11:20:00.000Z"),
+				sourceEventIds: ["evt-12"],
+			},
+		])
+		model.refreshIndexes()
 
-		const projection = await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "topic-brief",
-			query: "rollback",
-		})
+		const projection = await run("topic-brief", { query: "rollback" })
 
 		expect(projection.kind).toBe("topic-brief")
 		expect(projection.sections.map((section) => section.title)).toEqual([
@@ -570,7 +175,10 @@ describe("mongodb-discovery-projections", () => {
 		])
 		expect(projection.sections[0]?.evidence[0]?.path).toBe("episode:ep-1")
 		expect(projection.sections[2]?.evidence[0]?.path).toBe(
-			`procedure:rollback-runbook?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`procedure:rollback-runbook?${REF}`,
+		)
+		expect(projection.sections[2]?.evidence[0]?.summary).toBe(
+			"Disable rollout -> Restore prior stable version",
 		)
 		expect(projection.metadata.sourceCounts).toEqual({
 			episodic: 1,
@@ -579,133 +187,69 @@ describe("mongodb-discovery-projections", () => {
 		})
 	})
 
-	it("builds a what-changed brief with default last-7d time range and partial status on lane failure", async () => {
+	it("builds a what-changed brief with the default last-7d time range", async () => {
 		vi.useFakeTimers()
-		vi.setSystemTime(new Date("2026-04-05T12:00:00.000Z"))
+		vi.setSystemTime(at("2026-04-05T12:00:00.000Z"))
+		await model.seed("structured_mem_revisions", [
+			{
+				...TENANT,
+				type: "decision",
+				key: "routing-policy",
+				value: "Old routing policy",
+				supersededAt: at("2026-04-04T10:00:00.000Z"),
+				sourceEventIds: ["evt-20"],
+			},
+		])
+		await model.seed("events", [
+			{
+				...TENANT,
+				eventId: "evt-21",
+				role: "assistant",
+				body: "Trust-aware routing is now enabled for current-state answers.",
+				timestamp: at("2026-04-05T08:00:00.000Z"),
+			},
+		])
 
-		vi.mocked(structuredMemRevisionsCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					type: "decision",
-					key: "routing-policy",
-					value: "Old routing policy",
-					supersededAt: new Date("2026-04-04T10:00:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-20"],
-				},
-			]),
-		)
-		vi.mocked(eventsCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					eventId: "evt-21",
-					role: "assistant",
-					body: "Trust-aware routing is now enabled for current-state answers.",
-					timestamp: new Date("2026-04-05T08:00:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-				},
-			]),
-		)
-		vi.mocked(proceduresCollection).mockReturnValue({
-			find: vi.fn(() => {
-				throw new Error("procedures unavailable")
-			}),
-		} as unknown as Collection)
-		vi.mocked(relationsCollection).mockReturnValue(createMockFindCollection([]))
-		vi.mocked(structuredMemCollection).mockReturnValue(
-			createMockFindCollection([]),
-		)
-
-		const projection = await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "what-changed",
-		})
+		const projection = await run("what-changed")
 
 		expect(projection.kind).toBe("what-changed")
-		expect(projection.metadata.partial).toBe(true)
+		expect(projection.metadata.partial).toBe(false)
+		expect(projection.metadata.failures).toEqual([])
 		expect(projection.metadata.timeRange).toEqual({
 			label: "last-7d",
-			start: new Date("2026-03-29T12:00:00.000Z"),
-			end: new Date("2026-04-05T12:00:00.000Z"),
+			start: at("2026-03-29T12:00:00.000Z"),
+			end: at("2026-04-05T12:00:00.000Z"),
 		})
 		expect(projection.sections.map((section) => section.title)).toEqual([
 			"Structured changes",
 			"Recent anchors",
 		])
-		expect(recordProjectionRun).toHaveBeenCalledWith(
-			expect.objectContaining({
-				run: expect.objectContaining({
-					projectionType: "what-changed",
-					status: "partial",
-				}),
-			}),
-		)
-
-		vi.useRealTimers()
 	})
 
 	it("builds structured change evidence with previous and current durable truth", async () => {
-		vi.mocked(structuredMemRevisionsCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					type: "decision",
-					key: "routing-policy",
-					value: "Old routing policy",
-					supersededAt: new Date("2026-04-04T10:00:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-40"],
-				},
-			]),
-		)
-		vi.mocked(structuredMemCollection).mockImplementation(() => {
-			const find = vi.fn((query?: Document) => {
-				if (
-					query?.state === "active" &&
-					Array.isArray(query?.$or) &&
-					query.$or.some(
-						(entry) =>
-							entry?.type === "decision" && entry?.key === "routing-policy",
-					)
-				) {
-					return {
-						toArray: vi.fn().mockResolvedValue([
-							{
-								type: "decision",
-								key: "routing-policy",
-								value: "Trust-aware routing policy",
-								state: "active",
-								updatedAt: new Date("2026-04-05T09:30:00.000Z"),
-								scope: SCOPE,
-								scopeRef: SCOPE_REF,
-								sourceEventIds: ["evt-41"],
-							},
-						]),
-					}
-				}
-				return {
-					sort: vi.fn().mockReturnValue({
-						limit: vi.fn().mockReturnValue({
-							toArray: vi.fn().mockResolvedValue([]),
-						}),
-					}),
-				}
-			})
-			return { find } as unknown as Collection
-		})
-		vi.mocked(proceduresCollection).mockReturnValue(
-			createMockFindCollection([]),
-		)
-		vi.mocked(relationsCollection).mockReturnValue(createMockFindCollection([]))
-		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+		await model.seed("structured_mem_revisions", [
+			{
+				...TENANT,
+				type: "decision",
+				key: "routing-policy",
+				value: "Old routing policy",
+				supersededAt: new Date(Date.now() - 86_400_000),
+				sourceEventIds: ["evt-40"],
+			},
+		])
+		await model.seed("structured_mem", [
+			{
+				...TENANT,
+				type: "decision",
+				key: "routing-policy",
+				value: "Trust-aware routing policy",
+				state: "active",
+				updatedAt: new Date(Date.now() - 3_600_000),
+				sourceEventIds: ["evt-41"],
+			},
+		])
 
-		const projection = await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "what-changed",
-			maxItems: 4,
-		})
+		const projection = await run("what-changed", { maxItems: 4 })
 
 		expect(projection.sections[0]?.title).toBe("Structured changes")
 		expect(projection.sections[0]?.evidence[0]?.summary).toContain(
@@ -721,52 +265,40 @@ describe("mongodb-discovery-projections", () => {
 	})
 
 	it("builds a contradiction report from invalidated and conflicted lanes", async () => {
-		vi.mocked(structuredMemCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					type: "fact",
-					key: "deployment-owner",
-					value: "Alice owns deploy approvals.",
-					state: "conflicted",
-					updatedAt: new Date("2026-04-05T09:00:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-30"],
-				},
-			]),
-		)
-		vi.mocked(proceduresCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					procedureId: "legacy-rollback",
-					name: "Legacy rollback",
-					state: "invalidated",
-					updatedAt: new Date("2026-04-05T09:10:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-31"],
-				},
-			]),
-		)
-		vi.mocked(relationsCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					fromEntityId: "ent-service",
-					toEntityId: "ent-bob",
-					type: "owns",
-					state: "invalidated",
-					updatedAt: new Date("2026-04-05T09:15:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-					sourceEventIds: ["evt-32"],
-				},
-			]),
-		)
+		await model.seed("structured_mem", [
+			{
+				...TENANT,
+				type: "fact",
+				key: "deployment-owner",
+				value: "Alice owns deploy approvals.",
+				state: "conflicted",
+				updatedAt: at("2026-04-05T09:00:00.000Z"),
+				sourceEventIds: ["evt-30"],
+			},
+		])
+		await model.seed("procedures", [
+			{
+				...TENANT,
+				procedureId: "legacy-rollback",
+				name: "Legacy rollback",
+				state: "invalidated",
+				updatedAt: at("2026-04-05T09:10:00.000Z"),
+				sourceEventIds: ["evt-31"],
+			},
+		])
+		await model.seed("relations", [
+			{
+				...TENANT,
+				fromEntityId: "ent-service",
+				toEntityId: "ent-bob",
+				type: "owns",
+				state: "invalidated",
+				updatedAt: at("2026-04-05T09:15:00.000Z"),
+				sourceEventIds: ["evt-32"],
+			},
+		])
 
-		const projection = await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "contradiction-report",
-		})
+		const projection = await run("contradiction-report")
 
 		expect(projection.kind).toBe("contradiction-report")
 		expect(projection.summary).toContain("3")
@@ -776,125 +308,114 @@ describe("mongodb-discovery-projections", () => {
 			"Relation contradictions",
 		])
 		expect(projection.sections[1]?.evidence[0]?.path).toBe(
-			`procedure:legacy-rollback?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`procedure:legacy-rollback?${REF}`,
 		)
 		expect(projection.sections[2]?.evidence[0]?.path).toBe(
-			`relation:ent-service-ent-bob-owns?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`relation:ent-service-ent-bob-owns?${REF}`,
 		)
+	})
+
+	it.each([
+		undefined,
+		"   ",
+	])("treats query %j as no query for what-changed and contradiction reads", async (query) => {
+		await model.seed("relations", [
+			{
+				...TENANT,
+				fromEntityId: "a",
+				toEntityId: "b",
+				type: "owns",
+				state: "conflicted",
+				updatedAt: new Date(),
+			},
+		])
+		const result = await run("contradiction-report", { query })
+		expect(result.sections[0]?.title).toBe("Relation contradictions")
+		expect(
+			["entities", "structured_mem", "procedures"].flatMap((suffix) =>
+				model.searchPipelines(suffix),
+			),
+		).toEqual([])
 	})
 })
 
 describe("TTL expiry guards (B1)", () => {
-	beforeEach(() => {
-		vi.clearAllMocks()
-	})
+	const expired = new Date(Date.now() - 86_400_000)
 
-	const unexpiredClause = {
-		$or: [
-			{ expiresAt: { $exists: false } },
-			{ expiresAt: { $gt: expect.any(Date) } },
-		],
+	async function seedStructured(state: string, extra: Document = {}) {
+		await model.seed("structured_mem", [
+			{
+				...TENANT,
+				type: "fact",
+				key: "live",
+				value: "phoenix rollback live record",
+				state,
+				updatedAt: new Date(),
+			},
+			{
+				...TENANT,
+				type: "fact",
+				key: "stale",
+				value: "phoenix rollback stale record",
+				state,
+				updatedAt: new Date(),
+				expiresAt: expired,
+				...extra,
+			},
+		])
+		model.refreshIndexes()
 	}
 
-	function mockSiblingCollectionsEmpty(): void {
-		vi.mocked(entitiesCollection).mockReturnValue(createMockFindCollection([]))
-		vi.mocked(relationsCollection).mockReturnValue(createMockFindCollection([]))
-		vi.mocked(episodesCollection).mockReturnValue(createMockFindCollection([]))
-		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
-		vi.mocked(proceduresCollection).mockReturnValue(
-			createMockFindCollection([]),
-		)
-		vi.mocked(structuredMemRevisionsCollection).mockReturnValue(
-			createMockFindCollection([]),
-		)
-	}
-
-	function captureStructuredFind(): ReturnType<typeof vi.fn> {
-		const structuredFind = vi.fn().mockReturnValue({
-			sort: vi.fn().mockReturnValue({
-				limit: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockResolvedValue([]),
-				}),
-			}),
-			toArray: vi.fn().mockResolvedValue([]),
-		})
-		vi.mocked(structuredMemCollection).mockReturnValue({
-			find: structuredFind,
-		} as unknown as Collection)
-		return structuredFind
-	}
-
-	it("entity brief excludes expired structured records", async () => {
-		mockSiblingCollectionsEmpty()
-		const structuredFind = captureStructuredFind()
-
-		await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "entity-brief",
-			query: "Phoenix",
-		})
-
-		expect(structuredFind).toHaveBeenCalled()
-		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
-			$and: expect.arrayContaining([unexpiredClause]),
-		})
-	})
-
-	it("topic brief excludes expired structured records", async () => {
-		mockSiblingCollectionsEmpty()
-		const structuredFind = captureStructuredFind()
-
-		await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "topic-brief",
-			query: "rollback",
-		})
-
-		expect(structuredFind).toHaveBeenCalled()
-		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
-			$and: expect.arrayContaining([unexpiredClause]),
-		})
+	it.each([
+		["entity-brief", "Durable context"],
+		["topic-brief", "Durable memory"],
+	] as const)("%s excludes expired structured records", async (kind, section) => {
+		await seedStructured("active")
+		const projection = await run(kind, { query: "phoenix rollback" })
+		expect(
+			projection.sections
+				.find((entry) => entry.title === section)
+				?.evidence.map((entry) => entry.title),
+		).toEqual(["live"])
 	})
 
 	it("what-changed current-state lane excludes expired structured records", async () => {
-		mockSiblingCollectionsEmpty()
-		vi.mocked(structuredMemRevisionsCollection).mockReturnValue(
-			createMockFindCollection([
-				{
-					type: "decision",
-					key: "routing-policy",
-					value: "Old routing policy",
-					supersededAt: new Date("2026-04-04T10:00:00.000Z"),
-					scope: SCOPE,
-					scopeRef: SCOPE_REF,
-				},
-			]),
-		)
-		const structuredFind = captureStructuredFind()
-
-		await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "what-changed",
-		})
-
-		expect(structuredFind).toHaveBeenCalled()
-		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
-			$and: expect.arrayContaining([unexpiredClause]),
-		})
+		await model.seed("structured_mem_revisions", [
+			{
+				...TENANT,
+				type: "fact",
+				key: "stale",
+				value: "old",
+				supersededAt: new Date(Date.now() - 3_600_000),
+			},
+		])
+		await model.seed("structured_mem", [
+			{
+				...TENANT,
+				type: "fact",
+				key: "stale",
+				value: "current but expired",
+				state: "active",
+				updatedAt: new Date(),
+				expiresAt: expired,
+			},
+		])
+		const projection = await run("what-changed")
+		const summary = projection.sections[0]?.evidence[0]?.summary ?? ""
+		expect(summary).toContain("old")
+		expect(summary).not.toContain("current but expired")
 	})
 
-	it("contradiction report excludes expired structured records", async () => {
-		mockSiblingCollectionsEmpty()
-		const structuredFind = captureStructuredFind()
-
-		await buildDiscoveryProjection({
-			...defaultParams(),
-			kind: "contradiction-report",
-		})
-
-		expect(structuredFind).toHaveBeenCalled()
-		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
-			$and: expect.arrayContaining([unexpiredClause]),
-		})
+	it.each([
+		undefined,
+		"phoenix",
+	])("contradiction report excludes expired structured records (query %s)", async (query) => {
+		await seedStructured("conflicted")
+		const projection = await run("contradiction-report", { query })
+		expect(
+			projection.sections
+				.find((entry) => entry.title === "Structured contradictions")
+				?.evidence.map((entry) => entry.title),
+		).toEqual(["live"])
 	})
 })

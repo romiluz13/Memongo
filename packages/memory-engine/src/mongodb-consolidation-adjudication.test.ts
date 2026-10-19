@@ -112,45 +112,43 @@ describe("adjudicateFactMerge", () => {
 		expect(verdict.mergedValue).toBeUndefined()
 	})
 
-	it("treats malformed JSON as NO_MERGE and never throws", async () => {
+	it("rejects malformed JSON with a typed parse error, never NO_MERGE", async () => {
 		const { adjudicateFactMerge } = await import(
 			"./mongodb-consolidation-adjudication.js"
 		)
+		const { EnrichmentParseError } = await import("./mongodb-llm-enrichment.js")
 		const provider = {
 			name: "stub",
 			chatCompletion: vi.fn(async () => ({ content: "not json at all{" })),
 		}
 
-		const verdict = await adjudicateFactMerge({
-			provider,
-			model: "test-model",
-			factA,
-			factB,
-		})
-
-		expect(verdict.verdict).toBe("NO_MERGE")
+		await expect(
+			adjudicateFactMerge({ provider, model: "test-model", factA, factB }),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
 	})
 
-	it("treats an LLM failure as NO_MERGE and never throws", async () => {
+	it("rejects an LLM failure, never NO_MERGE", async () => {
 		const { adjudicateFactMerge } = await import(
 			"./mongodb-consolidation-adjudication.js"
 		)
+		const failure = new Error("connection reset")
 		const provider = {
 			name: "stub",
 			chatCompletion: vi.fn(async () => {
-				throw new Error("connection reset")
+				throw failure
 			}),
 		}
 
 		await expect(
 			adjudicateFactMerge({ provider, model: "test-model", factA, factB }),
-		).resolves.toEqual({ verdict: "NO_MERGE" })
+		).rejects.toBe(failure)
 	})
 
-	it("downgrades MERGE without union text to NO_MERGE", async () => {
+	it("rejects MERGE without union text, never NO_MERGE", async () => {
 		const { adjudicateFactMerge } = await import(
 			"./mongodb-consolidation-adjudication.js"
 		)
+		const { EnrichmentParseError } = await import("./mongodb-llm-enrichment.js")
 		const provider = {
 			name: "stub",
 			chatCompletion: vi.fn(async () => ({
@@ -158,14 +156,26 @@ describe("adjudicateFactMerge", () => {
 			})),
 		}
 
-		const verdict = await adjudicateFactMerge({
-			provider,
-			model: "test-model",
-			factA,
-			factB,
-		})
+		await expect(
+			adjudicateFactMerge({ provider, model: "test-model", factA, factB }),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
 
-		expect(verdict.verdict).toBe("NO_MERGE")
+	it("rejects an unknown verdict, never NO_MERGE", async () => {
+		const { adjudicateFactMerge } = await import(
+			"./mongodb-consolidation-adjudication.js"
+		)
+		const { EnrichmentParseError } = await import("./mongodb-llm-enrichment.js")
+		const provider = {
+			name: "stub",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({ verdict: "MAYBE" }),
+			})),
+		}
+
+		await expect(
+			adjudicateFactMerge({ provider, model: "test-model", factA, factB }),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
 	})
 
 	it("parses JSON wrapped in markdown code fences", async () => {
@@ -394,7 +404,7 @@ describe("resolveConflictedCandidate", () => {
 		)
 	})
 
-	it("degrades to unresolved (never throws) when the store read fails", async () => {
+	it("rejects when the store read fails, never unresolved", async () => {
 		const { resolveConflictedCandidate } = await import(
 			"./mongodb-consolidation-adjudication.js"
 		)
@@ -413,7 +423,7 @@ describe("resolveConflictedCandidate", () => {
 				agentId: "agent-1",
 				candidate: { key: "k", value: "v" },
 			}),
-		).resolves.toEqual({ resolved: false, invalidatedCount: 0 })
+		).rejects.toThrow("db down")
 	})
 
 	it("excludes expired facts from the adjudication candidate set (B1)", async () => {

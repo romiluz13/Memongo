@@ -359,11 +359,11 @@ export function runWithIndexHealth<T>(
 // ---------------------------------------------------------------------------
 
 // The collections whose manifest indexes each lane's native operation uses.
-// The `chunks` entries on the structured, procedure, session, evidence and
-// events lanes are the capability ladder's own reads: those tiers decide
-// between vector and text from the chunk flags, so a lane is admitted only
-// when they are healthy too. The ladder, and these entries, go with the
-// ladder removal (T3).
+// The `chunks` entries on the structured, procedure, session, evidence, raw
+// window and events lanes are the capability flags' own reads: those lanes
+// decide whether they run from the chunk flags, so a lane is admitted only
+// when the chunk indexes are healthy too. A lane whose flags no longer read
+// the chunk indexes drops its `chunks` entry.
 const LANE_COLLECTIONS: Partial<Record<SearchLane, readonly string[]>> = {
 	"active-critical": ["structured_mem", "chunks"],
 	structured: ["structured_mem", "chunks"],
@@ -373,8 +373,8 @@ const LANE_COLLECTIONS: Partial<Record<SearchLane, readonly string[]>> = {
 	graph: ["entities"],
 	episodic: ["episodes"],
 	kb: ["kb_chunks"],
+	"raw-window": ["events", "chunks"],
 	"hybrid:chunks": ["chunks"],
-	"hybrid:bridge": ["chunks"],
 	"hybrid:session_chunks": ["session_chunks", "chunks"],
 	"hybrid:memory_evidence": ["memory_evidence", "chunks"],
 	"backstop:hybrid": ["chunks"],

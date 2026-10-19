@@ -82,16 +82,21 @@ export type SearchConfig = {
 	timeRange?: { preset?: string; start?: string; end?: string }
 	needExactEvidence?: boolean
 	/**
+	 * A demand for a rerank stage. There is no reranker yet: `true` fails with
+	 * 400 RERANK_UNSUPPORTED (rerank-unsupported); `false` is accepted. Native
+	 * `$rerank` (Atlas only) is not implemented yet.
+	 */
+	rerank?: boolean
+	/**
 	 * Opt-in for the executor's constraint-relaxation fallback (RET-01).
 	 * Default false: explicit constraints (timeRange, needExactEvidence)
 	 * stay hard and an empty constrained answer stays empty.
 	 */
 	allowConstraintRelaxation?: boolean
 	numCandidates?: number
-	fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+	fusionMethod?: "scoreFusion" | "rankFusion"
 	hybridMode?: "hybrid" | "vector-only"
 	allowHybridBackstop?: boolean
-	lexicalPrefilter?: "disabled" | "experimental"
 }
 
 export type MemongoConversationRecallInput = {
@@ -474,7 +479,19 @@ export type MemongoStatusResponse = {
 		lastError?: string
 		lastProvider?: string
 	}
-	custom?: Record<string, unknown>
+	custom?: Record<string, unknown> & { rerank?: MemongoRerankStatus }
+}
+
+/**
+ * Rerank support reported by status. There is no reranker: the engine does not
+ * implement native `$rerank` (Atlas only) yet and the server is not probed.
+ */
+export type MemongoRerankStatus = {
+	nativeRerank: { engineSupport: boolean; serverSupport: boolean | "unknown" }
+	lane: {
+		outcome: MemongoSearchLaneOutcomeStatus
+		reason: MemongoSearchOutcomeReason
+	}
 }
 
 export type MemongoConversationRecallCitation = {
@@ -489,7 +506,7 @@ export type MemongoConversationRecallCitation = {
 export type MemongoConversationRecallResult = {
 	citation: MemongoConversationRecallCitation
 	score?: number
-	matchType: "filter" | "semantic" | "hybrid"
+	matchType: "filter" | "hybrid"
 }
 
 export type MemongoConversationRecallResponse = {
@@ -498,10 +515,8 @@ export type MemongoConversationRecallResponse = {
 		totalMatched: number
 		queryUsed?: string
 		filtersApplied: string[]
-		searchMethod: "standard" | "semantic" | "hybrid"
+		searchMethod: "standard" | "hybrid"
 		durationMs: number
-		/** Set when admission control denied the semantic pass — empties are throttling, not a verdict. */
-		throttled?: { retryAfterMs: number }
 	}
 	/** Present in silent mode when the call was swallowed (auth/throttle/unavailable). */
 	degradation?: MemongoDegradation
@@ -971,6 +986,7 @@ export type MemongoSearchOutcomeReason =
 	| "dependency-unavailable"
 	| "query-error"
 	| "internal-error"
+	| "rerank-unsupported"
 	| "budget-aggregations"
 	| "budget-embeds"
 	| "budget-deadline"
@@ -989,6 +1005,18 @@ export type MemongoSearchLaneOutcome = {
 
 /** #101: complete (no failure), partial (some lanes failed) or failed (non-2xx). */
 export type MemongoSearchOutcomeStatus = "complete" | "partial" | "failed"
+
+/**
+ * M2 T8 (#117): one typed row per failed section of an active slate, a
+ * discovery projection or a context bundle. Enum values only. A section that
+ * failed is a row here, never an empty section; nested rows read `parent:child`.
+ */
+export type MemongoSectionFailure = {
+	section: string
+	stage: string
+	outcome: "failed" | "budget-denied"
+	reason: MemongoSearchOutcomeReason
+}
 
 /** #101: a search call's outcome summary. */
 export type MemongoSearchOutcomes = {

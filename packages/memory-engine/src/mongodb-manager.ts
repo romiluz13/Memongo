@@ -69,11 +69,7 @@ import {
 	type Entity,
 	type RelationType,
 } from "./mongodb-graph.js"
-import {
-	normalizeSearchResults,
-	rrfScore,
-	type SearchMethod,
-} from "./mongodb-hybrid.js"
+import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import { updateLaneCoverage, getLaneCoverage } from "./mongodb-lane-coverage.js"
 import {
@@ -167,7 +163,6 @@ import {
 	decomposeQuery,
 	mergeMultiQueryResults,
 } from "./mongodb-query-decomposition.js"
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
 import {
 	planRetrieval,
 	type RetrievalPath,
@@ -213,7 +208,6 @@ import { resolveScopeIdentity, resolveScopeRef } from "./mongodb-scope.js"
 import {
 	buildVectorSearchStage,
 	MONGODB_MAX_NUM_CANDIDATES,
-	mongoSearch,
 	vectorSearch,
 } from "./mongodb-search.js"
 import {
@@ -238,7 +232,6 @@ import {
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
-	SearchTraceEvent,
 } from "./mongodb-search.js"
 import type {
 	StructuredMemoryEntry,
@@ -302,7 +295,6 @@ import type {
 	MemoryActorRole,
 	ClaimedMemoryJob,
 	ResolvedSearchConfig,
-	SearchLaneOutcome,
 } from "./types.js"
 import type { SearchOutcomeSummary } from "./search-outcomes.js"
 
@@ -358,7 +350,6 @@ import { MongoDBManagerSearchOps } from "./mongodb-manager-search.js"
 export {
 	MAX_SEARCH_MAX_RESULTS,
 	MAX_SEARCH_QUERY_LENGTH,
-	applyRecencyAccessBoostAfterRerank,
 	clampSearchMaxResults,
 	clampSearchQuery,
 	deduplicateSearchResults,
@@ -828,24 +819,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					},
 					mongoCfg.changeStreamDebounceMs,
 				)
-				let started = await csWatcher.start(persistedResumeToken ?? undefined)
-				if (!started && persistedResumeToken) {
-					log.warn(
-						"change stream resume failed with persisted token; retrying from latest position",
-					)
-					started = await csWatcher.start()
-					if (started) {
-						await manager.clearPersistedChangeStreamResumeToken()
-					}
-				}
-				if (started) {
-					manager.changeStreamWatcher = csWatcher
-					log.info("change stream watcher enabled for cross-instance sync")
-				} else {
-					log.info(
-						"change streams not available — falling back to file watcher only",
-					)
-				}
+				// start() throws ChangeStreamUnavailableError when the stream
+				// cannot open; the factory unwinds and rethrows it. There is no
+				// file-watcher-only fallback and no silent restart from "latest".
+				await csWatcher.start(persistedResumeToken ?? undefined)
+				manager.changeStreamWatcher = csWatcher
+				log.info("change stream watcher enabled for cross-instance sync")
 			}
 
 			log.info(
@@ -993,22 +972,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	private setLastSearchMode(mode: string, details?: Record<string, unknown>) {
 		return searchOpsOf(this).setLastSearchMode(mode, details)
-	}
-
-	private async legacySearch(
-		query: string,
-		opts?: {
-			maxResults?: number
-			minScore?: number
-			sessionKey?: string
-			scope?: MemoryScope
-			scopeRef?: string
-			kbRestricted?: boolean
-		},
-		admission?: AdmissionToken,
-		onOutcome?: (row: SearchLaneOutcome) => void,
-	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).legacySearch(query, opts, admission, onOutcome)
 	}
 
 	async search(
@@ -1200,43 +1163,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	): Promise<MemorySearchResult[]> {
 		return this.runIndexHealthRequest(() =>
 			searchOpsOf(this).searchKB(query, opts),
-		)
-	}
-
-	// ---------------------------------------------------------------------------
-	// Score normalization: detect which search method was used for legacy search
-	// ---------------------------------------------------------------------------
-
-	private detectSearchMethod(
-		mongoCfg: ResolvedMongoDBConfig,
-		capabilities: DetectedCapabilities,
-	): SearchMethod {
-		return searchOpsOf(this).detectSearchMethod(mongoCfg, capabilities)
-	}
-
-	/**
-	 * Resolve which search method actually produced these results, from the
-	 * trace mongoSearch emits, falling back to the configuration guess only
-	 * when nothing succeeded.
-	 *
-	 * This picks the normalizer, so guessing wrong corrupts ranking rather than
-	 * just mislabeling. mongoSearch degrades through hybrid → vector → keyword
-	 * → $text, and the last two return raw BM25/textScore values on an
-	 * unbounded scale. Calling those "hybrid" sends them to the [0,1] clamp,
-	 * which pins every lexical hit above ~1 to exactly 1.0 — sorting degraded
-	 * results above genuine cosine hits from the KB and structured lanes, whose
-	 * scores are normalized honestly. normalizeBM25Score exists precisely for
-	 * this case; it was simply never reached.
-	 */
-	private resolveObservedSearchMethod(
-		traceEvents: SearchTraceEvent[],
-		mongoCfg: ResolvedMongoDBConfig,
-		capabilities: DetectedCapabilities,
-	): SearchMethod {
-		return searchOpsOf(this).resolveObservedSearchMethod(
-			traceEvents,
-			mongoCfg,
-			capabilities,
 		)
 	}
 

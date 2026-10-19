@@ -233,9 +233,17 @@ export async function extractTypedRelations(params: {
 		)
 	}
 
-	if (!parsed || typeof parsed !== "object") return []
-	const raw = (parsed as Record<string, unknown>).relations
-	if (!Array.isArray(raw)) return []
+	const raw =
+		parsed && typeof parsed === "object"
+			? (parsed as Record<string, unknown>).relations
+			: undefined
+	if (!Array.isArray(raw)) {
+		throw new EnrichmentParseError(
+			`relation extraction response has no relations list (finishReason=${
+				responseMeta?.finishReason ?? "unknown"
+			}, provider=${provider.name})`,
+		)
+	}
 
 	const seen = new Set<string>()
 	const relations: TypedRelationCandidate[] = []

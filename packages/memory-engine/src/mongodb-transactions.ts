@@ -32,6 +32,30 @@ export function isTransactionUnsupported(error: unknown): boolean {
 }
 
 /**
+ * A write path needed a transaction and the deployment cannot run one. Boot
+ * requires a replica set or mongos, so this is a deployment defect to fix, not
+ * a signal to write without a transaction.
+ */
+export class TransactionUnsupportedError extends Error {
+	readonly code = "TRANSACTION_UNSUPPORTED"
+
+	constructor(cause: unknown) {
+		super(
+			"MongoDB transactions are required but this deployment does not support them; run against a replica set or mongos",
+			{ cause },
+		)
+		this.name = "TransactionUnsupportedError"
+	}
+}
+
+/** The error to throw for a failed transaction: typed when it is the unsupported-deployment error. */
+export function typedTransactionError(error: unknown): unknown {
+	return isTransactionUnsupported(error)
+		? new TransactionUnsupportedError(error)
+		: error
+}
+
+/**
  * Detect a WiredTiger `TransactionTooLargeForCache` error (MongoDB 6.2+,
  * code 388). The driver's `withTransaction` does NOT auto-retry this — it
  * surfaces to the caller. Note: code 225 is `TransactionTooOld` (a different,

@@ -49,6 +49,7 @@ vi.mock("./mongodb-search-lanes.js", async (original) => ({
 	searchConversationEvidenceEvents: vi.fn(),
 	searchTemporalCoverageEvents: vi.fn(),
 	searchTurnEventsWithinSessions: vi.fn(),
+	searchRawWindowEvents: vi.fn(async () => []),
 }))
 
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"

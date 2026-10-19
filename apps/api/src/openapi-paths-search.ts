@@ -46,14 +46,14 @@ const searchDegradationSchema = {
  * #101 / decision 16: the value-free outcome vocabulary of a search call
  * (enum values only; no query, body or provider text).
  */
-const searchOutcomeStatusSchema = {
+export const searchOutcomeStatusSchema = {
 	type: "string",
 	enum: ["complete", "partial", "failed"],
 	description:
 		"complete: no lane failed or was budget-denied. partial: some lanes failed or were denied and the rest answered (200, even with zero results). failed: no required lane answered (served as a non-2xx).",
 }
 
-const searchLaneOutcomeSchema = {
+export const searchLaneOutcomeSchema = {
 	type: "object",
 	required: ["lane", "stage", "outcome"],
 	properties: {
@@ -91,6 +91,7 @@ const searchLaneOutcomeSchema = {
 				"dependency-unavailable",
 				"query-error",
 				"internal-error",
+				"rerank-unsupported",
 				"budget-aggregations",
 				"budget-embeds",
 				"budget-deadline",
@@ -105,7 +106,7 @@ const searchLaneOutcomeSchema = {
 	},
 }
 
-const searchOutcomesSchema = {
+export const searchOutcomesSchema = {
 	type: "object",
 	required: ["status", "lanes"],
 	properties: {
@@ -113,14 +114,17 @@ const searchOutcomesSchema = {
 		lanes: { type: "array", items: searchLaneOutcomeSchema },
 	},
 	description:
-		"#101: this call's outcome summary. Absent on a throttled call, which carries `degradation` instead.",
+		"#101: this call's outcome summary. A throttled search is a failed call (503 SEARCH_BUDGET_EXHAUSTED) whose body carries it with a budget-denied row.",
 }
 
 /**
  * #101 / resolution R3: the non-2xx search failures. The body is the ApiError
  * envelope plus `outcomes` (status "failed" and every row).
  */
-const searchFailureResponses = {
+const RERANKED_DESCRIPTION =
+	"Always false: there is no reranker. The HTTP reranker was removed and native $rerank (Atlas only) is not implemented yet."
+
+export const searchFailureResponses = {
 	"500": {
 		description:
 			"SEARCH_LANES_FAILED: every required lane failed and at least one failure is a defect (query-error or internal-error); this wins over the 503 codes. The body adds `outcomes` (status failed, every row). Other unexpected failures keep their route's internal error code.",
@@ -350,6 +354,11 @@ export const searchPaths = {
 											},
 										},
 										needExactEvidence: { type: "boolean" },
+										rerank: {
+											type: "boolean",
+											description:
+												"A demand for a rerank stage. M2 has none: true is rejected with 400 RERANK_UNSUPPORTED (rerank-unsupported); false is accepted. Native $rerank (Atlas only) is not implemented yet.",
+										},
 										allowConstraintRelaxation: {
 											type: "boolean",
 											description:
@@ -358,17 +367,13 @@ export const searchPaths = {
 										numCandidates: { type: "number" },
 										fusionMethod: {
 											type: "string",
-											enum: ["scoreFusion", "rankFusion", "js-merge"],
+											enum: ["scoreFusion", "rankFusion"],
 										},
 										hybridMode: {
 											type: "string",
 											enum: ["hybrid", "vector-only"],
 										},
 										allowHybridBackstop: { type: "boolean" },
-										lexicalPrefilter: {
-											type: "string",
-											enum: ["disabled", "experimental"],
-										},
 									},
 								},
 								maxResults: {
@@ -501,7 +506,6 @@ export const searchPaths = {
 													fusionMethod: { type: "string" },
 													hybridMode: { type: "string" },
 													allowHybridBackstop: { type: "boolean" },
-													lexicalPrefilter: { type: "string" },
 												},
 											},
 											passes: {
@@ -526,6 +530,7 @@ export const searchPaths = {
 														},
 														reranked: {
 															type: "boolean",
+															description: RERANKED_DESCRIPTION,
 														},
 														correctionApplied: {
 															type: "string",
@@ -564,7 +569,10 @@ export const searchPaths = {
 												additionalProperties: { type: "number" },
 											},
 											queryRewritten: { type: "boolean" },
-											reranked: { type: "boolean" },
+											reranked: {
+												type: "boolean",
+												description: RERANKED_DESCRIPTION,
+											},
 											noDirectEvidenceReason: { type: "string" },
 											constraintRelaxations: {
 												type: "array",
@@ -618,6 +626,10 @@ export const searchPaths = {
 						},
 					},
 				},
+				"400": {
+					description:
+						"VALIDATION_ERROR: a malformed request. RERANK_UNSUPPORTED: searchConfig.rerank was true; there is no reranker, so the request fails instead of returning unreranked results.",
+				},
 				...searchFailureResponses,
 			},
 		},
@@ -645,7 +657,7 @@ export const searchPaths = {
 								query: {
 									type: "string",
 									description:
-										"Semantic recall query. Omit for filter-only conversation recall.",
+										"Recall query, run as one hybrid ($rankFusion) lane. Omit for a filter-only chronological listing.",
 								},
 								sessionId: {
 									type: "string",
@@ -732,7 +744,7 @@ export const searchPaths = {
 												score: { type: "number" },
 												matchType: {
 													type: "string",
-													enum: ["filter", "semantic", "hybrid"],
+													enum: ["filter", "hybrid"],
 												},
 											},
 										},
@@ -754,24 +766,19 @@ export const searchPaths = {
 											},
 											searchMethod: {
 												type: "string",
-												enum: ["standard", "semantic", "hybrid"],
+												enum: ["standard", "hybrid"],
 											},
 											durationMs: { type: "number" },
-											throttled: {
-												type: "object",
-												required: ["retryAfterMs"],
-												properties: {
-													retryAfterMs: { type: "number" },
-												},
-												description:
-													"WS-11: set when admission control denied the semantic recall pass — the empty results are throttling, not a retrieval verdict.",
-											},
 										},
 									},
 								},
 							},
 						},
 					},
+				},
+				"400": {
+					description:
+						"VALIDATION_ERROR: invalid input, including an invalid timezone (never replaced by UTC).",
 				},
 				...searchFailureResponses,
 			},

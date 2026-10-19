@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { ClientSession, Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import { bestEffort } from "./best-effort.js"
 import { isDuplicateKeyError } from "./internal.js"
 import {
 	getEventsByTimeRange,
@@ -80,40 +81,6 @@ export type EpisodeSummarizer = (
 	events: Array<{ role: string; body: string; timestamp: Date }>,
 	type?: EpisodeType,
 ) => Promise<EpisodeSummarizerResult>
-
-const EPISODE_QUERY_STOPWORDS = new Set([
-	"a",
-	"an",
-	"and",
-	"for",
-	"happened",
-	"how",
-	"in",
-	"is",
-	"of",
-	"on",
-	"or",
-	"summarize",
-	"the",
-	"to",
-	"what",
-])
-
-function buildEpisodeSearchRegex(query: string): RegExp {
-	const normalized = query.trim()
-	const terms = normalized
-		.toLowerCase()
-		.split(/\s+/)
-		.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
-		.filter((token) => token.length >= 3 && !EPISODE_QUERY_STOPWORDS.has(token))
-	const escapedTerms = Array.from(new Set(terms))
-		.slice(0, 8)
-		.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-	if (escapedTerms.length === 0) {
-		return new RegExp(normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
-	}
-	return new RegExp(escapedTerms.join("|"), "i")
-}
 
 function buildEpisodeSummarizerInput(
 	events: Array<{ role: string; body: string; timestamp: Date }>,
@@ -293,6 +260,15 @@ async function recordEpisodeProjectionRun(params: {
 	})
 }
 
+/** The projection-run row is bookkeeping: a failed write is logged and counted. */
+async function recordEpisodeProjectionRunBestEffort(
+	params: Parameters<typeof recordEpisodeProjectionRun>[0],
+): Promise<void> {
+	await bestEffort("episode-projection-run", () =>
+		recordEpisodeProjectionRun(params),
+	)
+}
+
 // ---------------------------------------------------------------------------
 // Materialize episode from raw events
 // ---------------------------------------------------------------------------
@@ -355,7 +331,7 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${events.length} events in range for agent=${agentId}`,
 			)
-			await recordEpisodeProjectionRun({
+			await recordEpisodeProjectionRunBestEffort({
 				db,
 				prefix,
 				admission: params.admission,
@@ -366,7 +342,7 @@ export async function materializeEpisode(params: {
 					itemsProjected: 0,
 					durationMs: Date.now() - startMs,
 				},
-			}).catch(() => {})
+			})
 			return null
 		}
 
@@ -382,7 +358,7 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${summarizerInput.length} conversational events in range for agent=${agentId}`,
 			)
-			await recordEpisodeProjectionRun({
+			await recordEpisodeProjectionRunBestEffort({
 				db,
 				prefix,
 				admission: params.admission,
@@ -393,7 +369,7 @@ export async function materializeEpisode(params: {
 					itemsProjected: 0,
 					durationMs: Date.now() - startMs,
 				},
-			}).catch(() => {})
+			})
 			return null
 		}
 		const {
@@ -567,7 +543,7 @@ export async function materializeEpisode(params: {
 		log.info(
 			`episode materialized: ${episodeId} type=${type} events=${events.length} agent=${agentId}`,
 		)
-		await recordEpisodeProjectionRun({
+		await recordEpisodeProjectionRunBestEffort({
 			db,
 			prefix,
 			admission: params.admission,
@@ -578,10 +554,10 @@ export async function materializeEpisode(params: {
 				itemsProjected: 1,
 				durationMs: Date.now() - startMs,
 			},
-		}).catch(() => {})
+		})
 		return episode
 	} catch (err) {
-		await recordEpisodeProjectionRun({
+		await recordEpisodeProjectionRunBestEffort({
 			db,
 			prefix,
 			admission: params.admission,
@@ -592,7 +568,7 @@ export async function materializeEpisode(params: {
 				itemsProjected: 0,
 				durationMs: Date.now() - startMs,
 			},
-		}).catch(() => {})
+		})
 		log.error(
 			`materializeEpisode failed: ${err instanceof Error ? err.message : String(err)}`,
 		)
@@ -692,9 +668,19 @@ export async function getEpisodesByType(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Search episodes by regex on summary/title
+// Search episodes ($search text on title and summary)
 // ---------------------------------------------------------------------------
 
+/**
+ * Episode search: one `$search` `text` query over the analyzed `title` and
+ * `summary` fields of the episode Search index. A document matches when it
+ * shares an analyzed term with the query; a substring or a near-spelling does
+ * not match.
+ *
+ * The Search stage only selects candidates: owner, scope, status and the time
+ * window are checked again on the hydrated document before the limit. A
+ * Search failure is a typed failure, never a different lookup.
+ */
 export async function searchEpisodes(params: {
 	db: Db
 	prefix: string
@@ -704,31 +690,21 @@ export async function searchEpisodes(params: {
 	scopeRef?: string
 	timeRange?: { start: Date; end: Date }
 	limit?: number
-	/**
-	 * P3.8: detected textSearch capability. When true, lookup routes through
-	 * the episode_autocomplete $search index; when false/omitted (no mongot),
-	 * the escaped $regex tier runs as the planned lookup instead of paying a
-	 * failed $search round trip per lookup.
-	 */
-	textSearchAvailable?: boolean
 	/** #101: per-call sink for this lane's tier outcome rows. */
 	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<Episode[]> {
 	const { db, prefix, query, agentId, scope, scopeRef, timeRange, limit } =
 		params
-	const report = (
-		stage: "atlas-search" | "episode-search",
-		count: number,
-	): void => {
+	const report = (count: number): void => {
 		params.onTierOutcome?.({
-			stage,
+			stage: "atlas-search",
 			outcome: count > 0 ? "ok" : "ok-empty",
 			...(count > 0 ? {} : { reason: "zero-hits" as const }),
 			resultCount: count,
 		})
 	}
 
-	// Guard: empty/whitespace-only query would produce a match-all regex
+	// Guard: an empty or whitespace-only query has nothing to search for.
 	if (!query.trim()) {
 		params.onTierOutcome?.({
 			stage: "episode-search",
@@ -740,88 +716,45 @@ export async function searchEpisodes(params: {
 
 	const col = episodesCollection(db, prefix)
 
-	// P3.8: serve episode lookup from the purpose-built episode_autocomplete
-	// search index when mongot is present; the unanchored case-insensitive
-	// $regex below is the planned tier only where textSearch is absent.
-	// #101 G1/R8: a $search error is a typed failure, never a regex fallback.
-	if (params.textSearchAvailable === true) {
-		try {
-			const searchFilters: Document[] = [
-				{ equals: { path: "agentId", value: agentId } },
-			]
-			if (scope) {
-				searchFilters.push({ equals: { path: "scope", value: scope } })
-			}
-			if (scopeRef) {
-				searchFilters.push({ equals: { path: "scopeRef", value: scopeRef } })
-			}
-			const postMatch: Document = { status: { $ne: "deleted" } }
-			if (timeRange) {
-				postMatch["timeRange.start"] = { $lte: timeRange.end }
-				postMatch["timeRange.end"] = { $gte: timeRange.start }
-			}
-			const pipeline: Document[] = [
-				{
-					$search: {
-						index: "episode_autocomplete",
-						compound: {
-							should: [
-								{ autocomplete: { query, path: "title" } },
-								{ autocomplete: { query, path: "summary" } },
-							],
-							filter: searchFilters,
-						},
-					},
-				},
-				{ $match: postMatch },
-				{ $limit: limit ?? 50 },
-			]
-			const docs = await col
-				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-				.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-				.toArray()
-			report("atlas-search", docs.length)
-			return docs as unknown as Episode[]
-		} catch (err) {
-			const typed = toTypedSearchError(err, "atlas-search")
-			log.warn("searchEpisodes $search failed", searchFailureLogFields(typed))
-			throw typed
-		}
-	}
-
 	try {
-		// Use a keyword-aware regex so summary-style queries can reopen episodes
-		// without requiring the full prompt to appear verbatim.
-		const regex = buildEpisodeSearchRegex(query)
-
-		const filter: Document = {
-			agentId,
-			status: { $ne: "deleted" },
-			$or: [{ title: { $regex: regex } }, { summary: { $regex: regex } }],
-		}
+		const tenant: Document = { agentId }
 		if (scope) {
-			filter.scope = scope
+			tenant.scope = scope
 		}
 		if (scopeRef) {
-			filter.scopeRef = scopeRef
+			tenant.scopeRef = scopeRef
 		}
+		const current: Document = { ...tenant, status: { $ne: "deleted" } }
 		if (timeRange) {
-			filter["timeRange.start"] = { $lte: timeRange.end }
-			filter["timeRange.end"] = { $gte: timeRange.start }
+			current["timeRange.start"] = { $lte: timeRange.end }
+			current["timeRange.end"] = { $gte: timeRange.start }
 		}
-
+		const pipeline: Document[] = [
+			{
+				$search: {
+					index: "episode_autocomplete",
+					compound: {
+						must: [{ text: { query, path: ["title", "summary"] } }],
+						filter: Object.entries(tenant).map(([path, value]) => ({
+							equals: { path, value },
+						})),
+					},
+				},
+			},
+			// The compound filter runs against the indexed copy, which can lag
+			// the latest write.
+			{ $match: current },
+			{ $limit: limit ?? 50 },
+		]
 		const docs = await col
-			.find(filter)
-			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
-			.sort({ updatedAt: -1 })
-			.limit(limit ?? 50)
+			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
+			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 			.toArray()
-
-		report("episode-search", docs.length)
+		report(docs.length)
 		return docs as unknown as Episode[]
 	} catch (err) {
-		const typed = toTypedSearchError(err, "episode-search")
-		log.error("searchEpisodes failed", searchFailureLogFields(typed))
+		const typed = toTypedSearchError(err, "atlas-search")
+		log.warn("searchEpisodes $search failed", searchFailureLogFields(typed))
 		throw typed
 	}
 }

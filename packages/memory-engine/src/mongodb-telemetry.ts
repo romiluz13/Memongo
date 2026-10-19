@@ -25,6 +25,7 @@ export type TelemetryOperation =
 	| "profile-synthesis"
 	| "active-slate-hydration"
 	| "context-bundle"
+	/** @deprecated Historical persisted telemetry only: the HTTP reranker was removed in M2. */
 	| "rerank"
 	| "query-rewrite"
 	| "entity-extraction"
@@ -54,7 +55,9 @@ export type TelemetryDocument = {
 	itemCount?: number
 	eventType?: string
 	projectionTriggered?: boolean
+	/** @deprecated Historical persisted telemetry only: the HTTP reranker was removed in M2. */
 	rerankModel?: string
+	/** @deprecated Historical persisted telemetry only: the HTTP reranker was removed in M2. */
 	rerankLatencyMs?: number
 	queryRewritten?: boolean
 	rewriteMethod?: string
@@ -73,6 +76,8 @@ export type TelemetryDocument = {
 	 */
 	retryAfterMs?: number
 	/**
+	 * @deprecated Historical persisted telemetry only: the HTTP reranker was
+	 * removed in M2.
 	 * WS-12 (C-019): rerank skip marker. Set when the rerank stage
 	 * legitimately did not run — "disabled" (config off), "no-results"
 	 * (nothing to rank), "no-api-key", "too-few-candidates",

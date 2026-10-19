@@ -637,7 +637,7 @@ export class MongoDBManagerLifecycleOps {
 						},
 					},
 				)
-				const expandedResults =
+				const expansion =
 					params.scope === "session"
 						? await expandSearchContext({
 								db: this.host.db,
@@ -648,8 +648,8 @@ export class MongoDBManagerLifecycleOps {
 								results: result.results,
 								maxResults: params.maxResults,
 							})
-						: result.results
-				const trustedResults = annotateResultsWithTrust(expandedResults, {
+						: { results: result.results, failures: [] }
+				const trustedResults = annotateResultsWithTrust(expansion.results, {
 					scope: params.scope,
 					scopeRef: params.scopeRef,
 					sessionKey: params.scope === "session" ? params.sessionId : undefined,
@@ -663,6 +663,18 @@ export class MongoDBManagerLifecycleOps {
 					results: trustedResults,
 					pathsExecuted: result.metadata.pathsExecuted,
 					trustSummary: summarizeTrust(trustedResults),
+					// X-09: the search's lane rows, status and throttle marker
+					// reach the bundle instead of being dropped here.
+					...(result.metadata.laneOutcomes
+						? { laneOutcomes: result.metadata.laneOutcomes }
+						: {}),
+					...(result.metadata.outcomeStatus
+						? { outcomeStatus: result.metadata.outcomeStatus }
+						: {}),
+					...(result.metadata.throttled
+						? { throttled: result.metadata.throttled }
+						: {}),
+					failures: expansion.failures,
 				}
 			},
 		})
@@ -705,10 +717,12 @@ export class MongoDBManagerLifecycleOps {
 	async recallConversation(
 		request: Omit<ConversationRecallRequest, "agentId">,
 	): Promise<ConversationRecallResponse> {
-		// M2 decision 8: recall never runs against an events index (or the chunk
-		// indexes its capability flags read) observed unhealthy at admission.
-		await assertCollectionIndexesHealthy(["events", "chunks"], "search")
-		const capabilities = await this.host.requestCapabilities()
+		// M2 decision 8: a querying recall is one hybrid lane on the events
+		// indexes and never runs against one observed unhealthy at admission.
+		// A query-less recall is a plain find and reads no Search index.
+		if (request.query?.trim()) {
+			await assertCollectionIndexesHealthy(["events"], "recall")
+		}
 		const nativeBitemporalVectorPrefilter =
 			await this.host.refreshNativeBitemporalVectorPrefilter()
 		return recallConversationCore({
@@ -722,7 +736,6 @@ export class MongoDBManagerLifecycleOps {
 			textIndexName: `${this.host.prefix}events_text`,
 			queryEmbeddingModel:
 				this.host.config?.mongodb?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL,
-			capabilities,
 			nativeBitemporalVectorPrefilter,
 		})
 	}

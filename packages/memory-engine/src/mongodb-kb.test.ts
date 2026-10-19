@@ -13,6 +13,7 @@ vi.mock("./mongodb-schema.js", () => ({
 }))
 
 import { hashText } from "./internal.js"
+import { TransactionUnsupportedError } from "./mongodb-transactions.js"
 import {
 	ingestToKB,
 	ingestFilesToKB,
@@ -530,7 +531,7 @@ describe("removeKBDocument", () => {
 		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
 
-	it("falls back to sequential when transactions are unsupported (F11)", async () => {
+	it("fails with TransactionUnsupportedError instead of deleting without a transaction (F11)", async () => {
 		const sessionMock = {
 			withTransaction: vi.fn(async () => {
 				const error = new Error(
@@ -545,20 +546,18 @@ describe("removeKBDocument", () => {
 			startSession: vi.fn(() => sessionMock),
 		}
 
-		const removed = await removeKBDocument(
-			mockDb(),
-			"test_",
-			"doc-fallback",
-			SCOPE,
-			clientMock as unknown as import("mongodb").MongoClient,
-		)
-		expect(removed).toBe(true)
-		// Should still delete via sequential fallback
-		expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({
-			docId: "doc-fallback",
-			scopeRef: SCOPE_REF,
-		})
-		expect(mockKB.deleteOne).toHaveBeenCalled()
+		await expect(
+			removeKBDocument(
+				mockDb(),
+				"test_",
+				"doc-fallback",
+				SCOPE,
+				clientMock as unknown as import("mongodb").MongoClient,
+			),
+		).rejects.toBeInstanceOf(TransactionUnsupportedError)
+		expect(mockKB.deleteOne).not.toHaveBeenCalled()
+		expect(mockKBChunks.deleteMany).not.toHaveBeenCalled()
+		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
 
 	it("propagates transaction failures without replaying sequential deletes", async () => {
@@ -690,7 +689,7 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 		expect(mockKBChunks.bulkWrite).not.toHaveBeenCalled()
 	})
 
-	it("falls back to sequential writes when transaction fails (standalone)", async () => {
+	it("fails with TransactionUnsupportedError instead of re-ingesting without a transaction (standalone)", async () => {
 		const oldHash = hashText("Old content standalone")
 		const newContent = "Updated content standalone test"
 		const doc: KBDocument = {
@@ -729,13 +728,13 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 			client: clientMock as unknown as import("mongodb").MongoClient,
 		})
 
-		// Should still succeed via fallback
-		expect(result.documentsProcessed).toBe(1)
-		expect(result.errors).toHaveLength(0)
-		// Chunks and doc deletion + new insertion should happen sequentially
-		expect(mockKBChunks.deleteMany).toHaveBeenCalled()
-		expect(mockKB.deleteOne).toHaveBeenCalled()
-		expect(mockKB.insertOne).toHaveBeenCalled()
+		expect(result.documentsProcessed).toBe(0)
+		expect(result.errors).toHaveLength(1)
+		expect(result.errors[0]).toContain("transactions are required")
+		expect(mockKBChunks.deleteMany).not.toHaveBeenCalled()
+		expect(mockKB.deleteOne).not.toHaveBeenCalled()
+		expect(mockKB.insertOne).not.toHaveBeenCalled()
+		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
 
 	it("uses session in all operations inside the transaction body", async () => {

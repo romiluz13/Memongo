@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto"
-import type { ClientSession, Db, MongoClient } from "mongodb"
+import type { ClientSession, Db, Document, MongoClient } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
+import { bestEffort } from "./best-effort.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { isDerivableFromContext } from "./mongodb-consolidator.js"
 import {
@@ -24,11 +25,16 @@ import {
 	buildUnexpiredClause,
 	mergeQueryClauses,
 } from "./mongodb-temporal.js"
+import { runSearchAggregateWithRetry } from "./mongodb-search.js"
 import { refineCandidatesValidTime } from "./mongodb-temporal-extraction.js"
 import {
 	type StructuredMemoryEntry,
 	writeStructuredMemory,
 } from "./mongodb-structured-memory.js"
+import {
+	searchFailureLogFields,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 const log = createSubsystemLogger("memory:mongodb:derived")
 
@@ -93,17 +99,13 @@ async function recordProjectionRunBestEffort(params: {
 	}
 	context: string
 }): Promise<void> {
-	try {
-		await recordProjectionRun({
+	await bestEffort(`${params.context}-projection-run`, () =>
+		recordProjectionRun({
 			db: params.db,
 			prefix: params.prefix,
 			run: params.run,
-		})
-	} catch (err) {
-		log.warn(
-			`${params.context} projection run recording failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-	}
+		}),
+	)
 }
 
 const STOPWORDS = new Set([
@@ -426,13 +428,22 @@ function escapeRegex(input: string): string {
 	return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-// Sentence punctuation may differ; the full claim and internal punctuation may not.
-function fullClaimPattern(claim: string): RegExp {
+function fullClaimForms(claim: string): {
+	literal: string
+	alternate: string
+	repeatedPeriod: boolean
+} {
 	const repeatedPeriod = claim.endsWith("..")
 	const literal = repeatedPeriod ? claim : claim.replace(/\.$/, "")
 	const alternate = /^My /i.test(literal)
 		? literal.replace(/^My /i, "The user's ")
 		: literal.replace(/^The user's /i, "My ")
+	return { literal, alternate, repeatedPeriod }
+}
+
+// Sentence punctuation may differ; the full claim and internal punctuation may not.
+function fullClaimPattern(claim: string): RegExp {
+	const { literal, alternate, repeatedPeriod } = fullClaimForms(claim)
 	return new RegExp(
 		`^(?:${escapeRegex(literal)}|${escapeRegex(alternate)})${repeatedPeriod ? "" : "\\.?"}$`,
 		"i",
@@ -453,6 +464,20 @@ function stripPromotionMetadata(
 	return entry
 }
 
+const MAX_SUPPORTING_EVENTS = 3
+// Search proposes candidates by relevance, so the lookup reads a bounded
+// window of them and keeps the most recent verified events from it.
+const SUPPORTING_EVENT_CANDIDATE_WINDOW = 25
+
+/**
+ * Events that repeat the candidate, which is what lets a requires-reinforcement
+ * candidate promote. A full LLM claim is a `$search` `phrase` and any other
+ * value a `text` query over the events text index. The Search stage only
+ * proposes candidates: tenant and lifecycle are applied again to the hydrated
+ * event, and every hit must pass the verifier (the anchored full claim, or the
+ * literal value) before it counts, so a Search hit alone is never evidence.
+ * A Search failure is a typed throw, never "no supporting events".
+ */
 async function findSupportingEventIds(params: {
 	db: Db
 	prefix: string
@@ -469,39 +494,81 @@ async function findSupportingEventIds(params: {
 		candidate.promotionReason === "llm-extraction"
 			? extractedFullClaim(value)
 			: undefined
-	const evidencePattern = claim
-		? fullClaimPattern(claim).source
-		: escapeRegex(value)
+	const verifier = claim
+		? fullClaimPattern(claim)
+		: new RegExp(escapeRegex(value), "i")
 
-	if (claim && !new RegExp(evidencePattern, "i").test(event.body)) {
+	if (claim && !verifier.test(event.body)) {
 		return []
 	}
 
-	const docs = await eventsCollection(db, prefix)
-		.find({
-			agentId: event.agentId,
-			scope: event.scope,
-			scopeRef: event.scopeRef,
-			eventId: { $ne: event.eventId },
-			body: {
-				$regex: new RegExp(evidencePattern, "i"),
+	let operator: Document
+	if (claim) {
+		const { literal, alternate } = fullClaimForms(claim)
+		operator = {
+			phrase: { query: [...new Set([literal, alternate])], path: "body" },
+		}
+	} else {
+		operator = { text: { query: value, path: "body", matchCriteria: "all" } }
+	}
+	const tenant = {
+		agentId: event.agentId,
+		scope: event.scope,
+		scopeRef: event.scopeRef,
+	}
+	const pipeline: Document[] = [
+		{
+			$search: {
+				index: `${prefix}events_text`,
+				compound: {
+					must: [operator],
+					filter: Object.entries(tenant).map(([path, fieldValue]) => ({
+						equals: { path, value: fieldValue },
+					})),
+				},
 			},
-			...buildEventLifecycleClause(),
-		})
-		.sort({ timestamp: -1, _id: -1 })
-		.limit(3)
-		.toArray()
+		},
+		// The indexed copy can lag the latest write, and lifecycle fields are
+		// not part of the index: revalidate tenant, lifecycle and the current
+		// event exclusion on the hydrated event before the window.
+		{
+			$match: mergeQueryClauses(
+				{ ...tenant, eventId: { $ne: event.eventId } },
+				buildEventLifecycleClause(),
+			),
+		},
+		{ $limit: SUPPORTING_EVENT_CANDIDATE_WINDOW },
+		{ $sort: { timestamp: -1, _id: -1 } },
+		{ $project: { _id: 0, eventId: 1, body: 1 } },
+	]
+	let docs: Document[]
+	try {
+		docs = await runSearchAggregateWithRetry(
+			eventsCollection(db, prefix),
+			pipeline,
+			{ stage: "atlas-search" },
+		)
+	} catch (err) {
+		const typed = toTypedSearchError(err, "atlas-search")
+		log.warn(
+			"findSupportingEventIds $search failed",
+			searchFailureLogFields(typed),
+		)
+		throw typed
+	}
 
 	return docs
+		.filter((doc) => typeof doc.body === "string" && verifier.test(doc.body))
 		.map((doc) => String(doc.eventId ?? ""))
 		.filter((eventId) => eventId.length > 0)
+		.slice(0, MAX_SUPPORTING_EVENTS)
 }
 
 /**
  * Combine deterministic regex candidates with LLM-extracted candidates (issue
- * #30). Regex candidates are trusted on identity collisions. Degrades to
- * regex-only when no provider is configured or the LLM call fails, so the write
- * path never breaks on a missing key or an upstream outage.
+ * #30). Regex candidates are trusted on identity collisions. With no provider
+ * configured, deterministic-only extraction is a declared mode. A configured
+ * provider whose call fails throws, so the derivation fails and is retried.
  */
 async function mergeStructuredCandidates(
 	event: ConversationEvent,
@@ -553,11 +620,14 @@ async function mergeStructuredCandidates(
 				llmCandidates.length,
 			)
 		} catch (err) {
+			// A configured provider that fails fails the derivation: the caller
+			// marks it failed with retry state. Regex candidates alone are not a
+			// complete result for this event.
 			recordPromotionDecision(event, "extraction", "provider-error")
 			log.warn(
-				`LLM structured extraction failed for ${event.eventId}, using regex only: ${String(err)}`,
+				`LLM structured extraction failed for ${event.eventId}; derivation fails: ${String(err)}`,
 			)
-			return regexCandidates
+			throw err
 		}
 	}
 
@@ -570,9 +640,10 @@ async function mergeStructuredCandidates(
 	}
 
 	// Refine each candidate's valid-time from its own text (#32). Anchored to the
-	// event timestamp, which is also the explicit fallback. Never throws. When no
-	// provider exists at all (prefetched facts only), candidates already carry
-	// the event-timestamp baseline, so refinement is simply skipped.
+	// event timestamp, which is the valid time when the model states no date. A
+	// failed extraction throws. When no provider exists at all (prefetched facts
+	// only), candidates already carry the event-timestamp baseline, so
+	// refinement is simply skipped.
 	const refineProvider = temporalProvider ?? provider
 	if (!refineProvider) {
 		return [...merged.values()]

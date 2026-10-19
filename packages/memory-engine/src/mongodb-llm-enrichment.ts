@@ -807,6 +807,18 @@ export class EnrichmentParseError extends Error {
 	}
 }
 
+/**
+ * The enrichment provider is configured (an API key is set) but its
+ * configuration cannot resolve to a provider. Distinct from "no provider
+ * configured", which is a declared deterministic-only mode and returns null.
+ */
+export class EnrichmentConfigError extends Error {
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options)
+		this.name = "EnrichmentConfigError"
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Provider resolution from env vars
 // ---------------------------------------------------------------------------
@@ -828,7 +840,25 @@ export function isExtractionLlmDisabled(
 	return value === "off" || value === "0" || value === "false"
 }
 
+/**
+ * Returns null only when no provider is configured (no API key): the declared
+ * deterministic-only mode. A configured provider that cannot resolve throws
+ * EnrichmentConfigError.
+ */
 export function resolveEnrichmentProvider(
+	env: Record<string, string | undefined>,
+): EnrichmentProvider | null {
+	try {
+		return resolveConfiguredEnrichmentProvider(env)
+	} catch (err) {
+		throw new EnrichmentConfigError(
+			err instanceof Error ? err.message : String(err),
+			{ cause: err },
+		)
+	}
+}
+
+function resolveConfiguredEnrichmentProvider(
 	env: Record<string, string | undefined>,
 ): EnrichmentProvider | null {
 	const apiKey = env.MEMONGO_ENRICHMENT_API_KEY?.trim()
@@ -898,14 +928,7 @@ export async function extractSessionEnrichment(
 	provider: EnrichmentProvider,
 	sessionText: string,
 	model: string,
-	options?: { strictJson?: boolean },
 ): Promise<EnrichmentResult> {
-	const empty: EnrichmentResult = {
-		facts: [],
-		qaPairs: [],
-		hasPersonalContent: false,
-	}
-
 	const messages: Array<{ role: string; content: string }> = [
 		{ role: "system", content: ENRICHMENT_SYSTEM_PROMPT },
 		{ role: "user", content: buildEnrichmentUserPrompt(sessionText) },
@@ -922,8 +945,8 @@ export async function extractSessionEnrichment(
 	// F5: a transient empty completion (VALID envelope, no content) gets one
 	// bounded in-step retry. Refusal/content-filter/length never retry here —
 	// a retry would be a pointless identical request — and fall straight
-	// through to the existing semantics below (parse of "" fails → strict
-	// throws / non-strict degrades). A legacy provider without responseMeta
+	// through to the parse below (parse of "" fails → EnrichmentParseError). A
+	// legacy provider without responseMeta
 	// is judged by content alone (backward compatible).
 	for (let retry = 0; retry < SESSION_EMPTY_RESPONSE_RETRIES; retry++) {
 		const shape = response.responseMeta?.shape
@@ -965,18 +988,16 @@ export async function extractSessionEnrichment(
 			.replace(/\n?```\s*$/i, "")
 		parsed = JSON.parse(stripped)
 	} catch {
-		if (options?.strictJson) {
-			throw new EnrichmentParseError(
-				`LLM enrichment JSON parse failed: ${response.content.slice(0, 200)}`,
-			)
-		}
-		log.warn("LLM enrichment JSON parse failed", {
-			preview: response.content.slice(0, 200),
-		})
-		return empty
+		throw new EnrichmentParseError(
+			`LLM enrichment JSON parse failed: ${response.content.slice(0, 200)}`,
+		)
 	}
 
-	if (!parsed || typeof parsed !== "object") return empty
+	if (!parsed || typeof parsed !== "object") {
+		throw new EnrichmentParseError(
+			`LLM enrichment response is not a JSON object (provider=${provider.name})`,
+		)
+	}
 	const record = parsed as Record<string, unknown>
 
 	const rawFacts = Array.isArray(record.facts) ? record.facts : []
@@ -1122,7 +1143,6 @@ async function enrichSingleSession(params: {
 	sourceEventIds: string[]
 	turnCount: number
 	timestamp: Date
-	strictJson?: boolean
 }): Promise<{
 	userfactDoc: UserfactEvidenceEnrichedDocument | null
 	qaDoc: QaEvidenceDocument | null
@@ -1131,7 +1151,6 @@ async function enrichSingleSession(params: {
 		params.provider,
 		params.sessionText,
 		params.model,
-		{ strictJson: params.strictJson },
 	)
 
 	const userfactDoc = buildEnrichedUserfactDocument({
@@ -1232,7 +1251,6 @@ export async function enrichSessionsWithLLM(params: {
 	scopeRef: string
 	eventIds: Map<string, string[]>
 	concurrency?: number
-	strict?: boolean
 	onProviderCall?: (outcome: "attempted" | "succeeded" | "failed") => void
 }): Promise<EnrichSessionsResult> {
 	const concurrency = params.concurrency ?? MAX_CONCURRENT
@@ -1304,7 +1322,6 @@ export async function enrichSessionsWithLLM(params: {
 							sourceEventIds: work.sourceEventIds,
 							turnCount: work.turnCount,
 							timestamp: work.timestamp,
-							strictJson: params.strict,
 						})
 						recordProviderCall("succeeded")
 						return enriched

@@ -764,6 +764,10 @@ export class MongoDBManagerAdminOps {
 				deploymentFacts: this.host.deploymentFacts,
 				searchMode: this.host.lastSearchMode,
 				searchModeDetails: this.host.lastSearchDetails,
+				rerank: {
+					nativeRerank: { engineSupport: false, serverSupport: "unknown" },
+					lane: { outcome: "not-applicable", reason: "capability-absent" },
+				},
 				retrievalPaths: [
 					"active-critical",
 					"structured",

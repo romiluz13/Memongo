@@ -35,17 +35,15 @@ const CREDENTIALS = {
 	MEMONGO_BENCHMARK_JUDGE_BASE_URL: "https://judge.invalid/cnryKeyedJudgePath",
 }
 const VOYAGE_KEY = "cnryKeyedVoyageKey"
-const VOYAGE_FIELD = "reranking.voyageApiKey"
 
-/** The real producer under exactly `env`, with a synthetic Voyage key. */
-function produce(env: Record<string, string>, voyageApiKey = VOYAGE_KEY) {
+/** The real producer under exactly `env`. */
+function produce(env: Record<string, string>) {
 	const saved = { ...process.env }
 	try {
 		for (const key of Object.keys(process.env))
 			if (key.startsWith("MEMONGO_")) delete process.env[key]
 		Object.assign(process.env, env)
 		const host = structuredClone(SYNTHETIC_BENCHMARK_HOST)
-		Object.assign(host.config.mongodb.reranking, { voyageApiKey })
 		const configuration = new MongoDBManagerBenchmarkScenarioOps(
 			host as never,
 		).snapshotBenchmarkRunConfiguration({
@@ -150,7 +148,6 @@ describe("keyed credential identity from the real producer", () => {
 			([name, value]) =>
 				[`env.${name}.hmac`, name, value] as [string, string, string],
 		),
-		["rerankerApiKeyHmac", VOYAGE_FIELD, VOYAGE_KEY],
 	]
 
 	it("never records a credential, its plain SHA-256 or the key", () => {
@@ -177,14 +174,11 @@ describe("keyed credential identity from the real producer", () => {
 		INPUTS,
 	)("binds a change of %s to exactly that fingerprint", (setting, field) => {
 		const base = produce(keyed(KEY_A))
-		const changed =
-			field === VOYAGE_FIELD
-				? produce(keyed(KEY_A), "cnryKeyedVoyageOther")
-				: produce(
-						keyed(KEY_A, {
-							[field]: `${CREDENTIALS[field as keyof typeof CREDENTIALS]}x`,
-						}),
-					)
+		const changed = produce(
+			keyed(KEY_A, {
+				[field]: `${CREDENTIALS[field as keyof typeof CREDENTIALS]}x`,
+			}),
+		)
 		expect(changed.configurationHash).not.toBe(base.configurationHash)
 		const differing = Object.keys(base.configuration.settings).filter(
 			(name) =>
@@ -195,11 +189,9 @@ describe("keyed credential identity from the real producer", () => {
 	})
 
 	it("records an absent credential as null under the same key domain", () => {
-		const { configuration } = produce(
-			{ [BENCHMARK_FINGERPRINT_KEY_ENV]: KEY_A },
-			// backend-config resolves an absent Voyage key to "".
-			"",
-		)
+		const { configuration } = produce({
+			[BENCHMARK_FINGERPRINT_KEY_ENV]: KEY_A,
+		})
 		for (const [setting] of INPUTS)
 			expect(configuration.settings[setting]).toBeNull()
 		expect(configuration.settings.credentialFingerprintKeyId).toBe(

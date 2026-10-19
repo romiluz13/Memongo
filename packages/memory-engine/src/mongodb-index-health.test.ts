@@ -375,10 +375,20 @@ describe("request scope", () => {
 
 	it("a lane that uses no Search index is not gated", async () => {
 		const { source, listReads } = harness()
+		await runWithIndexHealth(source, () => assertLaneIndexesHealthy("planner"))
+		expect(listReads()).toHaveLength(0)
+	})
+
+	it("raw-window reads the events and chunks indexes it depends on", async () => {
+		const { source, listReads } = harness()
 		await runWithIndexHealth(source, () =>
 			assertLaneIndexesHealthy("raw-window"),
 		)
-		expect(listReads()).toHaveLength(0)
+		expect(
+			listReads()
+				.map((call) => (call as { collection: string }).collection)
+				.sort(),
+		).toEqual([CHUNKS, `${PREFIX}events`].sort())
 	})
 
 	it("hybrid vector-only mode needs only the vector index", async () => {

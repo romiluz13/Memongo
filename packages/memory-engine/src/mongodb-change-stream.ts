@@ -44,6 +44,21 @@ export type ChangeStreamReopenPolicy = {
 	maxDelayMs?: number
 }
 
+/**
+ * Typed failure for a change stream that was asked for (`enableChangeStreams`)
+ * and cannot be opened. There is no "file watcher only" fallback: a deployment
+ * that enables change streams fails to start instead of silently losing
+ * cross-instance sync.
+ */
+export class ChangeStreamUnavailableError extends Error {
+	readonly code = "CHANGE_STREAM_UNAVAILABLE"
+
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options)
+		this.name = "ChangeStreamUnavailableError"
+	}
+}
+
 const DEFAULT_REOPEN_BASE_DELAY_MS = 1_000
 const DEFAULT_REOPEN_MAX_DELAY_MS = 30_000
 
@@ -51,8 +66,8 @@ const DEFAULT_REOPEN_MAX_DELAY_MS = 30_000
  * MongoDBChangeStreamWatcher watches for changes to the chunks collection
  * and invokes a callback when relevant inserts/updates/deletes are detected.
  *
- * Requires a replica set (same as transactions). Degrades gracefully on
- * standalone topologies by simply not opening a stream.
+ * Requires a replica set (same as transactions). On a standalone topology
+ * `start()` throws ChangeStreamUnavailableError.
  *
  * C-016 supervision: re-opens are unlimited but rate-limited by exponential
  * backoff with a ceiling — the first re-open is immediate (a stale token at
@@ -98,7 +113,9 @@ export class MongoDBChangeStreamWatcher {
 	 * F21: Open the change stream. Accepts an optional resumeAfter token
 	 * to resume from a previously persisted position. If the token is stale
 	 * (oplog rotated past it), re-opens from now and signals a gap.
-	 * Returns false if change streams are not supported (standalone MongoDB).
+	 * Throws ChangeStreamUnavailableError when the stream cannot be opened
+	 * (standalone MongoDB, or any other open failure). Returns false only when
+	 * the watcher was already closed.
 	 */
 	async start(resumeAfter?: unknown): Promise<boolean> {
 		if (this.closed) {
@@ -113,15 +130,19 @@ export class MongoDBChangeStreamWatcher {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			if (isChangeStreamNotSupported(msg)) {
-				log.info("change streams not supported (standalone topology)")
-				return false
+				throw new ChangeStreamUnavailableError(
+					"change streams are not supported on this topology (a replica set or mongos is required)",
+					{ cause: err },
+				)
 			}
 			if (isResumeTokenInvalid(err)) {
 				log.info("resume token stale at startup, re-opening from now")
 				return this.reopenFromNow("startup")
 			}
-			log.warn(`failed to start change stream: ${msg}`)
-			return false
+			throw new ChangeStreamUnavailableError(
+				`failed to start change stream: ${msg}`,
+				{ cause: err },
+			)
 		}
 	}
 

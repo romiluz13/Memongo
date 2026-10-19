@@ -88,14 +88,6 @@ vi.mock(
 		).queryRewriterModuleMock(),
 )
 
-vi.mock("../../packages/memory-engine/src/mongodb-reranker.js", async () =>
-	(
-		await import(
-			"../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
-		)
-	).rerankerModuleMock(),
-)
-
 vi.mock("../../packages/memory-engine/src/mongodb-lane-coverage.js", async () =>
 	(
 		await import(

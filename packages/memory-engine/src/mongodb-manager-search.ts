@@ -9,8 +9,6 @@ import { accessTargetFromSearchResult } from "./mongodb-access-tracker.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
-import { normalizeSearchResults } from "./mongodb-hybrid.js"
-import type { SearchMethod } from "./mongodb-hybrid.js"
 import { assertLaneIndexesHealthy } from "./mongodb-index-health.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import {
@@ -22,28 +20,14 @@ import {
 import { kbLaneCost } from "./search-lane-cost.js"
 import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
 import { recordRecallTrace } from "./mongodb-recall-traces.js"
-import type { RelevanceArtifact } from "./mongodb-relevance.js"
 import { resolveSessionEvidenceMode } from "./mongodb-session-evidence.js"
 import { resolveUserfactEvidenceMode } from "./mongodb-userfact-evidence.js"
 import { resolveEnrichmentMode } from "./mongodb-llm-enrichment.js"
 import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
-import {
-	kbCollection,
-	chunksCollection,
-	kbChunksCollection,
-	structuredMemCollection,
-} from "./mongodb-schema.js"
-import type { DetectedCapabilities } from "./mongodb-schema.js"
+import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { buildUnexpiredClause, mergeQueryClauses } from "./mongodb-temporal.js"
-import { mongoSearch } from "./mongodb-search.js"
-import type {
-	SearchExplainOptions,
-	SearchExplainTraceArtifact,
-	SearchTraceEvent,
-} from "./mongodb-search.js"
-import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
 	buildConstraintSummaries,
@@ -59,24 +43,23 @@ import type {
 	SearchLaneOutcome,
 } from "./types.js"
 import {
-	isSearchFailureOutcome,
 	SearchBudgetDeniedError,
+	SearchLaneError,
 	type SearchOutcomeSummary,
 	searchFailureLogFields,
 	searchFailureRow,
 	summarizeSearchOutcomes,
+	throttledSearchOutcomes,
 	toTypedSearchError,
 } from "./search-outcomes.js"
 import {
 	clampSearchMaxResults,
 	clampSearchQuery,
-	deduplicateSearchResults,
 	emptySearchMetadata,
 	getActiveSources,
 	isBenchmarkStrictMode,
 	MAX_SEARCH_QUERY_LENGTH,
 	normalizeDetailedSearchRequest,
-	rerankResults,
 	resolveRuntimeSearchConfig,
 } from "./mongodb-search-ranking.js"
 import type { ActiveSources } from "./mongodb-search-ranking.js"
@@ -313,286 +296,15 @@ export class MongoDBManagerSearchOps {
 		this.host.lastSearchDetails = details
 	}
 
-	async legacySearch(
-		query: string,
-		opts?: {
-			maxResults?: number
-			minScore?: number
-			sessionKey?: string
-			scope?: MemoryScope
-			scopeRef?: string
-			kbRestricted?: boolean
-		},
-		priorAdmission?: AdmissionToken,
-		/** #101 M7: receives a value-free row per failed legacy lane. */
-		onOutcome?: (row: SearchLaneOutcome) => void,
-	): Promise<MemorySearchResult[]> {
-		const cleaned = query.trim()
-		if (!cleaned) {
-			onOutcome?.({
-				lane: "legacy",
-				stage: "request",
-				outcome: "not-applicable",
-				reason: "empty-query",
-			})
-			return []
-		}
-
-		const readAdmission =
-			priorAdmission ??
-			(await captureAdmissionToken({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-			}))
-
-		const capabilities = await this.host.requestCapabilities()
-		const mongoCfg = this.host.config.mongodb!
-		const maxResults = clampSearchMaxResults(opts?.maxResults ?? 10)
-		const minScore = opts?.minScore ?? 0.1
-		const startedAt = Date.now()
-		const sampled = this.host.relevance?.shouldSample() ?? false
-		const explainArtifacts: RelevanceArtifact[] = []
-		const traceEvents: SearchTraceEvent[] = []
-		const explainOpts: SearchExplainOptions | undefined = sampled
-			? {
-					enabled: true,
-					deep: false,
-					includeScoreDetails: true,
-					onArtifact: (artifact: SearchExplainTraceArtifact) => {
-						explainArtifacts.push({
-							artifactType: artifact.artifactType,
-							summary: artifact.summary,
-							rawExplain: artifact.rawExplain,
-							compression: "none",
-						})
-					},
-				}
-			: undefined
-
-		const queryVector: number[] | null = null
-		const activeSources = getActiveSources(
-			mongoCfg.sources,
-			mongoCfg.kb.enabled && opts?.kbRestricted !== true,
-		)
-		const bridgeMaxResults = this.host.getBridgeChunkBudget(maxResults)
-		const emptyResults: MemorySearchResult[] = []
-		// The legacy path is a fallback for searchV2, so it must be confined to
-		// exactly the same tenant identity searchV2 would have used. Resolving it
-		// here (rather than passing `opts` through raw) is what keeps an absent
-		// `scope` from widening the read to every scope under this agentId.
-		const identity = this.host.resolveSearchIdentity(opts)
-		const bridgeFilter = this.host.buildBridgeChunkFilterForIdentity(identity)
-		const [
-			runtimeConversationResults,
-			bridgeConversationResults,
-			kbResults,
-			structuredResults,
-		] = await Promise.all([
-			!activeSources.conversation
-				? emptyResults
-				: mongoSearch(
-						chunksCollection(this.host.db, this.host.prefix),
-						cleaned,
-						queryVector,
-						{
-							maxResults,
-							minScore,
-							numCandidates: mongoCfg.numCandidates,
-							sessionKey: opts?.sessionKey,
-							filter: this.host.buildConversationChunkFilter(identity),
-							fusionMethod: mongoCfg.fusionMethod,
-							capabilities,
-							vectorIndexName: `${this.host.prefix}chunks_vector`,
-							textIndexName: `${this.host.prefix}chunks_text`,
-							vectorWeight: 0.7,
-							textWeight: 0.3,
-							embeddingMode: mongoCfg.embeddingMode,
-							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-							explain: explainOpts,
-							onTrace: (event) => {
-								traceEvents.push(event)
-							},
-						},
-					),
-			!activeSources.conversation || !bridgeFilter
-				? emptyResults
-				: mongoSearch(
-						chunksCollection(this.host.db, this.host.prefix),
-						cleaned,
-						queryVector,
-						{
-							maxResults: bridgeMaxResults,
-							minScore,
-							numCandidates: mongoCfg.numCandidates,
-							sessionKey: opts?.sessionKey,
-							filter: bridgeFilter,
-							fusionMethod: mongoCfg.fusionMethod,
-							capabilities,
-							vectorIndexName: `${this.host.prefix}chunks_vector`,
-							textIndexName: `${this.host.prefix}chunks_text`,
-							vectorWeight: 0.7,
-							textWeight: 0.3,
-							embeddingMode: mongoCfg.embeddingMode,
-							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-							explain: explainOpts,
-							onTrace: (event) => {
-								traceEvents.push(event)
-							},
-						},
-					),
-			!activeSources.reference
-				? emptyResults
-				: searchKB(
-						kbChunksCollection(this.host.db, this.host.prefix),
-						cleaned,
-						queryVector,
-						{
-							maxResults: Math.max(3, Math.floor(maxResults / 3)),
-							minScore,
-							scopeRef: identity.scopeRef,
-							numCandidates: mongoCfg.numCandidates,
-							vectorIndexName: `${this.host.prefix}kb_chunks_vector`,
-							textIndexName: `${this.host.prefix}kb_chunks_text`,
-							embeddingMode: mongoCfg.embeddingMode,
-							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-							kbDocs: kbCollection(this.host.db, this.host.prefix),
-							explain: explainOpts,
-						},
-					).catch((err) => {
-						if (isBenchmarkStrictMode()) {
-							throw toTypedSearchError(err, "lane", "kb")
-						}
-						log.warn("legacy KB search failed", searchFailureLogFields(err))
-						onOutcome?.(searchFailureRow("kb", "lane", err))
-						return [] as MemorySearchResult[]
-					}),
-			!activeSources.structured
-				? emptyResults
-				: searchStructuredMemory(
-						structuredMemCollection(this.host.db, this.host.prefix),
-						cleaned,
-						queryVector,
-						{
-							maxResults: Math.max(3, Math.floor(maxResults / 3)),
-							minScore,
-							filter: {
-								agentId: this.host.agentId,
-								scope: identity.scope,
-								scopeRef: identity.scopeRef,
-							},
-							numCandidates: mongoCfg.numCandidates,
-							capabilities,
-							vectorIndexName: `${this.host.prefix}structured_mem_vector`,
-							textIndexName: `${this.host.prefix}structured_mem_text`,
-							embeddingMode: mongoCfg.embeddingMode,
-							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-							explain: explainOpts,
-						},
-					).catch((err) => {
-						if (isBenchmarkStrictMode()) {
-							throw toTypedSearchError(err, "lane", "structured")
-						}
-						log.warn(
-							"legacy structured memory search failed",
-							searchFailureLogFields(err),
-						)
-						onOutcome?.(searchFailureRow("structured", "lane", err))
-						return [] as MemorySearchResult[]
-					}),
-		])
-
-		const conversationResults = [
-			...runtimeConversationResults,
-			...bridgeConversationResults,
-		]
-		const legacyMethod: SearchMethod = this.host.resolveObservedSearchMethod(
-			traceEvents,
-			mongoCfg,
-			capabilities,
-		)
-		const normalizedLegacy = normalizeSearchResults(
-			conversationResults,
-			legacyMethod,
-		)
-		const normalizedKb = normalizeSearchResults(kbResults, "kb")
-		const normalizedStructured = normalizeSearchResults(
-			structuredResults,
-			"structured",
-		)
-
-		const merged = [
-			...normalizedLegacy,
-			...normalizedKb,
-			...normalizedStructured,
-		].toSorted((a, b) => b.score - a.score)
-
-		const deduped = deduplicateSearchResults(merged)
-		const dedupCount = merged.length - deduped.length
-		if (dedupCount > 0) {
-			log.debug(`search dedup: removed ${dedupCount} duplicate result(s)`)
-		}
-		const finalResults = rerankResults(deduped, cleaned).slice(0, maxResults)
-		const successfulTrace = [...traceEvents]
-			.toReversed()
-			.find((event) => event.ok)
-		const fallbackPath =
-			successfulTrace && successfulTrace.method !== mongoCfg.fusionMethod
-				? `${mongoCfg.fusionMethod}->${successfulTrace.method}`
-				: undefined
-		const health =
-			this.host.relevance?.evaluateHealth(finalResults, fallbackPath) ?? "ok"
-		this.host.relevance?.recordSignal(finalResults, fallbackPath)
-
-		if (sampled && this.host.relevance) {
-			explainArtifacts.push({
-				artifactType: "trace",
-				summary: {
-					requestedFusionMethod: mongoCfg.fusionMethod,
-					fallbackPath,
-					events: traceEvents,
-					topScore: finalResults[0]?.score ?? 0,
-					resultCount: finalResults.length,
-				},
-			})
-			void this.host.relevance
-				.persistRun({
-					admission: readAdmission,
-					query: cleaned,
-					sourceScope: "all",
-					latencyMs: Date.now() - startedAt,
-					topK: maxResults,
-					hitSources: Array.from(
-						new Set(finalResults.map((result) => result.source)),
-					),
-					fallbackPath,
-					status: health,
-					sampled,
-					sampleRate: this.host.relevance.getSampleState().current,
-					artifacts: explainArtifacts,
-					diagnosticMode: false,
-				})
-				.catch((err) => {
-					this.host.relevance?.logTelemetryFailure(err)
-				})
-		}
-
-		this.host.recordSearchAccess(finalResults, readAdmission)
-		return finalResults
-	}
-
 	/**
 	 * RET-15: the V2 pipeline's actual verdict now feeds the relevance
 	 * runtime. Called only where the V2 outcome is the answer the caller
-	 * receives — the success return, and the empty/error outcomes returned
-	 * without an opt-in legacy re-run. Throttled denials are excluded
-	 * (WS-11: a throttle is not a retrieval verdict), and the legacy
-	 * fallback re-run records its own signal at its own seam.
+	 * receives — the success return and the empty/error outcomes. Throttled
+	 * denials are excluded (WS-11: a throttle is not a retrieval verdict).
 	 *
 	 * The sampled run carries the V2 decision surface — plan, constraints,
 	 * per-path execution and latency, rerank/rewrite flags — so a sampled
-	 * run diagnoses the pipeline that actually answered, not the legacy
-	 * approximation `relevanceExplain` used to run.
+	 * run diagnoses the pipeline that actually answered.
 	 *
 	 * `metadata` is deliberately structural: `V2SearchMetadata` (whose
 	 * `plan.constraints` is an object) and the `MemorySearchResponse`
@@ -625,10 +337,8 @@ export class MongoDBManagerSearchOps {
 		if (!relevance) {
 			return
 		}
-		// Mirror of the legacy seam: the sampling decision precedes the
-		// signal (recordSignal recomputes the rate), and health is judged on
-		// the V2 answer itself — the fusion fallbackPath concept does not
-		// apply to the planner pipeline.
+		// The sampling decision precedes the signal (recordSignal recomputes
+		// the rate), and health is judged on the V2 answer itself.
 		const sampled = relevance.shouldSample()
 		const health = relevance.evaluateHealth(params.results)
 		relevance.recordSignal(params.results)
@@ -709,8 +419,8 @@ export class MongoDBManagerSearchOps {
 			onLaneLatency?: (latencyByLane: Record<string, number>) => void
 			/**
 			 * WS-12 (C-019): receives the degradation marker when admission
-			 * control degraded this answer (denied query, denied legacy
-			 * re-run, or skipped KB vector lane). Same sink-not-state pattern
+			 * control denied this query or skipped the KB vector lane. Same
+			 * sink-not-state pattern
 			 * as onLaneLatency so concurrent searches cannot cross-attribute;
 			 * fires at most once, before the results return. A healthy search
 			 * never fires it — absence means the answer is authoritative.
@@ -758,7 +468,7 @@ export class MongoDBManagerSearchOps {
 
 		const mongoCfg = this.host.config.mongodb!
 		const maxResults = clampSearchMaxResults(opts?.maxResults ?? 10)
-		const minScore = opts?.minScore ?? mongoCfg.reranking?.minScore ?? 0.01
+		const minScore = opts?.minScore ?? 0.01
 		const activeSources = getActiveSources(
 			mongoCfg.sources,
 			mongoCfg.kb.enabled && opts?.kbRestricted !== true,
@@ -836,11 +546,12 @@ export class MongoDBManagerSearchOps {
 		const searchStart = Date.now()
 		let laneLatency: Record<string, number> = {}
 		// #101: this call's outcome summary, fired once in `finally`. A
-		// throttled request carries the degradation marker instead (R3).
+		// throttled request carries a typed budget-denied row and the
+		// degradation marker's retry hint.
 		let outcomes: SearchOutcomeSummary | undefined
 		let v2Returned = false
-		// #101 decision 18: one request ledger spans the v2 search and its
-		// opt-in legacy re-run; searchV2 takes its admission token on it.
+		// #101 decision 18: one request ledger spans the v2 search; searchV2
+		// takes its admission token on it.
 		const requestLedger = openSearchBudget(
 			resolveSearchBudgetLimits(mongoCfg.searchBudget),
 			{ admitted: false },
@@ -889,11 +600,9 @@ export class MongoDBManagerSearchOps {
 				}),
 			)
 			v2Returned = true
-			if (!v2.metadata.throttled) {
-				outcomes = {
-					status: v2.metadata.outcomeStatus ?? "complete",
-					lanes: v2.metadata.laneOutcomes ?? [],
-				}
+			outcomes = {
+				status: v2.metadata.outcomeStatus ?? "complete",
+				lanes: v2.metadata.laneOutcomes ?? [],
 			}
 
 			// Emit search telemetry (fire-and-forget). WS-11: a throttled
@@ -985,11 +694,11 @@ export class MongoDBManagerSearchOps {
 			}
 
 			// WS-11 change 2: a throttled response is NOT a retrieval verdict.
-			// No recall trace (nothing was retrieved), no benchmark-strict throw
-			// (the corpus is not at fault), no legacy re-run (it would pay for
-			// a second admission token and blur the throttle outcome). The
-			// empty results carry the throttle marker in metadata; WS-12
-			// reports it upstream as throttling, never as "no memories".
+			// No recall trace (nothing was retrieved) and no benchmark-strict
+			// throw (the corpus is not at fault). The empty results carry the
+			// throttle marker in metadata and a typed budget-denied outcome row
+			// through the outcome sink; WS-12 reports it upstream as throttling,
+			// never as "no memories".
 			if (v2.metadata.throttled) {
 				this.host.setLastSearchMode("v2:throttled", {
 					...v2Details,
@@ -1034,125 +743,28 @@ export class MongoDBManagerSearchOps {
 			)
 			if (isBenchmarkStrictMode()) {
 				throw new Error(
-					`searchV2 returned no results; legacy fallback disabled; paths=${v2.metadata.pathsExecuted.join(",") || "none"} hitsByLane=${JSON.stringify(v2.metadata.resultsByPath)}`,
+					`searchV2 returned no results; paths=${v2.metadata.pathsExecuted.join(",") || "none"} hitsByLane=${JSON.stringify(v2.metadata.resultsByPath)}`,
 				)
 			}
-			// P3.2: the legacySearch re-run is opt-in (empty ≠ error — the v2
-			// empty answer stands unless the deployment asks for the double
-			// retrieval via memory.mongodb.legacySearchFallback). #101 M4: it
-			// re-runs only after a COMPLETE empty — never after a partial or
-			// failed one, where the empty is not a zero-hit verdict.
-			if (!mongoCfg.legacySearchFallback || outcomes?.status !== "complete") {
-				this.host.setLastSearchMode("v2:empty", v2Details)
-				// RET-15: the empty verdict the caller receives is the signal.
-				this.recordV2RelevanceVerdict({
-					admission: readAdmission,
-					query: cleaned,
-					results: [],
-					metadata: v2.metadata,
-					latencyMs,
-					maxResults,
-				})
-				return []
-			}
-			// WS-11: the legacy re-run burns another server-side autoEmbed
-			// input outside the v2 lanes, so it pays its own admission token.
-			// A dry bucket leaves the v2 empty answer standing — re-running
-			// into the same denial would blur the throttle outcome.
-			const legacyAdmission = tryConsumeSearchAdmission()
-			if (!legacyAdmission.ok) {
-				this.host.setLastSearchMode("v2:empty->legacy-throttled", {
-					...v2Details,
-					retryAfterMs: legacyAdmission.retryAfterMs,
-				})
-				// WS-12 (C-019): the v2 empty verdict IS authoritative (it did
-				// search), but the configured double-check did not happen —
-				// the sink says which, so "unverified empty" never masquerades
-				// as fully-verified emptiness.
-				opts?.onDegradation?.({
-					kind: "throttled",
-					scope: "legacy-fallback-skipped",
-					retryAfterMs: legacyAdmission.retryAfterMs,
-				})
-				// RET-15: the v2 empty verdict stands (only the opt-in
-				// double-check was denied) — it is still the served answer.
-				this.recordV2RelevanceVerdict({
-					admission: readAdmission,
-					query: cleaned,
-					results: [],
-					metadata: v2.metadata,
-					latencyMs,
-					maxResults,
-				})
-				return []
-			}
-			const legacyRows: SearchLaneOutcome[] = []
-			let fallbackResults: MemorySearchResult[]
-			try {
-				fallbackResults = await requestLedger.run(() =>
-					this.host.legacySearch(cleaned, opts, readAdmission, (row) =>
-						legacyRows.push(row),
-					),
-				)
-				legacyRows.push({
-					lane: "legacy",
-					stage: "rerun",
-					outcome: fallbackResults.length > 0 ? "ok" : "ok-empty",
-					...(fallbackResults.length > 0
-						? {}
-						: { reason: "zero-hits" as const }),
-					resultCount: fallbackResults.length,
-				})
-			} catch (legacyErr) {
-				// The v2 complete-empty verdict stands; the failed opt-in
-				// re-run is a visible row that makes the call partial.
-				log.warn("legacy re-run failed", searchFailureLogFields(legacyErr))
-				legacyRows.push(searchFailureRow("legacy", "rerun", legacyErr))
-				fallbackResults = []
-			}
-			const lanes = [...(outcomes?.lanes ?? []), ...legacyRows]
-			outcomes = {
-				status: legacyRows.some(isSearchFailureOutcome)
-					? "partial"
-					: (outcomes?.status ?? "complete"),
-				lanes,
-			}
-			this.host.setLastSearchMode("v2->legacy-empty", {
-				...v2Details,
-				fallbackResults: fallbackResults.length,
-			})
-			void recordRecallTrace({
+			// Empty is not an error: the v2 answer stands as the verdict, and no
+			// second retrieval repeats it.
+			this.host.setLastSearchMode("v2:empty", v2Details)
+			// RET-15: the empty verdict the caller receives is the signal.
+			this.recordV2RelevanceVerdict({
 				admission: readAdmission,
-				db: this.host.db,
-				prefix: this.host.prefix,
-				privacyMode: mongoCfg.relevance.telemetry.queryPrivacyMode,
-				trace: {
-					agentId: this.host.agentId,
-					scope: searchScope,
-					scopeRef: searchScopeRef,
-					query: cleaned,
-					lanesUsed: ["legacy"],
-					lanesSkipped: Array.from(availablePaths),
-					totalHits: fallbackResults.length,
-					latencyMs,
-					hitsByLane: { legacy: fallbackResults.length },
-					topHitIds: fallbackResults
-						.map((result) => result.canonicalId ?? result.path)
-						.slice(0, 5),
-				},
-			}).catch((err) =>
-				log.warn(
-					"search fallback recall trace write failed",
-					settledFailureMeta(err),
-				),
-			)
-			return fallbackResults
+				query: cleaned,
+				results: [],
+				metadata: v2.metadata,
+				latencyMs,
+				maxResults,
+			})
+			return []
 		} catch (err) {
 			if (v2Returned) {
 				throw err
 			}
 			// M5/M6: a searchV2 throw is a typed request failure — never an
-			// empty answer and never an error-triggered legacy re-run.
+			// empty answer and never a re-run.
 			const typed = toTypedSearchError(err, "request", "search")
 			log.warn("planner search failed", searchFailureLogFields(typed))
 			outcomes = {
@@ -1186,10 +798,7 @@ export class MongoDBManagerSearchOps {
 				"phase:temporal-candidate-merge",
 				"phase:turn-precision",
 				"phase:precision-merge",
-				"phase:lane-controls-pre-rerank",
-				"phase:rerank-input",
-				"phase:rerank",
-				"phase:lane-controls-post-rerank",
+				"phase:lane-controls",
 				"phase:final-normalize",
 				"phase:projection",
 			].reduce((total, phase) => total + (laneLatency[phase] ?? 0), 0)
@@ -1208,6 +817,12 @@ export class MongoDBManagerSearchOps {
 		request: MemorySearchRequest,
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResponse> {
+		if (request.searchConfig?.rerank === true) {
+			throw new SearchLaneError({
+				stage: "request",
+				reason: "rerank-unsupported",
+			})
+		}
 		const normalized = normalizeDetailedSearchRequest(request)
 		// WS-16 (C-030): the clamp happened inside normalize — emit the
 		// telemetry marker here, where the host db/prefix are in reach, so
@@ -1266,8 +881,7 @@ export class MongoDBManagerSearchOps {
 		// searchV2 below runs inside the request budget and therefore takes
 		// its budget-share branch, which
 		// skips the per-pass admission charge; before this seam a 3-pass
-		// search paid 3 tokens and opened 3 fresh budgets. The opt-in legacy
-		// re-run keeps its own token (below).
+		// search paid 3 tokens and opened 3 fresh budgets.
 		const admission = tryConsumeSearchAdmission()
 		if (!admission.ok) {
 			void emitTelemetry(
@@ -1292,11 +906,14 @@ export class MongoDBManagerSearchOps {
 				evidenceCoverage: "none",
 				throttled: { retryAfterMs: admission.retryAfterMs },
 			})
+			const denied = throttledSearchOutcomes()
 			return {
 				results: [],
 				metadata: {
 					...emptySearchMetadata(normalized),
 					throttled: { retryAfterMs: admission.retryAfterMs },
+					laneOutcomes: denied.lanes,
+					outcomeStatus: denied.status,
 				},
 			}
 		}
@@ -1388,8 +1005,6 @@ export class MongoDBManagerSearchOps {
 		// per-pass searchV2 detects the active, admitted ledger (share branch
 		// in mongodb-search-v2.ts) and consumes from it instead of opening a
 		// fresh one, so the configured caps bound the REQUEST, not each pass.
-		// The opt-in legacy re-run below draws on the same ledger (it still
-		// pays its own admission token).
 		const requestLedger = openSearchBudget(
 			resolveSearchBudgetLimits(mongoCfg.searchBudget),
 		)
@@ -1401,9 +1016,8 @@ export class MongoDBManagerSearchOps {
 
 		// WS-11: a throttled detailed search is not a retrieval verdict. The
 		// denied pass already emitted its own throttle telemetry, the recall
-		// trace has nothing to record (no lanes ran), and a legacy re-run
-		// would pay a second admission token and blur the outcome — same
-		// policy as the search() throttle branch below.
+		// trace has nothing to record (no lanes ran) — same policy as the
+		// search() throttle branch above.
 		if (response.metadata.throttled) {
 			this.host.setLastSearchMode("v2:throttled", {
 				classification: response.metadata.classification,
@@ -1504,95 +1118,19 @@ export class MongoDBManagerSearchOps {
 			return response
 		}
 
-		// P3.2: legacySearch re-run is opt-in (see the search() sites).
-		// #101 M4: only after a complete empty, never a partial or failed one.
-		if (
-			!mongoCfg.legacySearchFallback ||
-			(response.metadata.outcomeStatus ?? "complete") !== "complete"
-		) {
-			this.host.setLastSearchMode("v2:empty", v2Details)
-			// RET-15: the empty verdict the caller receives is the signal.
-			this.recordV2RelevanceVerdict({
-				admission: readAdmission,
-				query: normalized.query,
-				results: response.results,
-				metadata: response.metadata,
-				latencyMs,
-				maxResults: resolvedSearchConfig.maxResults,
-			})
-			return response
-		}
-		// WS-11: same admission policy as the search() legacy site — the
-		// re-run pays its own token or it does not run.
-		const legacyAdmission = tryConsumeSearchAdmission()
-		if (!legacyAdmission.ok) {
-			this.host.setLastSearchMode("v2:empty->legacy-throttled", {
-				...v2Details,
-				retryAfterMs: legacyAdmission.retryAfterMs,
-			})
-			// RET-15: the v2 empty verdict stands (only the opt-in
-			// double-check was denied) — it is still the served answer.
-			this.recordV2RelevanceVerdict({
-				admission: readAdmission,
-				query: normalized.query,
-				results: response.results,
-				metadata: response.metadata,
-				latencyMs,
-				maxResults: resolvedSearchConfig.maxResults,
-			})
-			return response
-		}
-		const legacyRows: SearchLaneOutcome[] = []
-		let fallbackResults: MemorySearchResult[]
-		try {
-			fallbackResults = await requestLedger.run(() =>
-				this.host.legacySearch(
-					normalized.query,
-					{
-						maxResults: normalized.maxResults,
-						minScore: normalized.minScore,
-						sessionKey: normalized.conversationScope?.sessionKey,
-						scope: searchScope,
-						scopeRef: searchScopeRef,
-						kbRestricted: normalized.kbRestricted,
-					},
-					readAdmission,
-					(row) => legacyRows.push(row),
-				),
-			)
-			legacyRows.push({
-				lane: "legacy",
-				stage: "rerun",
-				outcome: fallbackResults.length > 0 ? "ok" : "ok-empty",
-				...(fallbackResults.length > 0 ? {} : { reason: "zero-hits" as const }),
-				resultCount: fallbackResults.length,
-			})
-		} catch (legacyErr) {
-			log.warn("legacy re-run failed", searchFailureLogFields(legacyErr))
-			legacyRows.push(searchFailureRow("legacy", "rerun", legacyErr))
-			fallbackResults = []
-		}
-		this.host.setLastSearchMode("v2->legacy-empty", {
-			...v2Details,
-			fallbackResults: fallbackResults.length,
+		// Empty is not an error: the v2 answer stands as the verdict, and no
+		// second retrieval repeats it.
+		this.host.setLastSearchMode("v2:empty", v2Details)
+		// RET-15: the empty verdict the caller receives is the signal.
+		this.recordV2RelevanceVerdict({
+			admission: readAdmission,
+			query: normalized.query,
+			results: response.results,
+			metadata: response.metadata,
+			latencyMs,
+			maxResults: resolvedSearchConfig.maxResults,
 		})
-		return {
-			results: fallbackResults,
-			metadata: {
-				...response.metadata,
-				budget: requestLedger.snapshot(),
-				pathsExecuted: response.metadata.pathsExecuted.length
-					? response.metadata.pathsExecuted
-					: ["legacy"],
-				laneOutcomes: [
-					...(response.metadata.laneOutcomes ?? []),
-					...legacyRows,
-				],
-				outcomeStatus: legacyRows.some(isSearchFailureOutcome)
-					? "partial"
-					: (response.metadata.outcomeStatus ?? "complete"),
-			},
-		}
+		return response
 	}
 
 	async searchKB(
@@ -1758,61 +1296,6 @@ export class MongoDBManagerSearchOps {
 			throw typed
 		} finally {
 			opts?.onOutcomes?.(summarizeSearchOutcomes(lanes, ["kb"]))
-		}
-	}
-
-	detectSearchMethod(
-		mongoCfg: ResolvedMongoDBConfig,
-		capabilities: DetectedCapabilities,
-	): SearchMethod {
-		// Best guess from configuration alone. Only correct when mongoSearch
-		// actually took the path its capabilities allow — prefer
-		// resolveObservedSearchMethod, which uses the trace of what ran.
-		const canVector =
-			mongoCfg.embeddingMode === "automated" && capabilities.vectorSearch
-
-		if (canVector && capabilities.textSearch) {
-			return "hybrid"
-		}
-		if (canVector) {
-			return "vector"
-		}
-		// Text-only or $text fallback
-		return "text"
-	}
-
-	/**
-	 * Resolve which search method actually produced these results, from the
-	 * trace mongoSearch emits, falling back to the configuration guess only
-	 * when nothing succeeded.
-	 *
-	 * This picks the normalizer, so guessing wrong corrupts ranking rather than
-	 * just mislabeling. mongoSearch degrades through hybrid → vector → keyword
-	 * → $text, and the last two return raw BM25/textScore values on an
-	 * unbounded scale. Calling those "hybrid" sends them to the [0,1] clamp,
-	 * which pins every lexical hit above ~1 to exactly 1.0 — sorting degraded
-	 * results above genuine cosine hits from the KB and structured lanes, whose
-	 * scores are normalized honestly. normalizeBM25Score exists precisely for
-	 * this case; it was simply never reached.
-	 */
-	resolveObservedSearchMethod(
-		traceEvents: SearchTraceEvent[],
-		mongoCfg: ResolvedMongoDBConfig,
-		capabilities: DetectedCapabilities,
-	): SearchMethod {
-		const succeeded = [...traceEvents].toReversed().find((event) => event.ok)
-		switch (succeeded?.method) {
-			case "scoreFusion":
-			case "rankFusion":
-			case "js-merge":
-				return "hybrid"
-			case "vector":
-				return "vector"
-			case "keyword":
-			case "$text":
-				return "text"
-			default:
-				return this.host.detectSearchMethod(mongoCfg, capabilities)
 		}
 	}
 }

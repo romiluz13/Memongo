@@ -3,7 +3,7 @@ import type {
 	SearchOutcomeSummary,
 } from "@memongo/memory-bridge"
 import type { Context } from "hono"
-import { apiErrorJson, internalError } from "./errors.js"
+import { apiErrorJson, internalError, jsonError } from "./errors.js"
 
 /**
  * #101 / decision 16, resolution R3: the one HTTP mapping of a search call's
@@ -179,15 +179,30 @@ export function searchFailureResponse(
 	)
 }
 
+export const RERANK_UNSUPPORTED_MESSAGE =
+	"rerank is not supported: native $rerank (Atlas only) is not implemented yet"
+
+function isRerankUnsupportedError(err: unknown): boolean {
+	return (
+		err instanceof Error &&
+		err.name === "SearchLaneError" &&
+		(err as Error & { reason?: unknown }).reason === "rerank-unsupported"
+	)
+}
+
 /**
  * The catch-block mapping: a typed search failure goes through the same
- * table; any other error keeps the generic internal error envelope.
+ * table; any other error keeps the generic internal error envelope. A rerank
+ * demand is the caller's request, not a lane failure: 400 RERANK_UNSUPPORTED.
  */
 export function searchErrorResponse(
 	c: Context,
 	err: unknown,
 	fallbackCode: string,
 ) {
+	if (isRerankUnsupportedError(err)) {
+		return jsonError(c, 400, "RERANK_UNSUPPORTED", RERANK_UNSUPPORTED_MESSAGE)
+	}
 	const outcomes = searchOutcomesFromError(err)
 	const mapping = mapSearchOutcomes(outcomes)
 	if (!outcomes || mapping.status === 200) {

@@ -867,14 +867,26 @@ describe("durable memory job leases (live MongoDB)", () => {
 		const enrichment = await import("./mongodb-llm-enrichment.js")
 		const provider = {
 			name: "worker-effects-e2e",
-			chatCompletion: vi.fn(async () => ({
-				content: JSON.stringify({
-					facts: [],
-					qa_pairs: [],
-					has_personal_content: false,
-					validity: { scope: "ongoing" },
-				}),
-			})),
+			chatCompletion: vi.fn(async ({ messages }) => {
+				const systemPrompt =
+					messages.find((message) => message.role === "system")?.content ?? ""
+				if (systemPrompt.startsWith("You extract the validity time window")) {
+					return {
+						content: JSON.stringify({ validFrom: null, validTo: null }),
+					}
+				}
+				if (systemPrompt.startsWith("You detect direct contradictions")) {
+					return { content: JSON.stringify({ contradictions: [] }) }
+				}
+				return {
+					content: JSON.stringify({
+						facts: [],
+						qa_pairs: [],
+						has_personal_content: false,
+						validity: { scope: "ongoing" },
+					}),
+				}
+			}),
 		}
 		const providerSpy = vi
 			.spyOn(enrichment, "resolveEnrichmentProvider")

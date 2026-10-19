@@ -28,14 +28,6 @@ const opts = {
 	vectorIndexName: "vector",
 	textIndexName: "text",
 	embeddingMode: "automated" as const,
-	capabilities: {
-		vectorSearch: true,
-		textSearch: true,
-		scoreFusion: true,
-		rankFusion: true,
-		storedSource: false,
-		vectorIndexMethod: false,
-	},
 }
 beforeEach(() => {
 	vi.useFakeTimers()
@@ -125,19 +117,20 @@ it.each([
 		aggregate.mock.calls.filter(([p]) => p[0].$search !== undefined),
 	).toHaveLength(0)
 })
-it("js-merge retry denial keeps the keyword branch's own results (S11)", async () => {
-	const { col, aggregate } = fixture(99)
-	const { value, budget } = await settle(
-		runWithSearchBudget({ maxEmbeds: 1, maxAggregations: 10 }, () =>
-			mongoSearch(col, "graphite", null, { ...opts, fusionMethod: "js-merge" }),
+it("a fused sibling's warmup retry re-charges both embeds with its aggregation", async () => {
+	const { col, aggregate } = fixture(1)
+	const { budget } = await settle(
+		runWithSearchBudget({ maxEmbeds: 5, maxAggregations: 10 }, () =>
+			mongoSearch(col, "graphite", null, {
+				...opts,
+				fusionMethod: "scoreFusion",
+				sibling: { filter: { source: "memory" }, maxResults: 3 },
+			}),
 		),
 	)
-	expect(value).toHaveLength(1)
-	expect(budget.embeds).toBe(1)
-	const vectorCalls = aggregate.mock.calls.filter(
-		([p]) => p[0].$vectorSearch || p[0].$rankFusion || p[0].$scoreFusion,
-	)
-	expect(vectorCalls).toHaveLength(1)
+	expect(aggregate).toHaveBeenCalledTimes(2)
+	expect(budget.aggregations).toBe(2)
+	expect(budget.embeds).toBe(4)
 })
 it("strict retry denial rejects instead of executing another embedding", async () => {
 	vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "true")

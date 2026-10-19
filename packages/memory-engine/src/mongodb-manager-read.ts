@@ -1,8 +1,4 @@
-import {
-	captureAdmissionToken,
-	isErasureGateConflictError,
-	type AdmissionToken,
-} from "./mongodb-erasure-epoch.js"
+import { captureAdmissionToken } from "./mongodb-erasure-epoch.js"
 import { findRelationByLocatorId } from "./mongodb-graph.js"
 import { listQuarantined } from "./mongodb-quarantine-review.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
@@ -38,59 +34,6 @@ export type ManagerReadResult = {
 	title?: string | undefined
 }
 
-/**
- * Erasure suppression: a conflict at admission or in-fence serves the
- * branch's own "reads as gone" miss shape instead of the
- * record. Each row's `source` matches that branch's real miss return, and
- * `conversationNormalize` replicates readConversationChunk's prefix handling
- * (strip ONE `conversation:` prefix and trim, then re-prefix) so `events/x`
- * and `conversation:events/x` both yield path `conversation:events/x`.
- */
-const BRANCH_SHAPES: ReadonlyArray<{
-	prefixes: readonly string[]
-	source: ManagerReadResult["source"]
-	conversationNormalize?: boolean
-}> = [
-	{ prefixes: ["structured:"], source: "structured" },
-	{ prefixes: ["entity:"], source: "conversation" },
-	{ prefixes: ["procedure:"], source: "structured" },
-	{ prefixes: ["event:"], source: "conversation" },
-	{ prefixes: ["episode:"], source: "conversation" },
-	{ prefixes: ["relation:"], source: "conversation" },
-	{ prefixes: ["kb:", "reference:"], source: "reference" },
-	{
-		prefixes: ["conversation:", "events/", "sessions/"],
-		source: "conversation",
-		conversationNormalize: true,
-	},
-]
-
-function suppressedShape(rawPath: string): ManagerReadResult {
-	const normalized = rawPath.trim()
-	for (const { prefixes, source, conversationNormalize } of BRANCH_SHAPES) {
-		if (!prefixes.some((p) => normalized.startsWith(p))) {
-			continue
-		}
-		const path = conversationNormalize
-			? `conversation:${normalized.startsWith("conversation:") ? normalized.slice("conversation:".length).trim() : normalized}`
-			: normalized
-		return {
-			text: "",
-			path,
-			locator: path,
-			source,
-			sourceType: source,
-		}
-	}
-	return {
-		text: "",
-		path: normalized,
-		locator: normalized,
-		source: "reference" as const,
-		sourceType: "reference" as const,
-	}
-}
-
 export class MongoDBManagerReadOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
 
@@ -104,39 +47,24 @@ export class MongoDBManagerReadOps {
 			throw new Error("path required") // ordinary validation, before any gate work
 		}
 
-		let token: AdmissionToken
-		try {
-			// Write-bearing admission (lead-authorized): upserts open(0) for a
-			// legacy/missing gate; durable findAndModify per call. Erasing at
-			// admission → the branch's miss shape, zero tenant-data access.
-			token = await captureAdmissionToken({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-			})
-		} catch (err) {
-			if (isErasureGateConflictError(err)) {
-				return suppressedShape(rawPath)
-			}
-			throw err // malformed gate / driver error: fail closed
-		}
-		try {
-			// One original token; no session passed → the fence owns exactly one
-			// session/transaction level (mongodb-write-fence.ts:30-42); there is
-			// no sessionless fallback. In-fence conflict (erasure won the gate
-			// between admission and commit) → miss shape, never a silent serve.
-			return await withFencedWrite({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				token,
-				fn: (session) => this.readLocator(rawPath, params, session),
-			})
-		} catch (err) {
-			if (isErasureGateConflictError(err)) {
-				return suppressedShape(rawPath)
-			}
-			throw err
-		}
+		// M2 T10 (G2-69): an erasure conflict at admission or inside the fence
+		// propagates as ErasureGateConflictError. A denied read is never an empty
+		// miss, so a caller cannot mistake "erasure in progress" for "no such file".
+		// A malformed gate or driver error fails closed the same way.
+		const token = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
+		// One original token; no session passed → the fence owns exactly one
+		// session/transaction level (mongodb-write-fence.ts:30-42); there is
+		// no sessionless fallback.
+		return withFencedWrite({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			token,
+			fn: (session) => this.readLocator(rawPath, params, session),
+		})
 	}
 
 	/**

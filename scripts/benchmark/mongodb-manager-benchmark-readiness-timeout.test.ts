@@ -205,12 +205,7 @@ function snapshot() {
 					kbTtlSec: 600,
 					similarityThreshold: 0.92,
 				},
-				reranking: {
-					enabled: false,
-					model: "rerank-2.5",
-					topN: 20,
-					minScore: 0.01,
-				},
+				reranking: {},
 				queryRewriting: {
 					enabled: false,
 					method: "rules",

@@ -93,29 +93,25 @@ function search(hybridMode: "hybrid" | "vector-only" = "hybrid") {
 		},
 	})
 }
-it("default hybrid reaches ordinary text with the resolved chunk identity", async () => {
+it("default hybrid issues the one native fusion aggregate, never $text, whatever the capability flags say", async () => {
 	const result = await search()
 	expect(aggregate).toHaveBeenCalledOnce()
 	const [pipeline, options] = aggregate.mock.calls[0]
-	const filter = pipeline[0].$match as Document
-	expect(filter.$and).toEqual([
-		{ $text: { $search: "graphite choice" } },
-		expect.objectContaining({
-			$and: expect.arrayContaining([
-				expect.objectContaining({
-					agentId: "agent-1",
-					scope: "agent",
-					scopeRef: "agent:agent-1",
-					source: { $in: ["conversation", "sessions"] },
-					status: { $ne: "deleted" },
-				}),
-			]),
-		}),
-	])
-	expect(JSON.stringify(filter)).toContain("expiresAt")
-	expect(JSON.stringify(filter)).toContain("invalidAt")
+	expect(pipeline[0].$scoreFusion).toBeDefined()
+	expect(pipeline.some((stage) => "$text" in (stage.$match ?? {}))).toBe(false)
+	expect(JSON.stringify(pipeline)).not.toContain("$text")
+	const inputs = pipeline[0].$scoreFusion.input.pipelines as Record<
+		string,
+		Document[]
+	>
+	for (const name of ["vector", "text"]) {
+		const filterText = JSON.stringify(inputs[name])
+		expect(filterText).toContain("agent-1")
+		expect(filterText).toContain("agent:agent-1")
+		expect(filterText).toContain("expiresAt")
+		expect(filterText).toContain("invalidAt")
+	}
 	expect(options?.maxTimeMS).toBeGreaterThan(0)
-	expect(pipeline[2]).toEqual({ $sort: { score: { $meta: "textScore" } } })
 	expect(result.results).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
@@ -126,18 +122,23 @@ it("default hybrid reaches ordinary text with the resolved chunk identity", asyn
 		]),
 	)
 })
-it("explicit vector-only retains no-query behavior", async () => {
+it("vector-only with neither capability is a typed unavailable row, not a silent empty", async () => {
 	const result = await search("vector-only")
 	expect(aggregate).not.toHaveBeenCalled()
 	expect(result.results).toEqual([])
+	expect(result.metadata.outcomeStatus).toBe("failed")
+	expect(result.metadata.laneOutcomes).toContainEqual(
+		expect.objectContaining({
+			outcome: "failed",
+			reason: "lane-unavailable",
+		}),
+	)
 })
-it("R5: strict mode runs classic $text as the planned lexical tier, not a fallback", async () => {
+it("strict mode runs the same one native aggregate", async () => {
 	vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "true")
 	const result = await search()
 	expect(aggregate).toHaveBeenCalledOnce()
-	expect(aggregate.mock.calls[0][0][0].$match.$and[0]).toEqual({
-		$text: { $search: "graphite choice" },
-	})
+	expect(aggregate.mock.calls[0][0][0].$scoreFusion).toBeDefined()
 	expect(result.results).toHaveLength(1)
 })
 it("exhausted aggregation budget sends no query", async () => {
@@ -147,6 +148,10 @@ it("exhausted aggregation budget sends no query", async () => {
 	)
 	expect(aggregate).not.toHaveBeenCalled()
 	expect(value.results).toEqual([])
+	expect(value.metadata.outcomeStatus).toBe("failed")
+	expect(value.metadata.laneOutcomes).toContainEqual(
+		expect.objectContaining({ outcome: "budget-denied" }),
+	)
 })
 it("a successful no-match query remains empty", async () => {
 	aggregate.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) })

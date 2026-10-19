@@ -226,6 +226,7 @@ describe("searchProcedures tiers (#101 matrix 1e)", () => {
 		const rows: SearchTierOutcome[] = []
 		const results = await findExactProcedureMatches(collection, "  ", {
 			maxResults: 5,
+			textIndexName: "procedures_text",
 			onTierOutcome: (row) => rows.push(row),
 		})
 		expect(results).toEqual([])

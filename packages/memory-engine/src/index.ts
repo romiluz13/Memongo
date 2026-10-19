@@ -39,7 +39,6 @@ export type {
 	SearchConfig,
 	SearchFusionMethod,
 	SearchHybridMode,
-	SearchLexicalPrefilterMode,
 	SearchRecipe,
 	MemorySearchRequest,
 	MemorySearchResponse,
@@ -80,6 +79,7 @@ export {
 	type SearchOutcomeSummary,
 	type SearchStage,
 } from "./search-outcomes.js"
+export type { SectionFailure } from "./section-failures.js"
 export {
 	isMemongoBootError,
 	MemongoBootError,

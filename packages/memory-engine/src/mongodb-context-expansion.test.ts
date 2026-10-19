@@ -2,9 +2,15 @@ import { describe, expect, it, vi } from "vitest"
 import type { Document } from "mongodb"
 import {
 	CONTEXT_EXPANSION_MAX_CONCURRENCY,
-	expandSearchContext,
+	expandSearchContext as expandWithFailures,
 } from "./mongodb-context-expansion.js"
 import type { MemorySearchResult } from "./types.js"
+
+async function expandSearchContext(
+	params: Parameters<typeof expandWithFailures>[0],
+): Promise<MemorySearchResult[]> {
+	return (await expandWithFailures(params)).results
+}
 
 function makeResult(
 	overrides: Partial<MemorySearchResult> & { path: string },
@@ -712,5 +718,102 @@ describe("same-time context neighbors", () => {
 				"events/d",
 			])
 		}
+	})
+})
+
+describe("expansion failures are typed rows, not silent empties", () => {
+	const options = {
+		prefix: "test_",
+		agentId: "agent1",
+		scope: "session" as const,
+		scopeRef: "agent:agent1:session:s1",
+	}
+	const timestamp = new Date("2026-04-05T10:00:00.000Z")
+	const parent = (sessionId: string, eventId: string) =>
+		makeResult({
+			path: `events/${eventId}`,
+			sessionId,
+			timestamp,
+			score: 0.9,
+		})
+
+	function failingDb(error: unknown) {
+		const find = vi.fn().mockReturnValue({
+			sort: vi.fn().mockReturnValue({
+				limit: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockRejectedValue(error),
+				}),
+			}),
+		})
+		return {
+			collection: vi.fn().mockReturnValue({ find }),
+		} as unknown as import("mongodb").Db
+	}
+
+	it("keeps the original results and reports one typed row per distinct failure", async () => {
+		const results = [parent("s1", "a"), parent("s2", "b")]
+		const expanded = await expandWithFailures({
+			...options,
+			db: failingDb(new Error("events unavailable")),
+			results,
+		})
+		expect(expanded.results).toEqual(results)
+		expect(expanded.failures).toEqual([
+			{
+				section: "context-expansion",
+				stage: "lane",
+				outcome: "failed",
+				reason: "internal-error",
+			},
+		])
+	})
+
+	it("reports a network failure by enum reason", async () => {
+		const expanded = await expandWithFailures({
+			...options,
+			db: failingDb(
+				Object.assign(new Error("socket closed"), {
+					name: "MongoNetworkError",
+				}),
+			),
+			results: [parent("s1", "a")],
+		})
+		expect(expanded.failures).toEqual([
+			{
+				section: "context-expansion",
+				stage: "lane",
+				outcome: "failed",
+				reason: "dependency-unavailable",
+			},
+		])
+	})
+
+	it("reports no failures when every neighbor lookup succeeds", async () => {
+		const { db } = createMockDb([])
+		const expanded = await expandWithFailures({
+			...options,
+			db,
+			results: [parent("s1", "a")],
+		})
+		expect(expanded.failures).toEqual([])
+	})
+
+	it("never logs the session id or the driver message", async () => {
+		const lines: string[] = []
+		for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+			vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+				lines.push(args.join(" "))
+			})
+		}
+		await expandWithFailures({
+			...options,
+			db: failingDb(new Error("secret-driver-message")),
+			results: [parent("secret-session-id", "a")],
+		})
+		const output = lines.join("\n")
+		expect(output).toContain("expandSearchContext")
+		expect(output).not.toContain("secret-driver-message")
+		expect(output).not.toContain("secret-session-id")
+		vi.restoreAllMocks()
 	})
 })

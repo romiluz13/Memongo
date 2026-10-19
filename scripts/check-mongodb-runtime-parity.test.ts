@@ -45,8 +45,8 @@ function harness(argv: string[] = []) {
 				return {
 					admin: () => ({
 						command: async () => ({
-							version: "8.2.0",
-							versionArray: [8, 2, 0],
+							version: "8.3.0",
+							versionArray: [8, 3, 0],
 						}),
 					}),
 					collection: (collectionName: string) => {

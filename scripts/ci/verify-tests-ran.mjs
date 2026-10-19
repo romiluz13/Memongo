@@ -18,9 +18,15 @@ import fs from "node:fs"
 //     [--require-suite <substr> ...]  (a testcase/testsuite matching <substr>
 //                                      must have executed in some expected
 //                                      file; matching-but-all-skipped fails)
+//     [--expect-gated <substr> ...]   (a testcase matching <substr> must be
+//                                      present and every match skipped: a
+//                                      case gated on a key this job does not
+//                                      have, so it can neither vanish nor run
+//                                      here without its gate)
 
 const USAGE = `usage: bun scripts/ci/verify-tests-ran.mjs --expect <junit.xml> [--expect ...]
-                  [--min-executed <N>] [--require-suite <substring> ...]`
+                  [--min-executed <N>] [--require-suite <substring> ...]
+                  [--expect-gated <substring> ...]`
 
 function fail(message) {
 	console.error(`verify-tests-ran: FAIL — ${message}`)
@@ -30,6 +36,7 @@ function fail(message) {
 const args = process.argv.slice(2)
 const expectPaths = []
 const requiredSuites = []
+const gatedCases = []
 let minExecuted = 1
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i]
@@ -39,6 +46,9 @@ for (let i = 0; i < args.length; i++) {
 		i++
 	} else if (arg === "--require-suite" && value) {
 		requiredSuites.push(value)
+		i++
+	} else if (arg === "--expect-gated" && value) {
+		gatedCases.push(value)
 		i++
 	} else if (arg === "--min-executed" && value) {
 		const parsed = Number.parseInt(value, 10)
@@ -201,6 +211,23 @@ for (const substr of requiredSuites) {
 	}
 }
 
+for (const substr of gatedCases) {
+	const matches = reports.flatMap(({ report }) =>
+		report.testcases.filter(
+			(tc) => tc.name.includes(substr) || tc.classname.includes(substr),
+		),
+	)
+	if (matches.length === 0) {
+		violations.push(
+			`expected-gated case absent: "${substr}" (no testcase matches it in any expected file)`,
+		)
+	} else if (matches.some((tc) => !tc.skipped)) {
+		violations.push(
+			`expected-gated case ran: "${substr}" (it must stay skipped in this job; its gate no longer holds)`,
+		)
+	}
+}
+
 if (violations.length > 0) {
 	console.error("verify-tests-ran: violations:")
 	for (const violation of violations) {
@@ -210,5 +237,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-	`verify-tests-ran: OK — ${reports.length} files, ${totalTests} tests, ${totalSkipped} skipped, ${totalExecuted} executed, ${totalFailed} failed; ${requiredSuites.length} required suites all ran`,
+	`verify-tests-ran: OK — ${reports.length} files, ${totalTests} tests, ${totalSkipped} skipped, ${totalExecuted} executed, ${totalFailed} failed; ${requiredSuites.length} required suites all ran; ${gatedCases.length} expected-gated cases skipped`,
 )

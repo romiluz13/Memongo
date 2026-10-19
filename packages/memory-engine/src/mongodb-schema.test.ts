@@ -1566,7 +1566,7 @@ describe("P3.8 index hygiene", () => {
 		}
 	})
 
-	it("creates the episode_autocomplete search index alongside entity_autocomplete", async () => {
+	it("creates the episode_autocomplete search index with analyzed title and summary", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
 		const episodes = db.collection("test_episodes") as unknown as {
@@ -1580,8 +1580,8 @@ describe("P3.8 index hygiene", () => {
 		const spec = episodeCall?.[0] as Document
 		expect(spec.type).toBe("search")
 		const fields = spec.definition?.mappings?.fields ?? {}
-		expect(fields.title?.type).toBe("autocomplete")
-		expect(fields.summary?.type).toBe("autocomplete")
+		expect(fields.title?.type).toBe("string")
+		expect(fields.summary?.type).toBe("string")
 		expect(fields.agentId?.type).toBe("token")
 		expect(fields.scope?.type).toBe("token")
 		expect(fields.scopeRef?.type).toBe("token")

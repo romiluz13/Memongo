@@ -291,7 +291,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Read a memory file by relative path",
 		requiredFields: ["relPath"],
 		optionalFields: ["agentId", "from", "lines"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 409, 500],
 		tools: ["memongo_read_file"],
 	},
 	{
@@ -472,7 +472,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"minScore",
 			"deep",
 		],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 500, 503],
 		tools: ["memongo_relevance_explain"],
 	},
 	{
@@ -621,7 +621,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Scan for novel memories",
 		requiredFields: [],
 		optionalFields: ["agentId", "limit", "scope", "scopeRef"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 500, 503],
 		tools: ["memongo_novelty_scan"],
 	},
 	{

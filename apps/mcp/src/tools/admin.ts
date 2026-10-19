@@ -52,7 +52,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				},
 				fusionMethod: {
 					type: "string",
-					enum: ["scoreFusion", "rankFusion", "js-merge"],
+					enum: ["scoreFusion", "rankFusion"],
 					description: "Server-side fusion preference for the KB lane.",
 				},
 			},

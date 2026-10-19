@@ -12,6 +12,7 @@ import {
 import type { MongoClient } from "mongodb"
 import type { MemongoConfig } from "@memongo/lib"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
+import { ChangeStreamUnavailableError } from "./mongodb-change-stream.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
 import * as schemaModule from "./mongodb-schema.js"
 import { resolveSearchIndexReadinessTiming } from "./mongodb-schema-search-definitions.js"
@@ -61,10 +62,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	(
 		await import("./test-helpers/manager-test-kit.js")
 	).queryRewriterModuleMock(),
-)
-
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
 )
 
 vi.mock("./mongodb-lane-coverage.js", async () =>
@@ -368,6 +365,38 @@ describe("W17 factory failure unwind (owned client)", () => {
 		// the unwind, not leaked with its flush timer.
 		expect(accessTrackerHarness.state.instances).toHaveLength(1)
 		expect(accessTrackerHarness.state.instances[0].closed).toBe(true)
+	})
+
+	it("fails the factory with a typed error, with no file-watcher-only fallback, when enabled change streams cannot open", async () => {
+		const cfg = {
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: W17_URI, enableChangeStreams: true },
+			},
+		} as MemongoConfig
+		vi.mocked(schemaModule.chunksCollection).mockReturnValue({
+			watch: () => {
+				throw new Error(
+					"The $changeStream stage is only supported on replica sets",
+				)
+			},
+		} as never)
+		const onClosed = vi.fn()
+
+		const outcome = MongoDBMemoryManager.create({
+			cfg,
+			agentId: "w17-unit",
+			resolved: resolveMemoryBackendConfig({ cfg, agentId: "w17-unit" }),
+			onClosed,
+		})
+
+		await expect(outcome).rejects.toBeInstanceOf(ChangeStreamUnavailableError)
+		await expect(outcome).rejects.toMatchObject({
+			code: "CHANGE_STREAM_UNAVAILABLE",
+		})
+		expect(mongoDriverHarness.FakeMongoClient.instances).toHaveLength(1)
+		expect(mongoDriverHarness.FakeMongoClient.instances[0].closeCalls).toBe(1)
+		expect(onClosed).toHaveBeenCalledTimes(1)
 	})
 
 	it("rethrows the original factory error even when the cleanup close fails", async () => {

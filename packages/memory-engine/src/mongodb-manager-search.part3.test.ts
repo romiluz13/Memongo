@@ -5,7 +5,6 @@ import {
 	searchV2 as searchV2Core,
 } from "./mongodb-manager.js"
 import { withHealthyCapabilities } from "./test-helpers/search-capabilities.js"
-import { crossEncoderRerank } from "./mongodb-reranker.js"
 import { rewriteQuery } from "./mongodb-query-rewriter.js"
 import { normalizeSinglePathScores } from "./mongodb-search-v2.js"
 import type { MemorySearchResult } from "./types.js"
@@ -15,6 +14,7 @@ import {
 	fakeDb,
 	fakePrefix,
 	captureManagerPrototype,
+	rawWindowEventsCollection,
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
@@ -62,10 +62,6 @@ vi.mock("./mongodb-query-rewriter.js", async () =>
 	).queryRewriterModuleMock(),
 )
 
-vi.mock("./mongodb-reranker.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).rerankerModuleMock(),
-)
-
 vi.mock("./mongodb-lane-coverage.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).laneCoverageModuleMock(),
 )
@@ -88,7 +84,6 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-const { getEventsByTimeRange } = await import("./mongodb-events.js")
 const { planRetrieval, resolveTimeRangePreset, extractTemporalWindow } =
 	await import("./mongodb-retrieval-planner.js")
 const { searchEpisodes } = await import("./mongodb-episodes.js")
@@ -112,11 +107,6 @@ const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 describe("searchV2 non-lane phase latency instrumentation", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-			results,
-			reranked: false,
-			latencyMs: 0,
-		}))
 		mocked(rewriteQuery).mockResolvedValue({
 			originalQuery: "espresso",
 			rewrittenQuery: "espresso coffee",
@@ -166,7 +156,7 @@ describe("searchV2 non-lane phase latency instrumentation", () => {
 				"phase:conversation-evidence",
 				"phase:temporal-candidate-merge",
 				"phase:precision-merge",
-				"phase:lane-controls-pre-rerank",
+				"phase:lane-controls",
 				"phase:final-normalize",
 				"phase:projection",
 			]),
@@ -259,83 +249,43 @@ describe("searchV2 non-lane phase latency instrumentation", () => {
 		).toBeGreaterThanOrEqual(0)
 	})
 
-	it("records phase:rerank only when reranking runs", async () => {
+	it("records no rerank phase and never calls a rerank endpoint (HTTP reranker removed in M2)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
-			reasoning: "rerank phase probe",
+			reasoning: "rerank removal probe",
 		})
 		mocked(searchEpisodes).mockResolvedValue([])
+		const fetchSpy = vi.fn()
+		vi.stubGlobal("fetch", fetchSpy)
 
-		const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
-			availablePaths: new Set(["episodic"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				rerankConfig: {
-					enabled: true,
-					model: "rerank-2.5-lite",
-					topN: 5,
-					minScore: 0,
-					voyageApiKey: "test-key",
+		try {
+			const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
+				availablePaths: new Set(["episodic"]),
+				searchOptions: {
+					allowHybridBackstop: false,
+					// A pre-M2 caller's enabled config is ignored here: enabling
+					// rerank fails at boot and per request, never inside searchV2.
+					rerankConfig: { enabled: true, voyageApiKey: "" } as never,
 				},
-			},
-		})
+			})
 
-		expect(
-			result.metadata.latencyByPath?.["phase:rerank"],
-		).toBeGreaterThanOrEqual(0)
-		expect(
-			result.metadata.latencyByPath?.["phase:rerank-input"],
-		).toBeGreaterThanOrEqual(0)
-	})
-
-	it("attributes post-rerank result controls when reranking succeeds", async () => {
-		mocked(planRetrieval).mockReturnValue({
-			paths: ["episodic"],
-			confidence: "high",
-			reasoning: "post-rerank controls phase probe",
-		})
-		mocked(searchEpisodes).mockResolvedValue([])
-		mocked(crossEncoderRerank).mockResolvedValue({
-			results: [],
-			reranked: true,
-			latencyMs: 0,
-			partitions: {
-				reranked: [],
-				emptySnippet: [],
-				overflow: [],
-				below: [],
-			},
-		})
-
-		const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
-			availablePaths: new Set(["episodic"]),
-			searchOptions: {
-				allowHybridBackstop: false,
-				rerankConfig: {
-					enabled: true,
-					model: "rerank-2.5-lite",
-					topN: 5,
-					minScore: 0,
-					voyageApiKey: "test-key",
-				},
-			},
-		})
-
-		expect(
-			result.metadata.latencyByPath?.["phase:lane-controls-post-rerank"],
-		).toBeGreaterThanOrEqual(0)
+			expect(result.metadata.reranked).toBe(false)
+			expect(
+				Object.keys(result.metadata.latencyByPath ?? {}).filter((phase) =>
+					/rerank/.test(phase.replace("heuristic-rerank", "")),
+				),
+			).toEqual([])
+			expect(fetchSpy).not.toHaveBeenCalled()
+		} finally {
+			vi.unstubAllGlobals()
+		}
 	})
 })
 
 describe("search() phase latency reporting", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-			results,
-			reranked: false,
-			latencyMs: 0,
-		}))
 	})
 
 	it("reports total and unaccounted phases without cache spans", async () => {
@@ -410,10 +360,7 @@ describe("search() phase latency reporting", () => {
 			"phase:temporal-candidate-merge",
 			"phase:turn-precision",
 			"phase:precision-merge",
-			"phase:lane-controls-pre-rerank",
-			"phase:rerank-input",
-			"phase:rerank",
-			"phase:lane-controls-post-rerank",
+			"phase:lane-controls",
 			"phase:final-normalize",
 			"phase:projection",
 		].reduce((total, phase) => total + (phases[phase] ?? 0), 0)
@@ -454,10 +401,9 @@ describe("raw-window temporal proximity scoring (P4.4.4)", () => {
 			confidence: "high",
 			reasoning: "temporal proximity probe",
 		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
-			laterButFar,
-			nearOrigin,
-		] as never)
+		mocked(eventsCollection).mockReturnValue(
+			rawWindowEventsCollection([laterButFar, nearOrigin]) as never,
+		)
 		mocked(extractTemporalWindow).mockReturnValue(
 			options?.noWindow
 				? null
@@ -534,7 +480,9 @@ describe("raw-window temporal proximity scoring (P4.4.4)", () => {
 				},
 			},
 		} as never)
-		mocked(getEventsByTimeRange).mockResolvedValue([nearOrigin] as never)
+		mocked(eventsCollection).mockReturnValue(
+			rawWindowEventsCollection([nearOrigin]) as never,
+		)
 		mocked(resolveTimeRangePreset).mockReturnValue({
 			start: new Date("2026-07-15T00:00:00Z"),
 			end: questionDate,

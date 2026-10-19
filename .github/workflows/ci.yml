@@ -103,14 +103,16 @@ jobs:
 
       # Skip-green guard for tier A: every gated file must have executed at
       # least one test, so a renamed file or a newly added skip cannot shrink
-      # the tier silently.
+      # the tier silently. Expected-gated cases boot the full required-index
+      # manifest through the public factory, which needs autoEmbed and so a
+      # model key; tier A is keyless, so each must be present and skipped.
       - name: Verify tier A suites ran (skip-green guard)
         run: >
           bun scripts/ci/verify-tests-ran.mjs
           --expect packages/memory-engine/test-results/junit.xml
+          --expect-gated "recovers and executes staged outbox work through the public manager factory"
           --require-suite mongodb-kb-reingest.e2e.test.ts
           --require-suite mongodb-kb-isolation.e2e.test.ts
-          --require-suite mongodb-legacy-search-isolation.e2e.test.ts
           --require-suite mongodb-vector-index-shape.e2e.test.ts
           --require-suite mongodb-rankfusion-score.e2e.test.ts
           --require-suite mongodb-projection-repair.e2e.test.ts

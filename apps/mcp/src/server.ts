@@ -351,21 +351,49 @@ function readKbFilterArg(args: Record<string, unknown>):
 	}
 }
 
+class McpArgumentError extends Error {
+	readonly code = "VALIDATION_ERROR"
+}
+
 function readFusionMethodArg(
 	args: Record<string, unknown>,
-): "scoreFusion" | "rankFusion" | "js-merge" | undefined {
+): "scoreFusion" | "rankFusion" | undefined {
 	const fusionMethod = args.fusionMethod
 	if (fusionMethod === undefined) {
 		return undefined
 	}
-	if (
-		fusionMethod === "scoreFusion" ||
-		fusionMethod === "rankFusion" ||
-		fusionMethod === "js-merge"
-	) {
+	if (fusionMethod === "scoreFusion" || fusionMethod === "rankFusion") {
 		return fusionMethod
 	}
-	throw new Error("fusionMethod must be scoreFusion|rankFusion|js-merge")
+	throw new McpArgumentError("fusionMethod must be scoreFusion|rankFusion")
+}
+
+function readSearchConfigArg(
+	args: Record<string, unknown>,
+): Parameters<MemongoMcpClient["searchDetailed"]>[0]["searchConfig"] {
+	const searchConfig = args.searchConfig
+	if (searchConfig !== null && typeof searchConfig === "object") {
+		readFusionMethodArg(searchConfig as Record<string, unknown>)
+	}
+	return searchConfig as Parameters<
+		MemongoMcpClient["searchDetailed"]
+	>[0]["searchConfig"]
+}
+
+function toolErrorPayload(err: unknown) {
+	const message = err instanceof Error ? err.message : String(err)
+	if (err instanceof MemongoClientError) {
+		return {
+			error: message,
+			status: err.status,
+			...(err.code ? { code: err.code } : {}),
+			...(err.outcomes ? { outcomes: err.outcomes } : {}),
+		}
+	}
+	if (err instanceof McpArgumentError) {
+		return { error: message, code: err.code }
+	}
+	return { error: message }
 }
 
 function jsonResult(payload: unknown, isError = false) {
@@ -912,9 +940,7 @@ export async function handleToolCall(
 					typeof args.maxPasses === "number" ? args.maxPasses : undefined,
 				returnPlan:
 					typeof args.returnPlan === "boolean" ? args.returnPlan : undefined,
-				searchConfig: args.searchConfig as Parameters<
-					MemongoMcpClient["searchDetailed"]
-				>[0]["searchConfig"],
+				searchConfig: readSearchConfigArg(args),
 			})
 			return jsonMemoryResult(out)
 		}
@@ -1261,22 +1287,7 @@ export async function handleToolCall(
 		}
 		throw new Error(`unknown tool: ${name}`)
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
-		// M2 decision 8: a failed search keeps its API code and its typed rows
-		// (index-stale, index-unavailable, ...), so an agent can tell an
-		// unhealthy index from an empty answer and retry a 503.
-		if (err instanceof MemongoClientError && err.outcomes) {
-			return jsonResult(
-				{
-					error: message,
-					...(err.code ? { code: err.code } : {}),
-					retryable: err.status === 503,
-					outcomes: err.outcomes,
-				},
-				true,
-			)
-		}
-		return jsonResult({ error: message }, true)
+		return jsonResult(toolErrorPayload(err), true)
 	}
 }
 

@@ -5,7 +5,10 @@ import {
 	induceFactsFromMemories,
 	type ReasonedFact,
 } from "./mongodb-consolidation-reasoning.js"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 
 function mockProvider(content: string): EnrichmentProvider {
 	return {
@@ -62,14 +65,38 @@ describe("deduceFactsFromMemories", () => {
 		expect(provider.chatCompletion).not.toHaveBeenCalled()
 	})
 
-	it("degrades to an empty result when the LLM returns unparseable content", async () => {
+	it("rejects with a typed parse error when the LLM returns unparseable content", async () => {
 		const provider = mockProvider("not json at all")
-		const result = await deduceFactsFromMemories({
-			provider,
-			model: "gpt-4o-mini",
-			facts,
-		})
-		expect(result).toEqual([])
+		await expect(
+			deduceFactsFromMemories({ provider, model: "gpt-4o-mini", facts }),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
+
+	it("rejects when the response has no facts list", async () => {
+		const provider = mockProvider(JSON.stringify({ other: [] }))
+		await expect(
+			induceFactsFromMemories({ provider, model: "gpt-4o-mini", facts }),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
+
+	it("rejects an LLM failure instead of returning no facts", async () => {
+		const failure = new Error("provider down")
+		const provider: EnrichmentProvider = {
+			name: "mock",
+			chatCompletion: vi.fn(async () => {
+				throw failure
+			}),
+		}
+		await expect(
+			deduceFactsFromMemories({ provider, model: "gpt-4o-mini", facts }),
+		).rejects.toBe(failure)
+	})
+
+	it("an empty facts list is a verdict, not a failure", async () => {
+		const provider = mockProvider(JSON.stringify({ facts: [] }))
+		await expect(
+			deduceFactsFromMemories({ provider, model: "gpt-4o-mini", facts }),
+		).resolves.toEqual([])
 	})
 
 	it("skips entries with an empty value", async () => {

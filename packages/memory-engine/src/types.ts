@@ -9,6 +9,7 @@ import type {
 	SearchLaneOutcome,
 	SearchOutcomeStatus,
 } from "./search-outcomes.js"
+import type { SectionFailure } from "./section-failures.js"
 import type { StructuredMemoryLifecyclePatch } from "./mongodb-structured-memory.js"
 
 export type MemorySource = "reference" | "conversation" | "structured"
@@ -99,7 +100,7 @@ export type MemorySearchResult = {
 	score: number
 	snippet: string
 	/**
-	 * Full passage text for the reranker and the reader (B5). `snippet`
+	 * Full passage text for the reader (B5). `snippet`
 	 * stays the short display preview; this carries the complete body so
 	 * answers past the preview length remain reachable. Absent on lanes
 	 * that only produce previews (fall back to `snippet`).
@@ -367,8 +368,6 @@ export type SearchFusionMethod = "scoreFusion" | "rankFusion" | "js-merge"
 
 export type SearchHybridMode = "hybrid" | "vector-only"
 
-export type SearchLexicalPrefilterMode = "disabled" | "experimental"
-
 export type SearchRecallProfile = "latency" | "balanced" | "proof"
 
 export type SearchConfig = {
@@ -380,6 +379,11 @@ export type SearchConfig = {
 	sourcePreference?: MemorySearchSourcePreference[]
 	timeRange?: MemorySearchTimeRange
 	needExactEvidence?: boolean
+	/**
+	 * A demand for a rerank stage. M2 has none: `true` is rejected with a typed
+	 * `rerank-unsupported` error, and `false` is always honored.
+	 */
+	rerank?: boolean
 	/**
 	 * RET-01: opt-in for the executor's constraint-relaxation fallback.
 	 * Explicit caller constraints (timeRange, needExactEvidence) are hard by
@@ -393,7 +397,6 @@ export type SearchConfig = {
 	fusionMethod?: SearchFusionMethod
 	hybridMode?: SearchHybridMode
 	allowHybridBackstop?: boolean
-	lexicalPrefilter?: SearchLexicalPrefilterMode
 }
 
 export type ResolvedSearchConfig = {
@@ -410,7 +413,6 @@ export type ResolvedSearchConfig = {
 	fusionMethod: SearchFusionMethod
 	hybridMode: SearchHybridMode
 	allowHybridBackstop: boolean
-	lexicalPrefilter: SearchLexicalPrefilterMode
 }
 
 export type MemoryConversationScope = {
@@ -485,6 +487,7 @@ export type {
 	SearchLaneOutcome,
 	SearchOutcomeStatus,
 } from "./search-outcomes.js"
+export type { SectionFailure } from "./section-failures.js"
 
 export type MemorySearchMetadata = {
 	mode: MemorySearchMode
@@ -546,9 +549,8 @@ export type MemorySearchMetadata = {
  *
  * - "denied": admission control denied the whole query before any lane ran —
  *   the empty results are NOT a retrieval verdict.
- * - "legacy-fallback-skipped": the v2 empty verdict stands (it did search);
- *   only the opt-in legacy re-run was denied, so the answer is authoritative
- *   but the configured double-check did not happen.
+ * - "legacy-fallback-skipped": no longer emitted (the legacy re-run was
+ *   removed); it stays in the wire contract until the surfaces drop it.
  * - "vector-lane-skipped": the KB vector lane was dropped by denial; the
  *   text-lane results stand but ranking quality is degraded.
  */
@@ -595,7 +597,10 @@ export type MemoryDiscoveryProjectionSection = {
 }
 
 export type MemoryDiscoveryProjectionMetadata = {
+	/** True iff `failures` is non-empty; the typed rows are the source of truth. */
 	partial: boolean
+	/** T8: one bounded enum row per section that failed; empty when healthy. */
+	failures: SectionFailure[]
 	evidenceCount: number
 	sourceCounts: Record<string, number>
 	timeRange?: {
@@ -658,7 +663,10 @@ export type MemoryActiveSlateItem = {
 export type MemoryActiveSlateMetadata = {
 	maxItems: number
 	truncated: boolean
+	/** True iff `failures` is non-empty; the typed rows are the source of truth. */
 	partial: boolean
+	/** T8: one bounded enum row per lane that failed; empty when healthy. */
+	failures: SectionFailure[]
 	countsByKind: Record<string, number>
 	sourceCounts: Record<string, number>
 }
@@ -733,10 +741,22 @@ export type MemoryContextBundleSection = {
 export type MemoryContextBundleMetadata = {
 	tokenBudget: number
 	estimatedTokensUsed: number
+	/** True iff `failures` is non-empty; the typed rows are the source of truth. */
 	partial: boolean
+	/**
+	 * T8: one bounded enum row per section that failed; nested rows carry a
+	 * `<section>:<child>` name. Empty when healthy.
+	 */
+	failures: SectionFailure[]
 	truncated: boolean
 	pathsExecuted: string[]
 	trustSummary?: MemorySearchTrustSummary
+	/** X-09: the query-evidence search's lane rows, kept instead of dropped. */
+	laneOutcomes?: SearchLaneOutcome[]
+	/** X-09: the query-evidence search's status, computed from its lane rows. */
+	outcomeStatus?: SearchOutcomeStatus
+	/** X-09: set when admission control denied the query-evidence search. */
+	throttled?: { retryAfterMs: number }
 	sectionsIncluded: MemoryContextBundleSectionKind[]
 }
 
@@ -1913,7 +1933,7 @@ export type ConversationRecallScoreDetails = {
 export type ConversationRecallResult = {
 	citation: ConversationRecallCitation
 	score?: number
-	matchType: "filter" | "semantic" | "hybrid"
+	matchType: "filter" | "hybrid"
 	scoreDetails?: ConversationRecallScoreDetails
 }
 
@@ -1924,15 +1944,9 @@ export type ConversationRecallResponse = {
 		/** Delivered query after trimming and the 2,000 UTF-16 code-unit ceiling. */
 		queryUsed?: string
 		filtersApplied: string[]
-		searchMethod: "standard" | "semantic" | "hybrid"
+		/** M2: "hybrid" for a query (one `$rankFusion` lane), "standard" for a no-query chronological listing. */
+		searchMethod: "standard" | "hybrid"
 		durationMs: number
-		/**
-		 * WS-11 admission control: present when the process-level search
-		 * admission bucket denied this call and the recall degraded to the
-		 * text-only standard lane. Distinguishes "overloaded" from "no
-		 * matching conversation events".
-		 */
-		throttled?: { retryAfterMs: number }
 	}
 }
 
@@ -1980,6 +1994,7 @@ export type NoveltyEvent = {
 export type NoveltyReport = {
 	events: NoveltyEvent[]
 	scannedCount: number
+	/** @deprecated Never set: a failed scan throws a typed SearchLaneError. */
 	error?: string
 	agentId: string
 }
@@ -2129,7 +2144,10 @@ export type ConsolidationOptions = {
 	scopeRef?: string
 	/** Bounded time window for scoped enrichment */
 	timeRange?: { from: Date; to: Date }
-	/** Filter events mentioning these entities (post-query regex filter) */
+	/**
+	 * Select events mentioning these entities with an Atlas Search `text` query
+	 * on the event body; the batch window rides in `compound.filter`.
+	 */
 	entitySet?: string[]
 	/**
 	 * Phase-0 gate lease duration. A run that crashes leaves the gate

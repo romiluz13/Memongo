@@ -20,12 +20,16 @@ npm install @memongo/memory-bridge
 import { memongoBridgeSearch, memongoBridgeStatus } from "@memongo/memory-bridge"
 
 const status = await memongoBridgeStatus({ agentId: "main" })
-const results = await memongoBridgeSearch({
+const { results, outcomes, degradation } = await memongoBridgeSearch({
 	query: "deployment notes",
 	agentId: "main",
 	maxResults: 10,
 })
 ```
+
+`memongoBridgeSearch()` and `memongoBridgeSearchKB()` return an envelope, never a bare array. A call whose lanes all failed throws the engine's typed `SearchLaneError` (or `SearchBudgetDeniedError`) with the failed rows on `error.outcomes`; a partly failed call returns its healthy results with `outcomes`, and a throttled call returns `degradation`.
+
+`memongoBridgeGetState()` omits a section whose read failed and lists it in `failures` (`{ section, reason }`) with `partial: true`; it rejects only when every section failed.
 
 ## Memory intelligence bridge functions
 

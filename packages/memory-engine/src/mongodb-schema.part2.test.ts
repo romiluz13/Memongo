@@ -74,12 +74,35 @@ function mockDb(
 
 describe("ensureSearchIndexes", () => {
 	it("treats autoEmbed listSearchIndexes type as vectorSearch-compatible", () => {
-		expect(isSearchIndexTypeCompatible("autoEmbed", "vectorSearch")).toBe(true)
-		expect(isSearchIndexTypeCompatible("vectorSearch", "vectorSearch")).toBe(
-			true,
-		)
-		expect(isSearchIndexTypeCompatible("search", "vectorSearch")).toBe(false)
-		expect(isSearchIndexTypeCompatible("vectorSearch", "search")).toBe(false)
+		expect(
+			isSearchIndexTypeCompatible({ type: "autoEmbed" }, "vectorSearch"),
+		).toBe(true)
+		expect(
+			isSearchIndexTypeCompatible({ type: "vectorSearch" }, "vectorSearch"),
+		).toBe(true)
+		expect(
+			isSearchIndexTypeCompatible({ type: "search" }, "vectorSearch"),
+		).toBe(false)
+		expect(
+			isSearchIndexTypeCompatible({ type: "vectorSearch" }, "search"),
+		).toBe(false)
+	})
+
+	it("reads an untyped listing's type from its definition, and never guesses", () => {
+		const vector = { latestDefinition: { fields: [{ type: "vector" }] } }
+		const text = { latestDefinition: { mappings: { dynamic: true } } }
+		expect(isSearchIndexTypeCompatible(vector, "vectorSearch")).toBe(true)
+		expect(isSearchIndexTypeCompatible(vector, "search")).toBe(false)
+		expect(isSearchIndexTypeCompatible(text, "search")).toBe(true)
+		expect(isSearchIndexTypeCompatible(text, "vectorSearch")).toBe(false)
+		expect(isSearchIndexTypeCompatible({}, "search")).toBe(false)
+		expect(isSearchIndexTypeCompatible({}, "vectorSearch")).toBe(false)
+		expect(
+			isSearchIndexTypeCompatible(
+				{ type: "unknownKind", latestDefinition: text.latestDefinition },
+				"search",
+			),
+		).toBe(false)
 	})
 
 	it("creates text + vector search indexes for the Memongo community profile", async () => {
@@ -1070,6 +1093,10 @@ describe("search index readiness helpers", () => {
 				indexNames: ["test_structured_mem_text", "test_structured_mem_vector"],
 			},
 			{
+				collectionName: "test_structured_mem_revisions",
+				indexNames: ["test_structured_mem_revisions_text"],
+			},
+			{
 				collectionName: "test_procedures",
 				indexNames: ["test_procedures_text", "test_procedures_vector"],
 			},
@@ -1420,7 +1447,10 @@ describe("ensureSearchIndexes text-analyzer strategy (C-029)", () => {
 			type: "string",
 			analyzer: "lucene.standard",
 		})
-		expect(structFields.key).toEqual({ type: "token" })
+		expect(structFields.key).toEqual([
+			{ type: "token" },
+			{ type: "string", analyzer: "lucene.standard" },
+		])
 	})
 
 	it("folding switches NL fields to lucene.folding and identifier-heavy fields to dual keyword+folding", async () => {

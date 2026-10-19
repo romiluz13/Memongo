@@ -1773,7 +1773,9 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase E: Novelty", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10_000))
 	})
 
-	it("novelty scan returns results or degrades gracefully", async () => {
+	it("novelty scan ranks the seeded events", async () => {
+		// A failed scan throws a typed SearchLaneError and fails this test; it is
+		// never an empty report.
 		const report = await scanNovelty({
 			db,
 			prefix: TEST_PREFIX,
@@ -1781,57 +1783,43 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase E: Novelty", () => {
 			options: { limit: 10 },
 		})
 
-		if (report.error === "mongot_unavailable") {
-			// Graceful degradation: empty report, no crash
-			expect(report.events).toHaveLength(0)
-			scores.noveltyDegradation = 100
-			// Without mongot, we cannot score accuracy
-			scores.noveltyAccuracy = 70 // Base score for graceful degradation
-		} else if (report.events.length === 0 && !report.error) {
-			// No vector search index available — degrade gracefully
-			scores.noveltyDegradation = 100
-			scores.noveltyAccuracy = 70
-		} else {
-			// Full novelty scan with real embeddings available.
-			// Anomaly events (uniform vectors) should rank as most novel
-			// since they are furthest from the centroid of random vectors.
-			scores.noveltyDegradation = 100
+		expect(report.events.length).toBeGreaterThan(0)
+		// Anomaly events (uniform vectors) should rank as most novel
+		// since they are furthest from the centroid of random vectors.
+		scores.noveltyDegradation = 100
+		console.log(
+			`[NOVELTY DIAG] ${report.events.length} events returned, scanned=${report.scannedCount}`,
+		)
+		for (const e of report.events.slice(0, 10)) {
 			console.log(
-				`[NOVELTY DIAG] ${report.events.length} events returned, scanned=${report.scannedCount}`,
+				`  score=${e.noveltyScore.toFixed(4)} body="${e.body.slice(0, 80)}"`,
 			)
-			for (const e of report.events.slice(0, 10)) {
-				console.log(
-					`  score=${e.noveltyScore.toFixed(4)} body="${e.body.slice(0, 80)}"`,
-				)
-			}
+		}
 
-			// Check if "Rust" anomaly is in top-5
-			const top5 = report.events.slice(0, 5)
-			const rustAnomaly = top5.some((e) =>
-				e.body.toLowerCase().includes("rust"),
-			)
-			const cloudAnomaly = top5.some((e) =>
-				e.body.toLowerCase().includes("google cloud"),
-			)
+		// Check if "Rust" anomaly is in top-5
+		const top5 = report.events.slice(0, 5)
+		const rustAnomaly = top5.some((e) => e.body.toLowerCase().includes("rust"))
+		const cloudAnomaly = top5.some((e) =>
+			e.body.toLowerCase().includes("google cloud"),
+		)
 
-			if (rustAnomaly && cloudAnomaly) {
-				scores.noveltyAccuracy = 100
-			} else if (rustAnomaly || cloudAnomaly) {
-				scores.noveltyAccuracy = 85
-			} else {
-				// Check top-10
-				const top10 = report.events.slice(0, 10)
-				const anyAnomaly = top10.some(
-					(e) =>
-						e.body.toLowerCase().includes("rust") ||
-						e.body.toLowerCase().includes("google cloud"),
-				)
-				scores.noveltyAccuracy = anyAnomaly ? 75 : 50
-			}
+		if (rustAnomaly && cloudAnomaly) {
+			scores.noveltyAccuracy = 100
+		} else if (rustAnomaly || cloudAnomaly) {
+			scores.noveltyAccuracy = 85
+		} else {
+			// Check top-10
+			const top10 = report.events.slice(0, 10)
+			const anyAnomaly = top10.some(
+				(e) =>
+					e.body.toLowerCase().includes("rust") ||
+					e.body.toLowerCase().includes("google cloud"),
+			)
+			scores.noveltyAccuracy = anyAnomaly ? 75 : 50
 		}
 	})
 
-	it("novelty scan for support agent handles graceful degradation", async () => {
+	it("novelty scan for the support agent returns a report or throws a typed failure", async () => {
 		const report = await scanNovelty({
 			db,
 			prefix: TEST_PREFIX,
@@ -1839,12 +1827,11 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase E: Novelty", () => {
 			options: { limit: 10 },
 		})
 
-		// Should not crash regardless of mongot availability
 		expect(report).toBeDefined()
 		expect(report.agentId).toBe(SUPPORT_AGENT_TIER1)
 
-		// If mongot is available and we have results, check for legal threat anomaly
-		if (report.events.length > 0 && !report.error) {
+		// Check for the legal threat anomaly among the ranked events.
+		if (report.events.length > 0) {
 			const top5 = report.events.slice(0, 5)
 			const legalAnomaly = top5.some((e) =>
 				e.body.toLowerCase().includes("legal"),
@@ -2195,8 +2182,8 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase I: Cross-Agent Isolation", () => {
 				options: { limit: 20 },
 			})
 
-			if (report.error || report.events.length === 0) {
-				// No data to check (mongot unavailable or no embeddings)
+			if (report.events.length === 0) {
+				// No events to check for this agent
 				continue
 			}
 

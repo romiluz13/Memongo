@@ -52,7 +52,6 @@ import { writeEventAndProject } from "./test-helpers/legacy-write-event.js"
 import { getRecentIngestRuns } from "./mongodb-ops.js"
 import { synthesizeProfile } from "./mongodb-profile.js"
 import { rewriteQuery, expandSynonyms } from "./mongodb-query-rewriter.js"
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
 // v2 retrieval planner
 import { planRetrieval } from "./mongodb-retrieval-planner.js"
 // Schema setup
@@ -64,11 +63,7 @@ import {
 } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 // Search functions (direct vector search, keyword search, hybrid)
-import {
-	vectorSearch,
-	keywordSearch,
-	buildVectorSearchStage,
-} from "./mongodb-search.js"
+import { vectorSearch, buildVectorSearchStage } from "./mongodb-search.js"
 // Time series telemetry
 import {
 	emitTelemetry,
@@ -97,8 +92,6 @@ const TEST_WINDOW_END = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
 const PREVIEW_VOYAGE_API_KEY = resolvePreviewVoyageApiKey()
 const AUTO_EMBED_ENABLED = hasAtlasModelKey(PREVIEW_VOYAGE_API_KEY)
 const describeAutoEmbed = AUTO_EMBED_ENABLED ? describe : describe.skip
-const describeRerank =
-	PREVIEW_VOYAGE_API_KEY.length > 0 ? describe : describe.skip
 
 async function waitForSearchIndexesReady(
 	db: Db,
@@ -1579,12 +1572,12 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				// isSearchIndexTypeCompatible exists to absorb, and what
 				// detectCapabilities already uses. Asserting the literal string
 				// here was asserting a field MongoDB never sends.
-				expect(
-					isSearchIndexTypeCompatible(vectorIdx!.type, "vectorSearch"),
-				).toBe(true)
+				expect(isSearchIndexTypeCompatible(vectorIdx!, "vectorSearch")).toBe(
+					true,
+				)
 				expect(vectorIdx!.status).toBe("READY")
 				expect(textIdx).toBeDefined()
-				expect(isSearchIndexTypeCompatible(textIdx!.type, "search")).toBe(true)
+				expect(isSearchIndexTypeCompatible(textIdx!, "search")).toBe(true)
 				expect(textIdx!.status).toBe("READY")
 
 				// Verify autoEmbed definition
@@ -1719,32 +1712,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 						r.snippet.toLowerCase().includes("connection"),
 				)
 				expect(bugHit).toBe(true)
-			},
-			VECTOR_SEARCH_TIMEOUT,
-		)
-
-		it(
-			"should return keyword search results with text index",
-			async () => {
-				await waitForSearchIndexesReady(db, {
-					timeoutMs: VECTOR_SEARCH_TIMEOUT,
-				})
-				const chunks = db.collection(`${PREFIX}chunks`)
-				const results = await keywordSearch(chunks, "DataVault pipeline", {
-					maxResults: 5,
-					minScore: 0.0,
-					indexName: `${PREFIX}chunks_text`,
-				})
-
-				expect(results.length).toBeGreaterThan(0)
-
-				// Text search results should contain the search terms
-				const hasRelevant = results.some(
-					(r) =>
-						r.snippet.toLowerCase().includes("datavault") ||
-						r.snippet.toLowerCase().includes("pipeline"),
-				)
-				expect(hasRelevant).toBe(true)
 			},
 			VECTOR_SEARCH_TIMEOUT,
 		)
@@ -2040,123 +2007,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			expect(emptyProfile.preferences).toEqual([])
 			expect(emptyProfile.topEntities).toEqual([])
 			expect(emptyProfile.activityPatterns.totalEvents).toBe(0)
-		})
-	})
-
-	// ═══════════════════════════════════════════════════════════════════════════
-	// PHASE 15: Cross-Encoder Re-ranking — Real Voyage rerank-2.5 API
-	// ═══════════════════════════════════════════════════════════════════════════
-
-	describeRerank("Phase 15: Cross-Encoder Re-ranking (Voyage API)", () => {
-		// Reranker auto-routes based on key prefix (same as Python SDK):
-		// al-... → ai.mongodb.com/v1/rerank (Atlas proxy)
-		// pa-... → api.voyageai.com/v1/rerank (direct)
-		// Rerank-only tests may use either family. MongoDB auto-embedding still requires al-....
-		const RERANK_KEY = PREVIEW_VOYAGE_API_KEY
-
-		it("should rerank search results via Voyage rerank-2.5 with instruction-following", async () => {
-			// Create results that mimic what searchV2 would return from the conversation data
-			const results: MemorySearchResult[] = [
-				{
-					path: "events/1",
-					startLine: 0,
-					endLine: 0,
-					score: 0.5,
-					snippet: "Python is a programming language for data science",
-					source: "conversation",
-				},
-				{
-					path: "events/2",
-					startLine: 0,
-					endLine: 0,
-					score: 0.8,
-					snippet:
-						"MongoDB is a document database. We chose it for DataVault because it handles flexible schemas and pipeline metadata well.",
-					source: "conversation",
-				},
-				{
-					path: "events/3",
-					startLine: 0,
-					endLine: 0,
-					score: 0.3,
-					snippet:
-						"TypeScript provides strong typing for the DataVault backend codebase",
-					source: "conversation",
-				},
-			]
-
-			const config: RerankConfig = {
-				enabled: true,
-				model: "rerank-2.5",
-				topN: 10,
-				minScore: 0,
-				voyageApiKey: RERANK_KEY,
-				instruction:
-					"This is agent memory for a coding assistant building DataVault. Prioritize database and architecture decisions.",
-			}
-
-			const result = await crossEncoderRerank({
-				db,
-				prefix: PREFIX,
-				agentId: AGENT_ID,
-				query: "What database does DataVault use and why?",
-				results,
-				config,
-			})
-
-			expect(result.reranked).toBe(true)
-			expect(result.latencyMs).toBeGreaterThan(0)
-			expect(result.results.length).toBe(3)
-
-			// MongoDB doc should rank highest for this database query
-			expect(result.results[0].snippet).toContain("MongoDB")
-			expect(result.results[0].score).toBeGreaterThan(0)
-			expect(result.results[0].score).toBeLessThanOrEqual(1)
-
-			console.log(`  Rerank latency: ${result.latencyMs}ms`)
-			console.log(
-				`  Reranked: ${result.results.map((r) => `${r.path}:${r.score.toFixed(4)}`).join(", ")}`,
-			)
-		})
-
-		it("should fall back gracefully with invalid API key", async () => {
-			const results: MemorySearchResult[] = [
-				{
-					path: "events/1",
-					startLine: 0,
-					endLine: 0,
-					score: 0.5,
-					snippet: "Test doc 1",
-					source: "conversation",
-				},
-				{
-					path: "events/2",
-					startLine: 0,
-					endLine: 0,
-					score: 0.8,
-					snippet: "Test doc 2",
-					source: "conversation",
-				},
-			]
-
-			const result = await crossEncoderRerank({
-				db,
-				prefix: PREFIX,
-				agentId: AGENT_ID,
-				query: "test",
-				results,
-				config: {
-					enabled: true,
-					model: "rerank-2.5",
-					topN: 10,
-					minScore: 0,
-					voyageApiKey: "invalid-key-xxx",
-				},
-			})
-
-			expect(result.reranked).toBe(false)
-			expect(result.results.length).toBe(2)
-			expect(result.results[0].path).toBe("events/1") // original order preserved
 		})
 	})
 

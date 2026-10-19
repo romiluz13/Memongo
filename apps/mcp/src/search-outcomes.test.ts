@@ -81,8 +81,8 @@ describe("MCP search outcome passthrough (#101)", () => {
 
 // M2 decision 8: the MCP adapter carries both index-health reasons as
 // retryable unavailability, the same as the HTTP API and the SDK. A failed
-// search is a tool error that keeps the code and the typed rows, so an agent
-// can tell an unhealthy index from an empty answer and retry.
+// search is a tool error that keeps the status, the code and the typed rows,
+// so an agent can tell an unhealthy index from an empty answer and retry a 503.
 describe("MCP index-health reasons (M2)", () => {
 	const ROWS = [
 		{
@@ -133,7 +133,7 @@ describe("MCP index-health reasons (M2)", () => {
 	it.each([
 		{ name: "memongo_search", method: "search" },
 		{ name: "memongo_search_kb", method: "searchKB" },
-	])("$name: a failed index-health search is a retryable tool error with both reasons", async ({
+	])("$name: a failed index-health search is a 503 tool error with both reasons", async ({
 		name,
 		method,
 	}) => {
@@ -158,11 +158,11 @@ describe("MCP index-health reasons (M2)", () => {
 		const payload = JSON.parse(out.content[0].text)
 		expect(payload.error).toContain("SEARCH_LANES_UNAVAILABLE")
 		expect(payload.code).toBe("SEARCH_LANES_UNAVAILABLE")
-		expect(payload.retryable).toBe(true)
+		expect(payload.status).toBe(503)
 		expect(payload.outcomes).toEqual({ status: "failed", lanes: ROWS })
 	})
 
-	it("a non-search error keeps the plain message payload", async () => {
+	it("an API error without outcomes carries its status and code and no rows", async () => {
 		const dispatch = vi.fn().mockRejectedValue(
 			new MemongoClientError(
 				400,
@@ -178,6 +178,7 @@ describe("MCP index-health reasons (M2)", () => {
 
 		expect(out.isError).toBe(true)
 		const payload = JSON.parse(out.content[0].text)
-		expect(Object.keys(payload)).toEqual(["error"])
+		expect(payload).toMatchObject({ status: 400, code: "VALIDATION_ERROR" })
+		expect(payload).not.toHaveProperty("outcomes")
 	})
 })

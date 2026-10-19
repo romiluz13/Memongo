@@ -29,6 +29,7 @@ import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 import { synthesizeProfile } from "./mongodb-profile.js"
 import { episodesCollection, eventsCollection } from "./mongodb-schema.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { SearchLaneError } from "./search-outcomes.js"
 
 const PREFIX = "test_"
 const AGENT_ID = "agent-1"
@@ -38,6 +39,10 @@ function createFindCollection(params: {
 	docs?: Document[]
 }): Collection {
 	return {
+		// Query-driven episode summaries select through $search.
+		aggregate: vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue(params.next ? [params.next] : []),
+		}),
 		find: vi.fn().mockReturnValue({
 			sort: vi.fn().mockReturnValue({
 				limit: vi.fn().mockReturnValue({
@@ -82,6 +87,7 @@ describe("mongodb-context-bundle", () => {
 				maxItems: 4,
 				truncated: false,
 				partial: false,
+				failures: [],
 				countsByKind: { "active-critical": 1, procedure: 1 },
 				sourceCounts: { structured: 1, procedural: 1 },
 			},
@@ -95,7 +101,12 @@ describe("mongodb-context-bundle", () => {
 			scope: "agent",
 			scopeRef: "agent:agent-1",
 			sections: [],
-			metadata: { partial: false, evidenceCount: 0, sourceCounts: {} },
+			metadata: {
+				partial: false,
+				failures: [],
+				evidenceCount: 0,
+				sourceCounts: {},
+			},
 			builtAt: new Date("2026-04-05T10:00:00.000Z"),
 		})
 		vi.mocked(synthesizeProfile).mockResolvedValue({
@@ -445,6 +456,101 @@ describe("mongodb-context-bundle", () => {
 		expect(bundle.sections.map((section) => section.kind)).toEqual([
 			"active-slate",
 		])
+		expect(bundle.metadata.failures).toEqual([
+			{
+				section: "query-evidence",
+				stage: "lane",
+				outcome: "failed",
+				reason: "internal-error",
+			},
+			{
+				section: "recent-events",
+				stage: "lane",
+				outcome: "failed",
+				reason: "internal-error",
+			},
+		])
+	})
+
+	it("throws the typed error instead of an empty bundle when every planned section fails", async () => {
+		vi.mocked(hydrateActiveSlate).mockRejectedValue(new Error("slate down"))
+		vi.mocked(episodesCollection).mockReturnValue({
+			aggregate: vi.fn(() => {
+				throw new Error("episodes down")
+			}),
+		} as unknown as Collection)
+		vi.mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => {
+				throw new Error("events down")
+			}),
+		} as unknown as Collection)
+
+		const failure = await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			request: { query: "Phoenix handoff" },
+			search: vi.fn().mockRejectedValue(new Error("search down")),
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect((failure as SearchLaneError).reason).toBe("internal-error")
+	})
+
+	it("carries a failed discovery projection and a nested partial as typed rows", async () => {
+		vi.mocked(episodesCollection).mockReturnValue(
+			createFindCollection({ next: null }),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(
+			createFindCollection({ docs: [] }),
+		)
+		vi.mocked(buildDiscoveryProjection).mockResolvedValue({
+			kind: "topic-brief",
+			query: "Phoenix",
+			title: "Phoenix topic brief",
+			summary: "Partial brief.",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			sections: [],
+			metadata: {
+				partial: true,
+				failures: [
+					{
+						section: "structured",
+						stage: "atlas-search",
+						outcome: "failed",
+						reason: "query-error",
+					},
+				],
+				evidenceCount: 0,
+				sourceCounts: {},
+			},
+			builtAt: new Date("2026-04-05T10:00:00.000Z"),
+		})
+
+		const bundle = await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			request: { query: "Phoenix", includeDiscoveryProjection: true },
+		})
+
+		expect(bundle.metadata.partial).toBe(true)
+		expect(bundle.metadata.failures).toEqual([
+			{
+				section: "discovery-projection:structured",
+				stage: "atlas-search",
+				outcome: "failed",
+				reason: "query-error",
+			},
+		])
 	})
 
 	it("wake-up mode limits token budget to 250 and includes profile", async () => {
@@ -457,6 +563,7 @@ describe("mongodb-context-bundle", () => {
 				maxItems: 5,
 				truncated: false,
 				partial: false,
+				failures: [],
 				countsByKind: {},
 				sourceCounts: {},
 			},
@@ -516,6 +623,7 @@ describe("mongodb-context-bundle", () => {
 				maxItems: 5,
 				truncated: false,
 				partial: false,
+				failures: [],
 				countsByKind: {},
 				sourceCounts: {},
 			},
@@ -574,6 +682,7 @@ describe("mongodb-context-bundle", () => {
 				maxItems: 10,
 				truncated: false,
 				partial: false,
+				failures: [],
 				countsByKind: {},
 				sourceCounts: {},
 			},
@@ -653,6 +762,7 @@ describe("mongodb-context-bundle", () => {
 				maxItems: 10,
 				truncated: false,
 				partial: false,
+				failures: [],
 				countsByKind: {},
 				sourceCounts: {},
 			},
@@ -1090,6 +1200,7 @@ describe("mongodb-context-bundle", () => {
 					maxItems: 4,
 					truncated: false,
 					partial: false,
+					failures: [],
 					countsByKind: { "active-critical": 1 },
 					sourceCounts: { structured: 1 },
 				},
@@ -1183,6 +1294,7 @@ describe("mongodb-context-bundle", () => {
 					maxItems: 4,
 					truncated: false,
 					partial: false,
+					failures: [],
 					countsByKind: {},
 					sourceCounts: {},
 				},

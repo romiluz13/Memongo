@@ -48,6 +48,7 @@ import type {
 	MemongoSearchLaneOutcome,
 	MemongoSearchOutcomes,
 	MemongoSearchResponse,
+	MemongoSectionFailure,
 	SearchConfig,
 	MemongoStatsResponse,
 	MemongoStatusResponse,
@@ -447,6 +448,7 @@ export type MemongoSearchPass = {
 	pathsExecuted: string[]
 	resultCount: number
 	queryRewritten: boolean
+	/** Always false: there is no reranker. */
 	reranked: boolean
 	correctionApplied?: string
 }
@@ -472,10 +474,9 @@ export type MemongoSearchDetailedMetadata = {
 		needExactEvidence: boolean
 		allowConstraintRelaxation: boolean
 		numCandidates: number
-		fusionMethod: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod: "scoreFusion" | "rankFusion"
 		hybridMode: "hybrid" | "vector-only"
 		allowHybridBackstop: boolean
-		lexicalPrefilter: "disabled" | "experimental"
 	}
 	passes: MemongoSearchPass[]
 	queriesTried: string[]
@@ -490,6 +491,7 @@ export type MemongoSearchDetailedMetadata = {
 	pathsExecuted: string[]
 	resultsByPath: Record<string, number>
 	queryRewritten: boolean
+	/** Always false: there is no reranker. */
 	reranked: boolean
 	noDirectEvidenceReason?: string
 	constraintRelaxations?: Array<{ constraint: string; action: string }>
@@ -547,6 +549,8 @@ export type MemongoActiveSlateResponse = {
 		maxItems: number
 		truncated: boolean
 		partial: boolean
+		/** M2 T8: typed rows for the lanes that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
 		countsByKind: Record<string, number>
 		sourceCounts: Record<string, number>
 	}
@@ -599,6 +603,8 @@ export type MemongoDiscoveryProjectionResponse = {
 	}>
 	metadata: {
 		partial: boolean
+		/** M2 T8: typed rows for the sections that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
 		evidenceCount: number
 		sourceCounts: Record<string, number>
 		timeRange?: {
@@ -660,6 +666,13 @@ export type MemongoContextBundleResponse = {
 		tokenBudget: number
 		estimatedTokensUsed: number
 		partial: boolean
+		/** M2 T8: typed rows for the sections that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
+		/** X-09: the query-evidence search lane outcomes. */
+		laneOutcomes?: MemongoSearchLaneOutcome[]
+		outcomeStatus?: MemongoSearchOutcomes["status"]
+		/** Set when admission control denied the query-evidence search. */
+		throttled?: { retryAfterMs: number }
 		truncated: boolean
 		pathsExecuted: string[]
 		trustSummary?: {
@@ -686,11 +699,32 @@ export type MemongoContextBundleResponse = {
 	degradation?: MemongoDegradation
 }
 
+/** One unreadable `state()` section with its typed reason (M2 T10, X-03). */
+export type MemongoStateFailure = {
+	section: "profile" | "blocks" | "bundle"
+	reason:
+		| "lane-unavailable"
+		| "index-missing"
+		| "index-not-ready"
+		| "index-stale"
+		| "index-unavailable"
+		| "query-timeout"
+		| "dependency-unavailable"
+		| "query-error"
+		| "internal-error"
+		| "erasure-in-progress"
+}
+
+/**
+ * A section that could not be read is absent and named in `failures`; it is
+ * never an empty object that reads as a healthy empty section.
+ */
 export type MemongoStateResponse = {
-	profile: MemongoProfileResponse
-	blocks: MemongoMemoryBlocksResponse
-	bundle: MemongoContextBundleResponse
-	partial?: boolean
+	profile?: MemongoProfileResponse
+	blocks?: MemongoMemoryBlocksResponse
+	bundle?: MemongoContextBundleResponse
+	partial?: true
+	failures?: MemongoStateFailure[]
 }
 
 /** Metadata shell for a silent-mode empty `searchDetailed` response. */
@@ -899,7 +933,7 @@ export class MemongoClient {
 		minScore?: number
 		filter?: { tags?: string[]; category?: string; source?: string }
 		/** Server-side fusion preference for the KB lane (P0.10). */
-		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod?: "scoreFusion" | "rankFusion"
 	}): Promise<MemongoSearchKBResponse> {
 		return this._silently<MemongoSearchKBResponse>({ results: [] }, () =>
 			apiPost(this._opts, "/v1/search-kb", {

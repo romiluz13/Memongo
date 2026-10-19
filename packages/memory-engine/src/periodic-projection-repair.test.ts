@@ -57,7 +57,10 @@ type RepairParams = { admission?: AdmissionToken; singleBatch?: boolean }
 function entry() {
 	const host = {
 		db: {
-			collection: () => ({ countDocuments: async () => 0 }),
+			collection: () => ({
+				countDocuments: async () => 0,
+				findOne: async () => null,
+			}),
 		} as unknown as Db,
 		prefix: "test_",
 		agentId: token.agentId,

@@ -15,6 +15,12 @@ import {
 	memongoBridgeRejectQuarantined,
 } from "@memongo/memory-bridge"
 import { apiErrorJson, internalError, jsonError } from "../lib/errors.js"
+import {
+	boundSearchOutcomes,
+	mapSearchOutcomes,
+	searchErrorResponse,
+	searchFailureResponse,
+} from "../lib/search-outcomes.js"
 
 import {
 	readAgentId,
@@ -52,9 +58,20 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 				deep: typeof body.deep === "boolean" ? body.deep : undefined,
 				kbRestricted: c.get("kbRestricted"),
 			})
-			return c.json(out)
+			// M2 T10 (X-11): lanes that all failed are a non-2xx; a partial answer
+			// keeps its failure rows on the 200.
+			const mapping = mapSearchOutcomes(out.outcomes)
+			if (out.outcomes && mapping.status !== 200) {
+				return searchFailureResponse(c, mapping, out.outcomes)
+			}
+			return c.json({
+				...out,
+				...(out.outcomes
+					? { outcomes: boundSearchOutcomes(out.outcomes) }
+					: {}),
+			})
 		} catch (err) {
-			return internalError(c, err, "RELEVANCE_EXPLAIN_FAILED")
+			return searchErrorResponse(c, err, "RELEVANCE_EXPLAIN_FAILED")
 		}
 	})
 

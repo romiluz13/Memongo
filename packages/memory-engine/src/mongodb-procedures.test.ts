@@ -3,7 +3,6 @@
 import type { Collection, Db } from "mongodb"
 import { describe, expect, it, vi } from "vitest"
 import {
-	findExactProcedureMatches,
 	searchProcedures,
 	writeProcedure,
 	type ProcedureEntry,
@@ -304,73 +303,6 @@ describe("mongodb-procedures", () => {
 				// RET-09: procedures are distilled step sequences —
 				// agent-derived by construction, labeled as such.
 				derivation: "derived",
-			}),
-		])
-	})
-
-	it("finds exact procedure aliases before broad search", async () => {
-		const col = createMockProcedureCol()
-		;(col.find as ReturnType<typeof vi.fn>).mockReturnValue({
-			toArray: vi.fn(async () => [
-				{
-					procedureId: "incident-response",
-					searchText: "incident response\nCheck status page",
-					sessionId: "q1::session_4",
-					updatedAt: new Date("2026-04-06T14:00:00Z"),
-					state: "active",
-					scope: "agent",
-					scopeRef: "agent:main",
-					sourceEventIds: ["evt-proc-alias"],
-				},
-			]),
-		} as unknown as ReturnType<typeof col.find>)
-		const asOf = new Date("2026-04-11T10:30:00.000Z")
-
-		const results = await findExactProcedureMatches(col, "incident response", {
-			maxResults: 3,
-			filter: {
-				agentId: "main",
-				state: "active",
-				currentOnly: true,
-				asOf,
-			},
-		})
-
-		expect(col.find).toHaveBeenCalledWith(
-			{
-				$and: expect.arrayContaining([
-					expect.objectContaining({
-						agentId: "main",
-						state: "active",
-					}),
-					{
-						$or: [
-							{ validFrom: { $exists: false } },
-							{ validFrom: { $lte: asOf } },
-						],
-					},
-					{
-						$or: [{ validTo: { $exists: false } }, { validTo: { $gt: asOf } }],
-					},
-					{
-						$or: [
-							{ name: /^incident response$/i },
-							{ triggerQueries: /^incident response$/i },
-						],
-					},
-				]),
-			},
-			expect.objectContaining({
-				limit: 3,
-				sort: { updatedAt: -1 },
-			}),
-		)
-		expect(results).toEqual([
-			expect.objectContaining({
-				path: "procedure:incident-response",
-				score: 1,
-				sessionId: "q1::session_4",
-				sourceEventIds: ["evt-proc-alias"],
 			}),
 		])
 	})

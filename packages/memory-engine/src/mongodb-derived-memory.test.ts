@@ -1,5 +1,9 @@
-import type { ClientSession, Collection, Db } from "mongodb"
+import type { ClientSession, Collection, Db, Document } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
 import {
 	extractLlmStructuredCandidates,
 	extractProcedureCandidatesFromEvent,
@@ -10,12 +14,18 @@ import {
 	promoteDerivedMemoryFromEvent,
 	resolveStructuredCandidatesForPromotion,
 } from "./mongodb-derived-memory.js"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 
 function mockLlmProvider(content: string): EnrichmentProvider {
 	return {
 		name: "mock",
-		chatCompletion: async () => ({ content }),
+		chatCompletion: async (params) =>
+			JSON.stringify(params.messages).includes("validFrom")
+				? { content: JSON.stringify({ validFrom: null, validTo: null }) }
+				: { content },
 	}
 }
 
@@ -74,15 +84,18 @@ function createMockCollection(
 ): Collection {
 	return {
 		findOne: vi.fn(async () => null),
-		find: vi.fn(() => ({
-			sort: vi.fn().mockReturnValue({
-				limit: vi.fn().mockReturnValue({
-					toArray: vi.fn(async () => []),
-				}),
-			}),
-		})),
+		find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
 		...overrides,
 	} as unknown as Collection
+}
+
+// The supporting-event lookup is one `$search` aggregate; `events` is what the
+// Search stage proposes.
+function searchProposes(events: Document[]) {
+	return {
+		aggregate: vi.fn(() => ({ toArray: vi.fn(async () => events) })),
+	}
 }
 
 function createMockDb(collections: Record<string, Collection>): Db {
@@ -187,15 +200,7 @@ describe("mongodb-derived-memory", () => {
 				timestamp: new Date("2026-03-20T10:00:00Z"),
 			},
 		]
-		const eventsCol = createMockCollection({
-			find: vi.fn(() => ({
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn(async () => supportingEvents),
-					}),
-				}),
-			})),
-		})
+		const eventsCol = createMockCollection(searchProposes(supportingEvents))
 
 		const promotable = await resolveStructuredCandidatesForPromotion({
 			db: createMockDb({
@@ -226,22 +231,18 @@ describe("mongodb-derived-memory", () => {
 
 	it("builds candidates from prefetched session facts without a per-event extraction call (P3.9)", async () => {
 		const structuredCol = createMockCollection()
-		const eventsCol = createMockCollection({
-			find: vi.fn(() => ({
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn(async () => [
-							{
-								eventId: "evt-sibling",
-								body: "The user grows cherry tomatoes in their garden.",
-								timestamp: new Date("2026-03-20T10:00:00Z"),
-							},
-						]),
-					}),
-				}),
-			})),
-		})
-		const chatCompletion = vi.fn(async () => ({ content: "{}" }))
+		const eventsCol = createMockCollection(
+			searchProposes([
+				{
+					eventId: "evt-sibling",
+					body: "The user grows cherry tomatoes in their garden.",
+					timestamp: new Date("2026-03-20T10:00:00Z"),
+				},
+			]),
+		)
+		const chatCompletion = vi.fn(async () => ({
+			content: JSON.stringify({ validFrom: null, validTo: null }),
+		}))
 		const provider = { name: "mock", chatCompletion }
 
 		const promotable = await resolveStructuredCandidatesForPromotion({
@@ -306,6 +307,7 @@ describe("mongodb-derived-memory", () => {
 		expect(promotable[0]?.type).toBe("fact")
 		expect(promotable[0]?.value).toContain("Blue Finch")
 		expect(structuredCol.findOne).not.toHaveBeenCalled()
+		expect(eventsCol.aggregate).not.toHaveBeenCalled()
 		expect(eventsCol.find).not.toHaveBeenCalled()
 	})
 
@@ -464,21 +466,15 @@ describe("mongodb-derived-memory", () => {
 		const structuredCol = createMockCollection()
 		// Reinforcement path: LLM facts are requires-reinforcement, so supply
 		// one supporting event so the candidate becomes promotable.
-		const eventsCol = createMockCollection({
-			find: vi.fn(() => ({
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn(async () => [
-							{
-								eventId: "evt-support-0",
-								body: "earlier chat about deployment",
-								timestamp: new Date("2026-03-20T10:00:00Z"),
-							},
-						]),
-					}),
-				}),
-			})),
-		})
+		const eventsCol = createMockCollection(
+			searchProposes([
+				{
+					eventId: "evt-support-0",
+					body: "User deploys to AWS us-east-1",
+					timestamp: new Date("2026-03-20T10:00:00Z"),
+				},
+			]),
+		)
 
 		const provider = mockLlmProvider(
 			JSON.stringify({
@@ -514,9 +510,68 @@ describe("mongodb-derived-memory", () => {
 		).toBe(true)
 	})
 
-	it("falls back to regex candidates when the LLM provider fails", async () => {
+	it("rejects when the LLM provider fails, never falling back to regex candidates", async () => {
 		const structuredCol = createMockCollection()
 		const eventsCol = createMockCollection()
+		const failure = new Error("llm upstream 500")
+		const failingProvider: EnrichmentProvider = {
+			name: "failing",
+			chatCompletion: async () => {
+				throw failure
+			},
+		}
+
+		await expect(
+			resolveStructuredCandidatesForPromotion({
+				db: createMockDb({
+					test_structured_mem: structuredCol,
+					test_events: eventsCol,
+				}),
+				prefix: "test_",
+				event: {
+					eventId: "evt-llm-fail-1",
+					agentId: "agent-1",
+					role: "user",
+					body: "Remember this: the launch codeword is Blue Finch.",
+					timestamp: new Date("2026-03-21T10:00:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
+				provider: failingProvider,
+				model: "gpt-4o-mini",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("rejects with a typed parse error when the LLM extraction response is malformed", async () => {
+		const failing = mockLlmProvider("this is not json")
+		await expect(
+			resolveStructuredCandidatesForPromotion({
+				db: createMockDb({
+					test_structured_mem: createMockCollection(),
+					test_events: createMockCollection(),
+				}),
+				prefix: "test_",
+				event: {
+					eventId: "evt-llm-parse-1",
+					agentId: "agent-1",
+					role: "user",
+					body: "Remember this: the launch codeword is Blue Finch.",
+					timestamp: new Date("2026-03-21T10:00:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
+				provider: failing,
+				model: "gpt-4o-mini",
+			}),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
+
+	it("promotes nothing and writes nothing when the extraction provider fails", async () => {
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		vi.mocked(writeStructuredMemory).mockClear()
 		const failingProvider: EnrichmentProvider = {
 			name: "failing",
 			chatCompletion: async () => {
@@ -524,27 +579,29 @@ describe("mongodb-derived-memory", () => {
 			},
 		}
 
-		const promotable = await resolveStructuredCandidatesForPromotion({
-			db: createMockDb({
-				test_structured_mem: structuredCol,
-				test_events: eventsCol,
+		await expect(
+			promoteDerivedMemoryFromEvent({
+				db: createMockDb({
+					test_structured_mem: createMockCollection(),
+					test_procedures: createMockCollection(),
+					test_events: createMockCollection(),
+				}),
+				prefix: "test_",
+				embeddingMode: "automated",
+				provider: failingProvider,
+				model: "gpt-4o-mini",
+				event: {
+					eventId: "evt-llm-fail-2",
+					agentId: "agent-1",
+					role: "user",
+					body: "Remember this: the launch codeword is Blue Finch.",
+					timestamp: new Date("2026-03-21T10:00:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
 			}),
-			prefix: "test_",
-			event: {
-				eventId: "evt-llm-fail-1",
-				agentId: "agent-1",
-				role: "user",
-				body: "Remember this: the launch codeword is Blue Finch.",
-				timestamp: new Date("2026-03-21T10:00:00Z"),
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-			},
-			provider: failingProvider,
-			model: "gpt-4o-mini",
-		})
-
-		expect(promotable).toHaveLength(1)
-		expect(promotable[0]?.value).toContain("Blue Finch")
+		).rejects.toThrow("llm upstream 500")
+		expect(writeStructuredMemory).not.toHaveBeenCalled()
 	})
 
 	it("extracts procedures from assistant workflow-style responses", () => {
@@ -813,7 +870,8 @@ describe("mongodb-derived-memory", () => {
 		expect(writtenKeys.size).toBe(2)
 	})
 
-	it("logs projection-run failures instead of swallowing them silently", async () => {
+	it("declares projection-run bookkeeping best-effort: a log line and a counter, never a failed promotion", async () => {
+		resetBestEffortFailureCounts()
 		const { recordProjectionRun } = await import("./mongodb-ops.js")
 		vi.mocked(recordProjectionRun).mockRejectedValue(
 			new Error("ops unavailable"),
@@ -849,8 +907,11 @@ describe("mongodb-derived-memory", () => {
 			skipped: false,
 		})
 		expect(loggerMocks.warn).toHaveBeenCalledWith(
-			expect.stringContaining("projection run recording failed"),
+			expect.stringContaining("projection-run failed: ops unavailable"),
 		)
+		expect(getBestEffortFailureCounts()).toMatchObject({
+			"structured promotion-projection-run": 1,
+		})
 	})
 })
 
@@ -860,15 +921,8 @@ describe("TTL expiry guards (B1)", () => {
 	})
 
 	it("excludes expired events when searching for supporting evidence", async () => {
-		const supportingFind = vi.fn(() => ({
-			sort: vi.fn().mockReturnValue({
-				limit: vi.fn().mockReturnValue({
-					toArray: vi.fn(async () => []),
-				}),
-			}),
-		}))
 		const structuredCol = createMockCollection()
-		const eventsCol = createMockCollection({ find: supportingFind })
+		const eventsCol = createMockCollection()
 
 		await resolveStructuredCandidatesForPromotion({
 			db: createMockDb({
@@ -887,8 +941,10 @@ describe("TTL expiry guards (B1)", () => {
 			},
 		})
 
-		expect(supportingFind).toHaveBeenCalled()
-		expect(supportingFind.mock.calls[0]?.[0]).toMatchObject({
+		expect(eventsCol.aggregate).toHaveBeenCalled()
+		const pipeline = (eventsCol.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0]?.[0] as Document[]
+		expect(pipeline[1]?.$match).toMatchObject({
 			$and: expect.arrayContaining([
 				{
 					$or: [

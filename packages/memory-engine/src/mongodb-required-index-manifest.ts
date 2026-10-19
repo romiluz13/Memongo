@@ -48,6 +48,7 @@ type Surface =
 	| "chunks"
 	| "kb"
 	| "structured"
+	| "revisions"
 	| "procedures"
 	| "events"
 	| "session"
@@ -75,6 +76,26 @@ type RequiredIndexRow = {
 
 const filterFields = (paths: string[]): Document[] =>
 	paths.map((path) => ({ type: "filter", path }))
+
+// T8 (#117): discovery matches content with `text`, which needs an analyzed
+// `string` mapping. Fields that other lanes filter with `equals`/`in` keep
+// their `token` mapping beside it.
+const analyzedString = (ctx: DefinitionContext): Document => ({
+	type: "string",
+	analyzer: ctx.textAnalyzer,
+})
+const tokenAndString = (ctx: DefinitionContext): Document[] => [
+	{ type: "token" },
+	analyzedString(ctx),
+]
+// The dual keyword+folding identifier mapping is already a `string`, so only
+// the plain `token` identifier gains the analyzed twin.
+const textSearchableIdentifier = (
+	ctx: DefinitionContext,
+): Document | Document[] =>
+	ctx.identifierField.type === "token"
+		? tokenAndString(ctx)
+		: ctx.identifierField
 
 const SESSION_CHUNKS_FILTER_PATHS = [
 	"agentId",
@@ -201,8 +222,8 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 					value: { type: "string", analyzer: ctx.textAnalyzer },
 					context: { type: "string", analyzer: ctx.textAnalyzer },
 					type: { type: "token" },
-					key: ctx.identifierField,
-					tags: { type: "token" },
+					key: textSearchableIdentifier(ctx),
+					tags: tokenAndString(ctx),
 					agentId: { type: "token" },
 					scope: { type: "token" },
 					scopeRef: { type: "token" },
@@ -247,6 +268,28 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 			),
 	},
 	{
+		surface: "revisions",
+		collection: "structured_mem_revisions",
+		name: "{prefix}structured_mem_revisions_text",
+		type: "search",
+		label: "structured_mem_revisions text",
+		definition: (ctx) => ({
+			mappings: {
+				dynamic: false,
+				fields: {
+					value: analyzedString(ctx),
+					context: analyzedString(ctx),
+					key: textSearchableIdentifier(ctx),
+					tags: tokenAndString(ctx),
+					agentId: { type: "token" },
+					scope: { type: "token" },
+					scopeRef: { type: "token" },
+					supersededAt: { type: "date" },
+				},
+			},
+		}),
+	},
+	{
 		surface: "procedures",
 		collection: "procedures",
 		name: "{prefix}procedures_text",
@@ -256,7 +299,13 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 			mappings: {
 				dynamic: false,
 				fields: {
-					name: { type: "string", analyzer: ctx.textAnalyzer },
+					// T7: `name` is also a lowercase token so the exact-match lane
+					// can run `equals`; `triggerQueries` has no other consumer.
+					name: [
+						{ type: "string", analyzer: ctx.textAnalyzer },
+						{ type: "token", normalizer: "lowercase" },
+					],
+					triggerQueries: { type: "token", normalizer: "lowercase" },
 					searchText: { type: "string", analyzer: ctx.textAnalyzer },
 					intentTags: { type: "token" },
 					agentId: { type: "token" },
@@ -432,12 +481,24 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 		name: "entity_autocomplete",
 		type: "search",
 		label: "entity autocomplete",
-		definition: () => ({
+		// T7: prefix lookup keeps the edgeGram `autocomplete` mapping; exact
+		// names run `equals` on the lowercase `token` mapping beside it. T8:
+		// discovery matches content with `text` on the analyzed `string`.
+		definition: (ctx) => ({
 			mappings: {
 				dynamic: false,
 				fields: {
-					name: { type: "autocomplete" },
-					aliases: { type: "autocomplete" },
+					name: [
+						{ type: "autocomplete" },
+						{ type: "token", normalizer: "lowercase" },
+						analyzedString(ctx),
+					],
+					aliases: [
+						{ type: "autocomplete" },
+						{ type: "token", normalizer: "lowercase" },
+						analyzedString(ctx),
+					],
+					type: analyzedString(ctx),
 					agentId: { type: "token" },
 					scope: { type: "token" },
 					scopeRef: { type: "token" },
@@ -451,12 +512,17 @@ const REQUIRED_INDEX_ROWS: RequiredIndexRow[] = [
 		name: "episode_autocomplete",
 		type: "search",
 		label: "episode autocomplete",
-		definition: () => ({
+		// T7: episode search runs `text`, so title and summary are analyzed
+		// strings. Nothing queries them with `autocomplete` any more.
+		definition: (ctx) => ({
 			mappings: {
 				dynamic: false,
 				fields: {
-					title: { type: "autocomplete" },
-					summary: { type: "autocomplete" },
+					title: analyzedString(ctx),
+					summary: analyzedString(ctx),
+					topics: analyzedString(ctx),
+					tags: analyzedString(ctx),
+					status: { type: "token" },
 					agentId: { type: "token" },
 					scope: { type: "token" },
 					scopeRef: { type: "token" },
@@ -481,6 +547,7 @@ function enabledSurfaces(env: NodeJS.ProcessEnv): Set<Surface> {
 		"chunks",
 		"kb",
 		"structured",
+		"revisions",
 		"procedures",
 		"events",
 		"session",
