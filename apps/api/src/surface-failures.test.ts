@@ -28,6 +28,7 @@ vi.mock(
 )
 
 import { createApp } from "./app.js"
+import { openApiSpec } from "./openapi-spec.js"
 
 beforeEach(() => {
 	vi.resetAllMocks()
@@ -273,6 +274,38 @@ describe("POST /v1/read-file (G2-69)", () => {
 
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({ text: "hi", path: "notes/a.md" })
+	})
+})
+
+describe("GET /v1/state (G3-75)", () => {
+	it("serves a failed section as a typed failure row, not an empty object", async () => {
+		bridge.memongoBridgeGetState.mockResolvedValue({
+			bundle: { sections: [] },
+			partial: true,
+			failures: [
+				{ section: "profile", reason: "dependency-unavailable" },
+				{ section: "blocks", reason: "erasure-in-progress" },
+			],
+		})
+
+		const response = await get("/v1/state")
+
+		expect(response.status).toBe(200)
+		const body = await json(response)
+		expect(body.partial).toBe(true)
+		expect(body.failures).toEqual([
+			{ section: "profile", reason: "dependency-unavailable" },
+			{ section: "blocks", reason: "erasure-in-progress" },
+		])
+		expect(body).not.toHaveProperty("profile")
+		expect(body).not.toHaveProperty("blocks")
+	})
+
+	it("documents the failure rows in the OpenAPI response", () => {
+		const schema = JSON.stringify(openApiSpec.paths["/v1/state"])
+
+		expect(schema).toContain('"failures"')
+		expect(schema).toContain("erasure-in-progress")
 	})
 })
 
