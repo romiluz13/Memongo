@@ -111,7 +111,7 @@ const searchOutcomesSchema = {
 		lanes: { type: "array", items: searchLaneOutcomeSchema },
 	},
 	description:
-		"#101: this call's outcome summary. Absent on a throttled call, which carries `degradation` instead.",
+		"#101: this call's outcome summary. A throttled search is a failed call (503 SEARCH_BUDGET_EXHAUSTED) whose body carries it with a budget-denied row.",
 }
 
 /**

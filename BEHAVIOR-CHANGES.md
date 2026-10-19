@@ -73,7 +73,9 @@ fallback; a failure is a typed row, never an empty success.
   (lane `search`, stage `request`, reason `budget-embeds`) and
   `outcomeStatus: "failed"` instead of a bare empty list. Over HTTP, a failed
   status with only budget-denied rows is a 503 `SEARCH_BUDGET_EXHAUSTED`
-  where the call used to be a 200 with a throttle marker.
+  where the call used to be a 200 with a throttle marker. That 503 body
+  carries `outcomes`; the route does not yet turn the manager's
+  `degradation.retryAfterMs` into a `Retry-After` header.
 - **Ledger.** The default stays 12 aggregations and 5 embeds. One fused
   aggregate costs one aggregation plus one embed per embedded vector input
   (a fused sibling pair is 1 aggregation and 2 embeds, taken atomically
