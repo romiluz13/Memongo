@@ -20,7 +20,7 @@ import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import {
 	conversationEvidenceLaneCost,
 	kbLaneCost,
-	mongoSearchTierCost,
+	nativeFusionCost,
 	structuredLaneCost,
 } from "./search-lane-cost.js"
 
@@ -162,21 +162,28 @@ describe("per-lane cost table (decision 18)", () => {
 				)
 				expect(charged).toEqual(cost)
 			})
-			it(`mongoSearch tier, ${label}, ${fusionMethod} (score ${fusionCaps.scoreFusion}, rank ${fusionCaps.rankFusion}): charges exactly its reservation`, async () => {
-				const cost = mongoSearchTierCost({
-					capabilities: caps,
+		}
+	}
+
+	for (const fusionMethod of ["scoreFusion", "rankFusion"] as const) {
+		for (const vectorInputs of [1, 2] as const) {
+			it(`mongoSearch native fusion, ${fusionMethod}, ${vectorInputs} vector input(s): charges exactly its reservation`, async () => {
+				const cost = nativeFusionCost({
 					embeddingMode: "automated",
-					fusionMethod,
+					vectorInputs,
 				})
+				expect(cost).toEqual({ aggregations: 1, embeds: vectorInputs })
 				const charged = await chargedWithin(cost, () =>
 					mongoSearch(zeroHits(), "garden plan", null, {
 						maxResults: 5,
 						minScore: 0,
 						fusionMethod,
-						capabilities: caps,
 						vectorIndexName: "t_chunks_vector",
 						textIndexName: "t_chunks_text",
 						embeddingMode: "automated",
+						...(vectorInputs === 2
+							? { sibling: { filter: { source: "memory" }, maxResults: 3 } }
+							: {}),
 					}),
 				)
 				expect(charged).toEqual(cost)

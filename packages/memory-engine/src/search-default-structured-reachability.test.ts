@@ -201,8 +201,10 @@ it("keeps three admitted primary reads when rich results suppress the semantic b
 			? [hit("events:one", "conversation"), hit("events:two", "conversation")]
 			: []
 	})
+	// The hybrid chunk read is one native fusion aggregate, so its reservation
+	// includes the embed of its vector input.
 	const { value, budget } = await runWithSearchBudget(
-		{ maxAggregations: 3, maxEmbeds: 0 },
+		{ maxAggregations: 3, maxEmbeds: 1 },
 		() => search(),
 	)
 	expect(value.metadata.pathsExecuted).toEqual([

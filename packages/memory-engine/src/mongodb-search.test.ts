@@ -6,14 +6,11 @@ import {
 	getSearchBudgetSnapshot,
 	runWithSearchBudget,
 } from "./mongodb-search-budget.js"
-import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	isSearchIndexWarmupError,
 	vectorSearch,
-	keywordSearch,
 	hybridSearchRankFusion,
 	hybridSearchScoreFusion,
-	hybridSearchJSFallback,
 	mongoSearch,
 	splitAtlasSearchFilter,
 	buildVectorSearchStage,
@@ -103,24 +100,6 @@ const SAMPLE_DOCS: Document[] = [
 		score: 0.8,
 	},
 ]
-
-const FULL_CAPS: DetectedCapabilities = {
-	vectorSearch: true,
-	textSearch: true,
-	scoreFusion: true,
-	rankFusion: true,
-	storedSource: false,
-	vectorIndexMethod: false,
-}
-
-const NO_CAPS: DetectedCapabilities = {
-	vectorSearch: false,
-	textSearch: false,
-	scoreFusion: false,
-	rankFusion: false,
-	storedSource: false,
-	vectorIndexMethod: false,
-}
 
 // ---------------------------------------------------------------------------
 // runSearchAggregateWithRetry — P3.8 maxTimeMS on user-driven pipelines
@@ -601,109 +580,6 @@ describe("vectorSearch", () => {
 // keywordSearch
 // ---------------------------------------------------------------------------
 
-describe("keywordSearch", () => {
-	it("builds $search pipeline with compound query", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		const results = await keywordSearch(col, "hello world", {
-			maxResults: 10,
-			minScore: 0.1,
-			indexName: "test_text",
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const searchStage = pipeline[0].$search
-		expect(searchStage.index).toBe("test_text")
-		expect(searchStage.compound.must[0].text.query).toBe("hello world")
-		expect(searchStage.compound.must[0].text.path).toBe("text")
-		expect(results).toHaveLength(2)
-	})
-
-	it("applies session filter as equals clause", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await keywordSearch(col, "test", {
-			maxResults: 5,
-			minScore: 0,
-			indexName: "idx",
-			sessionKey: "__sessions__",
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const searchStage = pipeline[0].$search
-		expect(searchStage.compound.filter).toEqual([
-			{ equals: { path: "source", value: "sessions" } },
-		])
-	})
-
-	it("does not apply source filter for normal session keys", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await keywordSearch(col, "test", {
-			maxResults: 5,
-			minScore: 0,
-			indexName: "idx",
-			sessionKey: "agent:main:main",
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const searchStage = pipeline[0].$search
-		expect(searchStage.compound.filter).toBeUndefined()
-	})
-
-	it("includes searchScore meta in $project", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await keywordSearch(col, "test", {
-			maxResults: 5,
-			minScore: 0,
-			indexName: "idx",
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const projectStage = pipeline[2].$project
-		expect(projectStage.score).toEqual({ $meta: "searchScore" })
-		expect(projectStage.canonicalId).toBe(1)
-		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
-		// RET-11 followup / RET-09: same four provenance-feeding fields the
-		// vector lane projects — guard against silent re-dropping here too.
-		expect(projectStage.expiresAt).toBe(1)
-		expect(projectStage.role).toBe(1)
-		expect(projectStage.confidence).toBe(1)
-		expect(projectStage.sourceReliability).toBe(1)
-	})
-
-	it("pushes supported hard filters into compound.filter", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await keywordSearch(col, "test", {
-			maxResults: 5,
-			minScore: 0,
-			indexName: "idx",
-			filter: {
-				agentId: "agent-1",
-				scope: "agent",
-				source: { $in: ["conversation", "sessions"] },
-			},
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$search.compound.filter).toEqual([
-			{ equals: { path: "agentId", value: "agent-1" } },
-			{ equals: { path: "scope", value: "agent" } },
-			{ in: { path: "source", value: ["conversation", "sessions"] } },
-		])
-		// The full filter is re-validated post-$search against the
-		// hydrated document — pushdown alone runs against the indexed copy,
-		// which can lag the latest write (platform probe: stale admissions).
-		expect(pipeline[1]?.$match).toEqual({
-			agentId: "agent-1",
-			scope: "agent",
-			source: { $in: ["conversation", "sessions"] },
-		})
-	})
-})
-
 describe("splitAtlasSearchFilter", () => {
 	it("splits supported $and filters into Atlas Search clauses", () => {
 		const split = splitAtlasSearchFilter({
@@ -741,99 +617,6 @@ describe("splitAtlasSearchFilter", () => {
 // hybridSearchJSFallback
 // ---------------------------------------------------------------------------
 
-describe("hybridSearchJSFallback", () => {
-	it("merges vector and keyword results with weights", () => {
-		const vecResults = [
-			{
-				path: "a.md",
-				startLine: 1,
-				endLine: 2,
-				score: 0.9,
-				snippet: "vec",
-				source: "conversation" as const,
-			},
-		]
-		const kwResults = [
-			{
-				path: "b.md",
-				startLine: 3,
-				endLine: 4,
-				score: 0.8,
-				snippet: "kw",
-				source: "conversation" as const,
-			},
-		]
-
-		const merged = hybridSearchJSFallback(vecResults, kwResults, {
-			maxResults: 10,
-			vectorWeight: 0.7,
-			textWeight: 0.3,
-		})
-
-		expect(merged.length).toBeGreaterThanOrEqual(2)
-	})
-
-	it("respects maxResults limit", () => {
-		const vecResults = Array.from({ length: 20 }, (_, i) => ({
-			path: `v${i}.md`,
-			startLine: 1,
-			endLine: 2,
-			score: 0.9 - i * 0.01,
-			snippet: "t",
-			source: "conversation" as const,
-		}))
-
-		const merged = hybridSearchJSFallback(vecResults, [], {
-			maxResults: 5,
-			vectorWeight: 1,
-			textWeight: 0,
-		})
-
-		expect(merged).toHaveLength(5)
-	})
-
-	it("preserves benchmark metadata across JS hybrid merge", () => {
-		const vecResults = [
-			{
-				path: "events/evt-1",
-				startLine: 1,
-				endLine: 2,
-				score: 0.9,
-				snippet: "vector",
-				source: "conversation" as const,
-				sessionId: "mini-q1::s1",
-				canonicalId: "event:evt-1",
-				sourceEventIds: ["evt-1"],
-			},
-		]
-		const kwResults = [
-			{
-				path: "events/evt-1",
-				startLine: 1,
-				endLine: 2,
-				score: 0.8,
-				snippet: "keyword",
-				source: "conversation" as const,
-			},
-		]
-
-		const merged = hybridSearchJSFallback(vecResults, kwResults, {
-			maxResults: 10,
-			vectorWeight: 0.7,
-			textWeight: 0.3,
-		})
-
-		expect(merged[0]?.sessionId).toBe("mini-q1::s1")
-		expect(merged[0]?.canonicalId).toBe("event:evt-1")
-		expect(merged[0]?.sourceEventIds).toEqual(["evt-1"])
-		expect(merged[0]?.snippet).toBe("keyword")
-	})
-})
-
-// ---------------------------------------------------------------------------
-// mongoSearch (dispatcher)
-// ---------------------------------------------------------------------------
-
 describe("mongoSearch dispatcher", () => {
 	const baseOpts = {
 		maxResults: 10,
@@ -850,7 +633,6 @@ describe("mongoSearch dispatcher", () => {
 		await mongoSearch(col, "test query", [0.1, 0.2], {
 			...baseOpts,
 			fusionMethod: "scoreFusion",
-			capabilities: FULL_CAPS,
 			embeddingMode: "automated",
 		})
 
@@ -874,7 +656,6 @@ describe("mongoSearch dispatcher", () => {
 		await mongoSearch(col, "test query", [0.1, 0.2], {
 			...baseOpts,
 			fusionMethod: "rankFusion",
-			capabilities: FULL_CAPS,
 			embeddingMode: "automated",
 		})
 
@@ -1073,7 +854,6 @@ describe("mongoSearch dispatcher", () => {
 			mongoSearch(col, "test query", [0.1, 0.2], {
 				...baseOpts,
 				fusionMethod: "scoreFusion",
-				capabilities: FULL_CAPS,
 				embeddingMode: "automated",
 			}),
 		).rejects.toMatchObject({ stage: "score-fusion", reason: "internal-error" })
@@ -1102,7 +882,6 @@ describe("mongoSearch dispatcher", () => {
 		const results = await mongoSearch(col, "test query", [0.1, 0.2], {
 			...baseOpts,
 			fusionMethod: "scoreFusion",
-			capabilities: FULL_CAPS,
 			embeddingMode: "automated",
 		})
 
@@ -1120,37 +899,10 @@ describe("mongoSearch dispatcher", () => {
 		const results = await mongoSearch(col, "sparse query", null, {
 			...baseOpts,
 			fusionMethod: "rankFusion",
-			capabilities: FULL_CAPS,
 			embeddingMode: "automated",
 		})
 
 		expect(col.aggregate).toHaveBeenCalledTimes(1)
-		expect(results).toEqual([])
-	})
-
-	it("does not re-run the js-merge vector search as a vector-only fallback (P3.2 dedupe)", async () => {
-		// js-merge already ran the identical vectorSearch + keywordSearch; on an
-		// empty merge the old waterfall re-ran the SAME vectorSearch, then
-		// keyword, then $text — 5 aggregations for one lane on an empty corpus.
-		const col = {
-			aggregate: vi.fn(() => ({
-				toArray: vi.fn(async () => []),
-			})),
-		} as unknown as Collection
-
-		const results = await mongoSearch(col, "sparse query", null, {
-			...baseOpts,
-			fusionMethod: "js-merge",
-			capabilities: {
-				...FULL_CAPS,
-				scoreFusion: false,
-				rankFusion: false,
-			},
-			embeddingMode: "automated",
-		})
-
-		// Exactly the js-merge pair: one vector + one keyword aggregation.
-		expect(col.aggregate).toHaveBeenCalledTimes(2)
 		expect(results).toEqual([])
 	})
 
@@ -1172,7 +924,6 @@ describe("mongoSearch dispatcher", () => {
 			mongoSearch(col, "test query", null, {
 				...baseOpts,
 				fusionMethod: "rankFusion",
-				capabilities: FULL_CAPS,
 				embeddingMode: "automated",
 			}),
 		).rejects.toMatchObject({ stage: "rank-fusion" })
@@ -1193,7 +944,6 @@ describe("mongoSearch dispatcher", () => {
 				mongoSearch(col, "sparse query", null, {
 					...baseOpts,
 					fusionMethod: "scoreFusion",
-					capabilities: FULL_CAPS,
 					embeddingMode: "automated",
 				}),
 			),
@@ -1215,7 +965,6 @@ describe("mongoSearch dispatcher", () => {
 				mongoSearch(col, "test query", null, {
 					...baseOpts,
 					fusionMethod: "rankFusion",
-					capabilities: FULL_CAPS,
 					embeddingMode: "automated",
 				}),
 		)
@@ -1242,7 +991,6 @@ describe("mongoSearch dispatcher", () => {
 		const results = await mongoSearch(col, "test query", [0.1, 0.2], {
 			...baseOpts,
 			fusionMethod: "rankFusion",
-			capabilities: FULL_CAPS,
 			embeddingMode: "automated",
 		})
 
@@ -1270,7 +1018,6 @@ describe("mongoSearch dispatcher", () => {
 			const results = await mongoSearch(col, "test query", [0.1, 0.2], {
 				...baseOpts,
 				fusionMethod: "rankFusion",
-				capabilities: FULL_CAPS,
 				embeddingMode: "automated",
 			})
 
@@ -1305,143 +1052,16 @@ describe("mongoSearch dispatcher", () => {
 			mongoSearch(col, "test query", [0.1, 0.2], {
 				...baseOpts,
 				fusionMethod: "rankFusion",
-				capabilities: FULL_CAPS,
 				embeddingMode: "automated",
 			}),
 		).rejects.toMatchObject({ name: "SearchLaneError", stage: "rank-fusion" })
 		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 
-	it("skips server-side fusion for js-merge fusionMethod", async () => {
-		// When fusionMethod is js-merge, should run separate vector + keyword queries
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await mongoSearch(col, "test query", [0.1, 0.2], {
-			...baseOpts,
-			fusionMethod: "js-merge",
-			capabilities: FULL_CAPS,
-			embeddingMode: "automated",
-		})
-
-		// aggregate should be called twice: once for vector, once for keyword
-		expect(col.aggregate).toHaveBeenCalledTimes(2)
-		const firstPipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		const secondPipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[1][0]
-		// Neither should be $scoreFusion or $rankFusion
-		expect(firstPipeline[0].$scoreFusion).toBeUndefined()
-		expect(firstPipeline[0].$rankFusion).toBeUndefined()
-		expect(secondPipeline[0].$scoreFusion).toBeUndefined()
-		expect(secondPipeline[0].$rankFusion).toBeUndefined()
-	})
-
-	it("falls back to vector-only when textSearch is not available", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await mongoSearch(col, "test", [0.1], {
-			...baseOpts,
-			capabilities: {
-				...FULL_CAPS,
-				textSearch: false,
-				scoreFusion: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-			},
-			embeddingMode: "automated",
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$vectorSearch).toBeDefined()
-	})
-
-	it("falls back to keyword-only when vectorSearch is unavailable", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await mongoSearch(col, "test", null, {
-			...baseOpts,
-			capabilities: { ...FULL_CAPS, vectorSearch: false },
-			embeddingMode: "automated",
-		})
-
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$search).toBeDefined()
-	})
-
-	it("falls back to keyword-only when vector search returns empty results", async () => {
-		let callCount = 0
-		const col = {
-			aggregate: vi.fn(() => ({
-				toArray: vi.fn(async () => {
-					callCount++
-					return callCount === 1 ? [] : SAMPLE_DOCS
-				}),
-			})),
-			find: vi.fn(() => ({
-				sort: vi.fn(() => ({
-					limit: vi.fn(() => ({
-						toArray: vi.fn(async () => SAMPLE_DOCS),
-					})),
-				})),
-			})),
-		} as unknown as Collection
-
-		const results = await mongoSearch(col, "test", null, {
-			...baseOpts,
-			capabilities: {
-				...FULL_CAPS,
-				textSearch: true,
-				scoreFusion: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-			},
-			embeddingMode: "automated",
-		})
-
-		expect(col.aggregate).toHaveBeenCalled()
-		expect(results).toHaveLength(2)
-		const pipelines = (
-			col.aggregate as ReturnType<typeof vi.fn>
-		).mock.calls.map((call) => call[0])
-		expect(pipelines.some((pipeline) => pipeline[0].$search != null)).toBe(true)
-	})
-
-	it("falls back to $text search when all Atlas Search methods fail", async () => {
-		// With NO_CAPS, dispatcher skips Atlas Search and goes directly to $text fallback
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-
-		await mongoSearch(col, "test", null, {
-			...baseOpts,
-			capabilities: NO_CAPS,
-			embeddingMode: "automated",
-		})
-
-		// Should have used aggregate with $text $match
-		expect(col.aggregate).toHaveBeenCalled()
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$match.$text).toBeDefined()
-		expect(pipeline[0].$match.$text.$search).toBe("test")
-	})
-
-	it("#101: throws a typed classic-text failure when the planned $text tier fails", async () => {
-		const col = mockCollectionThatFails("total failure")
-
-		await expect(
-			mongoSearch(col, "test", null, {
-				...baseOpts,
-				capabilities: NO_CAPS,
-				embeddingMode: "automated",
-			}),
-		).rejects.toMatchObject({ stage: "classic-text", reason: "internal-error" })
-	})
-
 	it("enables vector search in automated mode without queryVector", async () => {
 		const col = mockCollectionWithResults(SAMPLE_DOCS)
 		await mongoSearch(col, "test query", null, {
 			...baseOpts,
-			capabilities: FULL_CAPS,
 			embeddingMode: "automated",
 		})
 
@@ -1450,22 +1070,6 @@ describe("mongoSearch dispatcher", () => {
 			.calls[0][0]
 		// Should attempt hybrid search (scoreFusion) with automated embedding
 		expect(pipeline[0].$scoreFusion).toBeDefined()
-	})
-
-	it("disables vector search in automated mode when capability is false", async () => {
-		const col = mockCollectionWithResults(SAMPLE_DOCS)
-		await mongoSearch(col, "test query", null, {
-			...baseOpts,
-			capabilities: { ...NO_CAPS, textSearch: true },
-			embeddingMode: "automated",
-		})
-
-		// Without vectorSearch capability, should fall back to keyword only
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$search).toBeDefined()
-		expect(pipeline[0].$vectorSearch).toBeUndefined()
-		expect(pipeline[0].$scoreFusion).toBeUndefined()
 	})
 })
 
@@ -1764,17 +1368,6 @@ describe("freshness hard filter", () => {
 		expect(results.map((result) => result.path)).toEqual(["memory/control.md"])
 	})
 
-	it("keywordSearch excludes a stale index admission and keeps the fresh control", async () => {
-		const col = mockCollectionApplyingMatch([STALE_VICTIM, FRESH_CONTROL])
-		const results = await keywordSearch(col, "stale copy", {
-			maxResults: 5,
-			minScore: 0,
-			indexName: "idx",
-			filter: { agentId: "agent-1" },
-		})
-		expect(results.map((result) => result.path)).toEqual(["memory/control.md"])
-	})
-
 	it("mongoSearch pins storedSource off and revalidates the full filter inside both fusion input pipelines", async () => {
 		const col = mockCollectionWithResults(SAMPLE_DOCS)
 		await mongoSearch(col, "test query", [0.1, 0.2], {
@@ -1785,7 +1378,6 @@ describe("freshness hard filter", () => {
 			textIndexName: "chunks_text",
 			vectorWeight: 0.7,
 			textWeight: 0.3,
-			capabilities: { ...FULL_CAPS, storedSource: true },
 			embeddingMode: "automated",
 			filter: { agentId: "agent-1" },
 		})

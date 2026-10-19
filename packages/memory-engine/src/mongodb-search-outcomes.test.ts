@@ -4,7 +4,6 @@ import {
 	buildVectorSearchStage,
 	hybridSearchRankFusion,
 	hybridSearchScoreFusion,
-	keywordSearch,
 	mongoSearch,
 	runSearchAggregateWithRetry,
 	vectorSearch,
@@ -19,15 +18,6 @@ import {
 	type SearchTierOutcome,
 } from "./search-outcomes.js"
 
-const caps = {
-	vectorSearch: true,
-	textSearch: true,
-	scoreFusion: true,
-	rankFusion: true,
-	storedSource: false,
-	vectorIndexMethod: false,
-}
-
 const baseOpts = {
 	maxResults: 5,
 	minScore: 0,
@@ -35,7 +25,6 @@ const baseOpts = {
 	vectorIndexName: "test_vector",
 	textIndexName: "test_text",
 	embeddingMode: "automated" as const,
-	capabilities: caps,
 }
 
 const hit = {
@@ -228,7 +217,7 @@ describe("S4-S8 vector stage and vector-bearing tiers", () => {
 	})
 })
 
-describe("S9-S18 mongoSearch: one planned tier, no fallback after a failure", () => {
+describe("S9-S18 mongoSearch: one native operation, no fallback after a failure", () => {
 	it("S9: a successful zero-hit ends the lane with ok-empty", async () => {
 		const { collection, pipelines } = fixture(() => [])
 		const rows: SearchTierOutcome[] = []
@@ -251,8 +240,7 @@ describe("S9-S18 mongoSearch: one planned tier, no fallback after a failure", ()
 	it.each([
 		["scoreFusion", "score-fusion"],
 		["rankFusion", "rank-fusion"],
-		["vector", "vector"],
-	] as const)("S10: %s embed denial is budget-denied and never runs keyword", async (method, stage) => {
+	] as const)("S10: %s embed denial is budget-denied and runs no other query", async (method, stage) => {
 		const { collection, pipelines } = fixture()
 		const err = await runWithSearchBudget(
 			{ maxAggregations: 5, maxEmbeds: 1 },
@@ -260,43 +248,13 @@ describe("S9-S18 mongoSearch: one planned tier, no fallback after a failure", ()
 				tryConsumeSearchEmbed()
 				return mongoSearch(collection, "garden", null, {
 					...baseOpts,
-					fusionMethod: method === "vector" ? "scoreFusion" : method,
-					capabilities:
-						method === "vector" ? { ...caps, textSearch: false } : caps,
+					fusionMethod: method,
 				})
 			},
 		).catch((e: unknown) => e)
 		expect(err).toBeInstanceOf(SearchBudgetDeniedError)
 		expect(err).toMatchObject({ stage, reason: "budget-embeds" })
 		expect(pipelines).toHaveLength(0)
-	})
-
-	it("S11: a js-merge vector branch denial is its own row; keyword results stand", async () => {
-		const { collection, pipelines } = fixture()
-		const rows: SearchTierOutcome[] = []
-		const { value } = await runWithSearchBudget(
-			{ maxAggregations: 5, maxEmbeds: 1 },
-			async () => {
-				tryConsumeSearchEmbed()
-				return mongoSearch(collection, "garden", null, {
-					...baseOpts,
-					fusionMethod: "js-merge",
-					onTierOutcome: (row) => rows.push(row),
-				})
-			},
-		)
-		expect(value).toHaveLength(1)
-		expect(pipelines.map(stageOf)).toEqual(["$search"])
-		expect(rows).toContainEqual({
-			stage: "vector",
-			outcome: "budget-denied",
-			reason: "budget-embeds",
-		})
-		expect(rows).toContainEqual({
-			stage: "js-merge",
-			outcome: "ok",
-			resultCount: 1,
-		})
 	})
 
 	it.each([
@@ -312,89 +270,18 @@ describe("S9-S18 mongoSearch: one planned tier, no fallback after a failure", ()
 			"rank-fusion",
 			"$rankFusion",
 		],
-		[
-			"S13 js-merge",
-			{ fusionMethod: "js-merge" as const },
-			"js-merge",
-			"$vectorSearch",
-		],
-		[
-			"S14 vector",
-			{ capabilities: { ...caps, textSearch: false } },
-			"vector",
-			"$vectorSearch",
-		],
-		[
-			"S15 keyword",
-			{ capabilities: { ...caps, vectorSearch: false } },
-			"keyword",
-			"$search",
-		],
 	] as const)("%s: an error stops the lane with a typed failure", async (_label, override, stage, failingStage) => {
 		const { collection, pipelines } = fixture((pipeline) =>
 			stageOf(pipeline) === failingStage ? serverError() : [hit],
 		)
-		const traces: Array<{ message?: string }> = []
 		const err = await mongoSearch(collection, "garden", null, {
 			...baseOpts,
 			...override,
-			onTrace: (event) => traces.push(event),
 		}).catch((e: unknown) => e)
 		expect(err).toBeInstanceOf(SearchLaneError)
 		expect(err).toMatchObject({ stage, reason: "query-error" })
-		const ran = pipelines.map(stageOf)
-		expect(ran).not.toContain("$match")
-		if (stage === "score-fusion" || stage === "rank-fusion") {
-			expect(ran).toEqual([failingStage])
-		}
-		expect(JSON.stringify(traces)).not.toContain("secret")
-	})
-
-	it("S17: a refused classic-text aggregation throws budget-denied", async () => {
-		const { collection, pipelines } = fixture()
-		await expect(
-			runWithSearchBudget({ maxAggregations: 0, maxEmbeds: 5 }, () =>
-				mongoSearch(collection, "garden", null, {
-					...baseOpts,
-					capabilities: { ...caps, vectorSearch: false, textSearch: false },
-				}),
-			),
-		).rejects.toMatchObject({
-			stage: "classic-text",
-			reason: "budget-aggregations",
-		})
-		expect(pipelines).toHaveLength(0)
-	})
-
-	it("S18: classic $text runs only as the planned tier when neither Search lane exists", async () => {
-		const planned = fixture(() => [{ ...hit, score: 2 }])
-		const results = await mongoSearch(planned.collection, "garden", null, {
-			...baseOpts,
-			capabilities: { ...caps, vectorSearch: false, textSearch: false },
-		})
-		expect(results).toHaveLength(1)
-		expect(planned.pipelines[0][0].$match.$text).toBeDefined()
-
-		const failing = fixture(() => serverError(27))
-		await expect(
-			mongoSearch(failing.collection, "garden", null, {
-				...baseOpts,
-				capabilities: { ...caps, vectorSearch: false, textSearch: false },
-			}),
-		).rejects.toMatchObject({ stage: "classic-text", reason: "query-error" })
-	})
-
-	it("S18: $text is never reached after an upstream failure", async () => {
-		const { collection, pipelines } = fixture((pipeline) =>
-			stageOf(pipeline) === "$search" ? serverError() : [hit],
-		)
-		await expect(
-			mongoSearch(collection, "garden", null, {
-				...baseOpts,
-				capabilities: { ...caps, vectorSearch: false },
-			}),
-		).rejects.toBeInstanceOf(SearchLaneError)
-		expect(pipelines.map(stageOf)).toEqual(["$search"])
+		expect(pipelines.map(stageOf)).toEqual([failingStage])
+		expect(JSON.stringify(err)).not.toContain("secret")
 	})
 })
 
@@ -402,10 +289,10 @@ describe("S19 explain capture", () => {
 	it("reports a failed explain as an explain row and keeps the results", async () => {
 		const { collection } = fixture()
 		const rows: SearchTierOutcome[] = []
-		const results = await keywordSearch(collection, "garden", {
-			maxResults: 5,
-			minScore: 0,
-			indexName: "t",
+		const results = await hybridSearchScoreFusion(collection, "garden", null, {
+			...baseOpts,
+			vectorWeight: 0.7,
+			textWeight: 0.3,
 			explain: { enabled: true },
 			onTierOutcome: (row) => rows.push(row),
 		})

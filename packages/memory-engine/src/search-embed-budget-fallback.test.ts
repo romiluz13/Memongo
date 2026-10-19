@@ -1,10 +1,6 @@
 import type { Collection, Document } from "mongodb"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import {
-	mongoSearch,
-	vectorSearch,
-	type SearchTraceEvent,
-} from "./mongodb-search.js"
+import { mongoSearch, vectorSearch } from "./mongodb-search.js"
 import {
 	runWithSearchBudget,
 	tryConsumeSearchEmbed,
@@ -19,14 +15,6 @@ const opts = {
 	vectorIndexName: "test_vector",
 	textIndexName: "test_text",
 	embeddingMode: "automated" as const,
-	capabilities: {
-		vectorSearch: true,
-		textSearch: true,
-		scoreFusion: true,
-		rankFusion: true,
-		storedSource: false,
-		vectorIndexMethod: false,
-	},
 }
 function fixture(failFusion = false, emptyFusion = false) {
 	const pipelines: Document[][] = []
@@ -66,23 +54,14 @@ afterEach(() => {
 it.each([
 	"scoreFusion",
 	"rankFusion",
-	"vector",
 ] as const)("#101: %s embed denial is a typed budget denial and runs no lexical tier", async (method) => {
 	const { collection, pipelines } = fixture()
-	const trace: SearchTraceEvent[] = []
 	await expect(
 		runWithSearchBudget({ maxAggregations: 4, maxEmbeds: 1 }, async () => {
 			tryConsumeSearchEmbed()
 			return mongoSearch(collection, "garden plan", null, {
 				...opts,
-				fusionMethod: method === "vector" ? "scoreFusion" : method,
-				capabilities:
-					method === "vector"
-						? { ...opts.capabilities, textSearch: false }
-						: opts.capabilities,
-				onTrace: (event) => {
-					trace.push(event)
-				},
+				fusionMethod: method,
 			})
 		}),
 	).rejects.toMatchObject({
@@ -90,31 +69,40 @@ it.each([
 		reason: "budget-embeds",
 	})
 	expect(pipelines).toHaveLength(0)
-	expect(trace.filter((event) => event.ok)).toHaveLength(0)
 })
-it("js-merge embed denial keeps the keyword branch and records the vector denial", async () => {
+it("a fused sibling needs both embeds up front; one short denies the aggregate and strands no spend", async () => {
 	const { collection, pipelines } = fixture()
-	const trace: SearchTraceEvent[] = []
-	const { value, budget } = await runWithSearchBudget(
+	const { budget } = await runWithSearchBudget(
 		{ maxAggregations: 4, maxEmbeds: 1 },
 		async () => {
-			tryConsumeSearchEmbed()
-			return mongoSearch(collection, "garden plan", null, {
-				...opts,
-				fusionMethod: "js-merge",
-				onTrace: (event) => {
-					trace.push(event)
-				},
+			await expect(
+				mongoSearch(collection, "garden plan", null, {
+					...opts,
+					sibling: { filter: { source: "memory" }, maxResults: 3 },
+				}),
+			).rejects.toMatchObject({
+				name: "SearchBudgetDeniedError",
+				reason: "budget-embeds",
 			})
 		},
 	)
-	expect(value).toHaveLength(1)
+	expect(pipelines).toHaveLength(0)
+	expect(budget.embeds).toBe(0)
+	expect(budget.aggregations).toBe(0)
+})
+it("a fused sibling charges one aggregation and both embeds", async () => {
+	const { collection, pipelines } = fixture()
+	const { budget } = await runWithSearchBudget(
+		{ maxAggregations: 4, maxEmbeds: 2 },
+		() =>
+			mongoSearch(collection, "garden plan", null, {
+				...opts,
+				sibling: { filter: { source: "memory" }, maxResults: 3 },
+			}),
+	)
 	expect(pipelines).toHaveLength(1)
-	expect(pipelines[0][0].$search).toBeDefined()
-	expect(
-		trace.filter((event) => event.message === "embedding budget exhausted"),
-	).toHaveLength(1)
-	expect(budget.embeds).toBe(1)
+	expect(budget.aggregations).toBe(1)
+	expect(budget.embeds).toBe(2)
 })
 it("#101: a fusion error stops the lane; keyword never runs", async () => {
 	const { collection, pipelines } = fixture(true)
@@ -172,26 +160,17 @@ it.each([
 	vi.useFakeTimers()
 	try {
 		const { collection, pipelines } = fixture()
-		const trace: SearchTraceEvent[] = []
 		await expect(
 			runWithSearchBudget(
 				{ maxAggregations: 4, maxEmbeds: 1, maxWallMs: 1 },
 				async () => {
 					if (capacity) tryConsumeSearchEmbed()
 					vi.advanceTimersByTime(2)
-					return mongoSearch(collection, "garden plan", null, {
-						...opts,
-						onTrace: (e) => {
-							trace.push(e)
-						},
-					})
+					return mongoSearch(collection, "garden plan", null, opts)
 				},
 			),
 		).rejects.toMatchObject({ reason: "budget-deadline" })
 		expect(pipelines).toHaveLength(0)
-		expect(trace.some((e) => e.message === "embedding budget exhausted")).toBe(
-			false,
-		)
 	} finally {
 		vi.useRealTimers()
 	}

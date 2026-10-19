@@ -79,9 +79,10 @@ import {
 	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
 import {
+	addSearchCosts,
 	conversationEvidenceLaneCost,
 	kbLaneCost,
-	mongoSearchTierCost,
+	nativeFusionCost,
 	NO_SEARCH_COST,
 	structuredLaneCost,
 	vectorLeafCost,
@@ -118,6 +119,7 @@ import {
 	searchFailureLogFields,
 	searchFailureRow,
 	summarizeSearchOutcomes,
+	throttledSearchOutcomes,
 	toTypedSearchError,
 } from "./search-outcomes.js"
 // #101: the shared value-free outcome row lives in search-outcomes.ts (the
@@ -414,6 +416,7 @@ export async function searchV2(
 				proceduralScope: context.searchOptions?.proceduralScope,
 			},
 		})
+		const denied = throttledSearchOutcomes()
 		return {
 			results: [],
 			metadata: {
@@ -421,11 +424,13 @@ export async function searchV2(
 				pathsExecuted: [],
 				resultsByPath: {},
 				throttled: { retryAfterMs: admission.retryAfterMs },
+				laneOutcomes: denied.lanes,
+				outcomeStatus: denied.status,
 			},
 		}
 	}
 	// #101 decision 18: search() opens the request ledger before admission so
-	// its opt-in legacy re-run shares it; this search is admitted on it.
+	// every pass shares it; this search is admitted on it.
 	if (hasActiveSearchBudget()) {
 		markSearchBudgetAdmitted()
 		return runInRequestLedger()
@@ -1411,145 +1416,68 @@ async function searchV2WithBudget(
 						throw new SearchLaneUnavailableError({ lane: "hybrid" })
 					}
 					const searches: Array<Promise<MemorySearchResult[]>> = []
-					// P3.1: the conversation and bridge lanes read the same
+					// P3.1: the conversation and bridge sub-lanes read the same
 					// collection with the same query text, and under autoEmbed
-					// every $vectorSearch embeds that text server-side — two
-					// lanes cost two paid embeddings per request. When both
+					// every $vectorSearch embeds that text server-side. When both
 					// filters pin the same identity they differ only in the
-					// `source` set, so fuse them into ONE lane with the union of
-					// sources: one aggregation, one embedding. The bridge budget
-					// folds into the lane's (larger) conversation budget; the
-					// results were merged into one pool downstream anyway.
-					// Incompatible filters keep the split lanes below — a fusion
-					// must never widen or narrow either read.
-					const fusedChunkFilter = conversationChunkFilter
-						? fuseChunkLaneFilters(conversationChunkFilter, bridgeChunkFilter)
-						: undefined
-					if (fusedChunkFilter) {
-						searches.push(
-							timeLane("hybrid:chunks", () =>
-								runLane("hybrid:chunks", (onTierOutcome) =>
-									hybridMode === "vector-only"
-										? vectorSearch(chunksCollection(db, prefix), null, {
-												maxResults: context.maxResults ?? 10,
+					// `source` set, so they fuse into ONE read with the union of
+					// sources. When they cannot merge, the bridge sub-lane rides
+					// in the SAME native aggregate as a sibling input pair with its
+					// own filter and cap: one aggregation, never a second lane. A
+					// fusion must never widen or narrow either read.
+					const fusedChunkFilter = fuseChunkLaneFilters(
+						conversationChunkFilter,
+						bridgeChunkFilter,
+					)
+					const chunkFilter = fusedChunkFilter ?? conversationChunkFilter
+					const chunkSibling =
+						!fusedChunkFilter && bridgeChunkFilter
+							? { filter: bridgeChunkFilter, maxResults: bridgeMaxResults }
+							: undefined
+					const chunkMaxResults = context.maxResults ?? 10
+					searches.push(
+						timeLane("hybrid:chunks", () =>
+							runLane("hybrid:chunks", (onTierOutcome) =>
+								hybridMode === "vector-only"
+									? vectorSearch(chunksCollection(db, prefix), null, {
+											maxResults:
+												chunkMaxResults + (chunkSibling?.maxResults ?? 0),
+											minScore,
+											numCandidates,
+											sessionKey: context.searchOptions?.sessionKey,
+											filter: chunkSibling
+												? { $or: [chunkFilter, chunkSibling.filter] }
+												: chunkFilter,
+											indexName: `${prefix}chunks_vector`,
+											queryText: searchQuery,
+											embeddingMode,
+											queryEmbeddingModel,
+											onTierOutcome,
+										})
+									: mongoSearch(
+											chunksCollection(db, prefix),
+											searchQuery,
+											null,
+											{
+												maxResults: chunkMaxResults,
 												minScore,
 												numCandidates,
 												sessionKey: context.searchOptions?.sessionKey,
-												filter: fusedChunkFilter,
-												indexName: `${prefix}chunks_vector`,
-												queryText: searchQuery,
+												filter: chunkFilter,
+												sibling: chunkSibling,
+												fusionMethod,
+												vectorIndexName: `${prefix}chunks_vector`,
+												textIndexName: `${prefix}chunks_text`,
+												vectorWeight: 0.7,
+												textWeight: 0.3,
 												embeddingMode,
 												queryEmbeddingModel,
 												onTierOutcome,
-											})
-										: mongoSearch(
-												chunksCollection(db, prefix),
-												searchQuery,
-												null,
-												{
-													maxResults: context.maxResults ?? 10,
-													minScore,
-													numCandidates,
-													sessionKey: context.searchOptions?.sessionKey,
-													filter: fusedChunkFilter,
-													fusionMethod,
-													capabilities,
-													vectorIndexName: `${prefix}chunks_vector`,
-													textIndexName: `${prefix}chunks_text`,
-													vectorWeight: 0.7,
-													textWeight: 0.3,
-													embeddingMode,
-													queryEmbeddingModel,
-													onTierOutcome,
-												},
-											),
-								),
+											},
+										),
 							),
-						)
-					} else if (conversationChunkFilter) {
-						searches.push(
-							timeLane("hybrid:chunks", () =>
-								runLane("hybrid:chunks", (onTierOutcome) =>
-									hybridMode === "vector-only"
-										? vectorSearch(chunksCollection(db, prefix), null, {
-												maxResults: context.maxResults ?? 10,
-												minScore,
-												numCandidates,
-												sessionKey: context.searchOptions?.sessionKey,
-												filter: conversationChunkFilter,
-												indexName: `${prefix}chunks_vector`,
-												queryText: searchQuery,
-												embeddingMode,
-												queryEmbeddingModel,
-												onTierOutcome,
-											})
-										: mongoSearch(
-												chunksCollection(db, prefix),
-												searchQuery,
-												null,
-												{
-													maxResults: context.maxResults ?? 10,
-													minScore,
-													numCandidates,
-													sessionKey: context.searchOptions?.sessionKey,
-													filter: conversationChunkFilter,
-													fusionMethod,
-													capabilities,
-													vectorIndexName: `${prefix}chunks_vector`,
-													textIndexName: `${prefix}chunks_text`,
-													vectorWeight: 0.7,
-													textWeight: 0.3,
-													embeddingMode,
-													queryEmbeddingModel,
-													onTierOutcome,
-												},
-											),
-								),
-							),
-						)
-					}
-					if (!fusedChunkFilter && bridgeChunkFilter) {
-						searches.push(
-							timeLane("hybrid:bridge", () =>
-								runLane("hybrid:bridge", (onTierOutcome) =>
-									hybridMode === "vector-only"
-										? vectorSearch(chunksCollection(db, prefix), null, {
-												maxResults: bridgeMaxResults,
-												minScore,
-												numCandidates,
-												sessionKey: context.searchOptions?.sessionKey,
-												filter: bridgeChunkFilter,
-												indexName: `${prefix}chunks_vector`,
-												queryText: searchQuery,
-												embeddingMode,
-												queryEmbeddingModel,
-												onTierOutcome,
-											})
-										: mongoSearch(
-												chunksCollection(db, prefix),
-												searchQuery,
-												null,
-												{
-													maxResults: bridgeMaxResults,
-													minScore,
-													numCandidates,
-													sessionKey: context.searchOptions?.sessionKey,
-													filter: bridgeChunkFilter,
-													fusionMethod,
-													capabilities,
-													vectorIndexName: `${prefix}chunks_vector`,
-													textIndexName: `${prefix}chunks_text`,
-													vectorWeight: 0.7,
-													textWeight: 0.3,
-													embeddingMode,
-													queryEmbeddingModel,
-													onTierOutcome,
-												},
-											),
-								),
-							),
-						)
-					}
+						),
+					)
 					// Option B: parallel search on session_chunks collection (vector +
 					// text hybrid). Strictly opt-in: only benchmark ingest writes this
 					// collection, so for a real user it is empty — and the scorer
@@ -1621,7 +1549,6 @@ async function searchV2WithBudget(
 													sessionKey: context.searchOptions?.sessionKey,
 													filter: sessionFilter,
 													fusionMethod,
-													capabilities,
 													vectorIndexName: `${prefix}session_chunks_vector`,
 													textIndexName: `${prefix}session_chunks_text`,
 													vectorWeight: 0.7,
@@ -1692,7 +1619,6 @@ async function searchV2WithBudget(
 													sessionKey: context.searchOptions?.sessionKey,
 													filter: evidenceFilter,
 													fusionMethod,
-													capabilities,
 													vectorIndexName: `${prefix}memory_evidence_vector`,
 													textIndexName: `${prefix}memory_evidence_text`,
 													vectorWeight: 0.65,
@@ -1825,12 +1751,21 @@ async function searchV2WithBudget(
 		// optional starts, and run inside that reservation; optional work
 		// spends only the unreserved remainder.
 		const vectorOrText = capabilities.vectorSearch || capabilities.textSearch
-		const hybridSubLaneCount =
-			(fuseChunkLaneFilters(conversationChunkFilter, bridgeChunkFilter)
-				? 1
-				: 2) +
-			(sessionMode === "B" && vectorOrText ? 1 : 0) +
-			(isEvidenceMirrorEnabled() && vectorOrText ? 1 : 0)
+		// Each chunk-family read is ONE native aggregate (decision 18): one
+		// aggregation plus every embedded vector input. Chunk filters that cannot
+		// merge ride as a sibling input pair, so they add an embed, not an
+		// aggregation. A vector-only sub-lane stays one $vectorSearch.
+		const chunkVectorInputs = fuseChunkLaneFilters(
+			conversationChunkFilter,
+			bridgeChunkFilter,
+		)
+			? 1
+			: 2
+		const hybridSubLaneInputs = [
+			chunkVectorInputs,
+			...(sessionMode === "B" && vectorOrText ? [1] : []),
+			...(isEvidenceMirrorEnabled() && vectorOrText ? [1] : []),
+		]
 		const laneCost = (lane: SearchLane): SearchWorkCost => {
 			switch (lane) {
 				case "active-critical":
@@ -1848,20 +1783,14 @@ async function searchV2WithBudget(
 					})
 				case "kb":
 					return kbLaneCost({ capabilities, embeddingMode, fusionMethod })
-				case "hybrid": {
-					const subLane =
-						hybridMode === "vector-only"
-							? vectorLeafCost({ embeddingMode })
-							: mongoSearchTierCost({
-									capabilities,
-									embeddingMode,
-									fusionMethod,
-								})
-					return {
-						aggregations: subLane.aggregations * hybridSubLaneCount,
-						embeds: subLane.embeds * hybridSubLaneCount,
-					}
-				}
+				case "hybrid":
+					return addSearchCosts(
+						...hybridSubLaneInputs.map((vectorInputs) =>
+							hybridMode === "vector-only"
+								? vectorLeafCost({ embeddingMode })
+								: nativeFusionCost({ embeddingMode, vectorInputs }),
+						),
+					)
 				case "conversation-evidence":
 					return conversationEvidenceLaneCost({ capabilities, embeddingMode })
 				default:

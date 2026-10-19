@@ -12,9 +12,10 @@ const log = createSubsystemLogger("memory:mongodb:search-budget")
 // Per-search cost budget (fix-plan-2026-08-03 P3.2)
 //
 // One sparse query on an empty corpus used to fire 30+ aggregations and 4-6
-// paid server-side embeddings (the mongoSearch waterfall, procedural
-// backstops, a recursive hybrid backstop, then a legacySearch re-run). Cost
-// was inverse to data presence — cold tenants burned the most.
+// paid server-side embeddings (a mongoSearch tier ladder, procedural
+// backstops, a recursive hybrid backstop and a legacy re-run; the ladder and
+// the re-run no longer exist). Cost was inverse to data presence — cold
+// tenants burned the most.
 //
 // This module is the per-request ledger that caps that storm: the request
 // boundary opens one budget and every $vectorSearch stage build (an autoEmbed
@@ -250,8 +251,8 @@ export function getSearchBudgetSnapshot(): SearchBudgetSnapshot | undefined {
 
 /**
  * #101 decision 18: open one request ledger. Every `run` executes inside the
- * same ledger, so a request boundary can run its passes and its opt-in
- * legacy re-run against one set of counts.
+ * same ledger, so a request boundary can run all of its passes against one
+ * set of counts.
  */
 export function openSearchBudget(
 	limits: SearchBudgetLimits,

@@ -16,7 +16,6 @@ export type SearchLane =
 	| "kb"
 	| "hybrid"
 	| "hybrid:chunks"
-	| "hybrid:bridge"
 	| "hybrid:session_chunks"
 	| "hybrid:memory_evidence"
 	| "conversation-evidence"
@@ -26,7 +25,6 @@ export type SearchLane =
 	| "backstop:procedural"
 	| "backstop:hybrid"
 	| "planner"
-	| "legacy"
 	| "search"
 
 export type SearchStage =
@@ -295,4 +293,22 @@ export function summarizeSearchOutcomes(
 		status: !requiredSucceeded && requiredFailed ? "failed" : "partial",
 		lanes,
 	}
+}
+
+/**
+ * An admission denial ran nothing, so the request itself is the denied lane:
+ * a typed budget-denied row and a failed status, never a bare empty answer.
+ */
+export function throttledSearchOutcomes(): SearchOutcomeSummary {
+	return summarizeSearchOutcomes(
+		[
+			{
+				lane: "search",
+				stage: "request",
+				outcome: "budget-denied",
+				reason: "budget-embeds",
+			},
+		],
+		["search"],
+	)
 }
