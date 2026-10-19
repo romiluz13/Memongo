@@ -257,3 +257,50 @@ describe.each(ROUTES)("$path typed section failures", (route) => {
 		)
 	})
 })
+
+// M2 T13 (#120) gates the Search sections of these two routes on the request's
+// index snapshot, so a STALE or missing index reaches the HTTP seam as the
+// engine's typed `index-stale` / `index-unavailable` failure. The active slate
+// reads no Search index and is not gated, so it has no case here.
+describe.each(
+	ROUTES.filter((route) => route.path !== "/v1/hydrate-active-slate"),
+)("$path index-health failures", (route) => {
+	it.each([
+		{
+			name: "an index-stale section failure",
+			reason: "index-stale",
+			lane: "episodic",
+		},
+		{
+			name: "an index-unavailable section failure",
+			reason: "index-unavailable",
+			lane: "structured",
+		},
+	])("maps $name to a typed 503 SEARCH_LANES_UNAVAILABLE with its failure row, never an empty 200", async ({
+		reason,
+		lane,
+	}) => {
+		const typed = Object.assign(new Error(`stale ${SECRET_QUERY}`), {
+			name: "SearchLaneError",
+			lane,
+			stage: "index-health",
+			reason,
+		})
+		route.mock.mockRejectedValue(typed)
+
+		const res = await post(route.path, route.body)
+
+		expect(res.status).toBe(503)
+		const text = await res.text()
+		expect(text).not.toContain("SECRETTAIL")
+		const json = JSON.parse(text) as {
+			error: { code: string }
+			outcomes: { status: string; lanes: unknown[] }
+		}
+		expect(json.error.code).toBe("SEARCH_LANES_UNAVAILABLE")
+		expect(json.outcomes).toEqual({
+			status: "failed",
+			lanes: [{ lane, stage: "index-health", outcome: "failed", reason }],
+		})
+	})
+})

@@ -30,6 +30,7 @@ import { searchKB as searchKBCore } from "./mongodb-kb-search.js"
 import { recallConversation as recallConversationCore } from "./mongodb-conversation-recall.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import { hydrateActiveSlate as hydrateActiveSlateCore } from "./mongodb-active-slate.js"
+import { buildContextBundle as buildContextBundleCore } from "./mongodb-context-bundle.js"
 import { buildDiscoveryProjection as buildDiscoveryProjectionCore } from "./mongodb-discovery-projections.js"
 import {
 	activeIndexHealth,
@@ -144,6 +145,10 @@ vi.mock("./mongodb-kb-search.js", async (importOriginal) => ({
 vi.mock("./mongodb-active-slate.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	hydrateActiveSlate: vi.fn(),
+}))
+vi.mock("./mongodb-context-bundle.js", async (importOriginal) => ({
+	...(await importOriginal<Record<string, unknown>>()),
+	buildContextBundle: vi.fn(),
 }))
 vi.mock("./mongodb-discovery-projections.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
@@ -649,6 +654,35 @@ describe("running manager: the slate and discovery entries open a request scope 
 		await expect(
 			manager.buildDiscoveryProjection({ kind: "topic-brief", query: "pager" }),
 		).resolves.toMatchObject({ kind: "topic-brief" })
+	})
+
+	it("buildContextBundle runs inside a request scope: a STALE episodes index its episode-summary Search checks fails typed, then recovers", async () => {
+		vi.mocked(buildContextBundleCore).mockImplementation((async () => {
+			await assertCollectionIndexesHealthy(["episodes"], "episodic", ["search"])
+			return {
+				sections: [],
+				metadata: { pathsExecuted: [], estimatedTokensUsed: 0 },
+			}
+		}) as never)
+		const { manager, indexes } = await boot()
+		const saved = findIndex(indexes, "episode_autocomplete")
+		patchIndex(indexes, "episode_autocomplete", STALE)
+
+		const failure = await failureOf(
+			manager.buildContextBundle({ query: "pager" }),
+		)
+
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect(failure).toMatchObject({
+			lane: "episodic",
+			stage: "index-health",
+			reason: "index-stale",
+		})
+
+		restoreIndex(indexes, saved)
+		await expect(
+			manager.buildContextBundle({ query: "pager" }),
+		).resolves.toMatchObject({ sections: [] })
 	})
 
 	it("hydrateActiveSlate runs inside a request scope", async () => {
