@@ -227,7 +227,7 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			if (isRecallConversationValidationError(err)) {
 				return jsonError(c, 400, "VALIDATION_ERROR", message)
 			}
-			return internalError(c, err, "RECALL_CONVERSATION_FAILED")
+			return searchErrorResponse(c, err, "RECALL_CONVERSATION_FAILED")
 		}
 	})
 

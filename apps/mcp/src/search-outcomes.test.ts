@@ -78,3 +78,106 @@ describe("MCP search outcome passthrough (#101)", () => {
 		)
 	})
 })
+
+// M2 decision 8: the MCP adapter carries both index-health reasons as
+// retryable unavailability, the same as the HTTP API and the SDK. A failed
+// search is a tool error that keeps the code and the typed rows, so an agent
+// can tell an unhealthy index from an empty answer and retry.
+describe("MCP index-health reasons (M2)", () => {
+	const ROWS = [
+		{
+			lane: "hybrid:chunks",
+			stage: "index-health",
+			outcome: "failed",
+			reason: "index-stale",
+		},
+		{
+			lane: "kb",
+			stage: "index-health",
+			outcome: "failed",
+			reason: "index-unavailable",
+		},
+	] as const
+
+	it.each([
+		{ name: "memongo_search", method: "search" },
+		{ name: "memongo_search_kb", method: "searchKB" },
+	])("$name keeps a partial index-health summary on its result", async ({
+		name,
+		method,
+	}) => {
+		const partial = {
+			status: "partial",
+			lanes: [
+				{
+					lane: "structured",
+					stage: "lane",
+					outcome: "ok-empty",
+					reason: "zero-hits",
+				},
+				...ROWS,
+			],
+		}
+		const dispatch = vi
+			.fn()
+			.mockResolvedValue({ results: [], outcomes: partial })
+
+		const out = await handleToolCall(name, { query: "q" }, {
+			[method]: dispatch,
+		} as unknown as MemongoClient)
+
+		expect(out.isError).toBeUndefined()
+		expect(JSON.parse(out.content[0].text).outcomes).toEqual(partial)
+	})
+
+	it.each([
+		{ name: "memongo_search", method: "search" },
+		{ name: "memongo_search_kb", method: "searchKB" },
+	])("$name: a failed index-health search is a retryable tool error with both reasons", async ({
+		name,
+		method,
+	}) => {
+		const dispatch = vi.fn().mockRejectedValue(
+			new MemongoClientError(
+				503,
+				JSON.stringify({
+					error: {
+						code: "SEARCH_LANES_UNAVAILABLE",
+						message: "search failed (request id: r-3)",
+					},
+					outcomes: { status: "failed", lanes: ROWS },
+				}),
+			),
+		)
+
+		const out = await handleToolCall(name, { query: "q" }, {
+			[method]: dispatch,
+		} as unknown as MemongoClient)
+
+		expect(out.isError).toBe(true)
+		const payload = JSON.parse(out.content[0].text)
+		expect(payload.error).toContain("SEARCH_LANES_UNAVAILABLE")
+		expect(payload.code).toBe("SEARCH_LANES_UNAVAILABLE")
+		expect(payload.retryable).toBe(true)
+		expect(payload.outcomes).toEqual({ status: "failed", lanes: ROWS })
+	})
+
+	it("a non-search error keeps the plain message payload", async () => {
+		const dispatch = vi.fn().mockRejectedValue(
+			new MemongoClientError(
+				400,
+				JSON.stringify({
+					error: { code: "VALIDATION_ERROR", message: "bad input" },
+				}),
+			),
+		)
+
+		const out = await handleToolCall("memongo_search", { query: "q" }, {
+			search: dispatch,
+		} as unknown as MemongoClient)
+
+		expect(out.isError).toBe(true)
+		const payload = JSON.parse(out.content[0].text)
+		expect(Object.keys(payload)).toEqual(["error"])
+	})
+})

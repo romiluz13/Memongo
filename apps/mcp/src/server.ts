@@ -5,7 +5,7 @@ import {
 	CallToolRequestSchema,
 	ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
-import { MemongoClient } from "@memongo/client"
+import { MemongoClient, MemongoClientError } from "@memongo/client"
 import type {
 	MemongoProcedureLifecyclePatch,
 	MemongoProcedureStableHandle,
@@ -1262,6 +1262,20 @@ export async function handleToolCall(
 		throw new Error(`unknown tool: ${name}`)
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err)
+		// M2 decision 8: a failed search keeps its API code and its typed rows
+		// (index-stale, index-unavailable, ...), so an agent can tell an
+		// unhealthy index from an empty answer and retry a 503.
+		if (err instanceof MemongoClientError && err.outcomes) {
+			return jsonResult(
+				{
+					error: message,
+					...(err.code ? { code: err.code } : {}),
+					retryable: err.status === 503,
+					outcomes: err.outcomes,
+				},
+				true,
+			)
+		}
 		return jsonResult({ error: message }, true)
 	}
 }
