@@ -109,6 +109,40 @@ describe("enforceBootContract: the total deadline bounds every operation", () =>
 		expect(writeCalls(calls)).toEqual([])
 	})
 
+	it("reports the indexes the last poll saw building as index-not-ready when a later poll is cut off by the deadline", async () => {
+		vi.useFakeTimers()
+		let polled = false
+		const { settled } = boot(
+			{
+				indexes: {},
+				onCreate: (_collection, description) => ({
+					name: description.name,
+					type: description.type,
+					status: "BUILDING",
+					queryable: false,
+					latestDefinition: description.definition,
+				}),
+				// Every listing after the first readiness poll hangs past the deadline.
+				before: (op) =>
+					polled && op.kind === "listSearchIndexes" ? never() : undefined,
+			},
+			{
+				sleep: (ms: number) => {
+					polled = true
+					return new Promise((resolve) => setTimeout(resolve, ms))
+				},
+			},
+		)
+		await vi.advanceTimersByTimeAsync(DEADLINE_MS + 1)
+		const outcome = await settled
+		expect(outcome.error).toBeInstanceOf(MemongoBootError)
+		const err = outcome.error as MemongoBootError
+		expect(err.code).toBe("index-not-ready")
+		expect(err.failures).toHaveLength(manifest.length)
+		expect(err.failures.every((f) => f.code === "index-not-ready")).toBe(true)
+		expect(err.message).toContain("readiness deadline")
+	})
+
 	it("fails typed at the deadline when a repair create never answers, and starts no further repair", async () => {
 		vi.useFakeTimers()
 		const { calls, settled } = boot({

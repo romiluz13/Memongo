@@ -98,7 +98,7 @@ Each of these settings now fails boot with `config-invalid`, naming the setting:
   - The reads (`buildInfo`, `connectionStatus`, `$listSearchIndexes`) receive the remaining time as the driver `timeoutMS`, which the driver also sends to the server as `maxTimeMS` where the command takes one. It is never 0, because the driver reads 0 as no timeout.
   - `createSearchIndex`, `updateSearchIndex` and `beforeRepair` accept no timeout option (mongodb 7.7), so each is raced against the deadline. A timed-out call stops being awaited and may still finish on the server; the factory closes an owned client after the failed boot, and a shared client is released to its registry instead.
   - An operation that completes after the deadline fails, even when every index is then READY.
-  - Expiry is the new typed failure `boot-deadline-exceeded`, naming the operation that was running. An index still BUILDING at the last poll still fails as `index-not-ready`.
+  - Expiry is the new typed failure `boot-deadline-exceeded`, naming the operation that was running. An index still BUILDING at the last poll still fails as `index-not-ready`, also when the deadline cuts off a later readiness poll: the failure then names the indexes the last completed poll saw unmet.
   - The last poll sleep now leaves time for one more read (`now + poll >= deadline` stops), so the final read is never started after the deadline.
   - Preflight and `/ready` use the same machinery with the same 180 s default. They report the expiry once, as an unmet entry, and run no further check.
 - **Partial host metadata no longer authorizes serving (F3).**

@@ -585,8 +585,24 @@ export async function enforceBootContract(
 		}
 	}
 
+	const readinessExpired = `boot refused after the ${Math.round(deadlineMs / 1000)} s readiness deadline`
+	let lastUnmet: ReturnType<typeof unmetDetail>[] | undefined
 	for (;;) {
-		observed = await observeManifest(db, manifest, budget)
+		try {
+			observed = await observeManifest(db, manifest, budget)
+		} catch (err) {
+			// A readiness poll cut off by the deadline still has the previous
+			// poll's observation: those indexes were not ready, which is the
+			// actionable failure (the build continues; start again).
+			if (
+				lastUnmet &&
+				isMemongoBootError(err) &&
+				err.code === "boot-deadline-exceeded"
+			) {
+				throw bootFailure(lastUnmet, readinessExpired)
+			}
+			throw err
+		}
 		const assessments = assess()
 		throwOnTerminal(assessments)
 		const unmet = assessments.filter(
@@ -596,17 +612,18 @@ export async function enforceBootContract(
 			budget.assertLive("the final readiness check")
 			return { serverVersion, manifest, indexes: observed }
 		}
+		lastUnmet = unmet.map(({ entry, assessment }) =>
+			unmetDetail(
+				entry,
+				assessment as Exclude<IndexAssessment, { state: "serving" }>,
+			),
+		)
 		if (options.mode === "verify" || now() + pollMs >= deadline) {
 			throw bootFailure(
-				unmet.map(({ entry, assessment }) =>
-					unmetDetail(
-						entry,
-						assessment as Exclude<IndexAssessment, { state: "serving" }>,
-					),
-				),
+				lastUnmet,
 				options.mode === "verify"
 					? "required Search indexes are not serving"
-					: `boot refused after the ${Math.round(deadlineMs / 1000)} s readiness deadline`,
+					: readinessExpired,
 			)
 		}
 		await sleep(pollMs)
