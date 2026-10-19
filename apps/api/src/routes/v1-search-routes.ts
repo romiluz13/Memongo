@@ -132,26 +132,23 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			fusionMethod = body.fusionMethod
 		}
 		try {
-			const { results, degradation, outcomes } =
-				await memongoBridgeSearchKBWithDegradation({
-					query,
-					agentId: await readAgentId(c),
-					scope: await readScope(c),
-					sessionKey: await readSessionCoordinate(c),
-					scopeRef: await readScopeRef(c),
-					maxResults: readLimit(body),
-					minScore:
-						typeof body.minScore === "number" ? body.minScore : undefined,
-					filter,
-					fusionMethod,
-				})
+			const { results, outcomes } = await memongoBridgeSearchKBWithDegradation({
+				query,
+				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				sessionKey: await readSessionCoordinate(c),
+				scopeRef: await readScopeRef(c),
+				maxResults: readLimit(body),
+				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
+				filter,
+				fusionMethod,
+			})
 			const mapping = mapSearchOutcomes(outcomes)
 			if (outcomes && mapping.status !== 200) {
 				return searchFailureResponse(c, mapping, outcomes)
 			}
 			return c.json({
 				results,
-				...(degradation ? { degradation } : {}),
 				...(outcomes ? { outcomes: boundSearchOutcomes(outcomes) } : {}),
 			})
 		} catch (err) {

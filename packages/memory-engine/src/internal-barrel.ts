@@ -358,13 +358,7 @@ export {
 	type EntityExtractor,
 	type ExtractedEntity as ExtractedEntityV2,
 	type EntityExtractionContext,
-	type LLMFunction,
 	RegexEntityExtractor,
-	LLMEntityExtractor,
-	buildExtractionPrompt,
-	buildUserExtractionPrompt,
-	buildAssistantExtractionPrompt,
-	parseExtractionResponse,
 	AMBIGUOUS_PERSON_NAMES,
 	isAmbiguousPersonName,
 } from "./mongodb-entity-extractor.js"
@@ -375,11 +369,6 @@ export {
 	projectConversationWindows,
 	type ConversationWindow,
 } from "./mongodb-conversation-windows.js"
-export {
-	buildTieredSummaryPrompt,
-	parseTieredSummaryResponse,
-	withTieredSummaries,
-} from "./mongodb-tiered-summary.js"
 export {
 	ReasoningChainCollectionError,
 	traceReasoningChain,

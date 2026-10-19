@@ -670,41 +670,6 @@ function carriesWriteConcernError(err: unknown): boolean {
 	return viaSelf != null
 }
 
-/**
- * W09 reconciliation read: which of the given eventIds are majority-visible
- * in the events collection. Presence confirms durability and cannot roll
- * back. Absence only means durability is unconfirmed at read time: an earlier
- * attempt may still majority-commit, so retry requires the same logical-write
- * identity (idempotency key or caller-pinned eventId).
- */
-export async function findExistingEventIds(params: {
-	db: Db
-	prefix: string
-	eventIds: string[]
-}): Promise<Set<string>> {
-	const { db, prefix, eventIds } = params
-	if (eventIds.length === 0) {
-		return new Set()
-	}
-	const docs = await eventsCollection(db, prefix)
-		.find(
-			{ eventId: { $in: eventIds } },
-			{
-				projection: { _id: 0, eventId: 1 },
-				readConcern: { level: "majority" },
-			},
-		)
-		.toArray()
-	const existing = new Set<string>()
-	for (const doc of docs) {
-		const eventId = (doc as { eventId?: string }).eventId
-		if (typeof eventId === "string") {
-			existing.add(eventId)
-		}
-	}
-	return existing
-}
-
 export async function findExistingEventsForReplay(params: {
 	collection: Collection
 	eventIds: string[]

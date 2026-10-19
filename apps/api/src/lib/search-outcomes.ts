@@ -12,7 +12,10 @@ import { apiErrorJson, internalError, jsonError } from "./errors.js"
  * 503 SEARCH_LANES_UNAVAILABLE when every failure is a retryable
  * unavailability, 503 SEARCH_BUDGET_EXHAUSTED when every failure is a budget
  * denial, and otherwise 500 SEARCH_LANES_FAILED (500 > unavailable > budget).
- * Explain rows are diagnostics and never change the status (R4).
+ * Explain rows are diagnostics and never change the status (R4). A budget
+ * 503 raised by an admission-bucket denial carries `Retry-After`, computed
+ * from the denial's `retryAfterMs`; a per-request ledger denial has no
+ * retry hint, so it carries none.
  */
 export type SearchFailureCode =
 	| "SEARCH_LANES_UNAVAILABLE"
@@ -158,6 +161,7 @@ export function searchFailureResponse(
 	c: Context,
 	mapping: Exclude<SearchHttpMapping, { status: 200 }>,
 	outcomes: SearchOutcomeSummary,
+	retryAfterMs?: number,
 ) {
 	const requestId = c.get("requestId") ?? "no-request-id"
 	console.error(
@@ -170,6 +174,14 @@ export function searchFailureResponse(
 			path: c.req.path,
 		}),
 	)
+	if (
+		mapping.code === "SEARCH_BUDGET_EXHAUSTED" &&
+		typeof retryAfterMs === "number" &&
+		Number.isFinite(retryAfterMs) &&
+		retryAfterMs > 0
+	) {
+		c.header("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1000))))
+	}
 	return c.json(
 		{
 			...apiErrorJson(mapping.code, `search failed (request id: ${requestId})`),
@@ -224,5 +236,14 @@ export function searchErrorResponse(
 	if (!outcomes || mapping.status === 200) {
 		return internalError(c, err, fallbackCode)
 	}
-	return searchFailureResponse(c, mapping, outcomes)
+	const retryAfterMs =
+		err instanceof Error && err.name === "SearchBudgetDeniedError"
+			? (err as Error & { retryAfterMs?: unknown }).retryAfterMs
+			: undefined
+	return searchFailureResponse(
+		c,
+		mapping,
+		outcomes,
+		typeof retryAfterMs === "number" ? retryAfterMs : undefined,
+	)
 }

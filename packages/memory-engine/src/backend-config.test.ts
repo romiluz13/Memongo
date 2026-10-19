@@ -516,33 +516,6 @@ describe("resolveMemoryBackendConfig", () => {
 		}
 	})
 
-	it("defaults legacySearchFallback to off (opt-in, P3.2)", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.legacySearchFallback).toBe(false)
-	})
-
-	it("honors legacySearchFallback when explicitly enabled", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: "mongodb://localhost:27017",
-					legacySearchFallback: true,
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.legacySearchFallback).toBe(true)
-	})
-
 	it("resolves the per-search budget with defaults and valid overrides (P3.2)", () => {
 		const baseCfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -816,7 +789,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/embeddingMode "managed" is not supported/,
+			/memory\.mongodb\.embeddingMode is not supported/,
 		)
 	})
 

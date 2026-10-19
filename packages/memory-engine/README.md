@@ -31,24 +31,16 @@ if (!manager) {
 const results = await manager.search("release notes")
 ```
 
-## HTTP reranking
+## Reranking
 
-`memory.mongodb.reranking.model` defaults to `rerank-3`. Select `rerank-3-lite`,
-`rerank-2.5`, or `rerank-2.5-lite` explicitly to use that model; the engine sends
-that name without a model fallback.
-
-The rank window defaults to 20 results. Positive finite `topN` values are floored
-and capped at 1,000, including at the HTTP boundary for direct callers. A value
-between zero and one resolves to an empty window and skips reranking. Blank
-passages within the window are omitted from the request; results beyond the
-window remain overflow rather than being discarded. Provider failures retain
-the existing input-order fallback, or throw when strict mode is enabled.
-
-Configured instruction text is prepended to the query with a newline. This does
-not establish instruction-following support for rerank-3. Token limits and
-truncation remain provider-managed; the engine's document-count guard does not
-measure tokens. Model availability and retrieval quality require separate live
-qualification. This route uses HTTP, not MongoDB's native `$rerank` stage.
+This release has no rerank stage. The client-side Voyage cross-encoder is
+removed, and MongoDB's native `$rerank` stage is not implemented yet.
+`memory.mongodb.reranking.enabled: true` and `MEMONGO_RERANKING_ENABLED=true`
+fail boot with `rerank-unsupported`. The removed `reranking` keys and
+`MEMONGO_RERANK_MIN_SCORE` fail boot with `config-removed`. A search request
+with `rerank: true` is rejected with the same typed code, and `rerank: false` is
+always honored. `reranking.temporalProximityBoost` stays: it belongs to the
+raw-window lane.
 
 ## Consolidation lease behavior
 
@@ -73,7 +65,7 @@ Most apps should use [`@memongo/memory-bridge`](../memory-bridge/README.md) or [
 
 ### Access tracking and erasure
 
-Production search captures tenant admission before reading and carries it through fallback searches into buffered access tracking. Raw history and canonical reinforcement flush sequentially in one fenced transaction per admitted epoch. Stale or malformed admission is discarded; ordinary write failures retain the original epoch and batch ID for retry.
+Production search captures tenant admission before reading and carries it through its follow-up searches into buffered access tracking. Raw history and canonical reinforcement flush sequentially in one fenced transaction per admitted epoch. Stale or malformed admission is discarded; ordinary write failures retain the original epoch and batch ID for retry.
 
 The compatibility `AccessTracker.recordAccess(target)` call remains synchronous and starts admission for a new record intent immediately. `flush()` and `close()` await those pending admissions. To protect an earlier external read from erasure races, capture admission before that read and pass it as `recordAccess(target, admission)`; the compatibility call cannot certify a read it did not admit. A token for another agent is rejected.
 
@@ -93,11 +85,11 @@ Legacy `emitTelemetry` calls retain their void return and capture a new diagnost
 
 `searchV2` accepts original admission in its context and reuses it for input-clamp, throttle, and rewrite-clamp telemetry, including recursive backstops. Both search paths, context bundles, and relevance explanations pass the pre-read token. Relevance-explanation admission failure prevents source reads. External calls without admission retain new-intent telemetry and cannot certify an earlier external read.
 
-Reranker and query-rewriter telemetry also inherit `searchV2` admission. Their telemetry failures remain asynchronous, preserving provider results, fallback behavior, and strict provider errors. Direct leaf calls without admission retain new-intent telemetry and cannot certify an earlier external read. Provider error-log privacy and other diagnostic writers remain separate work.
+Query-rewriter telemetry also inherits `searchV2` admission. Its telemetry failures remain asynchronous and leave provider results and strict provider errors unchanged. Direct leaf calls without admission retain new-intent telemetry and cannot certify an earlier external read. Provider error-log privacy and other diagnostic writers remain separate work.
 
-Telemetry aggregation, cost-ledger failure, and all six manager recall-trace failure warnings retain fixed operation labels and finite numeric driver codes without serializing error text or payloads. These warnings do not add query digests. Their existing fallback results and asynchronous behavior are preserved. Other provider and planner error paths remain separate privacy work; errors implemented as proxies with throwing descriptor traps remain unsupported at this boundary.
+Telemetry aggregation, cost-ledger failure, and all six manager recall-trace failure warnings retain fixed operation labels and finite numeric driver codes without serializing error text or payloads. These warnings do not add query digests. Their existing results and asynchronous behavior are preserved. Other provider and planner error paths remain separate privacy work; errors implemented as proxies with throwing descriptor traps remain unsupported at this boundary.
 
-Relevance report persistence carries the manager's original admission through legacy search, all eight V2 verdict branches, and relevance explain. The run and its artifacts commit sequentially with the gate serial in one transaction; local IDs, privacy transformations, and artifact serialization happen once before callback retries. Direct compatible callers without a token start a new intent at `persistRun` invocation and cannot certify an earlier external read. A failure during either insert rolls back both rows and the serial. An exhausted unknown-commit-result retry can still reject after commit; rejection alone does not establish absent rows. Best-effort search/explain callers preserve served results on persistence failure.
+Relevance report persistence carries the manager's original admission through all eight V2 verdict branches and relevance explain. The run and its artifacts commit sequentially with the gate serial in one transaction; local IDs, privacy transformations, and artifact serialization happen once before callback retries. Direct compatible callers without a token start a new intent at `persistRun` invocation and cannot certify an earlier external read. A failure during either insert rolls back both rows and the serial. An exhausted unknown-commit-result retry can still reject after commit; rejection alone does not establish absent rows. Best-effort search/explain callers preserve served results on persistence failure.
 
 Cost-ledger recorders preserve the legacy `void` fire-and-forget API. Passing
 `{ admission }` returns a promise and fences the counter upsert in the same
@@ -162,13 +154,13 @@ Filesystem replacement and stale cleanup now select chunks with `startLine` pres
 
 The internal conversation-window projector selects events from the requested agent, session, scope and scope reference. Its upsert matches the existing window path within that partition and `source:"conversation"`, preserving the row ID and untouched embedding on reprojection. Missing or null imported event partition fields are excluded. There is no in-repository production caller. This filter does not distinguish conversation-sourced filesystem chunks, remove stale windows, refresh embeddings, fence erasure or prevent concurrent duplicate inserts. Typed projection identity, legacy repair and production wiring remain separate work.
 
-The consolidator phase-two similarity probe excludes invalidated rows in the vector prefilter and rechecks owner, scope, state, inference origin and expiry on the returned full document. An inferred or invalidated lookalike cannot force a NOOP that discards new observed evidence. Existing non-invalidated legacy behavior and ADD fallback remain. The five-neighbor candidate limit can still cause duplicate additions after filtering; deployed index readiness, real ANN behavior and later prune authority are separate validation work.
+The consolidator phase-two similarity probe excludes invalidated rows in the vector prefilter and rechecks owner, scope, state, inference origin and expiry on the returned full document. An inferred or invalidated lookalike cannot force a NOOP that discards new observed evidence. Existing non-invalidated legacy behavior remains. A failed probe fails the run with a typed `SearchLaneError`; it is never read as "nothing similar" and added. The five-neighbor candidate limit can still cause duplicate additions after filtering; deployed index readiness, real ANN behavior and later prune authority are separate validation work.
 
 A procedure write that changes an invalidated row to the effective active state clears its old validity end and invalidation reason. Changed procedure writes retain their existing new start time, and the invalidated revision keeps its original end. An absent state key preserves the stored state; a present `state: undefined` retains the existing active default. Procedure entries expose no validity-date overrides. Already-processed source receipts, imported active end dates, existing zombie rows and expiry-reader behavior remain separate work.
 
 Writing an existing invalidated structured row with the effective active state opens a new validity window at the supplied `validFrom` or the write time. It removes an unspecified `validTo` and the stale invalidation reason. The old invalidated revision retains its recorded end date. Explicit validity bounds remain caller-controlled, including past or future assertions; this change adds no backdate restriction. Ordinary active re-mentions keep their earliest start, and omitted expiry does not clear stored expiry. Current-only search serves the current row; previous intervals remain accessible through revision history. Existing zombie rows and extractor reactivation policy are separate work.
 
-Direct internal sync calls without admission retain their existing transaction and fallback behavior, including optional agent ownership. Manager sync continues to disable transcript-file ingestion. Joined sync calls share the in-flight request, and a genuinely fresh post-reopen request can import the surviving disk files. The later KB refresh captures its own new intent; the filesystem change does not close all sync-tail or erasure-policy work. Per-agent contention, filesystem erasure policy, search convergence, load, natural failover and unknown commit outcomes remain unmeasured.
+Direct internal sync calls without admission retain their existing transaction behavior, including optional agent ownership. A deployment without transactions fails with `TransactionUnsupportedError`; no write runs without one. Manager sync continues to disable transcript-file ingestion. Joined sync calls share the in-flight request, and a genuinely fresh post-reopen request can import the surviving disk files. The later KB refresh captures its own new intent; the filesystem change does not close all sync-tail or erasure-policy work. Per-agent contention, filesystem erasure policy, search convergence, load, natural failover and unknown commit outcomes remain unmeasured.
 
 Profile synthesis, active-slate hydration, discovery projections, and context bundles carry the manager admission captured before source reads. Their success and failure diagnostics reuse that token; the bundle passes it to nested readers and its own final telemetry. Profile, slate, and bundle telemetry stays asynchronous and best-effort. Discovery-run and telemetry rows commit together in one fenced transaction, with failures caught outside the callback. Stale diagnostic writes cannot recreate rows after erasure; returned read content remains best-effort and is not a transaction snapshot. Direct leaf calls without admission preserve their existing new-intent behavior and cannot certify earlier external reads.
 
@@ -214,19 +206,19 @@ After derived promotion, contradiction checks require an active, current, unexpi
 
 Search lane failures and exact procedural backstop warnings omit raw error text and retain only the fixed lane label and finite numeric error code. Strict failure propagation and lane outcome metadata remain unchanged (the searchV2 `onPathFailure` readiness hook was removed in M2: a lane failure is its outcome row); public error metadata retains separate privacy limitations.
 
-Conversation evidence and turn-precision event searches retain successful vector or text results when the sibling aggregation fails in non-strict mode. The failed branch appears under `phase:conversation-evidence:turn-vector` or the corresponding text/turn-precision name in lane outcomes. If every attempted branch fails, the existing parent failure path runs; strict mode rejects any failed branch. Both branches settle before return, so failure latency can increase; the thrown error is the first failed branch in input order. The existing filters, freshness checks, scoring, and budgets still apply. Direct calls without a tier sink log only a branch label and finite error code.
+Conversation evidence and turn-precision event searches are each one `$rankFusion` aggregate over a vector input and a text input. A failed or budget-denied lane fails typed and appears in the lane outcomes; a surviving branch does not stand in for it. Without vector search, text search and `rankFusion` the lane reports `not-applicable` (`capability-absent`, stage `rank-fusion`) and runs nothing. The existing filters, freshness checks, scoring, and budgets still apply.
 
-When `mongoSearch` cannot consume an embedding because the request capacity is spent or reserved, non-strict searches use the existing lexical path and trace `embedding budget exhausted`. A real empty fusion result still ends the waterfall. Strict searches reject embedding-capacity degradation; an expired request deadline keeps its existing empty behavior. The JS merge path retains its concurrently running lexical result. Direct vector/fusion leaves keep empty degradation unless the internal capacity hook is supplied. Each automated vector stage consumes its own embedding budget on warmup retries, including nested fusion inputs. Retry capacity denial retains the existing strict rejection or lexical fallback in `mongoSearch`; other retry callers keep empty degradation. Aggregation admission is charged before retry embedding admission, and first-attempt stage construction can charge an embedding even when execution is later refused, so these counters are conservative rather than exact billing. This does not eliminate embeddings across fallback queries or account for explain executions.
+A budget denial of `mongoSearch`'s fused aggregate or of its embedding is a typed `SearchBudgetDeniedError` and a `budget-denied` lane row. No lighter path runs in its place. A fusion that returns no rows is a final `ok-empty` answer. Each automated vector stage consumes its own embedding budget on warmup retries, including nested fusion inputs. Aggregation admission is charged before retry embedding admission, and first-attempt stage construction can charge an embedding even when execution is later refused, so these counters are conservative rather than exact billing. They do not account for explain executions.
 
 In `searchV2`, a supplied `structuredScope.type` takes precedence over an inferred type. A supplied `referenceScope.source` or `category` suppresses both inferred KB source and category constraints; supplied tags still apply. Without either explicit KB choice, planner inference is retained. Direct engine calls preserve the existing truthy checks, so empty strings act as absent values; HTTP validation rejects empty filter strings. This changes filter precedence only, not lane selection, state, or current-only policy.
 
 Structured search with `currentOnly` now honors a non-empty requested state or state array together with the existing validity window. Without a requested state, or with an empty array, it keeps the active default. Direct internal calls combining `currentOnly` with `invalidated` now filter invalidated rows by that window instead of returning active rows. The `searchV2` invalidated-state exception and non-current searches keep their existing behavior. This guarantees predicate composition, not that every superseded row has a closed validity window.
 
-Default hybrid `searchV2` requests with neither Vector Search nor Atlas Search capability now reach the existing ordinary `$text` fallback for chunk lanes. The resolved identity, source, lifecycle, and expiry filters still apply; a usable ordinary text index is required. Explicit vector-only mode keeps its no-query empty behavior in this case. Strict benchmark mode now rejects the required fallback instead of reporting a successful empty hybrid lane. The opt-in session and evidence-mirror lanes remain skipped without either Atlas capability. A missing ordinary index still follows the existing warning-and-empty behavior outside strict mode.
+A deployment with neither Vector Search nor Atlas Search does not boot, so no chunk lane has a `$text` path and boot creates no ordinary text index. The opt-in session and evidence-mirror lanes report `not-applicable` when their mode is disabled or their capability is absent.
 
 Plain queries without retrieval signals prioritize structured memory before procedures within the three primary lanes, while retaining the dedicated high-salience lane. Procedures keep their exact-match and sparse-result semantic backstops. Those backstops can add reads, and non-exact procedures may remain unsearched when other lanes return enough results. This makes ordinary facts reachable; it does not establish an accuracy improvement. Equal-score lane ordering also changes for other tied plans.
 
-KB JS merge waits for both search lanes to settle. Outside strict mode, a successful lane survives a sibling failure with its existing lane scores, threshold and result cap; the failed branch is reported through the lane-failure hook. If the surviving lane has no passing results, the existing recovery continues without rerunning that fulfilled lane. Both failures keep the existing waterfall. Strict mode rejects a failed branch after both settle, using the first failed branch in input order. Waiting can increase failure latency; existing server processing limits are unchanged. Raw errors remain available to hooks and in older waterfall diagnostics.
+KB search is one native fusion over `kb_chunks`: `$scoreFusion` with a minMaxScaler, or `$rankFusion`. A failure or a budget denial is a typed failure. No sibling branch stands in for it, and no weaker tier follows a zero-hit answer.
 
 Exact procedure-alias searches now supply the existing user-search `maxTimeMS` processing limit to `find`. The normal timeout mode uses the configured value or 10,000 ms default; MongoDB driver CSOT configurations can replace the command value with their remaining timeout. This is not a client wall-clock or complete-cursor deadline, and the `find` is still outside the aggregation-only budget.
 

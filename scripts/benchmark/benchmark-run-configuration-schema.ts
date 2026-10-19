@@ -12,7 +12,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v3"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v4"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -63,15 +63,9 @@ export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
 	"MEMONGO_LLM_ENRICHMENT_TIMEOUT_MS",
 	"MEMONGO_PREFERENCE_EVIDENCE_MODE",
 	"MEMONGO_QUERY_DECOMPOSITION_MODE",
-	// #66: reranking costs ~715ms of p95 and changes ranking, so a
-	// rerank-off run must not hash identically to a rerank-on one.
-	"MEMONGO_RERANKING_ENABLED",
-	"MEMONGO_RERANK_MIN_SCORE",
-	"MEMONGO_RERANK_STRICT",
 	"MEMONGO_SCORING_ABLATION",
 	"MEMONGO_SEARCH_MAX_TIME_MS",
 	"MEMONGO_SESSION_EVIDENCE_MODE",
-	"MEMONGO_STRICT_SEARCH_INDEX_READY",
 	"MEMONGO_TEMPORAL_COVERAGE_MODE",
 	"MEMONGO_USERFACT_EVIDENCE_MODE",
 	"MEMONGO_VECTOR_INDEXING_METHOD",

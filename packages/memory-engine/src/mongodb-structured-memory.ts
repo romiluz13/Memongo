@@ -2268,10 +2268,7 @@ export async function searchStructuredMemory(
 	},
 ): Promise<MemorySearchResult[]> {
 	const minScore = opts.minScore ?? 0.1
-	const canVector =
-		opts.embeddingMode === "automated"
-			? opts.capabilities.vectorSearch
-			: queryVector != null && opts.capabilities.vectorSearch
+	const canVector = opts.capabilities.vectorSearch
 
 	const numCandidates = Math.min(
 		opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
@@ -2530,45 +2527,4 @@ export async function searchStructuredMemory(
 		.filter((r) => r.score >= minScore)
 	report("atlas-search", textResults.length)
 	return textResults
-}
-
-// ---------------------------------------------------------------------------
-// Query by type
-// ---------------------------------------------------------------------------
-
-export async function getStructuredMemoryByType(
-	db: Db,
-	prefix: string,
-	type: string,
-	agentId?: string,
-	limit?: number,
-): Promise<
-	Array<{
-		type: string
-		key: string
-		value: string
-		confidence: number
-		updatedAt: Date
-	}>
-> {
-	const collection = structuredMemCollection(db, prefix)
-	const filter: Document = {
-		type,
-		// P4.4.1: hide expired docs until the TTL sweep removes them.
-		...buildUnexpiredClause(),
-	}
-	if (agentId) {
-		filter.agentId = agentId
-	}
-	const docs = await collection
-		.find(filter, { sort: { updatedAt: -1 }, limit: limit ?? 50 })
-		.toArray()
-
-	return docs.map((doc: Record<string, unknown>) => ({
-		type: doc.type as string,
-		key: doc.key as string,
-		value: doc.value as string,
-		confidence: (doc.confidence as number) ?? 0.8,
-		updatedAt: doc.updatedAt as Date,
-	}))
 }

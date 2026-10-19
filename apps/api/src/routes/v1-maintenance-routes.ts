@@ -6,11 +6,7 @@ import {
 	memongoBridgeSelfEdit,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
-import {
-	mapSearchOutcomes,
-	searchErrorResponse,
-	searchFailureResponse,
-} from "../lib/search-outcomes.js"
+import { searchErrorResponse } from "../lib/search-outcomes.js"
 import {
 	chainTraceCollectionSchema,
 	validateWithSchema,
@@ -88,25 +84,6 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 			})
-			if (report.error) {
-				// The engine reports an unreachable vector index as an error field on
-				// an otherwise empty report; that is a failed scan, never an empty one.
-				const outcomes = {
-					status: "failed" as const,
-					lanes: [
-						{
-							lane: "search" as const,
-							stage: "vector" as const,
-							outcome: "failed" as const,
-							reason: "lane-unavailable" as const,
-						},
-					],
-				}
-				const mapping = mapSearchOutcomes(outcomes)
-				if (mapping.status !== 200) {
-					return searchFailureResponse(c, mapping, outcomes)
-				}
-			}
 			return c.json(report)
 		} catch (err) {
 			return searchErrorResponse(c, err, "NOVELTY_SCAN_FAILED")

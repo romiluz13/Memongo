@@ -1901,11 +1901,16 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 		expect(body.degradation).toBeUndefined()
 	})
 
-	it("serves the degradation marker on /v1/search-kb when the vector lane is skipped (C-019)", async () => {
-		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
-			results: [],
-			degradation: { kind: "throttled", scope: "vector-lane-skipped" },
-		})
+	it("serves a KB admission denial as 503 SEARCH_BUDGET_EXHAUSTED with Retry-After, not a degraded 200", async () => {
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockRejectedValue(
+			Object.assign(new Error("typed search failure"), {
+				name: "SearchBudgetDeniedError",
+				lane: "kb",
+				stage: "request",
+				reason: "budget-embeds",
+				retryAfterMs: 2500,
+			}),
+		)
 
 		const res = await createApp().request("/v1/search-kb", {
 			method: "POST",
@@ -1913,16 +1918,14 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 			body: JSON.stringify({ query: "lucene index" }),
 		})
 
-		expect(res.status).toBe(200)
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBe("3")
 		const body = (await res.json()) as {
-			results: unknown[]
-			degradation?: { kind: string; scope: string }
+			error: { code: string }
+			degradation?: unknown
 		}
-		expect(body.results).toEqual([])
-		expect(body.degradation).toEqual({
-			kind: "throttled",
-			scope: "vector-lane-skipped",
-		})
+		expect(body.error.code).toBe("SEARCH_BUDGET_EXHAUSTED")
+		expect(body.degradation).toBeUndefined()
 	})
 
 	it("omits the degradation field on /v1/search-kb when nothing degraded", async () => {
@@ -1941,7 +1944,7 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 		expect(body.degradation).toBeUndefined()
 	})
 
-	it("documents degradation in the OpenAPI search schemas (C-019)", async () => {
+	it("documents degradation on /v1/search only; KB denial is a typed 503, not a marker (C-019)", async () => {
 		const res = await createApp().request("/openapi.json")
 		const json = (await res.json()) as {
 			components?: unknown
@@ -1968,6 +1971,7 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 					properties?: Record<string, unknown>
 			  }
 			| undefined
-		expect(kbSchema?.properties).toHaveProperty("degradation")
+		expect(kbSchema?.properties).not.toHaveProperty("degradation")
+		expect(kbSchema?.properties).toHaveProperty("outcomes")
 	})
 })

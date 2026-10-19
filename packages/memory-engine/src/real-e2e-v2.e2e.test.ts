@@ -11,10 +11,7 @@
 import { randomUUID } from "node:crypto"
 import { MongoClient, type Db } from "mongodb"
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
-import {
-	RegexEntityExtractor,
-	LLMEntityExtractor,
-} from "./mongodb-entity-extractor.js"
+import { RegexEntityExtractor } from "./mongodb-entity-extractor.js"
 // v2 episodes
 import {
 	materializeEpisode,
@@ -2156,27 +2153,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				`  Extracted ${result.entities.length} entities: ${result.entities.map((e) => `${e.name}(${e.type})`).join(", ")}`,
 			)
 			console.log(`  Created ${result.relationsCreated} relations`)
-		})
-
-		it("should fall back to regex when LLM times out", async () => {
-			const slowLlm = () => new Promise<string>(() => {}) // never resolves
-			const extractor = new LLMEntityExtractor(slowLlm, 100) // 100ms timeout
-			const testAgentId = `llm-timeout-e2e-${randomUUID().slice(0, 8)}`
-
-			const result = await extractAndUpsertEntities({
-				db,
-				prefix: PREFIX,
-				agentId: testAgentId,
-				eventContent: "@charlie works on #typescript with @dave",
-				scope: "agent",
-				extractor,
-			})
-
-			// Should fall back to regex and still extract entities
-			expect(result.entities.length).toBeGreaterThanOrEqual(2)
-			const names = result.entities.map((e) => e.name)
-			expect(names).toContain("charlie")
-			expect(names).toContain("typescript")
 		})
 
 		it("should produce identical results to inline extraction (backward compatibility)", async () => {

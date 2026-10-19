@@ -35,14 +35,10 @@ export type SearchStage =
 	| "lane"
 	| "reservation"
 	| "filter"
-	| "rerun"
 	| "vector"
 	| "atlas-search"
-	| "classic-text"
-	| "keyword"
 	| "score-fusion"
 	| "rank-fusion"
-	| "js-merge"
 	| "exact-match"
 	| "entity-lookup"
 	| "graph-expand"
@@ -153,11 +149,14 @@ export class SearchBudgetDeniedError extends Error {
 	readonly lane?: SearchLane
 	readonly stage: SearchStage
 	readonly reason: SearchBudgetReason
+	/** Set by an admission-bucket denial only: ms until a token refills. */
+	readonly retryAfterMs?: number
 
 	constructor(params: {
 		lane?: SearchLane
 		stage: SearchStage
 		reason: SearchBudgetReason
+		retryAfterMs?: number
 	}) {
 		super(
 			`search ${params.lane ?? "lane"} budget denied at ${params.stage}: ${params.reason}`,
@@ -166,6 +165,7 @@ export class SearchBudgetDeniedError extends Error {
 		this.lane = params.lane
 		this.stage = params.stage
 		this.reason = params.reason
+		this.retryAfterMs = params.retryAfterMs
 	}
 }
 

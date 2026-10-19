@@ -313,13 +313,12 @@ describe("manager search feeds the V2 verdict into the relevance runtime (RET-15
 		expect(relevance.persistRun).not.toHaveBeenCalled()
 	})
 
-	it("a stale legacySearchFallback flag serves and records the v2 empty verdict with no re-run", async () => {
+	it("a complete empty answer serves and records the v2 empty verdict with no re-run", async () => {
 		searchV2State.responses.push({ results: [], metadata: v2Metadata })
 		const relevance = buildRelevanceStub()
 		const legacySearch = vi.fn(async () => [v2Hit])
 		const manager = buildMockManager({
 			relevance,
-			config: kitMongoConfig({ legacySearchFallback: true }),
 			legacySearch,
 		})
 

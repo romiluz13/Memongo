@@ -11,6 +11,10 @@
 //     memory-job worker start+wake (facade scheduling queues)
 import { createHash } from "node:crypto"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { isIdempotencyConflictError } from "./mongodb-events.js"
 import {
@@ -390,6 +394,68 @@ describe("P0.1 regression — post-persist failure does not produce a client-vis
 		expect(fake.all("events")).toHaveLength(1)
 		// Replay does not re-project; the projection repair pass owns recovery.
 		expect(fake.all("chunks")).toHaveLength(0)
+	})
+})
+
+describe("M2 T11: a failed chunk projection is recorded, never reported as healthy", () => {
+	it("leaves a failed chunks projection run beside the durable event, and none when projection succeeds", async () => {
+		const failing = createStatefulMongoFake({ prefix: PREFIX })
+		const failingManager = buildStatefulManager(failing)
+		failing.injectFailure({
+			collection: "chunks",
+			method: "updateOne",
+			error: new Error("injected chunk projection failure"),
+		})
+
+		await failingManager.writeConversationEvent({
+			role: "user",
+			body: "durable but unprojected",
+			sessionId: "s-t11-failed",
+		})
+
+		const failedRuns = failing
+			.all("projection_runs")
+			.filter((run) => run.projectionType === "chunks")
+		expect(failing.all("events")).toHaveLength(1)
+		expect(failedRuns).toHaveLength(1)
+		expect(failedRuns[0]).toMatchObject({ status: "failed", itemsProjected: 0 })
+
+		const healthy = createStatefulMongoFake({ prefix: PREFIX })
+		const healthyManager = buildStatefulManager(healthy)
+
+		await healthyManager.writeConversationEvent({
+			role: "user",
+			body: "durable and projected",
+			sessionId: "s-t11-healthy",
+		})
+
+		const healthyRuns = healthy
+			.all("projection_runs")
+			.filter((run) => run.projectionType === "chunks")
+		expect(healthyRuns.some((run) => run.status === "failed")).toBe(false)
+	})
+
+	it("counts a projection-run row that cannot be written, and still acknowledges the durable event", async () => {
+		resetBestEffortFailureCounts()
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const manager = buildStatefulManager(fake)
+		fake.injectFailure({
+			collection: "projection_runs",
+			method: "insertOne",
+			error: new Error("injected run-record failure"),
+		})
+
+		const receipt = await manager.writeConversationEvent({
+			role: "user",
+			body: "durable, run record lost",
+			sessionId: "s-t11-run-record",
+		})
+
+		expect(receipt.chunkCreated).toBe(true)
+		expect(fake.all("events")).toHaveLength(1)
+		expect(getBestEffortFailureCounts()).toEqual({
+			"projection-run-record": 1,
+		})
 	})
 })
 

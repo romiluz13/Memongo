@@ -56,13 +56,11 @@ function fakeEvents(aggregateResult: () => Promise<Document[]>) {
 
 function recall(
 	request: Partial<Parameters<typeof recallConversation>[0]["request"]> = {},
-	onLaneFailure = vi.fn(),
 ) {
 	return recallConversation({
 		db: {} as Db,
 		prefix: "test_",
 		request: { agentId: "a1", ...TENANT, query: "deploy failed", ...request },
-		onLaneFailure,
 	})
 }
 
@@ -99,10 +97,7 @@ describe("recall is one hybrid lane", () => {
 		const { find, aggregate } = fakeEvents(async () => {
 			throw driverError
 		})
-		const onLaneFailure = vi.fn()
-		const failure = await recall({}, onLaneFailure).catch(
-			(error: unknown) => error,
-		)
+		const failure = await recall({}).catch((error: unknown) => error)
 		expect(failure).toBeInstanceOf(SearchLaneError)
 		expect(failure).toMatchObject({
 			lane: "recall",
@@ -110,10 +105,6 @@ describe("recall is one hybrid lane", () => {
 			reason: "query-error",
 		})
 		expect((failure as Error).cause).toBe(driverError)
-		expect(onLaneFailure).toHaveBeenCalledExactlyOnceWith(
-			"recall:hybrid",
-			driverError,
-		)
 		expect(aggregate).toHaveBeenCalledTimes(1)
 		expect(find).not.toHaveBeenCalled()
 		expect(JSON.stringify(warn.mock.calls)).not.toContain("falling back")
@@ -132,6 +123,7 @@ describe("recall is one hybrid lane", () => {
 			stage: "request",
 			reason: "budget-embeds",
 		})
+		expect((failure as SearchBudgetDeniedError).retryAfterMs).toBeGreaterThan(0)
 		expect(aggregate).not.toHaveBeenCalled()
 		expect(find).not.toHaveBeenCalled()
 	})
@@ -178,6 +170,7 @@ describe("recall is one hybrid lane", () => {
 			.catch((error: unknown) => error)
 		expect(failure).toBeInstanceOf(SearchBudgetDeniedError)
 		expect(failure).toMatchObject({ reason: "budget-embeds" })
+		expect((failure as SearchBudgetDeniedError).retryAfterMs).toBeUndefined()
 		expect(aggregate).not.toHaveBeenCalled()
 		expect(find).not.toHaveBeenCalled()
 	})

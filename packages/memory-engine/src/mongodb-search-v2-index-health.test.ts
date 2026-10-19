@@ -92,9 +92,11 @@ const CHUNKS_VECTOR = `${PREFIX}chunks_vector`
 const CHUNKS_TEXT = `${PREFIX}chunks_text`
 const CHUNKS = `${PREFIX}chunks`
 
-function healthyIndexes(): Record<string, FakeSearchIndex[]> {
+function healthyIndexes(
+	manifest: typeof MANIFEST = MANIFEST,
+): Record<string, FakeSearchIndex[]> {
 	const byCollection: Record<string, FakeSearchIndex[]> = {}
-	for (const entry of MANIFEST) {
+	for (const entry of manifest) {
 		byCollection[entry.collectionName] = [
 			...(byCollection[entry.collectionName] ?? []),
 			readyIndex(entry.name, entry.type, entry.definition),
@@ -119,12 +121,18 @@ function setStatus(
 	}
 }
 
-function harness(listError?: (collection: string) => Error | undefined) {
-	const fake = createFakeSearchDb({ indexes: healthyIndexes(), listError })
+function harness(
+	listError?: (collection: string) => Error | undefined,
+	manifest: typeof MANIFEST = MANIFEST,
+) {
+	const fake = createFakeSearchDb({
+		indexes: healthyIndexes(manifest),
+		listError,
+	})
 	const source = {
 		db: fake.db,
 		prefix: PREFIX,
-		manifest: MANIFEST,
+		manifest,
 		facts: FACTS,
 	}
 	const listReads = (collection: string) =>
@@ -197,6 +205,72 @@ beforeEach(() => {
 afterEach(() => {
 	vi.restoreAllMocks()
 	vi.unstubAllEnvs()
+})
+
+describe("searchV2 lanes the deployment profile builds no index for (T11)", () => {
+	const LONGMEMEVAL_MANIFEST = buildRequiredIndexManifest({
+		prefix: PREFIX,
+		serverVersionArray: [8, 3, 0, 0],
+		env: {
+			MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE: "longmemeval",
+		} as NodeJS.ProcessEnv,
+	})
+
+	it("the LongMemEval profile declares no entity or episode index", () => {
+		const collections = new Set(
+			LONGMEMEVAL_MANIFEST.map((entry) => entry.collectionName),
+		)
+		expect(collections.has(`${PREFIX}entities`)).toBe(false)
+		expect(collections.has(`${PREFIX}episodes`)).toBe(false)
+		expect(collections.has(`${PREFIX}structured_mem`)).toBe(true)
+	})
+
+	it("declares graph and episodic not-applicable before running, and the request stays complete", async () => {
+		plan(["structured", "graph", "episodic"])
+		const { source } = harness(undefined, LONGMEMEVAL_MANIFEST)
+
+		const result = await request(source, ["structured", "graph", "episodic"])
+
+		for (const lane of ["graph", "episodic"]) {
+			expect(rowsFor(result.metadata.laneOutcomes, lane)).toEqual([
+				{
+					lane,
+					stage: "plan",
+					outcome: "not-applicable",
+					reason: "capability-absent",
+				},
+			])
+		}
+		expect(searchEntitiesAutocomplete).not.toHaveBeenCalled()
+		expect(expandGraph).not.toHaveBeenCalled()
+		expect(searchEpisodes).not.toHaveBeenCalled()
+		expect(searchStructuredMemory).toHaveBeenCalledTimes(1)
+		expect(result.metadata.outcomeStatus).toBe("complete")
+	})
+
+	it("an empty manifest declares nothing, so it marks no lane not-applicable", async () => {
+		plan(["episodic"])
+		const { source } = harness(undefined, [])
+
+		const result = await request(source, ["episodic"])
+
+		expect(searchEpisodes).toHaveBeenCalledTimes(1)
+		expect(
+			rowsFor(result.metadata.laneOutcomes, "episodic"),
+		).not.toContainEqual(expect.objectContaining({ outcome: "not-applicable" }))
+	})
+
+	it("runs both lanes when the manifest declares their indexes", async () => {
+		plan(["episodic"])
+		const { source } = harness()
+
+		const result = await request(source, ["episodic"])
+
+		expect(searchEpisodes).toHaveBeenCalledTimes(1)
+		expect(
+			rowsFor(result.metadata.laneOutcomes, "episodic"),
+		).not.toContainEqual(expect.objectContaining({ outcome: "not-applicable" }))
+	})
 })
 
 describe("searchV2 lane gate on the request's index snapshot (M2 decision 8)", () => {

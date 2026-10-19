@@ -293,27 +293,3 @@ export function sectionFailuresFromLaneOutcomes(params: {
 				: "internal-error")) as SectionFailure["reason"],
 	}))
 }
-
-const bestEffortFailures = new Map<string, number>()
-
-/**
- * A declared best-effort side write: its failure never fails the read that
- * triggered it, but it is counted and logged with enums only, so the loss is
- * observable instead of swallowed.
- */
-export function noteBestEffortFailure(
-	log: SubsystemLogger,
-	label: string,
-	error: unknown,
-): void {
-	bestEffortFailures.set(label, (bestEffortFailures.get(label) ?? 0) + 1)
-	log.warn(`${label}: best-effort write failed`, settledFailureMeta(error))
-}
-
-export function bestEffortFailureCount(label: string): number {
-	return bestEffortFailures.get(label) ?? 0
-}
-
-export function resetBestEffortFailureCounts(): void {
-	bestEffortFailures.clear()
-}

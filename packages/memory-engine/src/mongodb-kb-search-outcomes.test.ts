@@ -104,8 +104,8 @@ describe("searchKB outcomes (#101 matrix 1f, M2 decision 5)", () => {
 			const { collection, pipelines } = fixture()
 			const { results, rows } = await run(collection, { fusionMethod })
 			expect(results).toEqual([])
-			// The old waterfall ran fusion, then vector, then keyword (then
-			// $text) after a zero here.
+			// The old waterfall ran fusion, then vector, then keyword after a
+			// zero here.
 			expect(pipelines.map(first)).toEqual([fusionStage])
 			expect(JSON.stringify(pipelines)).not.toContain('"$text"')
 			expect(rows).toEqual([

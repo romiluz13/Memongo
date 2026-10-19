@@ -15,8 +15,7 @@ import { memoryScopeEnum } from "./openapi-schemas.js"
 /**
  * WS-12 (C-019): degradation marker on search responses. Present exactly
  * when the answer is degraded rather than authoritative, so a throttled
- * search never reads as "no memories found" and a skipped KB vector lane
- * never reads as authoritative ranking.
+ * search never reads as "no memories found".
  */
 const searchDegradationSchema = {
 	type: "object",
@@ -29,9 +28,9 @@ const searchDegradationSchema = {
 		},
 		scope: {
 			type: "string",
-			enum: ["denied", "legacy-fallback-skipped", "vector-lane-skipped"],
+			enum: ["denied"],
 			description:
-				"Which surface was degraded: the whole query was denied before any lane ran, the optional legacy re-run of an empty v2 verdict was denied, or the KB vector lane was skipped (text-lane results stand with degraded ranking).",
+				"Which surface was degraded: the whole query was denied before any lane ran, so the empty results are not a retrieval verdict.",
 		},
 		retryAfterMs: {
 			type: "number",
@@ -135,7 +134,14 @@ export const searchFailureResponses = {
 	},
 	"503": {
 		description:
-			"SEARCH_LANES_UNAVAILABLE: every required lane failed with a retryable reason (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable); it wins over budget. SEARCH_BUDGET_EXHAUSTED: every failure is a search budget denial. The body adds `outcomes` (status failed, every row). SERVICE_UNAVAILABLE: the database is unreachable.",
+			"SEARCH_LANES_UNAVAILABLE: every required lane failed with a retryable reason (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable); it wins over budget. SEARCH_BUDGET_EXHAUSTED: every failure is a search budget denial; an admission-bucket denial also sets the Retry-After header (whole seconds, from the denial's retry hint), and a per-request budget denial sets none. The body adds `outcomes` (status failed, every row). SERVICE_UNAVAILABLE: the database is unreachable.",
+		headers: {
+			"Retry-After": {
+				description:
+					"Seconds until the admission bucket refills. Set only on SEARCH_BUDGET_EXHAUSTED responses caused by an admission-bucket denial.",
+				schema: { type: "integer", minimum: 1 },
+			},
+		},
 	},
 }
 
@@ -924,7 +930,7 @@ export const searchPaths = {
 								},
 								fusionMethod: {
 									type: "string",
-									enum: ["scoreFusion", "rankFusion", "js-merge"],
+									enum: ["scoreFusion", "rankFusion"],
 									description: "Server-side fusion preference for the KB lane.",
 								},
 							},
@@ -935,7 +941,7 @@ export const searchPaths = {
 			responses: {
 				"200": {
 					description:
-						"KB results (with degradation marker when the vector lane was skipped). A partial answer is a 200 with outcomes.status partial, even with zero results.",
+						"KB results. A partial answer is a 200 with outcomes.status partial, even with zero results.",
 					content: {
 						"application/json": {
 							schema: {
@@ -945,7 +951,6 @@ export const searchPaths = {
 										type: "array",
 										items: { type: "object" },
 									},
-									degradation: searchDegradationSchema,
 									outcomes: searchOutcomesSchema,
 								},
 							},

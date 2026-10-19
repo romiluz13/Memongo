@@ -8,7 +8,6 @@ import {
 	ensureStandardIndexes,
 	isSearchIndexReadyWithFilterFields,
 	isEventsVectorBitemporalPrefilterReady,
-	waitForSearchCapabilities,
 	queryCacheCollection,
 	telemetryCollection,
 	accessEventsCollection,
@@ -349,49 +348,6 @@ describe("detectCapabilities", () => {
 		expect(caps.capabilityGates?.["rerank-stage"]).toBe(false)
 		expect(caps.capabilityGates?.["lexical-prefilters"]).toBe(false)
 	})
-
-	it("waits for search capabilities to become available", async () => {
-		const fake = createFakeSearchDb({ indexes: {} })
-		setTimeout(() => {
-			fake.indexes.test_chunks = readyPair().test_chunks
-		}, 10)
-		const caps = await waitForSearchCapabilities(fake.db, "test_chunks", {
-			timeoutMs: 10_000,
-			pollMs: 1,
-		})
-		expect(caps.vectorSearch).toBe(true)
-		expect(caps.textSearch).toBe(true)
-	})
-
-	it("throws a typed index-not-ready failure on timeout instead of returning the last result", async () => {
-		const fake = createFakeSearchDb({ indexes: {} })
-		await expect(
-			waitForSearchCapabilities(fake.db, "test_chunks", {
-				timeoutMs: 20,
-				pollMs: 5,
-			}),
-		).rejects.toMatchObject({
-			name: "MemongoBootError",
-			code: "index-not-ready",
-			collection: "test_chunks",
-		})
-	})
-
-	it("propagates a listing failure while waiting instead of retrying it away", async () => {
-		const fake = createFakeSearchDb({
-			listError: () =>
-				Object.assign(new Error("not authorized"), {
-					code: 13,
-					codeName: "Unauthorized",
-				}),
-		})
-		await expect(
-			waitForSearchCapabilities(fake.db, "test_chunks", {
-				timeoutMs: 10_000,
-				pollMs: 1,
-			}),
-		).rejects.toMatchObject({ code: "search-privileges-denied" })
-	})
 })
 
 describe("waitForSearchIndexesQueryable", () => {
@@ -422,8 +378,7 @@ describe("waitForSearchIndexesQueryable", () => {
 
 		const result = await waitForSearchIndexesQueryable(collection, {
 			indexNames: ["events_text"],
-			// Same reasoning as the waitForSearchCapabilities retry test above:
-			// the give-up budget must not double as the expected runtime.
+			// The give-up budget must not double as the expected runtime.
 			timeoutMs: 10_000,
 			pollMs: 1,
 		})
@@ -789,10 +744,9 @@ describe("query_cache standard indexes", () => {
 	})
 })
 
-describe("search index budget", () => {
-	it("assertIndexBudget accommodates the full planned search index count on unbounded profiles", async () => {
+describe("planned search index set", () => {
+	it("creates the full planned search index set on atlas-local-preview", async () => {
 		const db = mockDb()
-		// This should NOT fail for unbounded Atlas profiles.
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
 		// The legacy query-cache collection no longer gets a Search index.
 		const qc = db.collection("test_query_cache") as unknown as {

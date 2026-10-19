@@ -35,9 +35,12 @@ function productionSources(directory: string, found: string[] = []): string[] {
 	return found
 }
 
+const TOKEN_TABLE = join(REPO_ROOT, "scripts", "ci", "check-no-fallbacks.ts")
+
+// The CI source check names the removed reranker tokens it forbids.
 const sources = SCANNED_ROOTS.flatMap((root) =>
 	productionSources(join(REPO_ROOT, root)),
-)
+).filter((path) => path !== TOKEN_TABLE)
 
 function filesContaining(token: string): string[] {
 	return sources

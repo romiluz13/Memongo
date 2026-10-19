@@ -151,7 +151,7 @@ describe("bridge search outcome passthrough (#101)", () => {
 		expect(fast.outcomes).toEqual(FAILED)
 	})
 
-	it("returns the KB summary alongside a vector-lane-skipped marker", async () => {
+	it("returns the KB partial summary with its hits and no degradation marker", async () => {
 		const kbPartial: SearchOutcomeSummary = {
 			status: "partial",
 			lanes: [
@@ -166,11 +166,6 @@ describe("bridge search outcome passthrough (#101)", () => {
 		}
 		const hit = { path: "kb/a", score: 1 }
 		searchKB.mockImplementation(async (_q: string, opts: Sinks) => {
-			opts.onDegradation?.({
-				kind: "throttled",
-				scope: "vector-lane-skipped",
-				retryAfterMs: 50,
-			})
 			opts.onOutcomes?.(kbPartial)
 			return [hit]
 		})
@@ -179,11 +174,6 @@ describe("bridge search outcome passthrough (#101)", () => {
 
 		expect(out).toEqual({
 			results: [hit],
-			degradation: {
-				kind: "throttled",
-				scope: "vector-lane-skipped",
-				retryAfterMs: 50,
-			},
 			outcomes: kbPartial,
 		})
 	})

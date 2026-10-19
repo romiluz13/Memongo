@@ -246,18 +246,18 @@ describe("mongodb-search-budget", () => {
 		await runWithSearchBudget(
 			{ maxAggregations: 1, maxEmbeds: 1 },
 			async () => {
-				consumeSearchAggregationOrThrow("keyword")
+				consumeSearchAggregationOrThrow("atlas-search")
 				consumeSearchEmbedOrThrow("vector")
 				const aggregation = (() => {
 					try {
-						consumeSearchAggregationOrThrow("keyword")
+						consumeSearchAggregationOrThrow("atlas-search")
 					} catch (err) {
 						return err
 					}
 				})()
 				expect(aggregation).toBeInstanceOf(SearchBudgetDeniedError)
 				expect(aggregation).toMatchObject({
-					stage: "keyword",
+					stage: "atlas-search",
 					reason: "budget-aggregations",
 				})
 				expect(() => consumeSearchEmbedOrThrow("vector")).toThrow(
@@ -283,7 +283,7 @@ describe("mongodb-search-budget", () => {
 	})
 
 	it("#101: unbudgeted callers are never denied", () => {
-		expect(() => consumeSearchAggregationOrThrow("keyword")).not.toThrow()
+		expect(() => consumeSearchAggregationOrThrow("atlas-search")).not.toThrow()
 		expect(() => consumeSearchEmbedOrThrow("vector")).not.toThrow()
 	})
 })

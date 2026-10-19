@@ -17,7 +17,7 @@ Memongo reads configuration from environment variables and an optional JSON conf
 | `MEMONGO_API_HOST` | API bind address | `127.0.0.1` |
 | `MEMONGO_CONFIG_PATH` | Alternate JSON config file path | `~/.memongo/memongo.json` |
 | `MEMONGO_WORKSPACE_DIR` | Workspace directory used by the bridge | `~/.memongo/workspace` |
-| `MEMONGO_MONGODB_FUSION_METHOD` | Hybrid fusion preference: `scoreFusion`, `rankFusion`, or `js-merge` | `scoreFusion` |
+| `MEMONGO_MONGODB_FUSION_METHOD` | Hybrid fusion stage: `scoreFusion` or `rankFusion`. Any other value, including the removed `js-merge`, fails boot | `scoreFusion` |
 | `MEMONGO_QUERY_EMBEDDING_MODEL` | Compatible Voyage 4 query embedding model | `voyage-4-large` |
 | `VOYAGE_API_KEY` | Atlas Model API key for MongoDB auto-embed lanes | (none) |
 | `MEMONGO_ENRICHMENT_BASE_URL` | Optional OpenAI-compatible or Anthropic endpoint for LLM enrichment | (none) |
@@ -46,6 +46,7 @@ Create `~/.memongo/memongo.json`:
 - When `MEMONGO_API_KEY` and scoped keys are unset, `/v1` routes are unauthenticated and the API logs a startup warning.
 - Managed Atlas cloud and Atlas Local Preview both use `embeddingMode: "automated"` with MongoDB Automated Embedding.
 - [MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/) is an upstream Preview feature that MongoDB says not to use in production. Treat this mode as evaluation or controlled-preview infrastructure until the feature is generally available or Memongo ships a production-supported client-side embedding path.
-- `$scoreFusion` is the default after the August 2026 benchmark comparison. On MongoDB versions without `$scoreFusion`, Memongo capability detection falls back to `$rankFusion`, then to client-side merge if needed.
+- `$scoreFusion` is the default after the August 2026 benchmark comparison. Memongo requires MongoDB 8.3 or later, which supports both stages, and it runs the one stage you configure. A deployment that cannot run it fails boot with a typed error; there is no other stage or client-side merge behind it.
+- Run `bun run --filter @memongo/api preflight` to list every unmet boot requirement without starting the server. The full contract is in the [self-hosting guide](https://github.com/romiluz13/memongo/blob/main/docs/platform/self-host.md#deployment-contract).
 - The engine infers `deploymentProfile: "atlas-managed"` for `mongodb+srv://...mongodb.net` URIs and `deploymentProfile: "atlas-local-preview"` for local preview URIs unless you set it explicitly.
 - The supported runtime backend is MongoDB.

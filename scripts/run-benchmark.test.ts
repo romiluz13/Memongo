@@ -582,32 +582,22 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 		)
 	})
 
-	it("--no-rerank disables reranking before the manager is acquired (B7)", async () => {
-		stubFullRunEnv()
-		// Explicit env enable: the flag must win, not just default.
-		vi.stubEnv("MEMONGO_RERANKING_ENABLED", "true")
-		vi.spyOn(console, "log").mockImplementation(() => {})
-		vi.spyOn(console, "error").mockImplementation(() => {})
-
-		await main(["--no-rerank"], offlineDeps)
-
-		// Set before the bridge resolves the manager config, so the resolved
-		// config disables reranking and the manifest records the deviation.
-		expect(process.env.MEMONGO_RERANKING_ENABLED).toBe("false")
-		expect(getManagerMock).toHaveBeenCalledTimes(1)
-		expect(relevanceBenchmarkMock).toHaveBeenCalledTimes(1)
-	})
-
-	it("leaves reranking configuration untouched without --no-rerank", async () => {
+	it("--no-rerank fails with a removal message before any manager or env change", async () => {
 		stubFullRunEnv()
 		vi.stubEnv("MEMONGO_RERANKING_ENABLED", "true")
 		vi.spyOn(console, "log").mockImplementation(() => {})
-		vi.spyOn(console, "error").mockImplementation(() => {})
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-		await main([], offlineDeps)
+		await expect(main(["--no-rerank"], offlineDeps)).rejects.toThrow(
+			"process.exit called",
+		)
 
+		expect(errorSpy).toHaveBeenCalledWith(
+			expect.stringContaining("--no-rerank was removed"),
+		)
 		expect(process.env.MEMONGO_RERANKING_ENABLED).toBe("true")
-		expect(relevanceBenchmarkMock).toHaveBeenCalledTimes(1)
+		expect(getManagerMock).not.toHaveBeenCalled()
+		expect(relevanceBenchmarkMock).not.toHaveBeenCalled()
 	})
 
 	it("acquires a caller-owned manager and closes it after a successful run", async () => {

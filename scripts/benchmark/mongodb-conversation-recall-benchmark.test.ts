@@ -65,18 +65,6 @@ function matchesTimestamp(value: Date, filter: unknown): boolean {
 	return true
 }
 
-function matchesBody(value: string, filter: unknown): boolean {
-	if (
-		filter &&
-		typeof filter === "object" &&
-		!Array.isArray(filter) &&
-		(filter as Record<string, unknown>).$regex instanceof RegExp
-	) {
-		return (filter as Record<string, RegExp>).$regex.test(value)
-	}
-	return true
-}
-
 function matchesFilter(doc: BenchmarkEvent, filter: Document): boolean {
 	return Object.entries(filter).every(([key, value]) => {
 		switch (key) {
@@ -93,7 +81,9 @@ function matchesFilter(doc: BenchmarkEvent, filter: Document): boolean {
 			case "timestamp":
 				return matchesTimestamp(doc.timestamp, value)
 			case "body":
-				return matchesBody(doc.body, value)
+				throw new Error(
+					"this fake serves no body filter: recall reads Search, never a content find",
+				)
 			default:
 				return true
 		}

@@ -44,6 +44,7 @@ import {
 	type Entity,
 	type Relation,
 } from "./mongodb-graph.js"
+import type { EntityExtractor } from "./mongodb-entity-extractor.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
@@ -953,17 +954,16 @@ describe("mongodb-graph", () => {
 			})
 
 			it("sets confidenceSource to learned for high-confidence LLM entities", async () => {
-				const llmFn = vi
-					.fn()
-					.mockResolvedValue(
-						JSON.stringify([
-							{ name: "MongoDB", type: "system", confidence: 0.9 },
-						]),
-					)
-				const { LLMEntityExtractor } = await import(
-					"./mongodb-entity-extractor.js"
-				)
-				const llmExtractor = new LLMEntityExtractor(llmFn, 5000)
+				const llmExtractor: EntityExtractor = {
+					extract: async () => [
+						{
+							name: "MongoDB",
+							type: "system",
+							confidence: 0.9,
+							extractionMethod: "llm",
+						},
+					],
+				}
 
 				const entitiesCol = createMockCollection()
 				const relationsCol = createMockCollection()

@@ -1150,12 +1150,6 @@ export class MongoDBManagerSearchOps {
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
 			/**
-			 * Never called for KB search since M2: admission denial is a typed
-			 * budget-denied failure, not a degraded answer. Kept so existing
-			 * callers still compile.
-			 */
-			onDegradation?: (degradation: MemorySearchDegradation) => void
-			/**
 			 * #101 / decision 16: receives this call's outcome summary
 			 * ({status, lanes}) exactly once — on healthy, partial and failed
 			 * calls alike. Sink-not-state (see onLaneLatency), so concurrent
@@ -1279,6 +1273,7 @@ export class MongoDBManagerSearchOps {
 					lane: "kb",
 					stage: "request",
 					reason: "budget-embeds",
+					retryAfterMs: kbAdmission.retryAfterMs,
 				})
 			}
 			// M2 decision 8: the KB lane never runs against an index observed

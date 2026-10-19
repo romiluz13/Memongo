@@ -114,23 +114,6 @@ describe("POST /v1/novelty-scan (X-10)", () => {
 		expect((await json(response)).error?.code).toBe("SEARCH_LANES_FAILED")
 	})
 
-	it("never serves the engine's error-in-report shape as a 200", async () => {
-		bridge.memongoBridgeScanNovelty.mockResolvedValue({
-			events: [],
-			scannedCount: 0,
-			error: "mongot_unavailable",
-			agentId: "owner",
-		})
-
-		const response = await post("/v1/novelty-scan")
-
-		expect(response.status).toBe(503)
-		const body = await json(response)
-		expect(body.error?.code).toBe("SEARCH_LANES_UNAVAILABLE")
-		expect(body.outcomes?.status).toBe("failed")
-		expect(body.events).toBeUndefined()
-	})
-
 	it("keeps an untyped failure on the route's internal error code", async () => {
 		bridge.memongoBridgeScanNovelty.mockRejectedValue(
 			new Error("private driver text"),

@@ -224,7 +224,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 						maxResults: 20,
 						searchOptions: {
 							capabilities,
-							fusionMethod: "js-merge",
+							fusionMethod: "rankFusion",
 							embeddingMode: "automated",
 							conversationEvidenceMode: "parallel",
 							needExactEvidence: true,

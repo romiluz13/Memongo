@@ -61,11 +61,15 @@ startup commands do not perform a retained-data upgrade.
 
 ### Three Deployment Tiers
 
-| Tier           | Description                       | Transactions | Vector Search | Text Search | Auto-Embedding  |
-| -------------- | --------------------------------- | :----------: | :-----------: | :---------: | :-------------: |
-| **standalone** | Single mongod, simplest setup     |      No      |      No       | $text only  |       No        |
-| **replicaset** | Single-node replica set with auth |     Yes      |      No       | $text only  |       No        |
-| **fullstack**  | mongod + mongot (search engine)   |     Yes      |      Yes      |   $search   | Yes (Voyage AI) |
+| Tier           | Description                       | Transactions | Vector Search | Text Search | Auto-Embedding  | Memongo boots |
+| -------------- | --------------------------------- | :----------: | :-----------: | :---------: | :-------------: | :-----------: |
+| **standalone** | Single mongod, simplest setup     |      No      |      No       |    None     |       No        |      No       |
+| **replicaset** | Single-node replica set with auth |     Yes      |      No       |    None     |       No        |      No       |
+| **fullstack**  | mongod + mongot (search engine)   |     Yes      |      Yes      |   $search   | Yes (Voyage AI) |      Yes      |
+
+Memongo requires MongoDB 8.3 or later with Search and Automated Embedding, and
+it refuses to start without them. The `standalone` and `replicaset` tiers stay
+for testing MongoDB itself; Memongo does not run against them.
 
 ## Quick Start
 
@@ -80,10 +84,10 @@ startup commands do not perform a retained-data upgrade.
 # Full stack (recommended) - transactions + vector search + auto-embedding
 ./docker/mongodb/start.sh fullstack
 
-# Replica set only - transactions + $text search
+# Replica set only - transactions, no Search (Memongo refuses to start against it)
 ./docker/mongodb/start.sh replicaset
 
-# Standalone - simplest, no transactions or search
+# Standalone - no transactions, no Search (Memongo refuses to start against it)
 ./docker/mongodb/start.sh standalone
 
 # Stop all services

@@ -47,6 +47,7 @@ import {
 import { QueryCacheInvalidationCoalescer } from "./mongodb-query-cache-invalidation.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { recordBestEffortFailure } from "./best-effort.js"
 import { chunksCollection, eventsCollection } from "./mongodb-schema.js"
 import {
 	annotateUncertainCommit,
@@ -1119,7 +1120,7 @@ export class MongoDBManagerWriteOps {
 						run: projectionRun,
 						session,
 					}),
-			}).catch(() => {})
+			}).catch((err) => recordBestEffortFailure("projection-run-record", err))
 			if (projected.chunkCreated) {
 				this.host.chunkCount += 1
 				// C-017: a newly projected chunk is embedded server-side
@@ -1848,7 +1849,7 @@ export class MongoDBManagerWriteOps {
 							run: projectionRun,
 							session,
 						}),
-				}).catch(() => {})
+				}).catch((err) => recordBestEffortFailure("projection-run-record", err))
 				let createdChunkCount = 0
 				for (const [position, item] of written.entries()) {
 					const chunkCreated = chunkResults[position]?.chunkCreated ?? false

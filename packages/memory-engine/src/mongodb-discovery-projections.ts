@@ -28,9 +28,9 @@ import {
 	structuredMemCollection,
 	structuredMemRevisionsCollection,
 } from "./mongodb-schema.js"
+import { recordBestEffortFailure } from "./best-effort.js"
 import {
 	SectionFailureCollector,
-	noteBestEffortFailure,
 	type SectionFailure,
 } from "./section-failures.js"
 import type {
@@ -1301,7 +1301,7 @@ export async function buildDiscoveryProjection(params: {
 				durationMs: Date.now() - startedAt,
 			},
 		}).catch((runError) =>
-			noteBestEffortFailure(log, "discovery-projection-run", runError),
+			recordBestEffortFailure("discovery-projection-run", runError),
 		)
 
 		return projection
@@ -1318,7 +1318,7 @@ export async function buildDiscoveryProjection(params: {
 				durationMs: Date.now() - startedAt,
 			},
 		}).catch((runError) =>
-			noteBestEffortFailure(log, "discovery-projection-run", runError),
+			recordBestEffortFailure("discovery-projection-run", runError),
 		)
 		throw error
 	}

@@ -36,10 +36,3 @@ export type DetectedCapabilities = {
 	 */
 	queryableSearchIndexes?: readonly string[]
 }
-
-export type MongoIndexBudgetCheck = {
-	profile: MemoryMongoDBDeploymentProfile
-	plannedSearchIndexes: number
-	budget: number | "unbounded"
-	withinBudget: boolean
-}

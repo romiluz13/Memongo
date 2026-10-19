@@ -1,3 +1,5 @@
+import type { SubsystemLogger } from "@memongo/lib"
+import { MongoServerError } from "mongodb"
 import type { Collection, Db } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
@@ -9,6 +11,19 @@ import {
 vi.mock("./mongodb-telemetry.js", () => ({
 	emitTelemetry: vi.fn(),
 }))
+
+const sharedLog = vi.hoisted(() => ({ warn: vi.fn() }))
+
+vi.mock("@memongo/lib", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@memongo/lib")>()
+	return {
+		...actual,
+		createSubsystemLogger: (subsystem: string): SubsystemLogger =>
+			subsystem === "memory:mongodb:best-effort"
+				? (sharedLog as unknown as SubsystemLogger)
+				: actual.createSubsystemLogger(subsystem),
+	}
+})
 
 describe("bestEffort", () => {
 	beforeEach(() => resetBestEffortFailureCounts())
@@ -23,6 +38,24 @@ describe("bestEffort", () => {
 			throw new Error("again")
 		})
 		expect(getBestEffortFailureCounts()).toEqual({ audit: 2 })
+	})
+
+	it("logs the label and the numeric code, never the driver message", async () => {
+		sharedLog.warn.mockClear()
+		await bestEffort("run-record", async () => {
+			throw new MongoServerError({
+				errmsg: "duplicate key {{ email: 'SECRETVALUE@private-host.example' }}",
+				code: 11000,
+			})
+		})
+		expect(sharedLog.warn).toHaveBeenCalledExactlyOnceWith(
+			"best-effort run-record failed",
+			{ code: 11000 },
+		)
+		expect(JSON.stringify(sharedLog.warn.mock.calls)).not.toContain(
+			"SECRETVALUE",
+		)
+		expect(getBestEffortFailureCounts()).toEqual({ "run-record": 1 })
 	})
 
 	it("leaves the counter alone when the work succeeds", async () => {

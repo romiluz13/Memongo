@@ -23,6 +23,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # M2: the search contract has no fallback, so the source must contain
+      # none: no regex content find, no BSON text operator, no removed config
+      # key or alias, no JS fusion entry point. Fails the build with the file
+      # and line; parsing and validation regex sit on an allowlist with a reason.
+      - name: No-fallback source check
+        run: bun run check-no-fallbacks
+
       - name: Typecheck (monorepo)
         run: bun run check-types
 
@@ -220,15 +227,15 @@ jobs:
           --health-retries 20
           --health-start-period 40s
     steps:
-      # Zero fallbacks: without the key (a fork PR, or the secret unset) the
-      # API would silently serve search from $text, so the job fails here
-      # instead of skipping or going green on the fallback.
+      # No fallback: without the key (a fork PR, or the secret unset) the
+      # MongoDB service cannot autoEmbed and the engine refuses to start, so
+      # the job fails here with that cause instead of skipping.
       - name: Assert Voyage key is armed for the proof-pack (no fallback)
         env:
           VOYAGE_KEY_PRESENT: ${{ secrets.VOYAGE_API_KEY != '' }}
         run: |
           if [[ "${VOYAGE_KEY_PRESENT}" != "true" ]]; then
-            echo "::error::VOYAGE_API_KEY secret is empty: the MongoDB service cannot embed, so the proof-pack would run on the \$text fallback"
+            echo "::error::VOYAGE_API_KEY secret is empty: the MongoDB service cannot embed, so the engine cannot start and the proof-pack cannot run"
             exit 1
           fi
           echo "VOYAGE_API_KEY secret present on the MongoDB service container"

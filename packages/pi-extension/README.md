@@ -111,7 +111,7 @@ by this switch.
 
 ## Graceful degradation
 
-If the Memongo API is down, all three tools return clean error messages instead of crashing. The agent is instructed to fall back to `memory_search` (local FTS5). Nothing breaks.
+If the Memongo API is down, all three tools return a clear error message instead of crashing. The message points the agent to its other memory tool, `memory_search` (local FTS5), which is a separate system. The extension returns no substitute results of its own: a failed Memongo call is an error, never an empty list.
 
 ## License
 

@@ -865,21 +865,17 @@ export function applyHardConstraintRejections(params: {
 	return { accepted, rejected }
 }
 
-export function canUseLegacyFallback(request: MemorySearchRequest): boolean {
-	return !(
-		request.needExactEvidence ||
-		request.timeRange ||
-		request.conversationScope ||
-		request.structuredScope ||
-		request.referenceScope ||
-		request.proceduralScope
-	)
-}
-
 export function requestHasHardConstraints(
 	request: MemorySearchRequest,
 ): boolean {
-	return !canUseLegacyFallback(request)
+	return Boolean(
+		request.needExactEvidence ||
+			request.timeRange ||
+			request.conversationScope ||
+			request.structuredScope ||
+			request.referenceScope ||
+			request.proceduralScope,
+	)
 }
 
 export function buildConstraintSummaries(

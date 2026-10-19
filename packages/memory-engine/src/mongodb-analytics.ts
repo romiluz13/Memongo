@@ -203,7 +203,8 @@ type EmbeddingCoverageMeasurement = EmbeddingStatusCoverage
  * M2 T10 (G3-75): the former `$vectorSearch` probe is removed. Its text query
  * was embedded server-side on every call, so each `/stats` request spent
  * provider embeddings four times outside the cost ledger. Unknown is the
- * honest answer when the cheap metadata cannot give one.
+ * honest answer when the cheap metadata cannot give one. A read that fails
+ * rejects: it is never reported as zero coverage.
  */
 export async function measureEmbeddingCoverage(params: {
 	collection: Collection
@@ -212,115 +213,94 @@ export async function measureEmbeddingCoverage(params: {
 	tenantFilter?: Document
 }): Promise<EmbeddingCoverageMeasurement> {
 	if (params.embeddingMode === "client") {
-		try {
-			const rows: Document[] = await params.collection
-				.aggregate([
-					...(params.tenantFilter ? [{ $match: params.tenantFilter }] : []),
-					{
-						$group: {
-							_id: null,
-							total: { $sum: 1 },
-							withEmbedding: {
-								$sum: {
-									$cond: [
-										{ $gt: [{ $size: { $ifNull: ["$embedding", []] } }, 0] },
-										1,
-										0,
-									],
-								},
+		const rows: Document[] = await params.collection
+			.aggregate([
+				...(params.tenantFilter ? [{ $match: params.tenantFilter }] : []),
+				{
+					$group: {
+						_id: null,
+						total: { $sum: 1 },
+						withEmbedding: {
+							$sum: {
+								$cond: [
+									{ $gt: [{ $size: { $ifNull: ["$embedding", []] } }, 0] },
+									1,
+									0,
+								],
 							},
 						},
 					},
-				])
-				.toArray()
-			const row = rows[0]
-			const total = typeof row?.total === "number" ? row.total : 0
-			const success =
-				typeof row?.withEmbedding === "number" ? row.withEmbedding : 0
-			return {
-				total,
-				success,
-				failed: 0,
-				pending: Math.max(0, total - success),
-				unknown: 0,
-				basis: "stored-vector",
-			}
-		} catch {
-			return {
-				total: 0,
-				success: 0,
-				failed: 0,
-				pending: 0,
-				unknown: 0,
-				basis: "stored-vector",
-			}
-		}
-	}
-
-	let total = 0
-	try {
-		total = await params.collection.countDocuments(params.tenantFilter ?? {})
-		const indexes = await params.collection
-			.aggregate([{ $listSearchIndexes: { name: params.indexName } }])
+				},
+			])
 			.toArray()
-		const index = indexes.find((entry) => entry.name === params.indexName)
-		const indexed = index?.numDocs
-		const fields = index?.latestDefinition?.fields
-		const isAutomatedEmbeddingIndex =
-			Array.isArray(fields) &&
-			fields.some(
-				(field: unknown) =>
-					typeof field === "object" &&
-					field !== null &&
-					(field as { type?: unknown }).type === "autoEmbed",
-			)
-		const unknownResult: EmbeddingCoverageMeasurement = {
-			total,
-			success: 0,
-			failed: 0,
-			pending: 0,
-			unknown: total,
-			basis: "search-index",
-		}
-		if (
-			index?.status !== "READY" ||
-			index.queryable !== true ||
-			!isAutomatedEmbeddingIndex
-		) {
-			return unknownResult
-		}
-
-		// numDocs is index-wide, so it only answers a question that is not
-		// tenant-scoped.
-		const indexedCount =
-			!params.tenantFilter &&
-			typeof indexed === "number" &&
-			Number.isFinite(indexed) &&
-			indexed >= 0
-				? Math.floor(indexed)
-				: null
-		if (indexedCount === null) {
-			return unknownResult
-		}
-
-		const success = Math.min(total, indexedCount)
+		const row = rows[0]
+		const total = typeof row?.total === "number" ? row.total : 0
+		const success =
+			typeof row?.withEmbedding === "number" ? row.withEmbedding : 0
 		return {
 			total,
 			success,
 			failed: 0,
 			pending: Math.max(0, total - success),
 			unknown: 0,
-			basis: "search-index",
+			basis: "stored-vector",
 		}
-	} catch {
-		return {
-			total,
-			success: 0,
-			failed: 0,
-			pending: 0,
-			unknown: total,
-			basis: "search-index",
-		}
+	}
+
+	const total = await params.collection.countDocuments(
+		params.tenantFilter ?? {},
+	)
+	const indexes = await params.collection
+		.aggregate([{ $listSearchIndexes: { name: params.indexName } }])
+		.toArray()
+	const index = indexes.find((entry) => entry.name === params.indexName)
+	const indexed = index?.numDocs
+	const fields = index?.latestDefinition?.fields
+	const isAutomatedEmbeddingIndex =
+		Array.isArray(fields) &&
+		fields.some(
+			(field: unknown) =>
+				typeof field === "object" &&
+				field !== null &&
+				(field as { type?: unknown }).type === "autoEmbed",
+		)
+	const unknownResult: EmbeddingCoverageMeasurement = {
+		total,
+		success: 0,
+		failed: 0,
+		pending: 0,
+		unknown: total,
+		basis: "search-index",
+	}
+	if (
+		index?.status !== "READY" ||
+		index.queryable !== true ||
+		!isAutomatedEmbeddingIndex
+	) {
+		return unknownResult
+	}
+
+	// numDocs is index-wide, so it only answers a question that is not
+	// tenant-scoped.
+	const indexedCount =
+		!params.tenantFilter &&
+		typeof indexed === "number" &&
+		Number.isFinite(indexed) &&
+		indexed >= 0
+			? Math.floor(indexed)
+			: null
+	if (indexedCount === null) {
+		return unknownResult
+	}
+
+	const success = Math.min(total, indexedCount)
+	return {
+		total,
+		success,
+		failed: 0,
+		pending: Math.max(0, total - success),
+		unknown: 0,
+		basis: "search-index",
 	}
 }
 
@@ -386,36 +366,6 @@ async function aggregateEmbeddingStatusCoverage(
 			basis: embeddingMode === "automated" ? "search-index" : "stored-vector",
 		},
 	)
-}
-
-/**
- * #26 reconciliation: advance the stored `embeddingStatus` field to "success"
- * for documents that actually carry an embedding vector, so the persisted field
- * stops lying (it was written "pending" and never advanced). Returns how many
- * documents were advanced. Documents without an on-document vector are left as
- * pending — for autoEmbed collections their queryability must be confirmed via a
- * live vector-search probe, not this sweep.
- */
-export async function reconcileEmbeddingStatus(
-	db: Db,
-	prefix: string,
-): Promise<{ advanced: number }> {
-	let advanced = 0
-	for (const col of embeddableChunkCollections(db, prefix)) {
-		try {
-			const res = await col.updateMany(
-				{
-					"embedding.0": { $exists: true },
-					embeddingStatus: { $ne: "success" },
-				},
-				{ $set: { embeddingStatus: "success" } },
-			)
-			advanced += res.modifiedCount ?? 0
-		} catch {
-			// Collection may not exist yet — ignore
-		}
-	}
-	return { advanced }
 }
 
 /**

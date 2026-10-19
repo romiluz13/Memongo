@@ -5,13 +5,13 @@
 import { MongoServerError } from "mongodb"
 import type { Document } from "mongodb"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 import { openSearchBudget } from "./mongodb-search-budget.js"
 import { SearchBudgetDeniedError, SearchLaneError } from "./search-outcomes.js"
-import {
-	bestEffortFailureCount,
-	resetBestEffortFailureCounts,
-} from "./section-failures.js"
 import {
 	createSearchModelDb,
 	type SearchModelDb,
@@ -751,7 +751,7 @@ describe("the run record is declared best-effort and counted", () => {
 		})
 		const projection = await run("topic-brief", "pager")
 		expect(projection.metadata.failures).toEqual([])
-		expect(bestEffortFailureCount("discovery-projection-run")).toBe(1)
+		expect(getBestEffortFailureCounts()["discovery-projection-run"]).toBe(1)
 	})
 })
 

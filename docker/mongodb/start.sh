@@ -1,9 +1,12 @@
 #!/bin/bash
 # Memongo MongoDB Quick Start
 # Usage:
-#   ./docker/mongodb/start.sh standalone    # Simplest, no transactions/search
-#   ./docker/mongodb/start.sh replicaset    # Transactions, $text search
-#   ./docker/mongodb/start.sh fullstack     # Transactions + vector search + auto-embedding
+#   ./docker/mongodb/start.sh standalone    # mongod only: no transactions, no Search
+#   ./docker/mongodb/start.sh replicaset    # Replica set: transactions, no Search
+#   ./docker/mongodb/start.sh fullstack     # mongod + mongot: the profile Memongo can start against
+#
+# Memongo requires MongoDB 8.3+ with Search and autoEmbed and refuses to start
+# without them, so only fullstack can serve it.
 #   ./docker/mongodb/start.sh stop          # Stop all services
 #   ./docker/mongodb/start.sh clean         # Stop and remove all data
 
@@ -20,7 +23,7 @@ NC='\033[0m'
 case "${1:-fullstack}" in
   standalone)
     echo -e "${GREEN}Starting MongoDB (standalone mode)...${NC}"
-    echo -e "${YELLOW}Note: No transactions or vector search in standalone mode.${NC}"
+    echo -e "${YELLOW}Note: No transactions or Search in standalone mode. Memongo refuses to start against it.${NC}"
     docker compose -f "$COMPOSE_FILE" --profile standalone up -d
     echo ""
     echo -e "${GREEN}MongoDB is starting on port ${MONGODB_PORT:-27017}${NC}"
@@ -28,9 +31,8 @@ case "${1:-fullstack}" in
     echo ""
     echo "Features available:"
     echo "  - Basic CRUD operations"
-    echo "  - \$text keyword search"
-    echo "  - NO transactions (withTransaction will fall back to sequential writes)"
-    echo "  - NO vector search (\$vectorSearch not available)"
+    echo "  - NO transactions (a write that needs one fails with a typed error)"
+    echo "  - NO Search (\$search and \$vectorSearch not available), so Memongo refuses to start"
     ;;
 
   replicaset)
@@ -48,9 +50,8 @@ case "${1:-fullstack}" in
     echo ""
     echo "Features available:"
     echo "  - ACID transactions (withTransaction)"
-    echo "  - \$text keyword search"
     echo "  - Change streams"
-    echo "  - NO vector search (requires fullstack profile with mongot)"
+    echo "  - NO Search (requires fullstack profile with mongot), so Memongo refuses to start"
     ;;
 
   fullstack)
@@ -73,7 +74,7 @@ case "${1:-fullstack}" in
     echo ""
     echo "Features available:"
     echo "  - ACID transactions (withTransaction)"
-    echo "  - \$text keyword search"
+    echo "  - \$search (keyword search)"
     echo "  - \$vectorSearch (semantic/vector search)"
     echo "  - \$search with \$rankFusion and \$scoreFusion"
     echo "  - Automated embeddings (when embedding API keys are provided)"
@@ -109,9 +110,9 @@ case "${1:-fullstack}" in
     echo "Usage: $0 {standalone|replicaset|fullstack|stop|clean}"
     echo ""
     echo "Deployment Tiers:"
-    echo "  standalone   - Simplest MongoDB. No transactions, no search."
-    echo "  replicaset   - MongoDB replica set. Transactions + \$text search."
-    echo "  fullstack    - mongod + mongot. Transactions + vector search + auto-embedding."
+    echo "  standalone   - mongod only. No transactions, no Search. Memongo cannot start."
+    echo "  replicaset   - MongoDB replica set. Transactions, no Search. Memongo cannot start."
+    echo "  fullstack    - mongod + mongot. Transactions + Search + auto-embedding. The supported profile."
     echo ""
     echo "Management:"
     echo "  stop         - Stop all services"

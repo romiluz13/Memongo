@@ -198,9 +198,14 @@ export async function checkChunkEventOrphans(
 ): Promise<{ orphanedChunkCount: number; orphanedEventIds: string[] }> {
 	const scopeFilter = agentId ? { agentId } : {}
 
-	// Step 1: event ids referenced by conversation chunks, via the path.
+	// Step 1: event ids referenced by conversation chunks, via the path. The
+	// range [events/, events0) is exactly the `events/` prefix ('0' is the
+	// character after '/'), so no regex runs against stored content.
 	const chunkDocs = await chunksCol
-		.find({ path: /^events\//, ...scopeFilter }, { projection: { path: 1 } })
+		.find(
+			{ path: { $gte: "events/", $lt: "events0" }, ...scopeFilter },
+			{ projection: { path: 1 } },
+		)
 		.toArray()
 	if (chunkDocs.length === 0) {
 		return { orphanedChunkCount: 0, orphanedEventIds: [] }

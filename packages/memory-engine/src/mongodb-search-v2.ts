@@ -20,6 +20,7 @@ import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import {
 	assertLaneIndexesHealthy,
+	laneHasNoManifestIndex,
 	capabilitiesFromActiveHealth,
 } from "./mongodb-index-health.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
@@ -1106,14 +1107,6 @@ async function searchV2WithBudget(
 					break
 				}
 				case "raw-window": {
-					if (!capabilities.textSearch) {
-						pathResults = notApplicable(
-							"raw-window",
-							"lane",
-							"capability-absent",
-						)
-						break
-					}
 					// M2 audit fix: cap raw-window events at 50 to avoid unbounded result sets
 					const rawWindowLimit = 50
 					const queryTerms = extractRawWindowQueryTerms(query)
@@ -1225,6 +1218,10 @@ async function searchV2WithBudget(
 					break
 				}
 				case "graph": {
+					if (laneHasNoManifestIndex("graph")) {
+						pathResults = notApplicable("graph", "plan", "capability-absent")
+						break
+					}
 					if (constrainedGraphCandidates.length > 0) {
 						const candidateEntities = (
 							await Promise.all(
@@ -1327,6 +1324,10 @@ async function searchV2WithBudget(
 					break
 				}
 				case "episodic": {
+					if (laneHasNoManifestIndex("episodic")) {
+						pathResults = notApplicable("episodic", "plan", "capability-absent")
+						break
+					}
 					// Use original query for episodic search (synonym expansion breaks matching)
 					const episodes = await searchEpisodes({
 						db,
@@ -1769,7 +1770,7 @@ async function searchV2WithBudget(
 				case "conversation-evidence":
 					return conversationEvidenceLaneCost({ capabilities, embeddingMode })
 				case "raw-window":
-					return rawWindowLaneCost({ capabilities })
+					return rawWindowLaneCost()
 				default:
 					return NO_SEARCH_COST
 			}

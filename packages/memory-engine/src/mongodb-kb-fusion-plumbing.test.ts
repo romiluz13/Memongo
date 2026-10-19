@@ -18,9 +18,7 @@ vi.mock("./mongodb-schema.js", async (importOriginal) => {
 
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 
-function makeManagerStub(
-	fusionMethod: "scoreFusion" | "rankFusion" | "js-merge",
-) {
+function makeManagerStub(fusionMethod: "scoreFusion" | "rankFusion") {
 	return {
 		db: createStatefulMongoFake().db,
 		agentId: "agent-1",

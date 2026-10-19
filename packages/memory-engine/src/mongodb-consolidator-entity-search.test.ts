@@ -64,7 +64,7 @@ beforeEach(() => {
 })
 
 describe("consolidator entity filter selects its batch through Atlas Search", () => {
-	it("emits one $search with the batch window in compound.filter and the entity query as must", async () => {
+	it("emits one $search with the batch window in compound.filter and one phrase per entity in should", async () => {
 		const f = fixture(async () => [])
 		await consolidateMemory({
 			db: f.db,
@@ -95,7 +95,11 @@ describe("consolidator entity filter selects its batch through Atlas Search", ()
 							{ equals: { path: "scopeRef", value: "agent:agent-1" } },
 							{ range: { path: "timestamp", gte: from, lte: to } },
 						],
-						must: [{ text: { query: ["Acme", "Berlin"], path: "body" } }],
+						should: [
+							{ phrase: { query: "Acme", path: "body" } },
+							{ phrase: { query: "Berlin", path: "body" } },
+						],
+						minimumShouldMatch: 1,
 					},
 				},
 			},
@@ -119,6 +123,37 @@ describe("consolidator entity filter selects its batch through Atlas Search", ()
 			{ $sort: { timestamp: -1 } },
 			{ $limit: 7 },
 		])
+	})
+
+	it("sends a multi-word entity as one phrase, never split into per-word terms", async () => {
+		const f = fixture(async () => [])
+		await consolidateMemory({
+			db: f.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { entitySet: ["Acme Corp", "Berlin"] },
+		})
+		const pipeline = (
+			f.events.aggregate.mock.calls[0] as unknown as [
+				Array<{
+					$search: {
+						compound: {
+							should: Array<{ phrase: { query: string } }>
+							minimumShouldMatch: number
+							must?: unknown
+						}
+					}
+				}>,
+			]
+		)[0]
+		const { compound } = pipeline[0].$search
+		expect(compound.should.map((clause) => clause.phrase.query)).toEqual([
+			"Acme Corp",
+			"Berlin",
+		])
+		expect(compound.minimumShouldMatch).toBe(1)
+		expect(compound).not.toHaveProperty("must")
+		expect(JSON.stringify(compound)).not.toContain('"text"')
 	})
 
 	it("keeps the window to agentId alone when no scope or time range is given", async () => {

@@ -238,6 +238,11 @@ function fail(message: string): never {
 }
 
 function parseArgs(argv: string[] = process.argv.slice(2)) {
+	if (argv.includes("--no-rerank")) {
+		fail(
+			"--no-rerank was removed: reranking is not supported, so there is nothing to disable. Remove the flag.",
+		)
+	}
 	const sampleFlag = argv.indexOf("--sample")
 	const sample =
 		sampleFlag >= 0 ? Number.parseInt(argv[sampleFlag + 1] ?? "", 10) : 0
@@ -290,12 +295,6 @@ function parseArgs(argv: string[] = process.argv.slice(2)) {
 				: undefined,
 		json: argv.includes("--json"),
 		resume: argv.includes("--resume"),
-		// B7: explicit opt-out of the cross-encoder reranker. Sets
-		// MEMONGO_RERANKING_ENABLED=false before the manager exists, so the
-		// resolved config disables reranking and the run manifest records the
-		// deviation (a rerank-off run must never look identical to a
-		// rerank-on run).
-		noRerank: argv.includes("--no-rerank"),
 		checkpointPath,
 	}
 }
@@ -476,7 +475,7 @@ export async function main(
 	argv: string[] = process.argv.slice(2),
 	deps: BenchmarkCliDeps = {},
 ): Promise<void> {
-	const { sample, questionsPath, json, resume, checkpointPath, noRerank } =
+	const { sample, questionsPath, json, resume, checkpointPath } =
 		parseArgs(argv)
 
 	if (!process.env.MEMONGO_MONGODB_URI?.trim()) {
@@ -492,15 +491,6 @@ export async function main(
 		parseBenchmarkFingerprintKey(process.env)
 	} catch (error) {
 		fail((error as Error).message)
-	}
-
-	// B7: --no-rerank must take effect before the manager is acquired (the
-	// resolved config is built at acquisition time) and before the benchmark
-	// ops reranker-key gate runs. The env value is also recorded verbatim in
-	// the run manifest's settings snapshot, so the rerank-off deviation is
-	// part of the run's configuration identity.
-	if (noRerank) {
-		process.env.MEMONGO_RERANKING_ENABLED = "false"
 	}
 
 	let datasetPath = DATASET
@@ -597,9 +587,6 @@ export async function main(
 		`checkpoint  : ${checkpointPath ? path.relative(REPO_ROOT, checkpointPath) : "disabled"}`,
 	)
 	console.log(`resume      : ${resume ? "enabled" : "disabled"}`)
-	if (noRerank) {
-		console.log("rerank      : disabled (--no-rerank)")
-	}
 	console.log("")
 
 	const recallRegression = await (

@@ -95,10 +95,6 @@ import {
 	updateMemoryJob,
 } from "./mongodb-memory-jobs.js"
 import {
-	isTransactionUnsupported,
-	MAJORITY_TRANSACTION_OPTIONS,
-} from "./mongodb-transactions.js"
-import {
 	getRecallTrace,
 	listRecallTraces,
 	recordRecallTrace,
@@ -158,11 +154,7 @@ import {
 	enrichSessionsWithLLM,
 	extractSessionEnrichment,
 } from "./mongodb-llm-enrichment.js"
-import {
-	resolveDecompositionMode,
-	decomposeQuery,
-	mergeMultiQueryResults,
-} from "./mongodb-query-decomposition.js"
+import { resolveDecompositionMode } from "./mongodb-query-decomposition.js"
 import {
 	planRetrieval,
 	type RetrievalPath,
@@ -229,6 +221,8 @@ import {
 	type BootPreflightReport,
 	runBootPreflight,
 } from "./mongodb-boot-preflight.js"
+import { MemongoBootError, describeDriverError } from "./mongodb-boot-errors.js"
+import { recordBestEffortFailure } from "./best-effort.js"
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
@@ -397,22 +391,6 @@ export type {
 } from "./mongodb-quarantine-review.js"
 
 const log = createSubsystemLogger("memory:mongodb")
-
-function redactMongoURI(uri: string): string {
-	try {
-		const parsed = new URL(uri)
-		if (parsed.password) {
-			parsed.password = "***"
-		}
-		if (parsed.username) {
-			parsed.username = parsed.username.slice(0, 2) + "***"
-		}
-		return parsed.toString()
-	} catch {
-		// If URL parsing fails, do a simple regex-based redaction
-		return uri.replace(/\/\/([^:]+):([^@]+)@/, "//***:***@")
-	}
-}
 
 // ---------------------------------------------------------------------------
 // MongoDBMemoryManager — implements MemorySearchManager for MongoDB backend
@@ -595,7 +573,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId)
-		const safeUri = redactMongoURI(mongoCfg.uri)
 		// B10: credential-free deployment identity (hosts + database + appName,
 		// never userinfo) so capability probe outcomes are scoped to this
 		// deployment only. Never log this key material.
@@ -606,28 +583,33 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		let client: MongoClient
 		let ownsClient = true
 		if (params.client) {
-			log.info(
-				`using shared MongoDB client: ${safeUri} (db=${mongoCfg.database})`,
-			)
+			log.info("using shared MongoDB client")
 			client = params.client
 			ownsClient = false
 		} else {
-			// Connect to MongoDB with a timeout to avoid hanging
-			log.info(`connecting to MongoDB: ${safeUri} (db=${mongoCfg.database})`)
+			// Connect to MongoDB with a timeout to avoid hanging. Nothing here
+			// prints the URI, a host or the database name.
+			log.info("connecting to MongoDB")
 			client = new MongoClient(mongoCfg.uri, buildMongoClientOptions(mongoCfg))
 			try {
 				await client.connect()
 				// Verify the connection actually works with a ping
 				await client.db("admin").command({ ping: 1 })
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+				const cause = describeDriverError(err)
+				log.warn(`failed to connect to MongoDB (${cause})`)
 				try {
 					await client.close()
 				} catch {
 					// Ignore close errors during failed connect
 				}
-				throw new Error(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+				throw new MemongoBootError(
+					{
+						code: "server-unreachable",
+						requirement: "a reachable MongoDB deployment",
+					},
+					`MongoDB is unreachable (${cause})`,
+				)
 			}
 		}
 
@@ -767,8 +749,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			try {
 				await manager.sync({ reason: "startup" })
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(`initial memory sync failed: ${msg}`)
+				recordBestEffortFailure("startup-sync", err)
 			}
 			try {
 				const repaired = await manager.repairEventProjections()
@@ -778,9 +759,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					)
 				}
 			} catch (err) {
-				log.warn(
-					`startup projection repair failed; remaining canonical events will be retried on restart: ${String(err)}`,
-				)
+				recordBestEffortFailure("startup-projection-repair", err)
 			}
 			manager.startMemoryJobWorker()
 
@@ -1149,12 +1128,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
 			/**
-			 * Never called for KB search since M2: admission denial is a typed
-			 * budget-denied failure, not a degraded answer. Kept so existing
-			 * callers still compile.
-			 */
-			onDegradation?: (degradation: MemorySearchDegradation) => void
-			/**
 			 * #101: receives this call's outcome summary ({status, lanes})
 			 * exactly once. Sink-not-state; rows are value-free enums.
 			 */
@@ -1269,10 +1242,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	private async persistChangeStreamResumeToken(token: unknown): Promise<void> {
 		return syncOpsOf(this).persistChangeStreamResumeToken(token)
-	}
-
-	private async clearPersistedChangeStreamResumeToken(): Promise<void> {
-		return syncOpsOf(this).clearPersistedChangeStreamResumeToken()
 	}
 
 	private async maybeAutoRefreshKB(): Promise<void> {
@@ -1644,10 +1613,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private async runClaimedBackgroundExtractionJob(
 		job: ClaimedMemoryJob,
 		prefetchedLlmFacts?: string[],
+		prefetchedEffects?: Parameters<
+			MongoDBManagerHost["runClaimedBackgroundExtractionJob"]
+		>[2],
 	): Promise<void> {
 		return jobsOpsOf(this).runClaimedBackgroundExtractionJob(
 			job,
 			prefetchedLlmFacts,
+			prefetchedEffects,
 		)
 	}
 

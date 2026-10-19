@@ -195,8 +195,8 @@ function searchEnvelope(
 /**
  * WS-12 (C-019): search carrying the degradation marker out of the engine.
  * Same pipeline as memongoBridgeSearch; the response's `degradation` is set
- * exactly when admission control degraded the answer (denied query, denied
- * legacy re-run), so the API boundary can serve "throttled" as throttling
+ * exactly when admission control denied the whole query, so the API
+ * boundary can serve "throttled" as throttling
  * instead of "no memories found". Absent means the answer is authoritative.
  */
 export async function memongoBridgeSearchWithDegradation(params: {
@@ -239,10 +239,9 @@ export async function memongoBridgeSearch(
 }
 
 /**
- * WS-12 (C-019): KB search carrying the degradation marker out of the engine.
- * `degradation` is set when admission control dropped the vector lane — the
- * text-lane results stand (real hits, degraded ranking), and the marker says
- * why, so degraded ranking never reads as authoritative ranking.
+ * KB search envelope. Since M2 a denied or failed KB search throws a typed
+ * error, so the envelope carries results and outcomes only, never a
+ * degradation marker.
  */
 export async function memongoBridgeSearchKBWithDegradation(params: {
 	query: string
@@ -256,7 +255,6 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 	fusionMethod?: MemoryMongoDBFusionMethod
 }): Promise<MemongoBridgeSearchEnvelope> {
 	const m = await memongoBridgeGetManager(params.agentId)
-	let degradation: MemorySearchDegradation | undefined
 	let outcomes: SearchOutcomeSummary | undefined
 	const results = await m.searchKB(params.query, {
 		maxResults: params.maxResults,
@@ -268,14 +266,11 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 		scopeRef: params.scopeRef,
 		filter: params.filter,
 		fusionMethod: params.fusionMethod,
-		onDegradation: (d) => {
-			degradation = d
-		},
 		onOutcomes: (o) => {
 			outcomes = o
 		},
 	})
-	return searchEnvelope(results, degradation, outcomes)
+	return searchEnvelope(results, undefined, outcomes)
 }
 
 /** Library KB search: the WithDegradation envelope, thrown when the call failed. */
@@ -721,7 +716,7 @@ export async function memongoBridgeSearchDetailed(params: {
 		rerank?: boolean
 		allowConstraintRelaxation?: boolean
 		numCandidates?: number
-		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod?: "scoreFusion" | "rankFusion"
 		hybridMode?: "hybrid" | "vector-only"
 		allowHybridBackstop?: boolean
 	}
@@ -801,7 +796,7 @@ export async function memongoBridgeSearchDetailed(params: {
 					rerank?: boolean
 					allowConstraintRelaxation?: boolean
 					numCandidates?: number
-					fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+					fusionMethod?: "scoreFusion" | "rankFusion"
 					hybridMode?: "hybrid" | "vector-only"
 					allowHybridBackstop?: boolean
 			  }
