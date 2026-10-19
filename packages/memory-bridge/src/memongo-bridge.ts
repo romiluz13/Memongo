@@ -58,6 +58,7 @@ import type {
 import {
 	SearchBudgetDeniedError,
 	SearchLaneError,
+	classifySearchError,
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
 } from "@memongo/memory-engine"
@@ -1141,12 +1142,39 @@ export async function memongoBridgeSelfEdit(params: {
 	})
 }
 
+export type MemongoStateSection = keyof MemoryStateFamily
+
+/**
+ * M2 T10 (X-03): one typed row per rejected state section. The reason is the
+ * engine's value-free failure enum, or `erasure-in-progress` when the tenant
+ * is being erased; the raw error never rides on the row.
+ */
+export type MemongoStateFailure = {
+	section: MemongoStateSection
+	reason: SearchFailureReason | "erasure-in-progress"
+}
+
+/**
+ * A section that could not be read is absent and named in `failures`; it is
+ * never replaced by an empty object that reads as a healthy empty section.
+ */
+export type MemongoBridgeState = Partial<MemoryStateFamily> & {
+	partial?: true
+	failures?: MemongoStateFailure[]
+}
+
+function stateFailureReason(error: unknown): MemongoStateFailure["reason"] {
+	return error instanceof Error && error.name === "ErasureGateConflictError"
+		? "erasure-in-progress"
+		: classifySearchError(error)
+}
+
 export async function memongoBridgeGetState(params: {
 	agentId?: string
 	scope?: MemoryScope
 	scopeRef?: string
 	kbRestricted?: boolean
-}): Promise<MemoryStateFamily & { partial?: boolean }> {
+}): Promise<MemongoBridgeState> {
 	const results = await Promise.allSettled([
 		memongoBridgeProfile({
 			agentId: params.agentId,
@@ -1174,20 +1202,34 @@ export async function memongoBridgeGetState(params: {
 			"all unified state reads failed",
 		)
 	}
-	const partial = results.some((r) => r.status === "rejected")
-	const profile =
-		results[0].status === "fulfilled"
-			? results[0].value
-			: ({} as MemoryStateFamily["profile"])
-	const slate = results[1].status === "fulfilled" ? results[1].value : null
-	const bundle =
-		results[2].status === "fulfilled"
-			? results[2].value
-			: ({} as MemoryStateFamily["bundle"])
-	const blocks = slate
-		? materializeBlocks(slate)
-		: { blocks: [], totalTokenBudget: 0, totalActualTokens: 0 }
-	return { profile, blocks, bundle, ...(partial ? { partial: true } : {}) }
+	const [profile, slate, bundle] = results
+	const failures: MemongoStateFailure[] = []
+	const state: MemongoBridgeState = {}
+	if (profile.status === "fulfilled") {
+		state.profile = profile.value
+	} else {
+		failures.push({
+			section: "profile",
+			reason: stateFailureReason(profile.reason),
+		})
+	}
+	if (slate.status === "fulfilled") {
+		state.blocks = materializeBlocks(slate.value)
+	} else {
+		failures.push({
+			section: "blocks",
+			reason: stateFailureReason(slate.reason),
+		})
+	}
+	if (bundle.status === "fulfilled") {
+		state.bundle = bundle.value
+	} else {
+		failures.push({
+			section: "bundle",
+			reason: stateFailureReason(bundle.reason),
+		})
+	}
+	return failures.length > 0 ? { ...state, partial: true, failures } : state
 }
 
 export async function memongoBridgeListRecallTraces(params: {

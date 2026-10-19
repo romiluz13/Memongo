@@ -73,7 +73,14 @@ export const maintenancePaths = {
 			},
 			responses: {
 				"200": { description: "Novelty report" },
-				"500": { description: "Novelty scan failed" },
+				"500": {
+					description:
+						"SEARCH_LANES_FAILED: the vector scan failed with a defect (query-error or internal-error). The body adds `outcomes` (status failed, the failing row). Other unexpected failures return NOVELTY_SCAN_FAILED.",
+				},
+				"503": {
+					description:
+						"SEARCH_LANES_UNAVAILABLE: the vector scan could not run (lane-unavailable, index-missing, index-not-ready, query-timeout, dependency-unavailable). The body adds `outcomes`. SERVICE_UNAVAILABLE: the database is unreachable. A failed scan is never an empty 200.",
+				},
 			},
 		},
 	},

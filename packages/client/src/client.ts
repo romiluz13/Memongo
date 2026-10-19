@@ -686,11 +686,30 @@ export type MemongoContextBundleResponse = {
 	degradation?: MemongoDegradation
 }
 
+/** One unreadable `state()` section with its typed reason (M2 T10, X-03). */
+export type MemongoStateFailure = {
+	section: "profile" | "blocks" | "bundle"
+	reason:
+		| "lane-unavailable"
+		| "index-missing"
+		| "index-not-ready"
+		| "query-timeout"
+		| "dependency-unavailable"
+		| "query-error"
+		| "internal-error"
+		| "erasure-in-progress"
+}
+
+/**
+ * A section that could not be read is absent and named in `failures`; it is
+ * never an empty object that reads as a healthy empty section.
+ */
 export type MemongoStateResponse = {
-	profile: MemongoProfileResponse
-	blocks: MemongoMemoryBlocksResponse
-	bundle: MemongoContextBundleResponse
-	partial?: boolean
+	profile?: MemongoProfileResponse
+	blocks?: MemongoMemoryBlocksResponse
+	bundle?: MemongoContextBundleResponse
+	partial?: true
+	failures?: MemongoStateFailure[]
 }
 
 /** Metadata shell for a silent-mode empty `searchDetailed` response. */

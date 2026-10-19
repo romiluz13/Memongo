@@ -6,7 +6,10 @@ const manager = vi.hoisted(() => ({
 	buildContextBundle: vi.fn(),
 }))
 const blocks = { blocks: [], totalTokenBudget: 80, totalActualTokens: 0 }
-vi.mock("@memongo/memory-engine", () => ({
+vi.mock("@memongo/memory-engine", async () => ({
+	...(await vi.importActual<typeof import("@memongo/memory-engine")>(
+		"@memongo/memory-engine",
+	)),
 	getMemorySearchManager: vi.fn(async () => ({ manager, error: null })),
 	closeAllMemorySearchManagers: vi.fn(),
 }))
@@ -60,7 +63,7 @@ describe("unified state total failure", () => {
 
 	it.each([
 		1, 2, 3, 4, 5, 6, 7,
-	])("preserves the fulfilled and partial shapes for lane mask %i", async (mask) => {
+	])("omits each rejected section and names it in a failure row for lane mask %i", async (mask) => {
 		const profile = { profile: [] }
 		const slate = { items: [] }
 		const bundle = { sections: [], metadata: { partial: true } }
@@ -80,15 +83,21 @@ describe("unified state total failure", () => {
 			scopeRef: "workspace:one",
 			kbRestricted: true,
 		})
+		const failures = [
+			...(mask & 1 ? [] : [{ section: "profile", reason: "internal-error" }]),
+			...(mask & 2 ? [] : [{ section: "blocks", reason: "internal-error" }]),
+			...(mask & 4 ? [] : [{ section: "bundle", reason: "internal-error" }]),
+		]
 		expect(state).toEqual({
-			profile: mask & 1 ? profile : {},
-			blocks:
-				mask & 2
-					? blocks
-					: { blocks: [], totalTokenBudget: 0, totalActualTokens: 0 },
-			bundle: mask & 4 ? bundle : {},
-			...(mask === 7 ? {} : { partial: true }),
+			...(mask & 1 ? { profile } : {}),
+			...(mask & 2 ? { blocks } : {}),
+			...(mask & 4 ? { bundle } : {}),
+			...(mask === 7 ? {} : { partial: true, failures }),
 		})
+		expect("profile" in state).toBe((mask & 1) !== 0)
+		expect("blocks" in state).toBe((mask & 2) !== 0)
+		expect("bundle" in state).toBe((mask & 4) !== 0)
+		expect(JSON.stringify(state)).not.toContain("private")
 		for (const mock of mocks)
 			expect(mock).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -102,6 +111,28 @@ describe("unified state total failure", () => {
 		expect(vi.mocked(getMemorySearchManager).mock.calls).toHaveLength(3)
 		for (const call of vi.mocked(getMemorySearchManager).mock.calls)
 			expect(call[0]).toEqual(expect.objectContaining({ agentId: "agent" }))
+	})
+
+	it("types each failure row by its reason without carrying the message", async () => {
+		const network = Object.assign(new Error("private network detail"), {
+			name: "MongoNetworkError",
+		})
+		const erasing = Object.assign(new Error("private erasure detail"), {
+			name: "ErasureGateConflictError",
+		})
+		manager.synthesizeProfile.mockRejectedValue(network)
+		manager.hydrateActiveSlate.mockRejectedValue(erasing)
+		manager.buildContextBundle.mockResolvedValue({ sections: [] })
+
+		const state = await memongoBridgeGetState({ agentId: "agent" })
+
+		expect(state.failures).toEqual([
+			{ section: "profile", reason: "dependency-unavailable" },
+			{ section: "blocks", reason: "erasure-in-progress" },
+		])
+		expect(state.partial).toBe(true)
+		expect(state.bundle).toEqual({ sections: [] })
+		expect(JSON.stringify(state)).not.toContain("private")
 	})
 
 	it("keeps startup string failures as plain reasons rather than inventing a driver class", async () => {
