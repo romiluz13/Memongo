@@ -472,7 +472,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"minScore",
 			"deep",
 		],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 500, 503],
 		tools: ["memongo_relevance_explain"],
 	},
 	{

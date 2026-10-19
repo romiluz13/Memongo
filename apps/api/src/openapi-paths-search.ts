@@ -103,7 +103,7 @@ const searchLaneOutcomeSchema = {
 	},
 }
 
-const searchOutcomesSchema = {
+export const searchOutcomesSchema = {
 	type: "object",
 	required: ["status", "lanes"],
 	properties: {
@@ -118,7 +118,7 @@ const searchOutcomesSchema = {
  * #101 / resolution R3: the non-2xx search failures. The body is the ApiError
  * envelope plus `outcomes` (status "failed" and every row).
  */
-const searchFailureResponses = {
+export const searchFailureResponses = {
 	"500": {
 		description:
 			"SEARCH_LANES_FAILED: every required lane failed and at least one failure is a defect (query-error or internal-error); this wins over the 503 codes. The body adds `outcomes` (status failed, every row). Other unexpected failures keep their route's internal error code.",

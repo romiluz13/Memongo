@@ -153,3 +153,86 @@ describe("POST /v1/novelty-scan (X-10)", () => {
 		expect(await response.json()).toEqual(report)
 	})
 })
+
+describe("POST /v1/admin/relevance/explain (X-11)", () => {
+	const failedRow = {
+		lane: "hybrid",
+		stage: "lane",
+		outcome: "failed",
+		reason: "lane-unavailable",
+	}
+	const explain = (extra: Record<string, unknown>) => ({
+		latencyMs: 12,
+		sourceScope: "all",
+		health: "insufficient-data",
+		sampleRate: 0.05,
+		artifacts: [],
+		results: [],
+		...extra,
+	})
+
+	it("serves an explain whose lanes all failed as a typed 503, not a health verdict", async () => {
+		bridge.memongoBridgeRelevanceExplain.mockResolvedValue(
+			explain({ outcomes: { status: "failed", lanes: [failedRow] } }),
+		)
+
+		const response = await post("/v1/admin/relevance/explain", {
+			query: "topic",
+		})
+
+		expect(response.status).toBe(503)
+		const body = await json(response)
+		expect(body.error?.code).toBe("SEARCH_LANES_UNAVAILABLE")
+		expect(body.outcomes).toEqual({ status: "failed", lanes: [failedRow] })
+		expect(body.health).toBeUndefined()
+	})
+
+	it("keeps a partial explain as a 200 that carries its failure rows", async () => {
+		bridge.memongoBridgeRelevanceExplain.mockResolvedValue(
+			explain({
+				outcomes: { status: "partial", lanes: [failedRow] },
+				results: [{ path: "a", score: 1 }],
+			}),
+		)
+
+		const response = await post("/v1/admin/relevance/explain", {
+			query: "topic",
+		})
+
+		expect(response.status).toBe(200)
+		const body = await json(response)
+		expect(body.health).toBe("insufficient-data")
+		expect(body.outcomes).toEqual({ status: "partial", lanes: [failedRow] })
+	})
+
+	it("reports a run that could not be stored on the 200", async () => {
+		bridge.memongoBridgeRelevanceExplain.mockResolvedValue(
+			explain({
+				health: "ok",
+				persistFailure: { reason: "dependency-unavailable" },
+			}),
+		)
+
+		const response = await post("/v1/admin/relevance/explain", {
+			query: "topic",
+		})
+
+		expect(response.status).toBe(200)
+		const body = await json(response)
+		expect(body.persistFailure).toEqual({ reason: "dependency-unavailable" })
+		expect(body.runId).toBeUndefined()
+	})
+
+	it("maps a typed engine failure to its typed status", async () => {
+		bridge.memongoBridgeRelevanceExplain.mockRejectedValue(
+			typedLaneError("query-error", "request"),
+		)
+
+		const response = await post("/v1/admin/relevance/explain", {
+			query: "topic",
+		})
+
+		expect(response.status).toBe(500)
+		expect((await json(response)).error?.code).toBe("SEARCH_LANES_FAILED")
+	})
+})

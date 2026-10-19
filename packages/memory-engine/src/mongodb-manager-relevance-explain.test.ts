@@ -189,6 +189,7 @@ describe("relevanceExplain diagnoses the V2 pipeline (RET-15)", () => {
 			query: "payment service notes",
 		})
 		expect(result.runId).toBeUndefined()
+		expect(result.persistFailure).toEqual({ reason: "internal-error" })
 		expect(result.results[0]?.path).toBe(v2Hit.path)
 		expect(relevance.logTelemetryFailure).toHaveBeenCalledWith(fault)
 		expect(relevance.persistRun).toHaveBeenCalledWith(
@@ -438,5 +439,115 @@ describe("relevanceExplain diagnoses the V2 pipeline (RET-15)", () => {
 		expect(options?.scope).toBe("session")
 		expect(options?.scopeRef).toBe("session:session-9")
 		expect(options?.sessionKey).toBe("session-9")
+	})
+
+	describe("failed lanes are reported, not scored as relevance health (X-11)", () => {
+		const failedRow = {
+			lane: "hybrid",
+			stage: "lane",
+			outcome: "failed",
+			reason: "lane-unavailable",
+		} as const
+		const okRow = {
+			lane: "structured",
+			stage: "lane",
+			outcome: "ok",
+			resultCount: 1,
+		} as const
+
+		async function stubOutcome(
+			outcomeStatus: "complete" | "partial" | "failed",
+			laneOutcomes: unknown[],
+			results: MemorySearchResult[],
+		) {
+			const { searchV2 } = await import("./mongodb-search-v2.js")
+			vi.mocked(searchV2).mockResolvedValueOnce({
+				results,
+				metadata: {
+					plan: { paths: ["hybrid"], confidence: "high", reasoning: "" },
+					pathsExecuted: ["hybrid"],
+					resultsByPath: { hybrid: results.length },
+					outcomeStatus,
+					laneOutcomes,
+				},
+			} as never)
+		}
+
+		it("answers insufficient-data and feeds no signal when every lane failed", async () => {
+			await stubOutcome("failed", [failedRow], [])
+			const relevance = buildRelevanceStub()
+			const manager = buildMockManager({ relevance })
+
+			const result = await manager.relevanceExplain({ query: "topic" })
+
+			expect(result.health).toBe("insufficient-data")
+			expect(relevance.evaluateHealth).not.toHaveBeenCalled()
+			expect(relevance.recordSignal).not.toHaveBeenCalled()
+			expect(result.outcomes).toEqual({
+				status: "failed",
+				lanes: [failedRow],
+			})
+			const run = relevance.persistRun.mock.calls[0]?.[0] as Record<
+				string,
+				unknown
+			>
+			expect(run.status).toBe("insufficient-data")
+		})
+
+		it("does not grade the surviving lane's results when a sibling failed", async () => {
+			await stubOutcome("partial", [okRow, failedRow], [v2Hit])
+			const relevance = buildRelevanceStub()
+			const manager = buildMockManager({ relevance })
+
+			const result = await manager.relevanceExplain({ query: "topic" })
+
+			expect(result.health).toBe("insufficient-data")
+			expect(relevance.evaluateHealth).not.toHaveBeenCalled()
+			expect(relevance.recordSignal).not.toHaveBeenCalled()
+			expect(result.results).toEqual([v2Hit])
+			expect(result.outcomes).toEqual({
+				status: "partial",
+				lanes: [okRow, failedRow],
+			})
+		})
+
+		it("still grades a complete answer and returns its summary", async () => {
+			await stubOutcome("complete", [okRow], [v2Hit])
+			const relevance = buildRelevanceStub()
+			const manager = buildMockManager({ relevance })
+
+			const result = await manager.relevanceExplain({ query: "topic" })
+
+			expect(result.health).toBe("healthy")
+			expect(relevance.recordSignal).toHaveBeenCalledWith([v2Hit])
+			expect(result.outcomes).toEqual({ status: "complete", lanes: [okRow] })
+		})
+	})
+
+	it("reports an erasure conflict on the run write as erasure-in-progress", async () => {
+		scripted.push([v2Hit])
+		const relevance = buildRelevanceStub()
+		const { ErasureGateConflictError } = await import(
+			"./mongodb-write-fence.js"
+		)
+		relevance.persistRun.mockRejectedValueOnce(
+			new ErasureGateConflictError("agent-1"),
+		)
+		const manager = buildMockManager({ relevance })
+
+		const result = await manager.relevanceExplain({ query: "topic" })
+
+		expect(result.runId).toBeUndefined()
+		expect(result.persistFailure).toEqual({ reason: "erasure-in-progress" })
+	})
+
+	it("returns no persistFailure when the run was stored", async () => {
+		scripted.push([v2Hit])
+		const manager = buildMockManager({ relevance: buildRelevanceStub() })
+
+		const result = await manager.relevanceExplain({ query: "topic" })
+
+		expect(result.runId).toBe("relevance-run-1")
+		expect(result.persistFailure).toBeUndefined()
 	})
 })

@@ -160,7 +160,8 @@ function throwIfSearchFailed(envelope: MemongoBridgeSearchEnvelope): void {
 			new SearchBudgetDeniedError({
 				lane: deniedRow.lane,
 				stage: deniedRow.stage,
-				reason: (deniedRow.reason as SearchBudgetReason) ?? "budget-reservation",
+				reason:
+					(deniedRow.reason as SearchBudgetReason) ?? "budget-reservation",
 			}),
 			{ outcomes },
 		)

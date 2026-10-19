@@ -32,6 +32,10 @@ import {
 	resolveSearchConfig,
 } from "./mongodb-search-executor.js"
 import type {
+	SearchFailureReason,
+	SearchOutcomeSummary,
+} from "./search-outcomes.js"
+import type {
 	MemorySearchManager,
 	MemorySearchRequest,
 	MemorySearchResult,
@@ -76,6 +80,16 @@ export function isBenchmarkStrictMode(): boolean {
 
 export type RelevanceExplainResult = {
 	runId?: string
+	/**
+	 * The diagnostic run could not be stored, so `runId` is absent. The
+	 * explanation itself is intact; the reason is a value-free enum.
+	 */
+	persistFailure?: { reason: SearchFailureReason | "erasure-in-progress" }
+	/**
+	 * This call's lane outcome summary. When its status is not `complete`,
+	 * `health` is `insufficient-data`: failed lanes are not a relevance verdict.
+	 */
+	outcomes?: SearchOutcomeSummary
 	latencyMs: number
 	sourceScope: RelevanceSourceScope
 	health: RelevanceHealth
