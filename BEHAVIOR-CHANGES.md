@@ -86,3 +86,45 @@ KB search (`searchKB`, the `kb` lane of `searchV2`, `/v1/search-kb`) now runs on
 - **Reservation cost.** The KB lane reserves one aggregation and one embed up front (previously up to three aggregations and two embeds, depending on capabilities). A request budget of exactly one aggregation and one embed now runs the lane. `kbLaneCost` takes only `{ embeddingMode }`.
 - **Explain.** Only the `fusionExplain` artifact is produced for KB search; the vector, keyword and `$text` explain artifacts are gone with their tiers.
 - **`/v1/search-kb` validates `fusionMethod`.** An unknown value used to be silently ignored. `js-merge`, any other string, `null` and non-string values now return `400 VALIDATION_ERROR` ("fusionMethod must be scoreFusion or rankFusion") and the engine is not called. Omitting the field keeps the configured fusion.
+
+## T5: HTTP reranker removed (#114)
+
+There is no reranker in M2. The client-side Voyage cross-encoder is gone. Native `$rerank` (Atlas only) arrives in M4.
+
+### Default change
+
+- Reranking was on by default whenever a Voyage key was present (model `rerank-3`, top 20). After M2 it is off and cannot be enabled.
+- Keyed deployments lose that rerank until M4. Their result order is now the fused retrieval order plus the heuristic reranker, MMR and the trust ordering, which stay.
+- A missing key, a provider error or an exhausted budget used to return the input order silently. No code calls the rerank endpoint any more, so there is no such failure to hide.
+
+### Fails boot, or fails the request
+
+- `memory.mongodb.reranking.enabled: true` and `MEMONGO_RERANKING_ENABLED=true` fail boot with `rerank-unsupported`. `enabled: false`, absent, and `MEMONGO_RERANKING_ENABLED=false` stay valid. A non-boolean `enabled` fails with `config-invalid`.
+- The keys `model`, `topN`, `minScore`, `voyageApiKey`, `instruction`, `recencyBoost`, `accessBoost` and the env `MEMONGO_RERANK_MIN_SCORE` fail boot with `config-removed`, naming the setting. The message never echoes the value, because `voyageApiKey` was a secret.
+- `reranking.temporalProximityBoost` stays. It belongs to the raw-window lane, and `0` is still its off-switch.
+- A per-request demand is new: `searchConfig.rerank: true`.
+  - The engine throws a `SearchLaneError` with reason `rerank-unsupported` at stage `request`, before any retrieval work.
+  - The API answers `400 RERANK_UNSUPPORTED`. `rerank: false` is accepted, and a non-boolean value is a `400 VALIDATION_ERROR`.
+  - `searchConfig.rerank` is added to the OpenAPI schema, the SDK `SearchConfig` and the MCP `memongo_search_detailed` schema.
+  - In silent SDK mode the refused demand returns the empty answer with a `degradation` marker that carries the status and the code.
+
+### Status and metadata
+
+- `status().custom.rerank` reports `nativeRerank: { engineSupport: false, serverSupport: "unknown" }` and a `lane` of `not-applicable` with reason `capability-absent`. The OpenAPI status response, the SDK `MemongoStatusResponse` type and the API capability table describe the same state.
+- `metadata.reranked` stays on the wire and is always `false`.
+- The `rerank` provider operation in the cost ledger and the `rerankModel`, `rerankLatencyMs` and `rerankSkipped` telemetry fields stay as deprecated, so historical rows still read. Nothing writes them.
+
+### Removed
+
+- `crossEncoderRerank`, its module and tests, and `http-rerank-config.ts` (`DEFAULT_HTTP_RERANK_MODEL`, `resolveEffectiveRerankTopN`). Both rerank URLs are gone: `https://api.voyageai.com/v1/rerank` and the Atlas proxy `https://ai.mongodb.com/v1/rerank`.
+- The post-cross-encoder boosts: recency, access and preference-evidence (`applyRecencyAccessBoostAfterRerank`, `applyPreferenceEvidenceBoostAfterRerank`).
+- RET-08 partition ordering and the B10 rule that skipped the per-session cap after the reranker. `applyLaneAwareResultControls` always sorts by score and always applies the cap.
+- The searchV2 latency phases `phase:lane-controls-pre-rerank`, `phase:rerank-input`, `phase:rerank` and `phase:lane-controls-post-rerank`. One `phase:lane-controls` replaces them.
+- `RERANK_TIMEOUT_MS` and `SEARCH_TAIL_COMPOSITION_BUDGET_MS`. The documented worst-case tail is the 10 s `maxTimeMS` alone (it was 10 s + 2 s).
+- The unwired JEV reranker (`mongodb-jev-reranker.ts`, `mongodb-jev-protocol.ts`) and its tests. `reranking.minScore` no longer feeds the search or benchmark default; both use `0.01`, the value it had by default.
+
+### Benchmark harness
+
+- The run manifest's `reranker` is always `{ model: "none", version: null, stage: "none" }`, and the run configuration records `rerankerEnabled: false`, `rerankerModel: "none"`, `rerankerTopN: 0` and null for the other reranker fields. Run-configuration hashes therefore differ from pre-T5 runs: do not pool them.
+- The B7 refusal ("reranking enabled but no reranker key") and the B12 boost overrides are removed, because neither state can exist.
+- `--no-rerank` still sets `MEMONGO_RERANKING_ENABLED=false`, which is now the only valid state, so the flag has no effect.
