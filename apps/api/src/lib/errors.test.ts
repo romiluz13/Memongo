@@ -113,6 +113,27 @@ describe("internalError (C-002: redacted server-side log, generic client body)",
 	})
 })
 
+describe("internalError and a missing tenant identity (M2 T13)", () => {
+	it("answers 400 TENANT_IDENTITY_REQUIRED instead of a 500 and does not log a server fault", async () => {
+		const errorLog = vi.spyOn(console, "error").mockImplementation(() => {})
+		const failure = new Error("readFile requires scope and scopeRef")
+		failure.name = "TenantIdentityRequiredError"
+		const app = new Hono()
+		app.get("/missing", (c) => internalError(c, failure, "READ_FILE_FAILED"))
+
+		const res = await app.request("/missing")
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "TENANT_IDENTITY_REQUIRED",
+				message: "readFile requires scope and scopeRef",
+			},
+		})
+		expect(errorLog).not.toHaveBeenCalled()
+	})
+})
+
 describe("isDependencyUnavailableError", () => {
 	it("matches the closed set of driver network names", () => {
 		expect(

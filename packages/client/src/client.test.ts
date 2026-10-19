@@ -494,6 +494,24 @@ describe("MemongoClient scope forwarding (P1.3)", () => {
 		expect(body.scopeRef).toBe("ref-A")
 	})
 
+	it("forwards the tenant identity on traceChain", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { factId: "fact-1", nodes: [] })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.traceChain({
+			factId: "fact-1",
+			collection: "structured_mem",
+			scope: "tenant",
+			scopeRef: "ref-A",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/chain-trace")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("tenant")
+		expect(body.scopeRef).toBe("ref-A")
+	})
+
 	it("forwards canonical scopes on event writes and consolidation", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = []
 		stubJsonFetch(calls)

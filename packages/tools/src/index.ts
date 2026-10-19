@@ -440,6 +440,8 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 			inputSchema: z.object({
 				factId: z.string(),
 				collection: chainTraceCollectionSchema,
+				scope: memoryScopeSchema,
+				scopeRef: z.string().min(1),
 				agentId: z.string().optional(),
 				maxDepth: z.number().optional(),
 			}),

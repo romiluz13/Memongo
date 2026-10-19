@@ -1050,6 +1050,8 @@ describe("createApp", () => {
 			body: JSON.stringify({
 				factId: "fact-1",
 				collection: "structured_mem",
+				scope: "workspace",
+				scopeRef: "workspace:demo",
 				agentId: "agent-42",
 				maxDepth: 3,
 			}),
@@ -1067,6 +1069,8 @@ describe("createApp", () => {
 			agentId: "agent-42",
 			factId: "fact-1",
 			collection: "structured_mem",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			maxDepth: 3,
 		})
 	})

@@ -1577,6 +1577,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}) {
 		return lifecycleOpsOf(this).traceChain(params)

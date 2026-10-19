@@ -346,6 +346,8 @@ export type MemongoDiscoveryProjectionInput = {
 export type MemongoTraceChainInput = {
 	factId: string
 	collection: string
+	scope: MemongoScope
+	scopeRef: string
 	agentId?: string
 	maxDepth?: number
 }

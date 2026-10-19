@@ -764,12 +764,16 @@ export class MongoDBManagerLifecycleOps {
 	async traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}) {
 		return traceReasoningChain({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
 			factId: params.factId,
 			collection: params.collection,
 			options: params.options,

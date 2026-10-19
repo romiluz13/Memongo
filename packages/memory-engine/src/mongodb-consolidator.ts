@@ -1037,6 +1037,8 @@ async function runConsolidation(
 						db,
 						prefix,
 						agentId,
+						scope: candidateScope ?? "agent",
+						scopeRef: candidateScopeRef ?? `agent:${agentId}`,
 						factId: candidate.eventId,
 						collection: "events",
 					}),

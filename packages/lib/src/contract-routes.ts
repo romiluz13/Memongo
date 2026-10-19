@@ -609,7 +609,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		method: "post",
 		operationId: "traceReasoningChain",
 		summary: "Trace a reasoning chain from a fact",
-		requiredFields: ["factId", "collection"],
+		requiredFields: ["factId", "collection", "scope", "scopeRef"],
 		optionalFields: ["agentId", "maxDepth"],
 		errorStatuses: [400, 500],
 		tools: ["memongo_chain_trace"],

@@ -934,6 +934,8 @@ export interface MemorySearchManager {
 	traceChain(params: {
 		factId: string
 		collection: string
+		scope: MemoryScope
+		scopeRef: string
 		options?: { maxDepth?: number }
 	}): Promise<ReasoningChain>
 	scanNovelty(params?: {

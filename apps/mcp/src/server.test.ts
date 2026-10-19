@@ -784,7 +784,12 @@ describe("structuredContent envelopes (P1.2)", () => {
 			memoryIds: ["mem-1"],
 		},
 		memongo_admin_get_trace: { traceId: "trace-1" },
-		memongo_chain_trace: { factId: "fact-1", collection: "structured_mem" },
+		memongo_chain_trace: {
+			factId: "fact-1",
+			collection: "structured_mem",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
 		memongo_erase_agent: { confirm: "erase", agentId: "agent-42" },
 		memongo_quarantine_promote: { quarantineId: "q-1" },
 		memongo_quarantine_reject: { quarantineId: "q-1" },
@@ -1388,12 +1393,22 @@ describe("chain-trace collection validation (WS-08 / C-015)", () => {
 		] as const) {
 			const out = await handleToolCall(
 				"memongo_chain_trace",
-				{ factId: "fact-1", collection },
+				{
+					factId: "fact-1",
+					collection,
+					scope: "workspace",
+					scopeRef: "workspace:demo",
+				},
 				{ traceChain } as unknown as MemongoClient,
 			)
 			expect(out.isError).toBeUndefined()
 			expect(traceChain).toHaveBeenCalledWith(
-				expect.objectContaining({ factId: "fact-1", collection }),
+				expect.objectContaining({
+					factId: "fact-1",
+					collection,
+					scope: "workspace",
+					scopeRef: "workspace:demo",
+				}),
 			)
 		}
 	})
@@ -1410,6 +1425,24 @@ describe("chain-trace collection validation (WS-08 / C-015)", () => {
 		expect(parseTextPayload(out)).toEqual({
 			error:
 				"collection must be one of structured_mem|entities|relations|procedures|entity_links",
+		})
+	})
+
+	it.each([
+		["scope", { scopeRef: "workspace:demo" }],
+		["scopeRef", { scope: "workspace" }],
+		["scope and scopeRef", {}],
+	])("rejects a trace with no %s before calling the client (M2 T13)", async (_label, identity) => {
+		const traceChain = vi.fn()
+		const out = await handleToolCall(
+			"memongo_chain_trace",
+			{ factId: "fact-1", collection: "structured_mem", ...identity },
+			{ traceChain } as unknown as MemongoClient,
+		)
+		expect(traceChain).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "scope and scopeRef are required",
 		})
 	})
 

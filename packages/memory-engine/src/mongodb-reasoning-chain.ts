@@ -14,8 +14,9 @@
  */
 
 import type { Db, Document } from "mongodb"
-import type { ChainTraceCollectionValue } from "@memongo/lib"
+import type { ChainTraceCollectionValue, MemoryScope } from "@memongo/lib"
 import { isChainTraceCollectionValue } from "@memongo/lib"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import type {
 	ReasoningChain,
@@ -84,11 +85,15 @@ export async function traceReasoningChain(params: {
 	db: Db
 	prefix: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	factId: string
 	collection: string
 	options?: ReasoningChainOptions
 }): Promise<ReasoningChain> {
-	const { db, prefix, agentId, factId, collection, options } = params
+	const { db, prefix, factId, collection, options } = params
+	const tenant = requireTenantIdentity("traceReasoningChain", params)
+	const { agentId } = tenant
 	const maxDepth = Math.max(0, options?.maxDepth ?? DEFAULT_MAX_DEPTH)
 
 	const emptyResult: ReasoningChain = {
@@ -118,7 +123,7 @@ export async function traceReasoningChain(params: {
 		// P4.4.1 (B1): hide TTL-expired docs from the trace (starting fact and
 		// traversed premises) until the sweep removes them. Semantics-neutral
 		// for collections without expiresAt via the $exists:false branch.
-		{ $match: { [idField]: factId, agentId, ...buildUnexpiredClause() } },
+		{ $match: { [idField]: factId, ...tenant, ...buildUnexpiredClause() } },
 		{
 			$graphLookup: {
 				from: fullCollectionName,
@@ -128,7 +133,7 @@ export async function traceReasoningChain(params: {
 				as: "premises",
 				maxDepth,
 				depthField: "hopDistance",
-				restrictSearchWithMatch: { agentId, ...buildUnexpiredClause() },
+				restrictSearchWithMatch: { ...tenant, ...buildUnexpiredClause() },
 			},
 		},
 	]
@@ -170,7 +175,8 @@ export async function traceReasoningChain(params: {
 			? await eventsCol
 					.find({
 						eventId: { $in: leafEventIds },
-						agentId,
+						...tenant,
+						...buildUnexpiredClause(),
 					})
 					.sort({ timestamp: 1 })
 					.toArray()

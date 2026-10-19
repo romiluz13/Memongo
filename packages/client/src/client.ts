@@ -1588,6 +1588,8 @@ export class MemongoClient {
 		return apiPost(this._opts, "/v1/chain-trace", {
 			factId: input.factId,
 			collection: input.collection,
+			scope: input.scope,
+			scopeRef: input.scopeRef,
 			agentId: input.agentId,
 			maxDepth: input.maxDepth,
 		})

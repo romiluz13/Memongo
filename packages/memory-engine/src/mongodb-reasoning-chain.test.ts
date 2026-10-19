@@ -38,6 +38,8 @@ describe("traceReasoningChain", () => {
 	it("rejects a non-allowlisted collection with a typed error instead of an empty complete chain", async () => {
 		const db = createMockDb({})
 		const error = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -58,6 +60,8 @@ describe("traceReasoningChain", () => {
 			aggregateResults: { [`${PREFIX}structured_mem`]: [] },
 		})
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -103,6 +107,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -144,6 +150,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -187,6 +195,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -226,6 +236,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -251,6 +263,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -301,6 +315,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -339,6 +355,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -376,6 +394,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -414,6 +434,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		const result = await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,
@@ -432,6 +454,8 @@ describe("traceReasoningChain", () => {
 		})
 
 		await traceReasoningChain({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
 			db,
 			prefix: PREFIX,
 			agentId: AGENT_ID,

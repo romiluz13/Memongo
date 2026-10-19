@@ -1316,6 +1316,30 @@ describe("WS-08 chain-trace collection validation (C-015)", () => {
 	})
 
 	it.each([
+		["scope", { scopeRef: "workspace:demo" }],
+		["scopeRef", { scope: "workspace" }],
+		["scope and scopeRef", {}],
+	])("rejects a trace with no %s before the engine is reached (M2 T13)", async (_label, identity) => {
+		const res = await createApp().request("/v1/chain-trace", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				factId: "fact-1",
+				collection: "structured_mem",
+				...identity,
+			}),
+		})
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "scope and scopeRef are required",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeTraceChain).not.toHaveBeenCalled()
+	})
+
+	it.each([
 		"structured_mem",
 		"entities",
 		"relations",
@@ -1329,12 +1353,19 @@ describe("WS-08 chain-trace collection validation (C-015)", () => {
 		const res = await createApp().request("/v1/chain-trace", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ factId: "fact-1", collection }),
+			body: JSON.stringify({
+				factId: "fact-1",
+				collection,
+				scope: "workspace",
+				scopeRef: "workspace:demo",
+			}),
 		})
 		expect(res.status).toBe(200)
 		expect(bridgeMocks.memongoBridgeTraceChain).toHaveBeenCalledWith({
 			factId: "fact-1",
 			collection,
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			agentId: undefined,
 			maxDepth: undefined,
 		})

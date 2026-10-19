@@ -1109,12 +1109,16 @@ export async function memongoBridgeTraceChain(params: {
 	agentId?: string
 	factId: string
 	collection: string
+	scope: MemoryScope
+	scopeRef: string
 	maxDepth?: number
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.traceChain({
 		factId: params.factId,
 		collection: params.collection,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 		options:
 			params.maxDepth !== undefined ? { maxDepth: params.maxDepth } : undefined,
 	})
