@@ -1,4 +1,5 @@
 import { MongoServerError, type Db } from "mongodb"
+import { manifestDefinition, runSearchPipeline } from "./search-stage-fake.js"
 
 export type Row = Record<string, unknown>
 export const BODY = "My pickup label is NARU-617-QP."
@@ -93,6 +94,7 @@ export function fixture(
 	}
 	type FakeCollection = {
 		find: (q: Row) => Cursor
+		aggregate: (pipeline: Row[]) => { toArray: () => Promise<Row[]> }
 		findOne: (q: Row) => Promise<Row | null>
 		updateOne: (
 			q: Row,
@@ -202,6 +204,24 @@ export function fixture(
 				},
 				async findOne(query: Row) {
 					return table(name).find((row) => matches(row, query)) ?? null
+				},
+				aggregate(pipeline: Row[]) {
+					// The supporting-event lookup is one `$search` over the events
+					// text index; the double evaluates it against the rows as they are
+					// when the query runs.
+					return {
+						async toArray() {
+							if (name !== "test_events") {
+								throw new Error(`Unsupported aggregate on ${name}`)
+							}
+							return runSearchPipeline({
+								indexName: "test_events_text",
+								definition: manifestDefinition("test_", "test_events_text"),
+								entries: table(name).map((indexed) => ({ indexed })),
+								pipeline,
+							})
+						},
+					}
 				},
 				async updateOne(
 					query: Row,

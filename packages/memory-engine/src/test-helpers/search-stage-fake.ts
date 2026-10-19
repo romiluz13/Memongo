@@ -261,6 +261,41 @@ function applyStage(docs: Document[], stage: Document): Document[] {
 }
 
 /**
+ * Evaluates one lane pipeline against a document set: the `$search` stage
+ * matches the indexed copies, the later stages run on the current documents.
+ * For a hand-rolled collection double whose rows change during a test; pass
+ * the rows as they are at the moment of the call.
+ */
+export function runSearchPipeline(params: {
+	indexName: string
+	definition: Document
+	entries: SearchStageFakeEntry[]
+	pipeline: Document[]
+}): Document[] {
+	const [first, ...rest] = params.pipeline
+	const search = first?.$search as Document | undefined
+	if (!search) {
+		throw new Error("search double: the first stage must be $search")
+	}
+	if (search.index !== params.indexName) {
+		throw new Error(
+			`search double: $search names index ${String(search.index)}, expected ${params.indexName}`,
+		)
+	}
+	const operator = Object.fromEntries(
+		Object.entries(search).filter(([key]) => key !== "index"),
+	)
+	const hydrated: Document[] = []
+	params.entries.forEach((entry, position) => {
+		if (!evaluate(operator, entry.indexed, params.definition)) return
+		const current = entry.current === undefined ? entry.indexed : entry.current
+		if (current === null) return
+		hydrated.push({ _id: position, ...current })
+	})
+	return rest.reduce(applyStage, hydrated)
+}
+
+/**
  * @param definition the index definition the manifest declares for the index
  *   the lane queries
  * @param indexName the index name the lane must pass to `$search`
@@ -286,28 +321,7 @@ export function createSearchStageFake(params: {
 			return {
 				toArray: async () => {
 					if (params.failure) throw params.failure
-					const [first, ...rest] = pipeline
-					const search = first?.$search as Document | undefined
-					if (!search) {
-						throw new Error("search double: the first stage must be $search")
-					}
-					if (search.index !== params.indexName) {
-						throw new Error(
-							`search double: $search names index ${String(search.index)}, expected ${params.indexName}`,
-						)
-					}
-					const operator = Object.fromEntries(
-						Object.entries(search).filter(([key]) => key !== "index"),
-					)
-					const hydrated: Document[] = []
-					params.entries.forEach((entry, position) => {
-						if (!evaluate(operator, entry.indexed, params.definition)) return
-						const current =
-							entry.current === undefined ? entry.indexed : entry.current
-						if (current === null) return
-						hydrated.push({ _id: position, ...current })
-					})
-					return rest.reduce(applyStage, hydrated)
+					return runSearchPipeline({ ...params, pipeline })
 				},
 			}
 		},

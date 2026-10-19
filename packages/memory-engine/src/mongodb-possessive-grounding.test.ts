@@ -1,6 +1,10 @@
 import type { Db } from "mongodb"
 import { describe, expect, it } from "vitest"
 import {
+	manifestDefinition,
+	runSearchPipeline,
+} from "./test-helpers/search-stage-fake.js"
+import {
 	persistPreparedDerivedMemoryPromotion,
 	prepareDerivedMemoryPromotion,
 	resolveStructuredCandidatesForPromotion,
@@ -110,6 +114,24 @@ function fixture(
 				},
 				async findOne(query: Row) {
 					return table(name).find((row) => matches(row, query)) ?? null
+				},
+				aggregate(pipeline: Row[]) {
+					// The supporting-event lookup is one `$search` over the events
+					// text index; the double evaluates it against the rows as they are
+					// when the query runs.
+					return {
+						async toArray() {
+							if (name !== "test_events") {
+								throw new Error(`Unsupported aggregate on ${name}`)
+							}
+							return runSearchPipeline({
+								indexName: "test_events_text",
+								definition: manifestDefinition("test_", "test_events_text"),
+								entries: table(name).map((indexed) => ({ indexed })),
+								pipeline,
+							})
+						},
+					}
 				},
 				async updateOne(query: Row, update: Row) {
 					if (Object.keys(update).some((key) => key !== "$setOnInsert")) {
