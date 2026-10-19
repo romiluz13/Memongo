@@ -102,6 +102,19 @@ function build(paths: string[]) {
 	return { host, ops }
 }
 
+/** Fails only the refresh marker's write; the import's own meta writes run. */
+function failMarkerWrite(error: Error) {
+	const meta = fake.collection("meta")
+	const write = meta.updateOne.bind(meta)
+	vi.spyOn(meta, "updateOne").mockImplementation(((
+		filter: Record<string, unknown>,
+		...rest: unknown[]
+	) =>
+		filter?._id === MARKER_ID
+			? Promise.reject(error)
+			: (write as (...args: unknown[]) => unknown)(filter, ...rest)) as never)
+}
+
 async function failureOf(run: Promise<unknown>): Promise<Error> {
 	try {
 		await run
@@ -138,6 +151,44 @@ describe("a failed KB refresh after a completed file sync reports its commit sta
 		expect(host.fileCount).toBe(3)
 		expect(host.chunkCount).toBe(9)
 		expect(fake.findDoc("meta", { _id: MARKER_ID })).toBeNull()
+	})
+
+	it("an uncertain marker commit after a clean import reports unknown, with the known counts (review 1244 E1)", async () => {
+		const good = path.join(tmpDir, "good.md")
+		await fs.writeFile(good, "# Good\nContent that ingests")
+		const { ops } = build([good])
+		const uncertain = Object.assign(new Error("commit result unknown"), {
+			hasErrorLabel: (label: string) =>
+				label === "UnknownTransactionCommitResult",
+		})
+		failMarkerWrite(uncertain)
+
+		const failure = await failureOf(ops.runSync())
+
+		expect(failure).toBeInstanceOf(KBRefreshError)
+		expect(failure).toMatchObject({ reason: "marker-write-failed" })
+		expect(failure).toHaveProperty("commitState", "unknown")
+		expect(failure).toHaveProperty("commit", {
+			operation: "sync",
+			fileSync: { filesFailed: 0, enumerationComplete: true },
+			kbImport: {
+				documentsProcessed: 1,
+				chunksCreated: expect.any(Number),
+				skipped: 0,
+			},
+		})
+	})
+
+	it("a marker write that failed with a certain error stays committed", async () => {
+		const good = path.join(tmpDir, "good.md")
+		await fs.writeFile(good, "# Good\nContent that ingests")
+		const { ops } = build([good])
+		failMarkerWrite(new Error("marker write refused"))
+
+		const failure = await failureOf(ops.runSync())
+
+		expect(failure).toMatchObject({ reason: "marker-write-failed" })
+		expect(failure).toHaveProperty("commitState", "committed")
 	})
 
 	it("a rejected import names no KB counts: absent means not known, never zero", async () => {

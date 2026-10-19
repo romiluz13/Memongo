@@ -300,6 +300,23 @@ describe("POST /v1/sync: a failed KB refresh says the file sync committed", () =
 		)
 	}
 
+	it("an uncertain marker write answers 500 KB_REFRESH_FAILED with commitState unknown and the known counts (review 1244 E1)", async () => {
+		bridge.memongoBridgeSync.mockRejectedValue(
+			refreshFailure("marker-write-failed", { commitState: "unknown" }),
+		)
+
+		const { status, body } = await call("sync")
+
+		expect(status).toBe(500)
+		expect(body.error?.code).toBe("KB_REFRESH_FAILED")
+		expect(body.error?.commitState).toBe("unknown")
+		expect(body.error?.message).toContain("outcome is not known")
+		expect(body.error?.commit).toMatchObject({
+			operation: "sync",
+			kbImport: { documentsProcessed: 2, chunksCreated: 7, skipped: 1 },
+		})
+	})
+
 	it("answers 500 KB_REFRESH_FAILED, says the file sync committed and carries the import's real counts", async () => {
 		bridge.memongoBridgeSync.mockRejectedValue(refreshFailure("import-errors"))
 

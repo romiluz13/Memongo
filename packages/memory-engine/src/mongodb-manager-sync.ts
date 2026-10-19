@@ -22,6 +22,7 @@ import {
 import { bestEffort } from "./best-effort.js"
 import { safeBootText } from "./mongodb-boot-errors.js"
 import { attachCommitReport } from "./mongodb-commit-report.js"
+import { isUncertainCommitError } from "./mongodb-search-barrier.js"
 import { syncToMongoDB } from "./mongodb-sync.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
@@ -624,7 +625,9 @@ export class MongoDBManagerSyncOps {
 				// import's counts are named only when the import produced them.
 				const kbImport = kbImportCounts(err)
 				throw attachCommitReport(err, {
-					commitState: "committed",
+					// An uncertain marker or import commit anywhere in the cause
+					// chain outranks the acknowledged file sync.
+					commitState: isUncertainCommitError(err) ? "unknown" : "committed",
 					commit: {
 						operation: "sync",
 						fileSync: {
