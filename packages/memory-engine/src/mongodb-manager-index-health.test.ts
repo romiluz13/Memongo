@@ -127,6 +127,9 @@ vi.mock("./mongodb-write-fence.js", async (importOriginal) => ({
 		agentId,
 		epoch: 0,
 	})),
+	withFencedWrite: vi.fn(
+		async ({ fn }: { fn: (session: unknown) => Promise<unknown> }) => fn({}),
+	),
 }))
 vi.mock("./mongodb-kb-search.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),

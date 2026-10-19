@@ -125,6 +125,10 @@ const RERANKED_DESCRIPTION =
 	"Always false: there is no reranker. The HTTP reranker was removed and native $rerank (Atlas only) is not implemented yet."
 
 export const searchFailureResponses = {
+	"409": {
+		description:
+			"ERASURE_IN_PROGRESS: an erasure is in progress for the agent, so the read is refused rather than answered with an empty result. For /v1/search-kb this also covers an erasure that began while the search ran: its chunks are never returned. Retry after the erasure finishes.",
+	},
 	"500": {
 		description:
 			"SEARCH_LANES_FAILED: every required lane failed and at least one failure is a defect (query-error or internal-error); this wins over the 503 codes. The body adds `outcomes` (status failed, every row). Other unexpected failures keep their route's internal error code.",

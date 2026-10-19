@@ -5,6 +5,7 @@ import type {
 	MemoryMongoDBQueryEmbeddingModel,
 } from "@memongo/lib"
 import { summarizeExplain } from "./mongodb-relevance.js"
+import { buildUnexpiredClause, mergeQueryClauses } from "./mongodb-temporal.js"
 import {
 	buildVectorSearchStage,
 	freshnessRevalidationStages,
@@ -195,6 +196,14 @@ export async function searchKB(
 		MONGODB_MAX_NUM_CANDIDATES,
 	)
 
+	// `expiresAt` is not an indexed filter field of the KB vector or text index
+	// and no TTL index sweeps kb_chunks, so retention can only be enforced on
+	// the hydrated document, after the Search stage.
+	const revalidationFilter = mergeQueryClauses(
+		chunkFilter,
+		buildUnexpiredClause({ field: "expiresAt" }),
+	)
+
 	const runKbFusion = async (): Promise<MemorySearchResult[] | null> => {
 		const { compoundFilter } = splitAtlasSearchFilter(chunkFilter)
 		const vsStage = buildVectorSearchStage({
@@ -229,13 +238,13 @@ export async function searchKB(
 			// Re-validate the full chunk filter against the hydrated
 			// document — the compound filter runs against the indexed copy,
 			// which can lag the latest write.
-			...freshnessRevalidationStages(chunkFilter),
+			...freshnessRevalidationStages(revalidationFilter),
 			{ $limit: opts.maxResults * 4 },
 		]
 		const pipelines = {
 			vector: [
 				{ $vectorSearch: vsStage },
-				...freshnessRevalidationStages(chunkFilter),
+				...freshnessRevalidationStages(revalidationFilter),
 			],
 			text: textPipeline,
 		}

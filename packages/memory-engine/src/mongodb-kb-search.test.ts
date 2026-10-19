@@ -8,6 +8,7 @@ import {
 } from "./mongodb-search-budget.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import { kbLaneCost } from "./search-lane-cost.js"
+import { createKbFusionDouble } from "./test-helpers/kb-fusion-double.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,6 +39,21 @@ const baseOpts = {
 	vectorIndexName: "test_kb_chunks_vector",
 	textIndexName: "test_kb_chunks_text",
 	embeddingMode: "automated" as const,
+}
+
+// The post-Search re-check carries the chunk filter plus the retention clause.
+function revalidatedBy(chunkFilter: Document): Document {
+	return {
+		$and: [
+			chunkFilter,
+			{
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: expect.any(Date) } },
+				],
+			},
+		],
+	}
 }
 
 function pipelinesOf(col: Collection): Document[][] {
@@ -257,8 +273,8 @@ describe("searchKB: tenant scope and metadata filters", () => {
 		expect(text[0].$search.compound.filter).toEqual([
 			{ equals: { path: "scopeRef", value: "agent:test" } },
 		])
-		expect(vector[1].$match).toEqual({ scopeRef: "agent:test" })
-		expect(text[1].$match).toEqual({ scopeRef: "agent:test" })
+		expect(vector[1].$match).toEqual(revalidatedBy({ scopeRef: "agent:test" }))
+		expect(text[1].$match).toEqual(revalidatedBy({ scopeRef: "agent:test" }))
 	})
 
 	it("short-circuits when the KB metadata filter resolves to no matching documents", async () => {
@@ -309,8 +325,8 @@ describe("searchKB: tenant scope and metadata filters", () => {
 		// The full chunk filter is re-validated post-search against the
 		// hydrated document — the compound filter runs against the indexed
 		// copy, which can lag the latest write.
-		expect(vector[1].$match).toEqual(chunkFilter)
-		expect(text[1].$match).toEqual(chunkFilter)
+		expect(vector[1].$match).toEqual(revalidatedBy(chunkFilter))
+		expect(text[1].$match).toEqual(revalidatedBy(chunkFilter))
 	})
 
 	it("treats a filter that normalizes to nothing as no filter, with or without kbDocs", async () => {
@@ -360,5 +376,88 @@ describe("searchKB: ledger", () => {
 
 		expect(cost).toEqual({ aggregations: 1, embeds: 1 })
 		expect(charged).toMatchObject({ aggregations: 1, embeds: 1 })
+	})
+})
+
+describe("searchKB: lifecycle of a chunk past its retention deadline", () => {
+	// M2 T13 (review F2): kb_chunks carry an optional Date `expiresAt` and no
+	// TTL index sweeps it, so the read itself must exclude an expired chunk.
+	// The Search prefilters cannot (expiresAt is not an indexed filter field),
+	// so the hydrated `$match` after each Search stage carries the clause.
+	const day = 24 * 60 * 60 * 1000
+	const chunk = (path: string, expiresAt?: unknown): Document => ({
+		scopeRef: "agent:test",
+		docId: "doc-1",
+		path,
+		startLine: 1,
+		endLine: 2,
+		text: `text of ${path}`,
+		...(expiresAt === undefined ? {} : { expiresAt }),
+	})
+
+	it.each([
+		"scoreFusion",
+		"rankFusion",
+	] as const)("%s: an expired chunk is excluded; a future and an absent deadline are kept", async (fusionMethod) => {
+		const double = createKbFusionDouble([
+			chunk("expired.md", new Date(Date.now() - day)),
+			chunk("future.md", new Date(Date.now() + day)),
+			chunk("permanent.md"),
+		])
+
+		const results = await searchKB(double.collection, "policy", null, {
+			...baseOpts,
+			fusionMethod,
+		})
+
+		expect(results.map((result) => result.filePath).toSorted()).toEqual([
+			"future.md",
+			"permanent.md",
+		])
+	})
+
+	it.each([
+		"scoreFusion",
+		"rankFusion",
+	] as const)("%s: the vector and the text input both re-check expiry on the hydrated document", async (fusionMethod) => {
+		const double = createKbFusionDouble([chunk("permanent.md")])
+
+		await searchKB(double.collection, "policy", null, {
+			...baseOpts,
+			fusionMethod,
+		})
+
+		const fusion =
+			double.pipelines[0][0].$scoreFusion ?? double.pipelines[0][0].$rankFusion
+		for (const input of Object.values(
+			fusion.input.pipelines as Record<string, Document[]>,
+		)) {
+			const match = input.find((stage) => stage.$match)?.$match
+			expect(JSON.stringify(match)).toContain('"expiresAt"')
+		}
+	})
+
+	it("keeps the scopeRef tenant predicate and the Search prefilters unchanged", async () => {
+		const double = createKbFusionDouble([chunk("permanent.md")])
+
+		await searchKB(double.collection, "policy", null, baseOpts)
+
+		const inputs = double.pipelines[0][0].$scoreFusion.input.pipelines
+		expect(inputs.vector[0].$vectorSearch.filter).toEqual({
+			scopeRef: "agent:test",
+		})
+		expect(inputs.text[0].$search.compound.filter).toEqual([
+			{ equals: { path: "scopeRef", value: "agent:test" } },
+		])
+	})
+
+	it("does not return a chunk of another scopeRef, expired or not", async () => {
+		const double = createKbFusionDouble([
+			{ ...chunk("foreign.md"), scopeRef: "agent:other" },
+		])
+
+		const results = await searchKB(double.collection, "policy", null, baseOpts)
+
+		expect(results).toEqual([])
 	})
 })
