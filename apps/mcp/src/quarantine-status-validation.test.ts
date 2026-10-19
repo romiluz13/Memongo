@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createMemongoServer, handleToolCall } from "./server.js"
 
 const error = "status must be pending-review|promoting|promoted|rejected"
+const TENANT = { scope: "workspace", scopeRef: "workspace:demo" } as const
 afterEach(() => {
 	vi.restoreAllMocks()
 	vi.unstubAllEnvs()
@@ -55,7 +56,7 @@ describe("MCP quarantine-list status validation", () => {
 		const list = vi.spyOn(client, "listQuarantined").mockResolvedValue([])
 		const result = await handleToolCall(
 			"memongo_quarantine_list",
-			{ status, agentId: "agent", limit: 5 },
+			{ status, agentId: "agent", limit: 5, ...TENANT },
 			client,
 		)
 		expect(result.isError).not.toBe(true)
@@ -63,6 +64,7 @@ describe("MCP quarantine-list status validation", () => {
 			status,
 			agentId: "agent",
 			limit: 5,
+			...TENANT,
 		})
 	})
 	it("preserves omitted status as an all-stage request", async () => {
@@ -71,9 +73,14 @@ describe("MCP quarantine-list status validation", () => {
 			apiKey: "fixture",
 		})
 		const list = vi.spyOn(client, "listQuarantined").mockResolvedValue([])
-		const result = await handleToolCall("memongo_quarantine_list", {}, client)
+		const result = await handleToolCall(
+			"memongo_quarantine_list",
+			{ ...TENANT },
+			client,
+		)
 		expect(result.isError).not.toBe(true)
 		expect(list).toHaveBeenCalledExactlyOnceWith({
+			...TENANT,
 			status: undefined,
 			agentId: undefined,
 			limit: undefined,
@@ -123,7 +130,7 @@ describe("MCP quarantine-list status validation", () => {
 			expect(fetch).not.toHaveBeenCalled()
 			const valid = await client.callTool({
 				name: "memongo_quarantine_list",
-				arguments: { status: "promoting", agentId: "agent" },
+				arguments: { status: "promoting", agentId: "agent", ...TENANT },
 			})
 			expect(valid.isError).not.toBe(true)
 			expect(fetch).toHaveBeenCalledTimes(1)
@@ -134,7 +141,7 @@ describe("MCP quarantine-list status validation", () => {
 			fetch.mockClear()
 			const omitted = await client.callTool({
 				name: "memongo_quarantine_list",
-				arguments: {},
+				arguments: { ...TENANT },
 			})
 			expect(omitted.isError).not.toBe(true)
 			expect(fetch).toHaveBeenCalledTimes(1)

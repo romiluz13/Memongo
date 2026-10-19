@@ -71,6 +71,8 @@ describe("listQuarantined — review queue listing (C-004)", () => {
 		})
 
 		const entries = await listQuarantined({
+			scope: "user",
+			scopeRef: "user-42",
 			db: fake.db,
 			prefix: PREFIX,
 			agentId: AGENT,
@@ -98,6 +100,8 @@ describe("listQuarantined — review queue listing (C-004)", () => {
 		})
 
 		const pendingOnly = await listQuarantined({
+			scope: "user",
+			scopeRef: "user-42",
 			db: fake.db,
 			prefix: PREFIX,
 			agentId: AGENT,
@@ -109,6 +113,8 @@ describe("listQuarantined — review queue listing (C-004)", () => {
 		).toBe(true)
 
 		const rejectedOnly = await listQuarantined({
+			scope: "user",
+			scopeRef: "user-42",
 			db: fake.db,
 			prefix: PREFIX,
 			agentId: AGENT,
@@ -117,12 +123,58 @@ describe("listQuarantined — review queue listing (C-004)", () => {
 		expect(rejectedOnly.map((entry) => entry.quarantineId)).toEqual([rejected])
 
 		const limited = await listQuarantined({
+			scope: "user",
+			scopeRef: "user-42",
 			db: fake.db,
 			prefix: PREFIX,
 			agentId: AGENT,
 			limit: 1,
 		})
 		expect(limited.length).toBe(1)
+	})
+
+	it("lists only the tenant's rows: another scopeRef and a row without a scope are not listed (M2 T13)", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const mine = await seedPending(fake)
+		await seedPending(fake, { scopeRef: "user-99" })
+		await seedPending(fake, { scope: undefined, scopeRef: undefined })
+
+		const entries = await listQuarantined({
+			db: fake.db,
+			prefix: PREFIX,
+			agentId: AGENT,
+			scope: "user",
+			scopeRef: "user-42",
+		})
+
+		expect(entries.map((entry) => entry.quarantineId)).toEqual([mine])
+	})
+
+	it.each([
+		["no scope", { scopeRef: "user-42" }, ["scope"]],
+		["no scopeRef", { scope: "user" }, ["scopeRef"]],
+		["an empty scopeRef", { scope: "user", scopeRef: " " }, ["scopeRef"]],
+		["an unknown scope", { scope: "galaxy", scopeRef: "x" }, ["scope"]],
+	])("fails typed before any read with %s (M2 T13)", async (_label, identity, missing) => {
+		const failure = await listQuarantined({
+			db: {
+				collection: () => {
+					throw new Error("a collection was touched")
+				},
+			} as never,
+			prefix: PREFIX,
+			agentId: AGENT,
+			...identity,
+		} as never).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+
+		expect(failure).toMatchObject({
+			name: "TenantIdentityRequiredError",
+			operation: "listQuarantined",
+			missing,
+		})
 	})
 })
 
@@ -770,7 +822,11 @@ describe("MongoDBMemoryManager — facade wiring (C-004)", () => {
 		const quarantineId = await seedPending(fake)
 		const manager = buildMockManager({ db: fake.db, prefix: PREFIX })
 
-		const entries = await manager.listQuarantined({ status: "pending-review" })
+		const entries = await manager.listQuarantined({
+			scope: "user",
+			scopeRef: "user-42",
+			status: "pending-review",
+		})
 		expect(entries.map((entry) => entry.quarantineId)).toEqual([quarantineId])
 
 		const promoted = await manager.promoteQuarantined({

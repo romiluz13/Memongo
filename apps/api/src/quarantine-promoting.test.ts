@@ -30,10 +30,18 @@ describe("quarantine promoting list filter", () => {
 	])("forwards %s", async (status) => {
 		const result = await new Hono()
 			.route("/v1", createV1Router())
-			.request(`/v1/admin/quarantine?agentId=agent1&status=${status}&limit=5`)
+			.request(
+				`/v1/admin/quarantine?agentId=agent1&scope=workspace&scopeRef=workspace%3Ademo&status=${status}&limit=5`,
+			)
 		expect(result.status).toBe(200)
 		expect(bridge.memongoBridgeListQuarantined).toHaveBeenCalledExactlyOnceWith(
-			{ agentId: "agent1", status, limit: 5 },
+			{
+				agentId: "agent1",
+				scope: "workspace",
+				scopeRef: "workspace:demo",
+				status,
+				limit: 5,
+			},
 		)
 	})
 	it("rejects unsupported status before invoking the bridge", async () => {

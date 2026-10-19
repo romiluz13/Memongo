@@ -536,6 +536,11 @@ export const adminTools: readonly McpToolDefinition[] = [
 		inputSchema: {
 			type: "object",
 			properties: {
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+				},
+				scopeRef: { type: "string" },
 				agentId: { type: "string" },
 				status: {
 					type: "string",
@@ -543,6 +548,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				},
 				limit: { type: "integer", minimum: 1, maximum: 100 },
 			},
+			required: ["scope", "scopeRef"],
 		},
 		category: "admin",
 	},

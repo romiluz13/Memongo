@@ -1,6 +1,6 @@
 "use client"
 
-import { MemongoClient } from "@memongo/client"
+import { MemongoClient, type MemongoScope } from "@memongo/client"
 import type { ReactNode } from "react"
 import { useMemo, useState } from "react"
 
@@ -173,6 +173,8 @@ export default function Home() {
 		"" | "pending-review" | "promoted" | "rejected"
 	>("pending-review")
 	const [quarantineLimit, setQuarantineLimit] = useState("20")
+	const [quarantineScope, setQuarantineScope] = useState<"" | MemongoScope>("")
+	const [quarantineScopeRef, setQuarantineScopeRef] = useState("")
 	const [quarantineId, setQuarantineId] = useState("")
 	const [reviewerId, setReviewerId] = useState("")
 	const [reviewNotes, setReviewNotes] = useState("")
@@ -301,8 +303,18 @@ export default function Home() {
 	}
 
 	async function listQuarantined() {
+		if (!quarantineScope || !quarantineScopeRef.trim()) {
+			setOutput({
+				title: "Quarantined memories",
+				body: "Choose a scope and enter a scope reference to list that tenant's quarantine queue.",
+				state: "error",
+			})
+			return
+		}
 		await withOutput("Quarantined memories", async () => {
 			return await client.listQuarantined({
+				scope: quarantineScope,
+				scopeRef: quarantineScopeRef.trim(),
 				agentId,
 				status: quarantineStatus || undefined,
 				limit: Number(quarantineLimit) || undefined,
@@ -572,6 +584,31 @@ export default function Home() {
 
 						{tab === "quarantine" && (
 							<div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
+								<Field label="Scope">
+									<select
+										value={quarantineScope}
+										onChange={(e) =>
+											setQuarantineScope(e.target.value as "" | MemongoScope)
+										}
+										style={fieldStyle}
+									>
+										<option value="">choose a scope</option>
+										<option value="session">session</option>
+										<option value="user">user</option>
+										<option value="agent">agent</option>
+										<option value="workspace">workspace</option>
+										<option value="tenant">tenant</option>
+										<option value="global">global</option>
+									</select>
+								</Field>
+								<Field label="Scope reference">
+									<input
+										value={quarantineScopeRef}
+										onChange={(e) => setQuarantineScopeRef(e.target.value)}
+										placeholder="e.g. agent:main"
+										style={fieldStyle}
+									/>
+								</Field>
 								<Field label="Status filter">
 									<select
 										value={quarantineStatus}

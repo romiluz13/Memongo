@@ -10,6 +10,7 @@
  * hand-written paths and the live router disagree.
  */
 import { AGENT_ID_FIELD_DESCRIPTION } from "@memongo/lib"
+import { memoryScopeEnum } from "./openapi-schemas.js"
 import {
 	searchFailureResponses,
 	searchOutcomesSchema,
@@ -233,6 +234,21 @@ export const adminPaths = {
 			description:
 				"Returns the injection-classified memories held for review, oldest first, with the matched patterns and decision metadata. Admin-only: scoped and agent-scoped API keys are rejected, because quarantined payloads must not flow back to agent credentials.",
 			parameters: [
+				{
+					name: "scope",
+					in: "query",
+					required: true,
+					description: "Tenant scope whose quarantine queue is listed.",
+					schema: { type: "string", enum: memoryScopeEnum },
+				},
+				{
+					name: "scopeRef",
+					in: "query",
+					required: true,
+					description:
+						"Tenant scope reference whose quarantine queue is listed.",
+					schema: { type: "string" },
+				},
 				{ name: "agentId", in: "query", schema: { type: "string" } },
 				{
 					name: "status",

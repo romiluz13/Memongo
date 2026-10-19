@@ -865,11 +865,15 @@ export async function memongoBridgeDeleteAllForAgent(params: {
  */
 export async function memongoBridgeListQuarantined(params: {
 	agentId?: string
+	scope: MemoryScope
+	scopeRef: string
 	status?: QuarantineStatus
 	limit?: number
 }): Promise<QuarantinedEntry[]> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.listQuarantined({
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 		status: params.status,
 		limit: params.limit,
 	})

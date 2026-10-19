@@ -1479,8 +1479,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return adminOpsOf(this).deleteAllForAgent(params)
 	}
 
-	/** C-004: list this agent's quarantine review queue, oldest first. */
-	async listQuarantined(params?: {
+	/** C-004: list one tenant's quarantine review queue, oldest first. */
+	async listQuarantined(params: {
+		scope: MemoryScope
+		scopeRef: string
 		status?: import("./mongodb-quarantine-review.js").QuarantineStatus
 		limit?: number
 	}) {

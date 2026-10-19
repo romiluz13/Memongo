@@ -1331,7 +1331,7 @@ describe("createApp", () => {
 			},
 		])
 		const res = await createApp().request(
-			"/v1/admin/quarantine?agentId=agent-42&status=pending-review&limit=25",
+			"/v1/admin/quarantine?agentId=agent-42&scope=workspace&scopeRef=workspace%3Ademo&status=pending-review&limit=25",
 		)
 		expect(res.status).toBe(200)
 		const json = (await res.json()) as Array<Record<string, unknown>>
@@ -1342,9 +1342,28 @@ describe("createApp", () => {
 		})
 		expect(bridgeMocks.memongoBridgeListQuarantined).toHaveBeenCalledWith({
 			agentId: "agent-42",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			status: "pending-review",
 			limit: 25,
 		})
+	})
+
+	it.each([
+		["scope", "scopeRef=workspace%3Ademo"],
+		["scopeRef", "scope=workspace"],
+		["scope and scopeRef", "agentId=agent-42"],
+	])("rejects a quarantine list with no %s before the bridge (M2 T13)", async (_label, query) => {
+		bridgeMocks.memongoBridgeListQuarantined.mockResolvedValue([])
+		const res = await createApp().request(`/v1/admin/quarantine?${query}`)
+		expect(res.status).toBe(400)
+		expect(await res.json()).toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "scope and scopeRef are required",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeListQuarantined).not.toHaveBeenCalled()
 	})
 
 	it("rejects an invalid quarantine status filter before the bridge", async () => {
@@ -1364,7 +1383,9 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeListQuarantined.mockRejectedValue(
 			new Error("queue read failed"),
 		)
-		const res = await createApp().request("/v1/admin/quarantine")
+		const res = await createApp().request(
+			"/v1/admin/quarantine?scope=workspace&scopeRef=workspace%3Ademo",
+		)
 		expect(res.status).toBe(500)
 		const json = (await res.json()) as { error: { code: string } }
 		expect(json.error.code).toBe("QUARANTINE_LIST_FAILED")

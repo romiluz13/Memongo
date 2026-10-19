@@ -34,6 +34,7 @@ import {
 	type AdmissionToken,
 } from "./mongodb-write-fence.js"
 import { memoryQuarantineCollection } from "./mongodb-schema.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	writeStructuredMemory,
 	type StructuredMemoryEntry,
@@ -134,22 +135,27 @@ export type QuarantineReviewReceipt = {
 }
 
 /**
- * List quarantined entries for one agent, oldest first (FIFO review queue).
- * `status` filters the lifecycle stage; unset lists every stage so the
- * console can show decided history alongside the pending queue.
+ * List the quarantined entries of one tenant (agentId, scope, scopeRef),
+ * oldest first (FIFO review queue). `status` filters the lifecycle stage;
+ * unset lists every stage so the console can show decided history alongside
+ * the pending queue. A row written without a scope belongs to no tenant and
+ * is not listed.
  */
 export async function listQuarantined(params: {
 	db: Db
 	prefix: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	status?: QuarantineStatus
 	limit?: number
 }): Promise<QuarantinedEntry[]> {
-	const { db, prefix, agentId, status } = params
+	const { db, prefix, status } = params
+	const tenant = requireTenantIdentity("listQuarantined", params)
 	const limit = clampListLimit(params.limit)
 	const docs = await memoryQuarantineCollection(db, prefix)
 		.find({
-			agentId,
+			...tenant,
 			...(status ? { status } : {}),
 		})
 		.sort({ createdAt: 1 })

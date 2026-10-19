@@ -1071,6 +1071,7 @@ export async function handleToolCall(
 				)
 			}
 			const out = await memongo.listQuarantined({
+				...readTenantArgs(args),
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				status:
 					args.status === "pending-review" ||

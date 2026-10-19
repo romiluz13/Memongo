@@ -15,6 +15,8 @@ const row: MemongoQuarantinedMemory = {
 	createdAt: "2026-10-01T00:00:00.000Z",
 }
 const filter: Parameters<MemongoClient["listQuarantined"]>[0] = {
+	scope: "workspace",
+	scopeRef: "workspace:demo",
 	status: row.status,
 }
 const decision: MemongoQuarantineReviewReceipt["status"] = "promoted"

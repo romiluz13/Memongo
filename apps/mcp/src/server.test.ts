@@ -630,17 +630,45 @@ describe("memongo quarantine review (C-004)", () => {
 
 		const out = await handleToolCall(
 			"memongo_quarantine_list",
-			{ agentId: "agent-42", status: "pending-review", limit: 5 },
+			{
+				agentId: "agent-42",
+				scope: "workspace",
+				scopeRef: "workspace:demo",
+				status: "pending-review",
+				limit: 5,
+			},
 			{ listQuarantined } as any,
 		)
 
 		expect(listQuarantined).toHaveBeenCalledWith({
 			agentId: "agent-42",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			status: "pending-review",
 			limit: 5,
 		})
 		expect(out.isError).toBeUndefined()
 		expect(parseTextPayload(out)).toEqual([entry])
+	})
+
+	it.each([
+		["scope", { scopeRef: "workspace:demo" }],
+		["scopeRef", { scope: "workspace" }],
+		["scope and scopeRef", {}],
+	])("rejects a quarantine list with no %s before calling the client (M2 T13)", async (_label, identity) => {
+		const listQuarantined = vi.fn().mockResolvedValue([])
+
+		const result = await handleToolCall(
+			"memongo_quarantine_list",
+			{ status: "pending-review", ...identity },
+			{ listQuarantined } as unknown as MemongoClient,
+		)
+
+		expect(result.isError).toBe(true)
+		expect(parseTextPayload(result)).toEqual({
+			error: "scope and scopeRef are required",
+		})
+		expect(listQuarantined).not.toHaveBeenCalled()
 	})
 
 	it("rejects an unrecognized status before calling the client", async () => {
@@ -791,6 +819,10 @@ describe("structuredContent envelopes (P1.2)", () => {
 			scopeRef: "workspace:demo",
 		},
 		memongo_erase_agent: { confirm: "erase", agentId: "agent-42" },
+		memongo_quarantine_list: {
+			scope: "workspace",
+			scopeRef: "workspace:demo",
+		},
 		memongo_quarantine_promote: { quarantineId: "q-1" },
 		memongo_quarantine_reject: { quarantineId: "q-1" },
 		memongo_get_job: { jobId: "job-1" },

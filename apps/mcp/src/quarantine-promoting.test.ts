@@ -14,12 +14,20 @@ describe("quarantine promoting list filter", () => {
 		)
 		const result = await handleToolCall(
 			"memongo_quarantine_list",
-			{ agentId: "agent1", status, limit: 5 },
+			{
+				agentId: "agent1",
+				scope: "workspace",
+				scopeRef: "workspace:demo",
+				status,
+				limit: 5,
+			},
 			{ listQuarantined } as unknown as MemongoClient,
 		)
 		expect(result.isError).not.toBe(true)
 		expect(listQuarantined).toHaveBeenCalledExactlyOnceWith({
 			agentId: "agent1",
+			scope: "workspace",
+			scopeRef: "workspace:demo",
 			status,
 			limit: 5,
 		})

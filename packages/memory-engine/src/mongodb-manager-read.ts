@@ -807,7 +807,9 @@ export class MongoDBManagerReadOps {
 	 * C-004 quarantine review: list this agent's review queue (and decided
 	 * history), oldest first.
 	 */
-	async listQuarantined(params?: {
+	async listQuarantined(params: {
+		scope: MemoryScope
+		scopeRef: string
 		status?: import("./mongodb-quarantine-review.js").QuarantineStatus
 		limit?: number
 	}) {
@@ -815,8 +817,10 @@ export class MongoDBManagerReadOps {
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
-			status: params?.status,
-			limit: params?.limit,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			status: params.status,
+			limit: params.limit,
 		})
 	}
 }

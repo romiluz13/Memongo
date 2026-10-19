@@ -557,7 +557,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		method: "get",
 		operationId: "listQuarantinedMemories",
 		summary: "List quarantined memories awaiting review (oldest first)",
-		requiredFields: [],
+		requiredFields: ["scope", "scopeRef"],
 		optionalFields: ["agentId", "status", "limit"],
 		errorStatuses: [400, 500],
 		tools: ["memongo_quarantine_list"],
