@@ -426,9 +426,13 @@ export class MongoDBManagerJobsOps {
 		prefetchedEffects?: BufferedWorkerEffects,
 	): Promise<void> {
 		// One search ledger per job: every Search lookup the job makes charges
-		// it, and its snapshot lands on the job row.
-		await runWithSearchBudget(EXTRACTION_JOB_SEARCH_BUDGET, () =>
-			this.runExtractionJob(job, prefetchedLlmFacts, prefetchedEffects),
+		// it, and its snapshot lands on the job row. #122 R2: one index-health
+		// snapshot per job, so its supporting-event Search never runs against
+		// an index observed unhealthy.
+		await this.host.runIndexHealthRequest(() =>
+			runWithSearchBudget(EXTRACTION_JOB_SEARCH_BUDGET, () =>
+				this.runExtractionJob(job, prefetchedLlmFacts, prefetchedEffects),
+			),
 		)
 	}
 
@@ -1459,27 +1463,31 @@ export class MongoDBManagerJobsOps {
 			const storedOptions =
 				MongoDBManagerJobsOps.consolidationOptionsFromMetadata(job.metadata)
 			// One search ledger per job: the consolidation run joins it, so the
-			// job row and the run row carry the same counts.
-			const { value: result, budget } = await runWithSearchBudget(
-				consolidationSearchBudgetLimits(
-					resolveConsolidationMaxEvents(storedOptions?.maxEvents),
-				),
+			// job row and the run row carry the same counts. #122 R2: one
+			// index-health snapshot per job for every Search probe of the run.
+			const { value: result, budget } = await this.host.runIndexHealthRequest(
 				() =>
-					consolidateMemory({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						agentId: this.host.agentId,
-						...(storedOptions ? { options: storedOptions } : {}),
-						...(job.admissionEpoch == null
-							? {}
-							: {
-									admission: {
-										kind: "admission" as const,
-										agentId: job.agentId,
-										epoch: job.admissionEpoch,
-									},
-								}),
-					}),
+					runWithSearchBudget(
+						consolidationSearchBudgetLimits(
+							resolveConsolidationMaxEvents(storedOptions?.maxEvents),
+						),
+						() =>
+							consolidateMemory({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								agentId: this.host.agentId,
+								...(storedOptions ? { options: storedOptions } : {}),
+								...(job.admissionEpoch == null
+									? {}
+									: {
+											admission: {
+												kind: "admission" as const,
+												agentId: job.agentId,
+												epoch: job.admissionEpoch,
+											},
+										}),
+							}),
+					),
 			)
 			const invalidatedScope = storedOptions?.scope ?? "agent"
 			const invalidatedScopeRef =

@@ -209,14 +209,18 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 				},
 				// No hybrid path on the deployment: only the corrective
 				// hybrid-evidence-relaxed pass adds it, so its backstop is the
-				// one retrieval the request has not already completed.
+				// one retrieval the request has not already completed. #122 R1:
+				// no graph path either. Graph now charges its real entity
+				// lookups (up to four aggregations), which this three-pass
+				// scenario cannot also fit under the 12-aggregation cap; the
+				// graph lane's own ledger is pinned in
+				// mongodb-search-v2-graph-episode-ledger.test.ts.
 				availablePaths: new Set([
 					"active-critical",
 					"structured",
 					"procedural",
 					"kb",
 					"raw-window",
-					"graph",
 				]),
 				executePass: ({ query, availablePaths }) =>
 					searchV2(db, "test_", query, "agent-1", {
@@ -236,7 +240,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 	const rows = response.metadata.laneOutcomes ?? []
 	const required: Record<number, string[]> = {
 		0: ["active-critical", "structured", "kb", "conversation-evidence"],
-		1: ["procedural", "raw-window", "graph", "conversation-evidence"],
+		1: ["procedural", "raw-window", "conversation-evidence"],
 		2: ["active-critical", "structured", "kb", "conversation-evidence"],
 	}
 	expect(response.metadata.passes.map((pass) => pass.reason)).toEqual([

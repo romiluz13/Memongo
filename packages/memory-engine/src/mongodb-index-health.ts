@@ -79,8 +79,13 @@ export type IndexHealthStats = {
 	indexesChecked: number
 }
 
-/** The user-driven metadata read ceiling; the read is bounded, never waited on. */
-export const INDEX_HEALTH_READ_MAX_TIME_MS = 5_000
+/**
+ * The metadata read's client-side bound. The driver `timeoutMS` covers server
+ * selection, the command and the cursor (and is sent to the server as
+ * maxTimeMS); the local deadline covers a read that never settles at all.
+ * Either expiry is a failed read, so the verdict is `index-unavailable`.
+ */
+export const INDEX_HEALTH_READ_TIMEOUT_MS = 5_000
 
 type CollectionRead =
 	| { ok: true; indexes: Map<string, SearchIndexDescription> }
@@ -91,18 +96,44 @@ function driverCode(err: unknown): number | undefined {
 	return typeof code === "number" ? code : undefined
 }
 
+async function withinReadDeadline<T>(
+	collectionName: string,
+	read: Promise<T>,
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(
+			() =>
+				reject(
+					new Error(
+						`$listSearchIndexes on ${collectionName} did not settle within ${INDEX_HEALTH_READ_TIMEOUT_MS} ms`,
+					),
+				),
+			INDEX_HEALTH_READ_TIMEOUT_MS,
+		)
+	})
+	try {
+		return await Promise.race([read, deadline])
+	} finally {
+		clearTimeout(timer)
+	}
+}
+
 /** One collection's `$listSearchIndexes`; a collection that does not exist has no indexes. */
 async function readCollectionIndexes(
 	db: Db,
 	collectionName: string,
 ): Promise<Map<string, SearchIndexDescription>> {
 	try {
-		const rows = (await db
-			.collection(collectionName)
-			.aggregate([{ $listSearchIndexes: {} }], {
-				maxTimeMS: INDEX_HEALTH_READ_MAX_TIME_MS,
-			})
-			.toArray()) as SearchIndexDescription[]
+		const rows = (await withinReadDeadline(
+			collectionName,
+			db
+				.collection(collectionName)
+				.aggregate([{ $listSearchIndexes: {} }], {
+					timeoutMS: INDEX_HEALTH_READ_TIMEOUT_MS,
+				})
+				.toArray(),
+		)) as SearchIndexDescription[]
 		const byName = new Map<string, SearchIndexDescription>()
 		for (const row of rows) {
 			if (typeof row.name === "string") byName.set(row.name, row)

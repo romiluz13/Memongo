@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
+	INDEX_HEALTH_READ_TIMEOUT_MS,
 	RequestIndexHealth,
 	activeIndexHealth,
 	assertCollectionIndexesHealthy,
@@ -275,6 +276,41 @@ describe("RequestIndexHealth", () => {
 		expect(second).toMatchObject({ reason: "index-unavailable" })
 		expect(listReads()).toHaveLength(1)
 		expect(health.stats().failedMetadataReads).toBe(1)
+	})
+
+	it("a metadata read that never settles is index-unavailable within its client bound", async () => {
+		vi.useFakeTimers()
+		try {
+			const { source, calls } = harness({
+				before: (operation) =>
+					operation.kind === "listSearchIndexes" &&
+					operation.collection === CHUNKS
+						? new Promise<void>(() => {})
+						: undefined,
+			})
+			const health = new RequestIndexHealth(source)
+
+			const outcome = health
+				.assertHealthy(health.select(["chunks"]), "hybrid:chunks")
+				.then(
+					() => "resolved",
+					(err: unknown) => err,
+				)
+			await vi.advanceTimersByTimeAsync(INDEX_HEALTH_READ_TIMEOUT_MS)
+
+			expect(await outcome).toMatchObject({
+				reason: "index-unavailable",
+				stage: "index-health",
+			})
+			expect(health.stats().failedMetadataReads).toBe(1)
+			expect(
+				calls.find(
+					(call) => call.op === "aggregate" && call.collection === CHUNKS,
+				),
+			).toMatchObject({ timeoutMS: INDEX_HEALTH_READ_TIMEOUT_MS })
+		} finally {
+			vi.useRealTimers()
+		}
 	})
 
 	it("a collection that does not exist has no indexes: unavailable, not an empty success", async () => {

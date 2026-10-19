@@ -684,3 +684,29 @@ Test gaps in the failure matrix (#121). This work adds tests only; no production
 
 - `waitForSearchIndexesQueryable` moved out of the engine's production source into `packages/memory-engine/src/test-helpers/search-index-wait.ts`. Only e2e tests call it, and the engine no longer exports it.
 - The e2e suite no longer expects the retired `idx_chunks_text` text index or a `$text` search. It now asserts that the chunks collection has no text index.
+
+## Review fixes R1, R2, R5 (1237)
+
+Fixes for the reviewer's blocking findings on #122. No index or collection is dropped, and no failure is relabeled as an empty success.
+
+### R1: one request ledger at every retrieval boundary
+
+- **Discovery, the context bundle and novelty.** `buildDiscoveryProjection`, `buildContextBundle` and `scanNovelty` each run on one request ledger with the configured `searchBudget` limits (12 aggregations and 5 embeds by default). Sibling sections and a nested search share it; the nested search still takes its admission token. A caller that already holds a ledger joins it. Previously each section, and each nested search, charged a ledger of its own or none.
+- **An exhausted ledger is typed.** In discovery and the bundle, a section the ledger cannot pay for is a `budget-denied` failure row, as T8 defines. Novelty throws `SearchBudgetDeniedError`, and `POST /v1/novelty-scan` answers 503 `SEARCH_BUDGET_EXHAUSTED` with the row in the body and no `Retry-After`.
+- **Novelty reserves every probe first.** Each candidate's k-NN probe is one aggregation and one embed, and the scan reserves all of them before the first one runs. At the default limits, a scan with more than 5 candidates is refused with `budget-reservation`, and no probe runs. Raise `searchBudget.maxEmbeds` to scan more candidates in one request.
+- **Graph and episode Search are charged.** The graph lane's entity lookups and the episodic lane's episode Search run through the charged executor. Each attempt is one aggregation. Both lanes now retry an index warmup error, and a warmup that never ends is a typed `index-not-ready`; previously the driver error surfaced. The graph lane looks up at most 4 candidate entities and reserves that many aggregations; the episodic lane reserves 1. A multi-pass search whose ledger cannot also fit the graph reservation gets a typed reservation denial on the graph lane. The graph traversal (`$graphLookup`) is not a Search operation and is not charged.
+
+### R2: index health for jobs and write decisions
+
+- **One snapshot per request or job.** Public `scanNovelty` and `consolidate`, each background extraction job and each consolidation job take one request-local index-health snapshot. A job's search-budget row on the job now includes the health checks it made.
+- **Every native probe checks its index.** Each check happens before the probe runs, against the snapshot:
+  - novelty's k-NN probes check the events vector index;
+  - the consolidator's similarity, dedup and prune probes check the structured-memory vector index;
+  - its entity Search checks the events text index;
+  - the supporting-event Search of a promotion decision checks the events text index.
+- **What a failed check does.** An index that is STALE, missing or unreadable fails typed `index-stale` or `index-unavailable` at the `index-health` stage, and no probe runs. A job fails with retry state and keeps its events unacknowledged. A later request or job reads health again and recovers once the index is healthy.
+
+### R5: the health metadata read is bounded
+
+- **Bounded at the client.** The `$listSearchIndexes` read behind a health snapshot carries the driver's `timeoutMS` (5 s) and a local deadline of the same length, so a read that never settles cannot hang the request.
+- **Expiry is typed.** A read that misses its bound is `index-unavailable` (`metadata-read-failed`), like any other failed metadata read. Previously the read carried only a server `maxTimeMS`, which does not bound a client that never gets a reply.

@@ -24,9 +24,16 @@ import type { Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { NoveltyEvent, NoveltyOptions, NoveltyReport } from "./types.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
-import { consumeSearchWorkOrThrow } from "./mongodb-search-budget.js"
+import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
+import {
+	searchWorkDenialReason,
+	tryReserveSearchBudget,
+} from "./mongodb-search-budget.js"
 import { buildEventLifecycleClause } from "./mongodb-temporal.js"
-import { toTypedSearchError } from "./search-outcomes.js"
+import {
+	SearchBudgetDeniedError,
+	toTypedSearchError,
+} from "./search-outcomes.js"
 
 export type { NoveltyEvent, NoveltyReport, NoveltyOptions }
 
@@ -153,6 +160,23 @@ export async function scanNovelty(params: {
 		}
 	}
 
+	// #122 R2: the probes never run against an events vector index observed
+	// unhealthy in this request's snapshot.
+	await assertCollectionIndexesHealthy(["events"], undefined, ["vectorSearch"])
+	// #122 R1: reserve every probe before the first one runs. A ledger without
+	// room is a typed denial and no probe runs; outside a ledger the
+	// reservation charges nothing.
+	const probes = tryReserveSearchBudget({
+		aggregations: candidates.length,
+		embeds: candidates.length,
+	})
+	if (!probes) {
+		throw new SearchBudgetDeniedError({
+			stage: "reservation",
+			reason: "budget-reservation",
+		})
+	}
+
 	try {
 		// 4. For each candidate, run k-NN to find its nearest neighbors
 		const scoredEvents: NoveltyEvent[] = []
@@ -165,9 +189,14 @@ export async function scanNovelty(params: {
 			const searchLimit = kNeighbors + 1
 			const numCandidates = Math.max(searchLimit * 20, 100)
 
-			// One probe embeds the body server-side: charged to the caller's
-			// ledger (a no-op when the scan runs outside one). A denial throws.
-			consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
+			// One probe embeds the body server-side: charged to the scan's
+			// reservation (a no-op when the scan runs outside a ledger).
+			if (!probes.tryConsumeWork({ aggregations: 1, embeds: 1 })) {
+				throw new SearchBudgetDeniedError({
+					stage: "vector",
+					reason: searchWorkDenialReason({ aggregations: 1, embeds: 1 }),
+				})
+			}
 
 			const pipeline: Document[] = [
 				{
@@ -247,5 +276,7 @@ export async function scanNovelty(params: {
 		const typed = toTypedSearchError(err, "vector")
 		log.warn(`novelty scan failed: ${typed.message}`)
 		throw typed
+	} finally {
+		probes.release()
 	}
 }

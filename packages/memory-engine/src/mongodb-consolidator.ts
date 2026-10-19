@@ -36,6 +36,7 @@ import {
 	runWithSearchBudget,
 } from "./mongodb-search-budget.js"
 import { toTypedSearchError } from "./search-outcomes.js"
+import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
 import {
 	buildEventLifecycleClause,
 	buildUnexpiredClause,
@@ -142,6 +143,16 @@ const UNSCORED_NOVELTY = 0.5
 // similarity probes, 50 dedup probes, 50 prune probes) plus slack: it is
 // accounting with a runaway cap, not a throttle on normal work.
 const CONSOLIDATION_PROBE_CEILING = 200
+
+/**
+ * #122 R2: the similarity, dedup and prune probes query the structured-memory
+ * vector index; each runs only when this request's snapshot finds it healthy.
+ */
+function assertStructuredVectorHealthy(): Promise<void> {
+	return assertCollectionIndexesHealthy(["structured_mem"], undefined, [
+		"vectorSearch",
+	])
+}
 
 export function consolidationSearchBudgetLimits(maxEvents: number): {
 	maxAggregations: number
@@ -1111,7 +1122,9 @@ async function runConsolidation(
 
 				// A failed probe throws a typed SearchLaneError (or a budget denial):
 				// the event fails and stays unacknowledged. The probe's answer is
-				// the only thing that can authorize an ADD.
+				// the only thing that can authorize an ADD. #122 R2: so is a
+				// structured-memory vector index observed unhealthy.
+				await assertStructuredVectorHealthy()
 				consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
 				let similarResults: Document[]
 				try {
@@ -1608,6 +1621,7 @@ async function runConsolidation(
 						// Skip facts merged away by a prior iteration in this loop
 						if (retiredIds.has(factId)) continue
 
+						await assertStructuredVectorHealthy()
 						consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
 						let similars: Document[]
 						try {
@@ -1873,6 +1887,7 @@ async function runConsolidation(
 				// Skip facts invalidated by a prior iteration in this loop
 				if (invalidatedIds.has(String(fact._id))) continue
 
+				await assertStructuredVectorHealthy()
 				consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
 				let duplicates: Document[]
 				try {
@@ -2210,6 +2225,9 @@ async function searchEntityBatch(params: {
 			range: { path: "timestamp", gte: window.$gte, lte: window.$lte },
 		})
 	}
+	// #122 R2: never select the batch through an events text index observed
+	// unhealthy in this request's snapshot.
+	await assertCollectionIndexesHealthy(["events"], undefined, ["search"])
 	consumeSearchWorkOrThrow("atlas-search", { aggregations: 1, embeds: 0 })
 	try {
 		return await eventsCol

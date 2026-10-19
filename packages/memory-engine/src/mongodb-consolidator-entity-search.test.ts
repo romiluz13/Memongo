@@ -7,6 +7,8 @@ import {
 	openSearchBudget,
 } from "./mongodb-search-budget.js"
 import { SearchLaneError } from "./search-outcomes.js"
+import { runWithIndexHealth } from "./mongodb-index-health.js"
+import { createIndexHealthSource } from "./test-helpers/index-health-source.js"
 import { matchesFilter } from "./test-helpers/stateful-mongo-fake.js"
 
 const seams = vi.hoisted(() => ({
@@ -252,6 +254,34 @@ describe("consolidator entity filter selects its batch through Atlas Search", ()
 			)[0]
 			expectLiveOnly(pipeline[1].$match as Record<string, unknown>)
 		})
+	})
+
+	it("a STALE events text index in the run's snapshot fails the run typed and never runs the $search (#122 R2)", async () => {
+		const f = fixture(async () => [])
+		const health = createIndexHealthSource({
+			prefix: "test_",
+			patch: { events_text: { status: "STALE" } },
+		})
+
+		await expect(
+			runWithIndexHealth(health, () =>
+				consolidateMemory({
+					db: f.db,
+					prefix: "test_",
+					agentId: "agent-1",
+					options: { entitySet: ["Acme"] },
+				}),
+			),
+		).rejects.toMatchObject({
+			name: "SearchLaneError",
+			stage: "index-health",
+			reason: "index-stale",
+		})
+		expect(f.events.aggregate).not.toHaveBeenCalled()
+		const terminal = f.runs.updateOne.mock.calls
+			.map((call) => (call as unknown as [unknown, { $set?: unknown }])[1].$set)
+			.filter(Boolean)
+		expect(terminal).toEqual([expect.objectContaining({ status: "failed" })])
 	})
 
 	it("fails the run with a typed Search error, never an empty batch, when the $search stage fails", async () => {

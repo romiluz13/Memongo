@@ -97,3 +97,19 @@ export function conversationEvidenceLaneCost(
 export function rawWindowLaneCost(): SearchWorkCost {
 	return TEXT_TIER
 }
+
+/** #122 R1: the most entity candidates the `graph` lane looks up. */
+export const GRAPH_LANE_MAX_LOOKUPS = 4
+
+/** `graph`: one `$search` autocomplete aggregate per entity candidate it looks up; no embed. */
+export function graphLaneCost(candidates: number): SearchWorkCost {
+	return {
+		aggregations: Math.min(Math.max(0, candidates), GRAPH_LANE_MAX_LOOKUPS),
+		embeds: 0,
+	}
+}
+
+/** `episodic`: one `$search` aggregate over the episodes; no embed. */
+export function episodicLaneCost(): SearchWorkCost {
+	return TEXT_TIER
+}

@@ -28,6 +28,7 @@ import {
 	relationsCollection,
 } from "./mongodb-schema.js"
 import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
+import { runSearchAggregateWithRetry } from "./mongodb-search.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	searchFailureLogFields,
@@ -2328,10 +2329,11 @@ export async function searchEntitiesAutocomplete(params: {
 			{ $limit: maxResults },
 		]
 
-		const docs = await collection
-			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-			.toArray()
+		// #122 R1: the charged executor charges this lookup to the request
+		// ledger (one aggregation) and carries the user-search maxTimeMS.
+		const docs = await runSearchAggregateWithRetry(collection, pipeline, {
+			stage: "entity-lookup",
+		})
 		return docs as unknown as Entity[]
 	} catch (err) {
 		const typed = toTypedSearchError(err, "entity-lookup")

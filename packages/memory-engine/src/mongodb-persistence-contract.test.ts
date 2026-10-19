@@ -4,6 +4,7 @@ import {
 	fixture,
 	event,
 	BODY,
+	fixtureIndexHealth,
 	type Row,
 } from "./test-helpers/persistence-contract-store.js"
 import {
@@ -65,6 +66,7 @@ async function managerLoop(
 		memoryJobWorkerStopped: false,
 		memoryJobWorkerGeneration: 0,
 		memoryJobOperationContexts: new Map(),
+		...fixtureIndexHealth,
 	}) as MongoDBMemoryManager
 	const receipts = await manager.writeConversationEventsBatch([
 		{

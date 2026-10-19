@@ -103,6 +103,35 @@ describe("POST /v1/novelty-scan (X-10)", () => {
 		expect(JSON.stringify(body)).not.toContain("private")
 	})
 
+	it("maps a scan the request ledger cannot reserve to 503 SEARCH_BUDGET_EXHAUSTED (#122 R1)", async () => {
+		bridge.memongoBridgeScanNovelty.mockRejectedValue(
+			Object.assign(new Error("private provider detail"), {
+				name: "SearchBudgetDeniedError",
+				lane: "search",
+				stage: "reservation",
+				reason: "budget-reservation",
+			}),
+		)
+
+		const response = await post("/v1/novelty-scan")
+
+		expect(response.status).toBe(503)
+		const body = await json(response)
+		expect(body.error?.code).toBe("SEARCH_BUDGET_EXHAUSTED")
+		expect(response.headers.get("Retry-After")).toBeNull()
+		expect(body.outcomes).toEqual({
+			status: "failed",
+			lanes: [
+				{
+					lane: "search",
+					stage: "reservation",
+					outcome: "budget-denied",
+					reason: "budget-reservation",
+				},
+			],
+		})
+	})
+
 	it("maps a typed query defect to a typed 500", async () => {
 		bridge.memongoBridgeScanNovelty.mockRejectedValue(
 			typedLaneError("query-error"),
