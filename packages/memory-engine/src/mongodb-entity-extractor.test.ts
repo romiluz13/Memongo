@@ -11,6 +11,7 @@ import {
 	isAmbiguousPersonName,
 	type EntityExtractionContext,
 } from "./mongodb-entity-extractor.js"
+import { EnrichmentParseError } from "./mongodb-llm-enrichment.js"
 
 describe("mongodb-entity-extractor", () => {
 	describe("RegexEntityExtractor", () => {
@@ -151,22 +152,18 @@ describe("mongodb-entity-extractor", () => {
 			)
 		})
 
-		it("falls back to regex on LLM error", async () => {
-			const llmFn = vi.fn().mockRejectedValue(new Error("LLM unavailable"))
+		it("rejects on LLM error instead of falling back to regex", async () => {
+			const failure = new Error("LLM unavailable")
+			const llmFn = vi.fn().mockRejectedValue(failure)
 			const extractor = new LLMEntityExtractor(llmFn, 5000)
 
-			// Content with @mention should be picked up by regex fallback
-			const result = await extractor.extract("Talk to @alice about it")
-			expect(result).toContainEqual(
-				expect.objectContaining({
-					name: "alice",
-					type: "person",
-					extractionMethod: "regex",
-				}),
+			// The @mention is regex-extractable; the failure must not become it.
+			await expect(extractor.extract("Talk to @alice about it")).rejects.toBe(
+				failure,
 			)
 		})
 
-		it("falls back to regex on timeout", async () => {
+		it("rejects on timeout instead of falling back to regex", async () => {
 			const llmFn = vi
 				.fn()
 				.mockImplementation(
@@ -176,14 +173,18 @@ describe("mongodb-entity-extractor", () => {
 			// Very short timeout to trigger quickly
 			const extractor = new LLMEntityExtractor(llmFn, 50)
 
-			const result = await extractor.extract("Contact @bob about the issue")
-			expect(result).toContainEqual(
-				expect.objectContaining({
-					name: "bob",
-					type: "person",
-					extractionMethod: "regex",
-				}),
-			)
+			await expect(
+				extractor.extract("Contact @bob about the issue"),
+			).rejects.toThrow("LLM extraction timeout")
+		})
+
+		it("rejects an unparseable response with a typed parse error", async () => {
+			const llmFn = vi.fn().mockResolvedValue("no entities here")
+			const extractor = new LLMEntityExtractor(llmFn, 5000)
+
+			await expect(
+				extractor.extract("Talk to @alice about it"),
+			).rejects.toBeInstanceOf(EnrichmentParseError)
 		})
 
 		it("handles markdown-wrapped JSON response", async () => {
@@ -230,8 +231,17 @@ describe("mongodb-entity-extractor", () => {
 			expect(result[1].confidence).toBe(0)
 		})
 
-		it("returns empty array for unparseable input", () => {
-			expect(parseExtractionResponse("not json at all")).toEqual([])
+		it("throws a typed parse error for unparseable input", () => {
+			expect(() => parseExtractionResponse("not json at all")).toThrow(
+				EnrichmentParseError,
+			)
+			expect(() => parseExtractionResponse("[not valid json]")).toThrow(
+				EnrichmentParseError,
+			)
+		})
+
+		it("returns an empty array for a well-formed empty list", () => {
+			expect(parseExtractionResponse("[]")).toEqual([])
 		})
 
 		it("defaults confidence to 0.7 when not provided", () => {

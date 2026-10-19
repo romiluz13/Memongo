@@ -5,6 +5,7 @@ import {
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
+import { bestEffort } from "./best-effort.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { isDerivableFromContext } from "./mongodb-consolidator.js"
 import {
@@ -93,17 +94,13 @@ async function recordProjectionRunBestEffort(params: {
 	}
 	context: string
 }): Promise<void> {
-	try {
-		await recordProjectionRun({
+	await bestEffort(`${params.context}-projection-run`, () =>
+		recordProjectionRun({
 			db: params.db,
 			prefix: params.prefix,
 			run: params.run,
-		})
-	} catch (err) {
-		log.warn(
-			`${params.context} projection run recording failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-	}
+		}),
+	)
 }
 
 const STOPWORDS = new Set([
@@ -499,9 +496,9 @@ async function findSupportingEventIds(params: {
 
 /**
  * Combine deterministic regex candidates with LLM-extracted candidates (issue
- * #30). Regex candidates are trusted on identity collisions. Degrades to
- * regex-only when no provider is configured or the LLM call fails, so the write
- * path never breaks on a missing key or an upstream outage.
+ * #30). Regex candidates are trusted on identity collisions. With no provider
+ * configured, deterministic-only extraction is a declared mode. A configured
+ * provider whose call fails throws, so the derivation fails and is retried.
  */
 async function mergeStructuredCandidates(
 	event: ConversationEvent,
@@ -553,11 +550,14 @@ async function mergeStructuredCandidates(
 				llmCandidates.length,
 			)
 		} catch (err) {
+			// A configured provider that fails fails the derivation: the caller
+			// marks it failed with retry state. Regex candidates alone are not a
+			// complete result for this event.
 			recordPromotionDecision(event, "extraction", "provider-error")
 			log.warn(
-				`LLM structured extraction failed for ${event.eventId}, using regex only: ${String(err)}`,
+				`LLM structured extraction failed for ${event.eventId}; derivation fails: ${String(err)}`,
 			)
-			return regexCandidates
+			throw err
 		}
 	}
 
@@ -570,9 +570,10 @@ async function mergeStructuredCandidates(
 	}
 
 	// Refine each candidate's valid-time from its own text (#32). Anchored to the
-	// event timestamp, which is also the explicit fallback. Never throws. When no
-	// provider exists at all (prefetched facts only), candidates already carry
-	// the event-timestamp baseline, so refinement is simply skipped.
+	// event timestamp, which is the valid time when the model states no date. A
+	// failed extraction throws. When no provider exists at all (prefetched facts
+	// only), candidates already carry the event-timestamp baseline, so
+	// refinement is simply skipped.
 	const refineProvider = temporalProvider ?? provider
 	if (!refineProvider) {
 		return [...merged.values()]

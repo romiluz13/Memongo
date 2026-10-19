@@ -300,7 +300,9 @@ describe("privacy of added debug extraction/promotion decision records", () => {
 			prefetchedLlmFacts: [],
 		})
 		expect(chatCompletion).not.toHaveBeenCalled()
-		await prepareDerivedMemoryPromotion({ ...args, provider })
+		await expect(
+			prepareDerivedMemoryPromotion({ ...args, provider }),
+		).rejects.toThrow("private provider payload")
 		expect(chatCompletion).toHaveBeenCalledTimes(1)
 		expect(decisions()).toEqual(
 			expect.arrayContaining([

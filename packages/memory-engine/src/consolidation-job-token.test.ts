@@ -13,6 +13,10 @@ import { createStatefulMongoFake } from "./test-helpers/stateful-mongo-fake.js"
 import type { ClaimedMemoryJob } from "./types.js"
 
 vi.mock("./mongodb-consolidator.js", () => ({
+	consolidationSearchBudgetLimits: (maxEvents: number) => ({
+		maxAggregations: maxEvents + 200,
+		maxEmbeds: maxEvents + 200,
+	}),
 	consolidateMemory: vi.fn(async () => ({
 		runId: "result",
 		eventsProcessed: 0,

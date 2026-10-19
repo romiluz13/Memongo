@@ -23,6 +23,7 @@ import { createStatefulMongoFake } from "./test-helpers/stateful-mongo-fake.js"
 // ---------------------------------------------------------------------------
 const llmState = {
 	contradictions: [] as Array<{ key: string; rationale: string }>,
+	failOn: undefined as undefined | "contradictions" | "merge" | "reasoning",
 }
 
 vi.mock("./mongodb-llm-enrichment.js", async (importOriginal) => {
@@ -38,6 +39,14 @@ vi.mock("./mongodb-llm-enrichment.js", async (importOriginal) => {
 					.filter((message) => message.role === "system")
 					.map((message) => message.content)
 					.join("\n")
+				const kind = system.includes("detect direct contradictions")
+					? "contradictions"
+					: system.includes("should be merged into one")
+						? "merge"
+						: "reasoning"
+				if (llmState.failOn === kind) {
+					throw new Error(`injected ${kind} provider failure`)
+				}
 				if (system.includes("detect direct contradictions")) {
 					return {
 						content: JSON.stringify({
@@ -123,6 +132,7 @@ function gateDoc(fake: ReturnType<typeof createStatefulMongoFake>) {
 
 beforeEach(() => {
 	llmState.contradictions = []
+	llmState.failOn = undefined
 })
 
 describe("consolidation gate + promotion — collection state", () => {
@@ -261,7 +271,6 @@ describe("NOOP gate — similarity decision against stored state", () => {
 		["stale scope reference", { scopeRef: "agent:another" }, true, 1],
 		["expired", { expiresAt: new Date(0) }, false, 1],
 		["low score", {}, true, 1],
-		["probe failure", {}, true, 1],
 	] as const)("%s lookalike preserves the promotion decision", async (label, patch, staleIndex, promoted) => {
 		const fake = createStatefulMongoFake({ prefix: PREFIX })
 		await seedFact(fake, {
@@ -290,7 +299,6 @@ describe("NOOP gate — similarity decision against stored state", () => {
 				const vector = pipeline[0]?.$vectorSearch as Document | undefined
 				if (vector?.numCandidates !== 100) return original(pipeline)
 				probes.push(pipeline)
-				if (label === "probe failure") throw new Error("owned probe failure")
 				if (!staleIndex) return original(pipeline)
 				return original([
 					{ $match: { key: "existing decision record" } },
@@ -317,6 +325,40 @@ describe("NOOP gate — similarity decision against stored state", () => {
 						?.sourceEventIds,
 				).toEqual(["evt-repeat"])
 			}
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
+	it("a failed similarity probe never authorizes ADD: typed failure, event unacknowledged, run failed", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const structured = fake.collection("structured_mem")
+		const original = structured.aggregate.bind(structured)
+		const spy = vi
+			.spyOn(structured, "aggregate")
+			.mockImplementation((pipeline) => {
+				const vector = pipeline[0]?.$vectorSearch as Document | undefined
+				if (vector?.numCandidates !== 100) return original(pipeline)
+				throw new Error("owned probe failure")
+			})
+		try {
+			await seedEvent(fake, {
+				eventId: "evt-repeat",
+				body: "We decided to use Biome for linting",
+			})
+			await expect(
+				consolidateMemory({ db: fake.db, prefix: PREFIX, agentId: AGENT }),
+			).rejects.toMatchObject({
+				name: "SearchLaneError",
+				stage: "vector",
+				reason: "internal-error",
+			})
+			expect(fake.all("structured_mem")).toHaveLength(0)
+			expect(
+				fake.findDoc("events", { eventId: "evt-repeat" })?.dreamerProcessedAt,
+			).toBeUndefined()
+			expect(gateDoc(fake)?.status).toBe("failed")
+			expect(gateDoc(fake)?.error).toContain("search")
 		} finally {
 			spy.mockRestore()
 		}
@@ -420,6 +462,99 @@ describe("P4.4.2 contradiction resolution — collection state", () => {
 		const gate = gateDoc(fake)
 		expect(gate?.status).toBe("completed")
 		expect(gate?.conflictsResolved).toBe(1)
+	})
+
+	it("a contradiction-detection failure fails the event and the run: no skip, no promotion, no invalidation", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		await seedFact(fake, {
+			key: "down after the deploy",
+			value: "stale conflicted statement",
+			state: "conflicted",
+		})
+		await seedFact(fake, {
+			key: "server status",
+			value: "The server is up and healthy",
+		})
+		await seedEvent(fake, {
+			eventId: "evt-outage",
+			body: "The server is down after the deploy",
+		})
+		llmState.contradictions = [
+			{ key: "server status", rationale: "cannot be both up and down" },
+		]
+		llmState.failOn = "contradictions"
+
+		await expect(
+			consolidateMemory({ db: fake.db, prefix: PREFIX, agentId: AGENT }),
+		).rejects.toThrow("injected contradictions provider failure")
+
+		expect(
+			fake.findDoc("structured_mem", { key: "server status" })?.state,
+		).toBe("active")
+		expect(
+			fake.findDoc("structured_mem", { key: "down after the deploy" })?.state,
+		).toBe("conflicted")
+		expect(
+			fake.findDoc("events", { eventId: "evt-outage" })?.dreamerProcessedAt,
+		).toBeUndefined()
+		expect(gateDoc(fake)?.status).toBe("failed")
+		expect(gateDoc(fake)?.error).toContain("injected contradictions")
+	})
+})
+
+describe("write-decision failures fail the run and leave state untouched", () => {
+	it("a reasoning-phase provider failure fails the run and acknowledges no event", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		await seedEvent(fake, {
+			eventId: "evt-noise",
+			body: "the rain in spain stays mainly on the plain",
+		})
+		await seedFact(fake, { key: "alpha", value: "the alpha value is 1" })
+		await seedFact(fake, { key: "beta", value: "the beta value is 2" })
+		llmState.failOn = "reasoning"
+
+		await expect(
+			consolidateMemory({ db: fake.db, prefix: PREFIX, agentId: AGENT }),
+		).rejects.toThrow("injected reasoning provider failure")
+
+		expect(
+			fake.findDoc("events", { eventId: "evt-noise" })?.dreamerProcessedAt,
+		).toBeUndefined()
+		expect(fake.all("structured_mem")).toHaveLength(2)
+		expect(gateDoc(fake)?.status).toBe("failed")
+	})
+
+	it("a merge-adjudication provider failure fails the run and invalidates no fact", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		await seedEvent(fake, {
+			eventId: "evt-noise",
+			body: "the rain in spain stays mainly on the plain",
+		})
+		await seedFact(fake, {
+			key: "deploy window",
+			value: "the deploy window starts at 4pm",
+			updatedAt: new Date("2026-07-01T00:00:00.000Z"),
+		})
+		await seedFact(fake, {
+			key: "release window",
+			value: "the deploy window starts at 4pm EST",
+			updatedAt: new Date("2026-08-01T00:00:00.000Z"),
+		})
+		llmState.failOn = "merge"
+
+		await expect(
+			consolidateMemory({
+				db: fake.db,
+				prefix: PREFIX,
+				agentId: AGENT,
+				options: { llmDedup: true },
+			}),
+		).rejects.toThrow("injected merge provider failure")
+
+		for (const fact of fake.all("structured_mem")) {
+			expect(fact.state).toBe("active")
+		}
+		expect(gateDoc(fake)?.status).toBe("failed")
 	})
 })
 

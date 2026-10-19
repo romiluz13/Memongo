@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Db, Collection, Document } from "mongodb"
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
 import { SearchLaneError, type SearchTierOutcome } from "./search-outcomes.js"
 
 // Mock mongodb-events.js for checkAutoEpisodeTriggers tests
@@ -154,6 +158,35 @@ describe("mongodb-episodes", () => {
 				(episodesCol as unknown as { findOne: ReturnType<typeof vi.fn> })
 					.findOne,
 			).toHaveBeenCalledOnce()
+		})
+
+		it("declares the projection-run record best-effort: logged and counted, never failing the episode", async () => {
+			resetBestEffortFailureCounts()
+			const start = new Date("2026-03-15T09:00:00Z")
+			const end = new Date("2026-03-15T10:00:00Z")
+			vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(
+				makeEventDocs(4, start) as never,
+			)
+			const db = createMockDb({
+				[`${PREFIX}episodes`]: createMockCollection(),
+				[`${PREFIX}projection_runs`]: createMockCollection({
+					insertOne: vi.fn().mockRejectedValue(new Error("runs store down")),
+				}),
+			})
+
+			const result = await materializeEpisode({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				type: "daily",
+				timeRange: { start, end },
+				summarizer: mockSummarizer,
+			})
+
+			expect(result).not.toBeNull()
+			expect(getBestEffortFailureCounts()).toMatchObject({
+				"episode-projection-run": 1,
+			})
 		})
 
 		it("keeps auto episodes scoped by scopeRef and consolidates only the pre-gap window", async () => {

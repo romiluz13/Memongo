@@ -1,6 +1,4 @@
-import { createSubsystemLogger } from "@memongo/lib"
-
-const log = createSubsystemLogger("memory:mongodb:entity-extractor")
+import { EnrichmentParseError } from "./mongodb-llm-enrichment.js"
 
 // ---------------------------------------------------------------------------
 // Stop words (canonical source — mongodb-graph.ts re-exports this set)
@@ -249,21 +247,20 @@ export type LLMFunction = (prompt: string) => Promise<string>
 export class LLMEntityExtractor implements EntityExtractor {
 	private llmFn: LLMFunction
 	private timeoutMs: number
-	private fallback: RegexEntityExtractor
 
 	constructor(llmFn: LLMFunction, timeoutMs = 5000) {
 		this.llmFn = llmFn
 		this.timeoutMs = timeoutMs
-		this.fallback = new RegexEntityExtractor()
 	}
 
+	/** A timeout, a provider failure or an unparseable response rejects; there is no regex fallback. */
 	async extract(
 		content: string,
 		context?: EntityExtractionContext,
 	): Promise<ExtractedEntity[]> {
 		let timer: ReturnType<typeof setTimeout> | undefined
 		try {
-			const result = await Promise.race([
+			return await Promise.race([
 				this.extractWithLLM(content, context),
 				new Promise<never>((_, reject) => {
 					timer = setTimeout(
@@ -272,12 +269,6 @@ export class LLMEntityExtractor implements EntityExtractor {
 					)
 				}),
 			])
-			return result
-		} catch (err) {
-			log.warn("LLM entity extraction failed, falling back to regex", {
-				error: err instanceof Error ? err.message : String(err),
-			})
-			return this.fallback.extract(content)
 		} finally {
 			if (timer !== undefined) {
 				clearTimeout(timer)
@@ -405,42 +396,48 @@ Response (JSON array only):`
 }
 
 export function parseExtractionResponse(response: string): ExtractedEntity[] {
-	try {
-		// Find JSON array in response (may be wrapped in markdown code block)
-		const jsonMatch = response.match(/\[[\s\S]*\]/)
-		if (!jsonMatch) {
-			return []
-		}
-
-		const parsed = JSON.parse(jsonMatch[0]) as Array<{
-			name?: string
-			type?: string
-			confidence?: number
-		}>
-
-		if (!Array.isArray(parsed)) {
-			return []
-		}
-
-		return parsed
-			.filter(
-				(
-					e,
-				): e is typeof e & {
-					name: string
-				} => typeof e.name === "string" && e.name.trim().length >= 2,
-			)
-			.map((e) => ({
-				name: e.name.trim(),
-				type: e.type ?? "custom",
-				confidence:
-					typeof e.confidence === "number"
-						? Math.min(1, Math.max(0, e.confidence))
-						: 0.7,
-				extractionMethod: "llm" as const,
-			}))
-	} catch {
-		log.warn("failed to parse LLM extraction response")
-		return []
+	// Find JSON array in response (may be wrapped in markdown code block)
+	const jsonMatch = response.match(/\[[\s\S]*\]/)
+	if (!jsonMatch) {
+		throw new EnrichmentParseError(
+			"LLM entity extraction response has no JSON array",
+		)
 	}
+
+	let parsed: Array<{
+		name?: string
+		type?: string
+		confidence?: number
+	}>
+	try {
+		parsed = JSON.parse(jsonMatch[0])
+	} catch {
+		throw new EnrichmentParseError(
+			"LLM entity extraction response is not valid JSON",
+		)
+	}
+
+	if (!Array.isArray(parsed)) {
+		throw new EnrichmentParseError(
+			"LLM entity extraction response is not a JSON array",
+		)
+	}
+
+	return parsed
+		.filter(
+			(
+				e,
+			): e is typeof e & {
+				name: string
+			} => !!e && typeof e.name === "string" && e.name.trim().length >= 2,
+		)
+		.map((e) => ({
+			name: e.name.trim(),
+			type: e.type ?? "custom",
+			confidence:
+				typeof e.confidence === "number"
+					? Math.min(1, Math.max(0, e.confidence))
+					: 0.7,
+			extractionMethod: "llm" as const,
+		}))
 }

@@ -25,6 +25,7 @@ import {
 } from "./mongodb-cost-ledger.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { classifyInjection } from "./mongodb-injection-classifier.js"
+import { bestEffort } from "./best-effort.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
@@ -56,7 +57,7 @@ import {
 } from "./mongodb-temporal.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
-	isTransactionUnsupported,
+	typedTransactionError,
 } from "./mongodb-transactions.js"
 import type {
 	MemoryActorRole,
@@ -1579,13 +1580,7 @@ export async function writeStructuredMemory(params: {
 							}
 						)
 					} catch (err) {
-						if (!isTransactionUnsupported(err)) {
-							throw err
-						}
-						log.info(
-							"transactions not supported for structured memory, falling back to direct writes",
-						)
-						return await persistWithDuplicateKeyRetry()
+						throw typedTransactionError(err)
 					} finally {
 						await session.endSession()
 					}
@@ -1658,11 +1653,7 @@ export async function writeStructuredMemory(params: {
 		if (session) {
 			await audit
 		} else {
-			Promise.allSettled([audit]).catch((err) => {
-				log.warn(
-					`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
-				)
-			})
+			void bestEffort("structured-memory-audit", () => audit)
 		}
 	}
 
@@ -1884,13 +1875,7 @@ export async function invalidateStructuredMemoryByHandle(params: {
 				await persist(session)
 			}, MAJORITY_TRANSACTION_OPTIONS)
 		} catch (err) {
-			if (!isTransactionUnsupported(err)) {
-				throw err
-			}
-			log.info(
-				"transactions not supported for structured lifecycle, falling back to direct writes",
-			)
-			await withRevisionCasRetry(() => persist())
+			throw typedTransactionError(err)
 		} finally {
 			await session.endSession()
 		}
@@ -1932,11 +1917,7 @@ export async function invalidateStructuredMemoryByHandle(params: {
 			if (session) {
 				await audit
 			} else {
-				audit.catch((err) => {
-					log.warn("structured memory invalidate audit failed", {
-						error: err,
-					})
-				})
+				void bestEffort("structured-memory-invalidate-audit", () => audit)
 			}
 		}
 		if (params.session && params.transactionalSideEffects === "inline") {
@@ -2093,9 +2074,7 @@ export async function applyStructuredMemoryFeedbackByHandle(params: {
 		if (session) {
 			await audit
 		} else {
-			audit.catch((err) => {
-				log.warn("structured memory feedback audit failed", { error: err })
-			})
+			void bestEffort("structured-memory-feedback-audit", () => audit)
 		}
 		return structuredLifecycleItemFromDoc(updated)
 	}

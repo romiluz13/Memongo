@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 import {
 	extractValidityFromText,
 	refineCandidatesValidTime,
@@ -69,62 +72,58 @@ describe("extractValidityFromText", () => {
 		expect(result.validTo).toBeUndefined()
 	})
 
-	it("degrades to the reference-time fallback (not the write clock) when the LLM call throws", async () => {
+	it("rejects when the LLM call throws, never the reference-time baseline", async () => {
+		const failure = new Error("network down")
 		const provider: EnrichmentProvider = {
 			name: "mock",
 			chatCompletion: vi.fn(async () => {
-				throw new Error("network down")
+				throw failure
 			}),
 		}
-		const result = await extractValidityFromText({
-			provider,
-			model: "m",
-			text: "The user has a dog.",
-			referenceTime: REFERENCE,
-		})
-		expect(result.source).toBe("reference")
-		expect(result.validFrom?.toISOString()).toBe(REFERENCE.toISOString())
+		await expect(
+			extractValidityFromText({
+				provider,
+				model: "m",
+				text: "The user has a dog.",
+				referenceTime: REFERENCE,
+			}),
+		).rejects.toBe(failure)
 	})
 
-	it("degrades to the reference-time fallback when the response is not valid JSON", async () => {
-		const { provider } = providerReturning("not json at all")
-		const result = await extractValidityFromText({
-			provider,
-			model: "m",
-			text: "The user has a cat.",
-			referenceTime: REFERENCE,
-		})
-		expect(result.source).toBe("reference")
-		expect(result.validFrom?.toISOString()).toBe(REFERENCE.toISOString())
-	})
-
-	it("drops an invalid/unparseable extracted date and falls back to reference time", async () => {
-		const { provider } = providerReturning(
+	it.each([
+		["not valid JSON", "not json at all"],
+		["not an object", JSON.stringify("2021-01-01")],
+		["missing validFrom and validTo", JSON.stringify({ note: "none" })],
+		[
+			"an unparseable validFrom",
 			JSON.stringify({ validFrom: "sometime last year", validTo: null }),
-		)
-		const result = await extractValidityFromText({
-			provider,
-			model: "m",
-			text: "The user moved recently.",
-			referenceTime: REFERENCE,
-		})
-		expect(result.source).toBe("reference")
-		expect(result.validFrom?.toISOString()).toBe(REFERENCE.toISOString())
-	})
-
-	it("ignores a validTo that precedes validFrom (impossible window)", async () => {
-		const { provider } = providerReturning(
+		],
+		[
+			"an unparseable validTo",
+			JSON.stringify({ validFrom: "2021-01-01", validTo: "soon" }),
+		],
+		[
+			"a non-string validFrom",
+			JSON.stringify({ validFrom: 2021, validTo: null }),
+		],
+		[
+			"a validTo without a validFrom",
+			JSON.stringify({ validFrom: null, validTo: "2022-01-01" }),
+		],
+		[
+			"a validTo before its validFrom",
 			JSON.stringify({ validFrom: "2023-01-01", validTo: "2022-01-01" }),
-		)
-		const result = await extractValidityFromText({
-			provider,
-			model: "m",
-			text: "garbled window",
-			referenceTime: REFERENCE,
-		})
-		expect(result.source).toBe("extracted")
-		expect(result.validFrom?.toISOString()).toBe("2023-01-01T00:00:00.000Z")
-		expect(result.validTo).toBeUndefined()
+		],
+	])("rejects a response that is %s with a typed parse error", async (_label, content) => {
+		const { provider } = providerReturning(content)
+		await expect(
+			extractValidityFromText({
+				provider,
+				model: "m",
+				text: "The user moved recently.",
+				referenceTime: REFERENCE,
+			}),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
 	})
 
 	it("passes the reference date to the model so it can resolve relative expressions", async () => {
@@ -196,20 +195,21 @@ describe("refineCandidatesValidTime", () => {
 		expect(out[2].validFrom?.toISOString()).toBe(REFERENCE.toISOString())
 	})
 
-	it("never throws when the provider fails; every candidate falls back to the event baseline", async () => {
+	it("rejects when the provider fails; no candidate falls back to the event baseline", async () => {
+		const failure = new Error("boom")
 		const provider: EnrichmentProvider = {
 			name: "mock",
 			chatCompletion: vi.fn(async () => {
-				throw new Error("boom")
+				throw failure
 			}),
 		}
-		const [out] = await refineCandidatesValidTime({
-			candidates: [candidate("x")],
-			provider,
-			model: "m",
-			referenceTime: REFERENCE,
-		})
-		expect(out.validFrom?.toISOString()).toBe(REFERENCE.toISOString())
-		expect(out.provenance?.validTimeSource).toBe("event")
+		await expect(
+			refineCandidatesValidTime({
+				candidates: [candidate("x")],
+				provider,
+				model: "m",
+				referenceTime: REFERENCE,
+			}),
+		).rejects.toBe(failure)
 	})
 })

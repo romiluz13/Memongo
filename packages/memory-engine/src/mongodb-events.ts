@@ -5,6 +5,7 @@ import {
 	createSubsystemLogger,
 	retryAsync,
 } from "@memongo/lib"
+import { bestEffort } from "./best-effort.js"
 import {
 	EVENT_IDENTITY_READ_OPTIONS,
 	type EventMetadataWriteOptions,
@@ -22,7 +23,6 @@ import {
 	isErasureGateConflictError,
 	type AdmissionToken,
 } from "./mongodb-write-fence.js"
-import { settledFailureMeta } from "./query-diagnostics.js"
 
 const log = createSubsystemLogger("memory:mongodb:events")
 const DURABLE_EVENT_WRITE_CONCERN = {
@@ -1326,16 +1326,13 @@ export async function projectChunksFromEvents(params: {
 			itemsProjected: chunksCreated,
 			durationMs: Date.now() - startMs,
 		}
-		await withFencedWrite({
-			db,
-			prefix,
-			token: admission,
-			fn: (session) => recordProjectionRun({ db, prefix, run, session }),
-		}).catch((diagnosticErr) =>
-			log.warn(
-				"projection repair failed-run record was not written",
-				settledFailureMeta(diagnosticErr),
-			),
+		await bestEffort("projection-repair-failed-run-record", () =>
+			withFencedWrite({
+				db,
+				prefix,
+				token: admission,
+				fn: (session) => recordProjectionRun({ db, prefix, run, session }),
+			}),
 		)
 		const msg = err instanceof Error ? err.message : String(err)
 		log.warn(
@@ -1350,16 +1347,13 @@ export async function projectChunksFromEvents(params: {
 		itemsProjected: chunksCreated,
 		durationMs: Date.now() - startMs,
 	}
-	await withFencedWrite({
-		db,
-		prefix,
-		token: admission,
-		fn: (session) => recordProjectionRun({ db, prefix, run, session }),
-	}).catch((err) =>
-		log.warn(
-			"projection repair run record was not written",
-			settledFailureMeta(err),
-		),
+	await bestEffort("projection-repair-run-record", () =>
+		withFencedWrite({
+			db,
+			prefix,
+			token: admission,
+			fn: (session) => recordProjectionRun({ db, prefix, run, session }),
+		}),
 	)
 	log.info(
 		`projected ${chunksCreated} chunks from ${events.length} events for agent=${agentId}`,
@@ -1523,17 +1517,19 @@ export async function projectEventChunksBatch(params: {
 	}))
 	const chunksCreated = results.filter((r) => r.chunkCreated).length
 	if (params.recordRun !== false) {
-		await recordProjectionRun({
-			db,
-			prefix,
-			run: {
-				agentId: events[0].agentId,
-				projectionType: "chunks",
-				status: failedIndexes.size > 0 || !markerSet ? "failed" : "ok",
-				itemsProjected: chunksCreated,
-				durationMs: Date.now() - startMs,
-			},
-		}).catch(() => {})
+		await bestEffort("chunk-projection-run", () =>
+			recordProjectionRun({
+				db,
+				prefix,
+				run: {
+					agentId: events[0].agentId,
+					projectionType: "chunks",
+					status: failedIndexes.size > 0 || !markerSet ? "failed" : "ok",
+					itemsProjected: chunksCreated,
+					durationMs: Date.now() - startMs,
+				},
+			}),
+		)
 	}
 	return results
 }
@@ -1634,17 +1630,19 @@ export async function projectEventChunk(params: {
 		)
 	}
 	if (params.recordRun !== false) {
-		await recordProjectionRun({
-			db,
-			prefix,
-			run: {
-				agentId: event.agentId,
-				projectionType: "chunks",
-				status: markerSet ? "ok" : "failed",
-				itemsProjected: result.upsertedCount > 0 ? 1 : 0,
-				durationMs: Date.now() - startMs,
-			},
-		}).catch(() => {})
+		await bestEffort("chunk-projection-run", () =>
+			recordProjectionRun({
+				db,
+				prefix,
+				run: {
+					agentId: event.agentId,
+					projectionType: "chunks",
+					status: markerSet ? "ok" : "failed",
+					itemsProjected: result.upsertedCount > 0 ? 1 : 0,
+					durationMs: Date.now() - startMs,
+				},
+			}),
+		)
 	}
 	return { chunkCreated: result.upsertedCount > 0 }
 }

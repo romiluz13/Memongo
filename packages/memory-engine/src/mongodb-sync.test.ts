@@ -22,6 +22,7 @@ vi.mock("./session-files.js", () => ({
 
 import { chunksCollection, filesCollection } from "./mongodb-schema.js"
 import { syncToMongoDB } from "./mongodb-sync.js"
+import { TransactionUnsupportedError } from "./mongodb-transactions.js"
 import { listSessionFilesForAgent, buildSessionEntry } from "./session-files.js"
 
 // ---------------------------------------------------------------------------
@@ -1014,7 +1015,7 @@ describe("syncToMongoDB — transaction wrapping", () => {
 		expect(staleDeleteCall![1]).toMatchObject({ session: mockSession })
 	})
 
-	it("falls back to non-transactional when transactions are not supported", async () => {
+	it("fails with TransactionUnsupportedError instead of writing without a transaction", async () => {
 		const sessionEntry = {
 			path: "sessions/tx-fallback.jsonl",
 			absPath: "/tmp/sessions/tx-fallback.jsonl",
@@ -1034,25 +1035,60 @@ describe("syncToMongoDB — transaction wrapping", () => {
 		;(
 			mockSession.withTransaction as ReturnType<typeof vi.fn>
 		).mockRejectedValue(
-			new Error(
-				"Transaction numbers are only allowed on a replica set member or mongos",
+			Object.assign(
+				new Error(
+					"Transaction numbers are only allowed on a replica set member or mongos",
+				),
+				{ code: 20 },
 			),
 		)
 		const mockClient = createMockClient(mockSession)
 
-		const result = await syncToMongoDB({
-			db: {} as Db,
-			prefix: "test_",
-			workspaceDir: tmpDir,
-			agentId: "agent-1",
-			embeddingMode: "automated",
-			client: mockClient,
-		})
+		await expect(
+			syncToMongoDB({
+				db: {} as Db,
+				prefix: "test_",
+				workspaceDir: tmpDir,
+				agentId: "agent-1",
+				embeddingMode: "automated",
+				client: mockClient,
+			}),
+		).rejects.toBeInstanceOf(TransactionUnsupportedError)
 
-		// Should still succeed with non-transactional fallback
-		expect(result.sessionFilesProcessed).toBe(1)
-		expect(result.sessionChunksUpserted).toBeGreaterThanOrEqual(1)
+		expect(mockChunks.bulkWrite).not.toHaveBeenCalled()
+		expect(mockFiles.updateOne).not.toHaveBeenCalled()
 		expect(mockSession.endSession).toHaveBeenCalled()
+	})
+
+	it("fails stale cleanup with TransactionUnsupportedError instead of deleting without a transaction", async () => {
+		;(mockChunks.distinct as ReturnType<typeof vi.fn>).mockResolvedValue([
+			"memory/stale.md",
+		])
+		const mockSession = createMockSession()
+		;(
+			mockSession.withTransaction as ReturnType<typeof vi.fn>
+		).mockRejectedValue(
+			Object.assign(
+				new Error(
+					"Transaction numbers are only allowed on a replica set member or mongos",
+				),
+				{ code: 20 },
+			),
+		)
+
+		await expect(
+			syncToMongoDB({
+				db: {} as Db,
+				prefix: "test_",
+				workspaceDir: tmpDir,
+				agentId: "agent-1",
+				embeddingMode: "automated",
+				client: createMockClient(mockSession),
+			}),
+		).rejects.toBeInstanceOf(TransactionUnsupportedError)
+
+		expect(mockChunks.deleteMany).not.toHaveBeenCalled()
+		expect(mockFiles.deleteMany).not.toHaveBeenCalled()
 	})
 
 	it("does not use transactions when client is not provided", async () => {

@@ -28,7 +28,8 @@ import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
 	isTransactionTooLargeForCache,
-	isTransactionUnsupported,
+	TransactionUnsupportedError,
+	typedTransactionError,
 } from "./mongodb-transactions.js"
 import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js"
 import type {
@@ -405,10 +406,10 @@ async function syncFileNonTransactional(params: {
  * withTransaction — all-or-nothing, no crash window with chunks missing while
  * the hash still says current.
  *
- * Fallbacks (standalone server, or a transaction too large for the WiredTiger
- * cache): the transaction aborted, so nothing from it is visible. We then run
- * the invalidation-first non-transactional ordering, which keeps every crash
- * window self-healing.
+ * Fallback (a transaction too large for the WiredTiger cache): the transaction
+ * aborted, so nothing from it is visible. We then run the invalidation-first
+ * non-transactional ordering, which keeps every crash window self-healing. A
+ * deployment without transactions fails with TransactionUnsupportedError.
  *
  * Unifies the former syncFileAtomically + syncSessionFileAtomically — memory
  * files and session transcripts share the exact same durability contract.
@@ -429,7 +430,6 @@ async function syncSourceFileAtomically(params: {
 	embeddingStatus: EmbeddingStatus
 }): Promise<{
 	upserted: number
-	disableTransactions: boolean
 	failed: boolean
 }> {
 	const {
@@ -466,7 +466,6 @@ async function syncSourceFileAtomically(params: {
 				await upsertFileMetadata(filesCol, entry, namespace, session)
 				return {
 					upserted: result.upsertedCount + result.modifiedCount,
-					disableTransactions: false,
 					failed: false,
 				}
 			},
@@ -486,7 +485,6 @@ async function syncSourceFileAtomically(params: {
 		})
 		return {
 			upserted: result.upserted,
-			disableTransactions: false,
 			failed: result.failed,
 		}
 	}
@@ -519,18 +517,12 @@ async function syncSourceFileAtomically(params: {
 			upserted = result.upsertedCount + result.modifiedCount
 			await upsertFileMetadata(filesCol, entry, namespace, session)
 		}, MAJORITY_TRANSACTION_OPTIONS)
-		return { upserted, disableTransactions: false, failed: false }
+		return { upserted, failed: false }
 	} catch (err) {
-		if (isTransactionTooLargeForCache(err) || isTransactionUnsupported(err)) {
-			if (isTransactionUnsupported(err)) {
-				log.info(
-					"transactions not supported (standalone), falling back for file sync",
-				)
-			} else {
-				log.warn(
-					"transaction too large for cache, falling back to invalidation-first ordering",
-				)
-			}
+		if (isTransactionTooLargeForCache(err)) {
+			log.warn(
+				"transaction too large for cache, falling back to invalidation-first ordering",
+			)
 			// The transaction aborted — nothing from it is visible. Replace
 			// the file non-transactionally with crash-window-safe ordering.
 			const result = await syncFileNonTransactional({
@@ -545,13 +537,10 @@ async function syncSourceFileAtomically(params: {
 			})
 			return {
 				upserted: result.upserted,
-				// Only a standalone server keeps needing the fallback; a
-				// too-large transaction is per-file, so keep transactions on.
-				disableTransactions: isTransactionUnsupported(err),
 				failed: result.failed,
 			}
 		}
-		throw err
+		throw typedTransactionError(err)
 	} finally {
 		await session.endSession()
 	}
@@ -616,8 +605,7 @@ export async function syncToMongoDB(params: {
 			workspaceDir: params.workspaceDir,
 		}),
 	}
-	// Track whether transactions are available (disabled on first standalone error)
-	let useTransactions = !!params.client
+	const useTransactions = !!params.client
 
 	const chunksCol = chunksCollection(db, prefix)
 	const filesCol = filesCollection(db, prefix)
@@ -708,26 +696,22 @@ export async function syncToMongoDB(params: {
 			const embeddingStatus: EmbeddingStatus = "pending"
 			const embeddings: number[][] | null = null
 
-			const { upserted, disableTransactions, failed } =
-				await syncSourceFileAtomically({
-					db: params.db,
-					prefix: params.prefix,
-					admission: params.admission,
-					client: params.client,
-					useTransactions,
-					chunksCol,
-					filesCol,
-					entry: file,
-					namespace: memoryNamespace,
-					chunks,
-					model,
-					embeddings,
-					embeddingStatus,
-				})
+			const { upserted, failed } = await syncSourceFileAtomically({
+				db: params.db,
+				prefix: params.prefix,
+				admission: params.admission,
+				client: params.client,
+				useTransactions,
+				chunksCol,
+				filesCol,
+				entry: file,
+				namespace: memoryNamespace,
+				chunks,
+				model,
+				embeddings,
+				embeddingStatus,
+			})
 			totalChunksUpserted += upserted
-			if (disableTransactions) {
-				useTransactions = false
-			}
 
 			if (failed) {
 				filesFailed++
@@ -740,7 +724,11 @@ export async function syncToMongoDB(params: {
 				label: file.path,
 			})
 		} catch (err) {
-			if (isErasureGateConflictError(err) || isMalformedGateError(err))
+			if (
+				isErasureGateConflictError(err) ||
+				isMalformedGateError(err) ||
+				err instanceof TransactionUnsupportedError
+			)
 				throw err
 			// W14: count per-file failures so the caller (dirty-flag gating in
 			// the manager) can refuse to treat this sync as clean.
@@ -792,12 +780,12 @@ export async function syncToMongoDB(params: {
 			sessionStaleDeleted = sessionResult.staleDeleted
 			filesFailed += sessionResult.filesFailed
 			sessionEnumerationComplete = sessionResult.enumerationComplete
-			// Propagate standalone detection from session sync to stale cleanup
-			if (!sessionResult.useTransactions) {
-				useTransactions = false
-			}
 		} catch (err) {
-			if (isErasureGateConflictError(err) || isMalformedGateError(err))
+			if (
+				isErasureGateConflictError(err) ||
+				isMalformedGateError(err) ||
+				err instanceof TransactionUnsupportedError
+			)
 				throw err
 			// W14: a session-sync-level failure leaves the valid-path set
 			// incomplete for the sessions namespace — stale cleanup must not
@@ -875,21 +863,7 @@ export async function syncToMongoDB(params: {
 					}
 				}, MAJORITY_TRANSACTION_OPTIONS)
 			} catch (err) {
-				if (isTransactionUnsupported(err)) {
-					// Fallback: non-transactional stale cleanup
-					staleDeleted = await deleteStaleChunks(
-						chunksCol,
-						memoryNamespace,
-						validPaths,
-					)
-					if (staleFileIds.length > 0) {
-						await filesCol.deleteMany({
-							_id: { $in: staleFileIds },
-						} as Record<string, unknown>)
-					}
-				} else {
-					throw err
-				}
+				throw typedTransactionError(err)
 			} finally {
 				await session?.endSession()
 			}
@@ -954,7 +928,6 @@ async function syncSessionFiles(params: {
 	filesProcessed: number
 	chunksUpserted: number
 	staleDeleted: number
-	useTransactions: boolean
 	filesFailed: number
 	enumerationComplete: boolean
 }> {
@@ -981,7 +954,6 @@ async function syncSessionFiles(params: {
 			filesProcessed: 0,
 			chunksUpserted: 0,
 			staleDeleted: 0,
-			useTransactions: params.useTransactions,
 			filesFailed: 0,
 			enumerationComplete,
 		}
@@ -991,7 +963,6 @@ async function syncSessionFiles(params: {
 	let filesProcessed = 0
 	let filesFailed = 0
 	let chunksUpserted = 0
-	let useTransactions = params.useTransactions
 	params.progress?.({
 		completed: 0,
 		total: sessionPaths.length,
@@ -1059,26 +1030,22 @@ async function syncSessionFiles(params: {
 			const embeddings: number[][] | null = null
 
 			// Atomic write: delete + upsert + metadata in one transaction (W15)
-			const { upserted, disableTransactions, failed } =
-				await syncSourceFileAtomically({
-					db: params.db,
-					prefix: params.prefix,
-					admission: params.admission,
-					client: params.client,
-					useTransactions,
-					chunksCol: params.chunksCol,
-					filesCol: params.filesCol,
-					entry,
-					namespace: sessionNamespace,
-					chunks,
-					model: params.model,
-					embeddings,
-					embeddingStatus,
-				})
+			const { upserted, failed } = await syncSourceFileAtomically({
+				db: params.db,
+				prefix: params.prefix,
+				admission: params.admission,
+				client: params.client,
+				useTransactions: params.useTransactions,
+				chunksCol: params.chunksCol,
+				filesCol: params.filesCol,
+				entry,
+				namespace: sessionNamespace,
+				chunks,
+				model: params.model,
+				embeddings,
+				embeddingStatus,
+			})
 			chunksUpserted += upserted
-			if (disableTransactions) {
-				useTransactions = false
-			}
 			if (failed) {
 				filesFailed++
 			} else {
@@ -1090,7 +1057,11 @@ async function syncSessionFiles(params: {
 				label: `Indexed conversation transcript ${filesProcessed + filesFailed}/${sessionPaths.length}`,
 			})
 		} catch (err) {
-			if (isErasureGateConflictError(err) || isMalformedGateError(err))
+			if (
+				isErasureGateConflictError(err) ||
+				isMalformedGateError(err) ||
+				err instanceof TransactionUnsupportedError
+			)
 				throw err
 			// W14: a transient per-file failure must count (dirty-flag gating)
 			// and must keep stale cleanup off — the file's path never made it
@@ -1167,7 +1138,6 @@ async function syncSessionFiles(params: {
 		filesProcessed,
 		chunksUpserted,
 		staleDeleted,
-		useTransactions,
 		filesFailed,
 		enumerationComplete,
 	}

@@ -958,11 +958,12 @@ describe("P4.4.3 LLM-adjudicated dedup", () => {
 		expect(updateOneMock).not.toHaveBeenCalled()
 	})
 
-	it("treats an adjudication failure as no-merge and never throws", async () => {
+	it("an adjudication failure fails the run and merges nothing, never NO_MERGE", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const { db, updateOneMock } = makeDedupSetup({ dupScore: 0.88 })
 		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
-		adjudicateFactMergeMock.mockRejectedValueOnce(new Error("llm down"))
+		const failure = new Error("llm down")
+		adjudicateFactMergeMock.mockRejectedValueOnce(failure)
 
 		await expect(
 			consolidateMemory({
@@ -971,7 +972,7 @@ describe("P4.4.3 LLM-adjudicated dedup", () => {
 				agentId: "agent-1",
 				options: { minCombinedScore: 0, llmDedup: true },
 			}),
-		).resolves.toMatchObject({ factsPromoted: 0 })
+		).rejects.toBe(failure)
 		expect(updateOneMock).not.toHaveBeenCalled()
 	})
 

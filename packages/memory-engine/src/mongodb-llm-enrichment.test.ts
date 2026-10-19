@@ -16,6 +16,7 @@ import {
 	buildQaEvidenceDocument,
 	enrichSessionsWithLLM,
 	withRetry,
+	EnrichmentConfigError,
 	EnrichmentHttpError,
 	EnrichmentParseError,
 	EnrichmentResponseError,
@@ -166,6 +167,25 @@ describe("resolveEnrichmentProvider", () => {
 				MEMONGO_ENRICHMENT_BASE_URL: "https://example.com/v1",
 			}),
 		).toThrow("MEMONGO_ENRICHMENT_MODEL")
+	})
+
+	it("types every failure to resolve a configured provider as EnrichmentConfigError", () => {
+		for (const env of [
+			{
+				MEMONGO_ENRICHMENT_API_KEY: "test-key",
+				MEMONGO_ENRICHMENT_MODEL: "gpt-4o-mini",
+			},
+			{
+				MEMONGO_ENRICHMENT_API_KEY: "test-key",
+				MEMONGO_ENRICHMENT_BASE_URL: "https://example.com/v1",
+				MEMONGO_ENRICHMENT_MODEL: "gpt-4o-mini",
+				MEMONGO_ENRICHMENT_AUTH_STYLE: "not-a-style",
+			},
+		]) {
+			expect(() => resolveEnrichmentProvider(env)).toThrow(
+				EnrichmentConfigError,
+			)
+		}
 	})
 
 	it("creates Anthropic provider from explicit provider flag", () => {
@@ -735,18 +755,20 @@ describe("extractSessionEnrichment", () => {
 		}
 	})
 
-	it("returns empty result for invalid JSON", async () => {
+	it("rejects invalid JSON with a typed parse error instead of an empty result", async () => {
 		const provider = mockProvider("not valid json at all")
 
-		const result = await extractSessionEnrichment(
-			provider,
-			"hello world",
-			"gpt-4o-mini",
-		)
+		await expect(
+			extractSessionEnrichment(provider, "hello world", "gpt-4o-mini"),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
 
-		expect(result.facts).toEqual([])
-		expect(result.qaPairs).toEqual([])
-		expect(result.hasPersonalContent).toBe(false)
+	it("rejects a JSON value that is not an object with a typed parse error", async () => {
+		const provider = mockProvider("null")
+
+		await expect(
+			extractSessionEnrichment(provider, "hello world", "gpt-4o-mini"),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
 	})
 
 	it("returns empty result when LLM returns empty arrays", async () => {
@@ -812,35 +834,31 @@ describe("extractSessionEnrichment", () => {
 		expect(result.hasPersonalContent).toBe(true)
 	})
 
-	it("logs warning on JSON parse failure with first 200 chars of content", async () => {
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+	it("carries the first 200 chars of the content in the parse error", async () => {
 		const provider = mockProvider("<html>Error page from gateway</html>")
 
-		const result = await extractSessionEnrichment(
+		const error = await extractSessionEnrichment(
 			provider,
 			"hello",
 			"gpt-4o-mini",
+		).then(
+			() => undefined,
+			(failure: unknown) => failure,
 		)
 
-		expect(result.facts).toEqual([])
-		expect(warnSpy).toHaveBeenCalledTimes(1)
-		const warnMsg = warnSpy.mock.calls[0][0] as string
-		expect(warnMsg).toContain("LLM enrichment JSON parse failed")
-		expect(warnMsg).toContain("<html>Error page")
-		warnSpy.mockRestore()
+		expect(error).toBeInstanceOf(EnrichmentParseError)
+		expect((error as Error).message).toContain(
+			"LLM enrichment JSON parse failed",
+		)
+		expect((error as Error).message).toContain("<html>Error page")
 	})
 
-	it("throws on JSON parse failure in strict mode", async () => {
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+	it("throws on JSON parse failure with no mode that downgrades it", async () => {
 		const provider = mockProvider("Sure, here is a rewritten project overview")
 
 		await expect(
-			extractSessionEnrichment(provider, "hello", "gpt-4o-mini", {
-				strictJson: true,
-			}),
+			extractSessionEnrichment(provider, "hello", "gpt-4o-mini"),
 		).rejects.toBeInstanceOf(EnrichmentParseError)
-		expect(warnSpy).not.toHaveBeenCalled()
-		warnSpy.mockRestore()
 	})
 
 	it("wraps session text as data before passing it to the provider", async () => {
@@ -1795,21 +1813,7 @@ describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
 		expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
 	})
 
-	it("degrades to the existing empty result after the bounded retry is exhausted (non-strict)", async () => {
-		const provider = providerSequence([
-			{
-				content: "",
-				responseMeta: { shape: "empty-content", finishReason: "stop" },
-			},
-		])
-		const result = await extractSessionEnrichment(provider, "hello", "m")
-		expect(result.facts).toEqual([])
-		expect(result.qaPairs).toEqual([])
-		// Total-call budget: exactly 1 + SESSION_EMPTY_RESPONSE_RETRIES calls.
-		expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
-	})
-
-	it("keeps strictJson fatal after the bounded retry is exhausted", async () => {
+	it("fails with a typed parse error after the bounded retry is exhausted", async () => {
 		const provider = providerSequence([
 			{
 				content: "",
@@ -1817,12 +1821,13 @@ describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
 			},
 		])
 		await expect(
-			extractSessionEnrichment(provider, "hello", "m", { strictJson: true }),
+			extractSessionEnrichment(provider, "hello", "m"),
 		).rejects.toBeInstanceOf(EnrichmentParseError)
+		// Total-call budget: exactly 1 + SESSION_EMPTY_RESPONSE_RETRIES calls.
 		expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
 	})
 
-	it("does NOT retry a refusal — a retry would be a pointless identical request", async () => {
+	it("does NOT retry a refusal — a retry would be a pointless identical request — and fails typed", async () => {
 		const provider = providerSequence([
 			{ content: "", responseMeta: { shape: "refusal", finishReason: "stop" } },
 			{
@@ -1830,12 +1835,13 @@ describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
 				responseMeta: { shape: "ok", finishReason: "stop" },
 			},
 		])
-		const result = await extractSessionEnrichment(provider, "hello", "m")
-		expect(result.facts).toEqual([])
+		await expect(
+			extractSessionEnrichment(provider, "hello", "m"),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
 		expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
 	})
 
-	it("does NOT retry a length-truncated completion", async () => {
+	it("does NOT retry a length-truncated completion and fails typed", async () => {
 		const provider = providerSequence([
 			{
 				content: '{"facts":',
@@ -1846,8 +1852,9 @@ describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
 				responseMeta: { shape: "ok", finishReason: "stop" },
 			},
 		])
-		const result = await extractSessionEnrichment(provider, "hello", "m")
-		expect(result.facts).toEqual([])
+		await expect(
+			extractSessionEnrichment(provider, "hello", "m"),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
 		expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
 	})
 
@@ -1888,7 +1895,7 @@ describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
 		// Three retryable 429s (the default transport retry budget), then a
 		// persistent empty completion: worst case is
 		// maxRetries + 1 + SESSION_EMPTY_RESPONSE_RETRIES = 5 calls, and the
-		// session degrades (not fails).
+		// session fails typed.
 		// F-B1-5: the transport backoff sleeps on real timers (1s base with
 		// exponential growth and jitter, up to ~10.5s for three retries), which
 		// blows the default 5s test timeout. Fake the timers and fast-forward
@@ -1939,7 +1946,11 @@ describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
 			const result = await run
 
 			expect(call).toBe(5)
-			expect(result.sessionsFailed).toBe(0)
+			// The persistent empty completion fails the session (counted, with a
+			// sample), never a silent empty enrichment.
+			expect(result.sessionsFailed).toBe(1)
+			expect(result.failedSessionIds).toEqual(["s1"])
+			expect(result.failureSamples[0]?.errorName).toBe("EnrichmentParseError")
 			expect(result.sessionsEnriched).toBe(0)
 			expect(result.userfactDocs).toEqual([])
 		} finally {

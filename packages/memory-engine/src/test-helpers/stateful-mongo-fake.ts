@@ -477,6 +477,11 @@ function applyUpdateOperators(
 					)
 				}
 				break
+			case "$currentDate":
+				for (const path of Object.keys(spec)) {
+					setPath(doc, path, new Date())
+				}
+				break
 			case "$unset":
 				for (const path of Object.keys(spec)) {
 					unsetPath(doc, path)

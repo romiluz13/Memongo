@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { ClientSession, Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import { bestEffort } from "./best-effort.js"
 import { isDuplicateKeyError } from "./internal.js"
 import {
 	getEventsByTimeRange,
@@ -293,6 +294,15 @@ async function recordEpisodeProjectionRun(params: {
 	})
 }
 
+/** The projection-run row is bookkeeping: a failed write is logged and counted. */
+async function recordEpisodeProjectionRunBestEffort(
+	params: Parameters<typeof recordEpisodeProjectionRun>[0],
+): Promise<void> {
+	await bestEffort("episode-projection-run", () =>
+		recordEpisodeProjectionRun(params),
+	)
+}
+
 // ---------------------------------------------------------------------------
 // Materialize episode from raw events
 // ---------------------------------------------------------------------------
@@ -355,7 +365,7 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${events.length} events in range for agent=${agentId}`,
 			)
-			await recordEpisodeProjectionRun({
+			await recordEpisodeProjectionRunBestEffort({
 				db,
 				prefix,
 				admission: params.admission,
@@ -366,7 +376,7 @@ export async function materializeEpisode(params: {
 					itemsProjected: 0,
 					durationMs: Date.now() - startMs,
 				},
-			}).catch(() => {})
+			})
 			return null
 		}
 
@@ -382,7 +392,7 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${summarizerInput.length} conversational events in range for agent=${agentId}`,
 			)
-			await recordEpisodeProjectionRun({
+			await recordEpisodeProjectionRunBestEffort({
 				db,
 				prefix,
 				admission: params.admission,
@@ -393,7 +403,7 @@ export async function materializeEpisode(params: {
 					itemsProjected: 0,
 					durationMs: Date.now() - startMs,
 				},
-			}).catch(() => {})
+			})
 			return null
 		}
 		const {
@@ -567,7 +577,7 @@ export async function materializeEpisode(params: {
 		log.info(
 			`episode materialized: ${episodeId} type=${type} events=${events.length} agent=${agentId}`,
 		)
-		await recordEpisodeProjectionRun({
+		await recordEpisodeProjectionRunBestEffort({
 			db,
 			prefix,
 			admission: params.admission,
@@ -578,10 +588,10 @@ export async function materializeEpisode(params: {
 				itemsProjected: 1,
 				durationMs: Date.now() - startMs,
 			},
-		}).catch(() => {})
+		})
 		return episode
 	} catch (err) {
-		await recordEpisodeProjectionRun({
+		await recordEpisodeProjectionRunBestEffort({
 			db,
 			prefix,
 			admission: params.admission,
@@ -592,7 +602,7 @@ export async function materializeEpisode(params: {
 				itemsProjected: 0,
 				durationMs: Date.now() - startMs,
 			},
-		}).catch(() => {})
+		})
 		log.error(
 			`materializeEpisode failed: ${err instanceof Error ? err.message : String(err)}`,
 		)

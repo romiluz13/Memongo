@@ -47,21 +47,15 @@ function params(error: unknown) {
 const seams = [
 	{
 		name: "resolution",
-		message: "conflicted candidate resolution failed; preserving skip",
-		result: { resolved: false, invalidatedCount: 0 },
 		call: (error: unknown) => resolveConflictedCandidate(params(error)),
 	},
 	{
 		name: "preparation",
-		message: "conflicted candidate preparation failed; preserving skip",
-		result: [],
 		call: (error: unknown) =>
 			prepareConflictedCandidateResolution(params(error)),
 	},
 	{
 		name: "merge",
-		message: "llm dedup adjudication call failed",
-		result: { verdict: "NO_MERGE" },
 		call: (error: unknown) =>
 			adjudicateFactMerge({
 				...params(error),
@@ -71,8 +65,6 @@ const seams = [
 	},
 	{
 		name: "reasoning",
-		message: "consolidation reasoning LLM call failed",
-		result: [],
 		call: (error: unknown) =>
 			deduceFactsFromMemories({
 				...params(error),
@@ -96,7 +88,7 @@ describe.each(seams)("$name failure warning", (seam) => {
 		"message",
 		"numeric-code",
 		"string-code",
-	])("keeps its fallback with %s errors without logging memory content", async (kind) => {
+	])("rejects with the original %s error and logs no memory content", async (kind) => {
 		const poison = vi.fn(() => {
 			throw new Error("conversion must not run")
 		})
@@ -113,13 +105,10 @@ describe.each(seams)("$name failure warning", (seam) => {
 		vi.spyOn(console, "warn").mockImplementation((...args) => {
 			lines.push(args.join(" "))
 		})
-		expect(await seam.call(error)).toEqual(seam.result)
-		expect(lines).toHaveLength(1)
-		expect(lines[0]).toContain(seam.message)
-		expect(lines[0]).not.toContain(privateText)
-		expect(lines[0]).not.toContain('"error"')
-		expect(lines[0].length).toBeLessThan(250)
-		if (kind === "numeric-code") expect(lines[0]).toContain('"code":503')
+		await expect(seam.call(error)).rejects.toBe(error)
+		for (const line of lines) {
+			expect(line).not.toContain(privateText)
+		}
 		expect(poison).not.toHaveBeenCalled()
 	})
 })
