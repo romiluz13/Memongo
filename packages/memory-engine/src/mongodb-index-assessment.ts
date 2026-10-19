@@ -9,8 +9,8 @@ import {
 } from "./mongodb-boot-errors.js"
 import type { RequiredSearchIndex } from "./mongodb-required-index-manifest.js"
 import {
-	isSearchIndexTypeCompatible,
 	type SearchIndexDescription,
+	servedSearchIndexType,
 } from "./mongodb-schema-search-readiness.js"
 
 const DOCUMENTED_INDEX_STATUSES = new Set([
@@ -109,11 +109,19 @@ export function assessRequiredIndex(
 		failure: { code, requirement, status, ...at },
 		reason,
 	})
-	if (!isSearchIndexTypeCompatible(index.type, entry.type)) {
+	const servedType = servedSearchIndexType(index)
+	if (servedType === undefined) {
+		return terminal(
+			"index-metadata-unknown",
+			"a readable index type",
+			`reports type ${JSON.stringify(index.type ?? null)} with no search or vectorSearch definition`,
+		)
+	}
+	if (servedType !== entry.type) {
 		return terminal(
 			"index-type-mismatch",
 			`a ${entry.type} index`,
-			`exists as type ${String(index.type)}; boot never drops an index, so remove or rename it`,
+			`exists as a ${servedType} index; boot never drops an index, so remove or rename it`,
 		)
 	}
 	const status = upper(index.status)

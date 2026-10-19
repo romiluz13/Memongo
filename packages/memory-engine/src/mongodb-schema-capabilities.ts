@@ -90,11 +90,11 @@ export async function detectCapabilities(
 		)
 		result.textSearch =
 			textIndex !== undefined &&
-			isSearchIndexTypeCompatible(textIndex.type, "search") &&
+			isSearchIndexTypeCompatible(textIndex, "search") &&
 			isSearchIndexQueryable(textIndex)
 		result.vectorSearch =
 			vectorIndex !== undefined &&
-			isSearchIndexTypeCompatible(vectorIndex.type, "vectorSearch") &&
+			isSearchIndexTypeCompatible(vectorIndex, "vectorSearch") &&
 			isSearchIndexQueryable(vectorIndex)
 		// storedSource reflects what the serving index was BUILT with: true
 		// only when the vector index definition carries a stored-source config
@@ -124,7 +124,7 @@ export async function detectCapabilities(
 			)
 			if (
 				textIndex !== undefined &&
-				isSearchIndexTypeCompatible(textIndex.type, "search") &&
+				isSearchIndexTypeCompatible(textIndex, "search") &&
 				isSearchIndexQueryable(textIndex)
 			) {
 				queryable.push(name)
@@ -176,11 +176,11 @@ export async function probeSearchLaneReadiness(
 	return {
 		textSearch:
 			textIndex !== undefined &&
-			isSearchIndexTypeCompatible(textIndex.type, "search") &&
+			isSearchIndexTypeCompatible(textIndex, "search") &&
 			isSearchIndexQueryable(textIndex),
 		vectorSearch:
 			vectorIndex !== undefined &&
-			isSearchIndexTypeCompatible(vectorIndex.type, "vectorSearch") &&
+			isSearchIndexTypeCompatible(vectorIndex, "vectorSearch") &&
 			isSearchIndexQueryable(vectorIndex),
 	}
 }

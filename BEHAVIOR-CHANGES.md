@@ -24,8 +24,14 @@ Each M2 ticket lists the behavior it removed or changed, under its own heading.
   - An index still building at the deadline fails with `index-not-ready`.
   - An index still absent after repair fails with `index-absent`.
   - A same-named index of the wrong type fails with `index-type-mismatch`; boot never drops it.
+    - `$listSearchIndexes` documents no `type` field, and the server omits it. When it is absent, the definition decides: `mappings` means a search index and `fields` means a vectorSearch index.
+    - Previously, a missing `type` counted as compatible with any type, so boot sent `updateSearchIndex` to a wrong-type index.
   - A definition without autoEmbed fails with `autoembed-unavailable`.
-  - Unknown or inconsistent metadata fails with `index-metadata-unknown`. This includes the undocumented `ACTIVE` status and a READY index without `queryable: true`.
+  - A create or update the deployment answers and refuses fails with `index-definition-rejected`. `search-management-unavailable` now means only that the listing failed, or that the Search Index Management service could not be reached.
+  - Unknown or inconsistent metadata fails with `index-metadata-unknown`. This includes:
+    - the undocumented `ACTIVE` status
+    - a READY index without `queryable: true`
+    - an index with neither a readable type nor a definition
 - Previously, the engine warned and served when indexes were not queryable after the wait (`mongodb-manager.ts:718-826`). That warn-and-serve path is gone.
 - Boot repair creates or updates manifest indexes. It never drops an index or a collection.
 - Previously, all 17 index-create catches, the `ensureNamedSearchIndex` swallow paths and the capability-probe catches logged and continued. They now fail as `MemongoBootError`.

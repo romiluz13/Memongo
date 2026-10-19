@@ -231,6 +231,22 @@ export function classifySearchIndexError(
 			`boot refused: the deployment rejected the autoEmbed definition of ${where} (${diagnostic}); autoEmbed requires the atlas-local preview image or Atlas`,
 		)
 	}
+	// A listing failure means Search management cannot be used; a create or
+	// update the service answered and refused is a rejected definition.
+	if (
+		context.operation !== "$listSearchIndexes" &&
+		!isSearchIndexManagementUnavailable(message)
+	) {
+		return new MemongoBootError(
+			{
+				code: "index-definition-rejected",
+				requirement: "a definition the deployment accepts",
+				collection: context.collection,
+				index: context.index,
+			},
+			`boot refused: the deployment rejected ${context.operation} on ${where} (${diagnostic})`,
+		)
+	}
 	return new MemongoBootError(
 		{
 			code: "search-management-unavailable",

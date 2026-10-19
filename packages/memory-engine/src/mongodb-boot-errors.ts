@@ -16,6 +16,7 @@ export type MemongoBootFailureCode =
 	| "index-absent"
 	| "index-type-mismatch"
 	| "index-metadata-unknown"
+	| "index-definition-rejected"
 	| "collection-absent"
 	| "config-invalid"
 	| "config-removed"

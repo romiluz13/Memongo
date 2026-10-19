@@ -1579,12 +1579,12 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				// isSearchIndexTypeCompatible exists to absorb, and what
 				// detectCapabilities already uses. Asserting the literal string
 				// here was asserting a field MongoDB never sends.
-				expect(
-					isSearchIndexTypeCompatible(vectorIdx!.type, "vectorSearch"),
-				).toBe(true)
+				expect(isSearchIndexTypeCompatible(vectorIdx!, "vectorSearch")).toBe(
+					true,
+				)
 				expect(vectorIdx!.status).toBe("READY")
 				expect(textIdx).toBeDefined()
-				expect(isSearchIndexTypeCompatible(textIdx!.type, "search")).toBe(true)
+				expect(isSearchIndexTypeCompatible(textIdx!, "search")).toBe(true)
 				expect(textIdx!.status).toBe("READY")
 
 				// Verify autoEmbed definition

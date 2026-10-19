@@ -38,7 +38,7 @@ export type SearchIndexDescription = {
 	queryable?: boolean
 	definition?: Document
 	statusDetail?: Array<{
-		mainIndex?: { queryable?: boolean; status?: string }
+		mainIndex?: { queryable?: boolean; status?: string; definition?: Document }
 		definitions?: Array<{ queryable?: boolean; status?: string }>
 	}>
 	latestDefinition?: Document
@@ -149,7 +149,7 @@ export function isSearchIndexReadyWithFilterFields(
 	if (!isSearchIndexQueryable(index)) {
 		return false
 	}
-	if (expectedType && !isSearchIndexTypeCompatible(index.type, expectedType)) {
+	if (expectedType && !isSearchIndexTypeCompatible(index, expectedType)) {
 		return false
 	}
 	const definition = index.latestDefinition ?? index.definition
@@ -257,15 +257,42 @@ export function searchIndexDefinitionSignature(definition: Document): string {
 	return JSON.stringify(sortObject(codeOwned))
 }
 
+function isDocument(value: unknown): value is Document {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The type a listed Search index serves, or undefined when it cannot be read.
+ * $listSearchIndexes documents no `type` field and the server omits it (CI
+ * run 39214244063 and real-e2e-v2 both saw it undefined), so the definition
+ * decides when it is absent: a search definition requires `mappings`, a
+ * vectorSearch definition requires `fields`.
+ */
+export function servedSearchIndexType(
+	index: SearchIndexDescription,
+): "search" | "vectorSearch" | undefined {
+	if (index.type === "search") return "search"
+	// Atlas Local reports vectorSearch indexes backed by autoEmbed as `autoEmbed`.
+	if (index.type === "vectorSearch" || index.type === "autoEmbed") {
+		return "vectorSearch"
+	}
+	if (index.type !== undefined) return undefined
+	const definition =
+		index.latestDefinition ??
+		index.definition ??
+		index.statusDetail?.find((host) => host.mainIndex?.definition)?.mainIndex
+			?.definition
+	if (!isDocument(definition)) return undefined
+	if (isDocument(definition.mappings)) return "search"
+	if (Array.isArray(definition.fields)) return "vectorSearch"
+	return undefined
+}
+
 export function isSearchIndexTypeCompatible(
-	actual: string | undefined,
+	index: SearchIndexDescription,
 	expected: "search" | "vectorSearch",
 ): boolean {
-	if (!actual) return true
-	if (actual === expected) return true
-	// Atlas Local reports vectorSearch indexes backed by autoEmbed as
-	// `autoEmbed`. Treat that as compatible with the vectorSearch create API.
-	return expected === "vectorSearch" && actual === "autoEmbed"
+	return servedSearchIndexType(index) === expected
 }
 
 /**

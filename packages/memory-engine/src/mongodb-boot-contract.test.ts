@@ -452,6 +452,65 @@ describe("enforceBootContract: index states", () => {
 		expect(err.code).toBe("index-type-mismatch")
 		expect(writeCalls(calls)).toEqual([])
 	})
+
+	// $listSearchIndexes documents no `type` field, and keyless atlas-local
+	// omits it: CI run 39214244063 listed a fresh vectorSearch index named
+	// chunks_text this way, and boot then tried updateSearchIndex on it.
+	it("reads the type from the definition when the listing omits it", async () => {
+		const { calls, run } = harness({
+			indexes: withIndex("t_chunks_text", (entry) => ({
+				name: entry.name,
+				status: "PENDING",
+				queryable: false,
+				latestDefinition: {
+					fields: [
+						{
+							type: "vector",
+							path: "embedding",
+							numDimensions: 4,
+							similarity: "cosine",
+						},
+					],
+				},
+			})),
+			updateError: () =>
+				Object.assign(new Error('"fields" is required'), {
+					code: 125,
+					codeName: "CommandFailed",
+				}),
+		})
+		const err = await bootError(run())
+		expect(err.code).toBe("index-type-mismatch")
+		expect(err.index).toBe("t_chunks_text")
+		expect(writeCalls(calls)).toEqual([])
+	})
+
+	it("serves an untyped listing whose definition matches the manifest", async () => {
+		const { calls, run } = harness({
+			indexes: servingIndexes((entry) => {
+				const { type: _omitted, ...untyped } = readyIndex(
+					entry.name,
+					entry.type,
+					entry.definition,
+				)
+				return untyped as FakeSearchIndex
+			}),
+		})
+		await expect(run()).resolves.toBeDefined()
+		expect(writeCalls(calls)).toEqual([])
+	})
+
+	it("fails as unknown metadata when neither type nor definition is readable", async () => {
+		const { calls, run } = harness({
+			indexes: withIndex("t_chunks_text", (entry) => ({
+				name: entry.name,
+				status: "PENDING",
+				queryable: false,
+			})),
+		})
+		expect((await bootError(run())).code).toBe("index-metadata-unknown")
+		expect(writeCalls(calls)).toEqual([])
+	})
 })
 
 describe("enforceBootContract: repair", () => {
@@ -571,7 +630,7 @@ describe("enforceBootContract: repair", () => {
 				}),
 		})
 		const err = await bootError(run())
-		expect(err.code).toBe("search-management-unavailable")
+		expect(err.code).toBe("index-definition-rejected")
 		expect(err.index).toBe("t_kb_chunks_text")
 	})
 
@@ -606,6 +665,31 @@ describe("enforceBootContract: repair", () => {
 				}),
 		})
 		expect((await bootError(run())).code).toBe("search-privileges-denied")
+	})
+
+	it("types a definition the server rejects as rejected, not as management unavailable", async () => {
+		const { run } = harness({
+			indexes: withIndex("t_events_text", (entry) =>
+				readyIndex(entry.name, entry.type, { mappings: { dynamic: true } }),
+			),
+			updateError: () =>
+				Object.assign(new Error('"fields" is required'), {
+					code: 125,
+					codeName: "CommandFailed",
+				}),
+		})
+		const err = await bootError(run())
+		expect(err.code).toBe("index-definition-rejected")
+		expect(err.index).toBe("t_events_text")
+	})
+
+	it("keeps search-management-unavailable for the management service error", async () => {
+		const { run } = harness({
+			indexes: {},
+			createError: () =>
+				new Error("Error connecting to Search Index Management service."),
+		})
+		expect((await bootError(run())).code).toBe("search-management-unavailable")
 	})
 
 	it("runs beforeRepair before any write and stops on its failure", async () => {
