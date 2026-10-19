@@ -1,5 +1,7 @@
-import { createSubsystemLogger } from "@memongo/lib"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 
 /**
  * LLM valid-time extraction (issue #32).
@@ -11,16 +13,16 @@ import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
  * fact only became valid at ingestion.
  *
  * This module derives real valid-time from what the text says ("since 2021",
- * "until last March"), resolved against the event's own timestamp. When the text
- * carries no date, it falls back EXPLICITLY to that event timestamp (the
- * reference time) — never silently to the write clock — and records which
- * happened via `source`.
+ * "until last March"), resolved against the event's own timestamp. When the
+ * model answers that the text carries no date (`validFrom: null`), the valid
+ * time IS the event timestamp (the reference time) — never the write clock —
+ * and `source` records which happened.
  *
- * Every failure path degrades to the reference-time fallback rather than
- * throwing, so a missing/misbehaving LLM never breaks a write.
+ * A failure is not an answer: a provider failure, a response that is not the
+ * requested JSON shape, or a date that does not parse throws (the provider's
+ * own typed error, or EnrichmentParseError). It never becomes the
+ * reference-time baseline.
  */
-
-const log = createSubsystemLogger("memory:mongodb:temporal-extraction")
 
 // The JSON answer is tiny (two dates), but reasoning models (e.g. DeepSeek)
 // spend their chain-of-thought tokens BEFORE emitting the final content. A small
@@ -62,12 +64,21 @@ function buildUserPrompt(text: string, referenceTime: Date): string {
 	].join("\n")
 }
 
-function parseIsoDate(value: unknown): Date | undefined {
-	if (typeof value !== "string") return undefined
-	const trimmed = value.trim()
-	if (!trimmed) return undefined
-	const parsed = new Date(trimmed)
-	if (Number.isNaN(parsed.getTime())) return undefined
+// null is the model's answer "the text states no date"; anything else must be
+// an ISO date string.
+function parseIsoDate(value: unknown, field: string): Date | undefined {
+	if (value === null) return undefined
+	const parsed = typeof value === "string" ? new Date(value.trim()) : undefined
+	if (
+		typeof value !== "string" ||
+		!value.trim() ||
+		!parsed ||
+		Number.isNaN(parsed.getTime())
+	) {
+		throw new EnrichmentParseError(
+			`temporal extraction returned an unusable ${field}`,
+		)
+	}
 	return parsed
 }
 
@@ -84,29 +95,17 @@ export async function extractValidityFromText(params: {
 	referenceTime: Date
 }): Promise<ExtractedValidity> {
 	const { provider, model, text, referenceTime } = params
-	const fallback: ExtractedValidity = {
-		validFrom: referenceTime,
-		source: "reference",
-	}
 
-	let content: string
-	try {
-		const response = await provider.chatCompletion({
-			model,
-			messages: [
-				{ role: "system", content: SYSTEM_PROMPT },
-				{ role: "user", content: buildUserPrompt(text, referenceTime) },
-			],
-			responseFormat: { type: "json_object" },
-			maxTokens: MAX_TOKENS,
-		})
-		content = response.content
-	} catch (err) {
-		log.warn("temporal extraction LLM call failed", {
-			error: err instanceof Error ? err.message : String(err),
-		})
-		return fallback
-	}
+	const response = await provider.chatCompletion({
+		model,
+		messages: [
+			{ role: "system", content: SYSTEM_PROMPT },
+			{ role: "user", content: buildUserPrompt(text, referenceTime) },
+		],
+		responseFormat: { type: "json_object" },
+		maxTokens: MAX_TOKENS,
+	})
+	const content = response.content
 
 	let parsed: unknown
 	try {
@@ -115,25 +114,39 @@ export async function extractValidityFromText(params: {
 			.replace(/\n?```\s*$/i, "")
 		parsed = JSON.parse(stripped)
 	} catch {
-		log.warn("temporal extraction JSON parse failed", {
-			preview: content.slice(0, 200),
-		})
-		return fallback
+		throw new EnrichmentParseError(
+			`temporal extraction JSON parse failed (provider=${provider.name})`,
+		)
 	}
 
-	if (!parsed || typeof parsed !== "object") return fallback
+	if (
+		!parsed ||
+		typeof parsed !== "object" ||
+		!("validFrom" in parsed) ||
+		!("validTo" in parsed)
+	) {
+		throw new EnrichmentParseError(
+			`temporal extraction response lacks validFrom and validTo (provider=${provider.name})`,
+		)
+	}
 	const record = parsed as Record<string, unknown>
 
-	const validFrom = parseIsoDate(record.validFrom)
+	const validFrom = parseIsoDate(record.validFrom, "validFrom")
+	const validTo = parseIsoDate(record.validTo, "validTo")
 	if (!validFrom) {
-		// No usable start date — explicit fallback to the event timestamp.
-		return fallback
+		if (validTo) {
+			throw new EnrichmentParseError(
+				"temporal extraction returned validTo without validFrom",
+			)
+		}
+		// The model answered that the text states no start date: the valid time
+		// is the event time.
+		return { validFrom: referenceTime, source: "reference" }
 	}
-
-	let validTo = parseIsoDate(record.validTo)
-	// An end that precedes the start is an impossible window; drop it.
 	if (validTo && validTo.getTime() < validFrom.getTime()) {
-		validTo = undefined
+		throw new EnrichmentParseError(
+			"temporal extraction returned a validTo before its validFrom",
+		)
 	}
 
 	return {

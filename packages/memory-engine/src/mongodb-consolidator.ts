@@ -28,7 +28,14 @@ import {
 	isMemoryScopeValue,
 	type MemoryScope,
 } from "@memongo/lib"
+import { bestEffort, recordBestEffortFailure } from "./best-effort.js"
 import { isDuplicateKeyError } from "./internal.js"
+import {
+	consumeSearchWorkOrThrow,
+	getSearchBudgetSnapshot,
+	runWithSearchBudget,
+} from "./mongodb-search-budget.js"
+import { toTypedSearchError } from "./search-outcomes.js"
 import {
 	buildUnexpiredClause,
 	buildCurrentValidityClause,
@@ -58,7 +65,6 @@ import {
 } from "./mongodb-graph.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
-import { settledFailureMeta } from "./query-diagnostics.js"
 import {
 	isExtractionLlmDisabled,
 	resolveEnrichmentProvider,
@@ -123,11 +129,18 @@ const DEFAULT_IMPORTANCE_WEIGHT = 0.6
 // signal. Weight 0 rather than removal keeps the option honored for callers
 // who set it explicitly.
 const DEFAULT_ACCESS_WEIGHT = 0
-// An event missing from the novelty report was never SCORED — scanNovelty caps
-// its candidate set — so its novelty is unknown, not zero. Treating unknown as
-// "perfectly duplicate" silently discarded every event past that cap. Real
-// duplicate detection is the $vectorSearch NOOP check in the promotion loop.
+// An event missing from a SUCCESSFUL novelty report was never SCORED —
+// scanNovelty caps its candidate set — so its novelty is unknown, not zero.
+// Treating unknown as "perfectly duplicate" silently discarded every event past
+// that cap. Real duplicate detection is the $vectorSearch NOOP check in the
+// promotion loop. This is the neutral weight for events the scan did not cover;
+// a scan FAILURE never reaches it, because scanNovelty throws and the run fails.
 const UNSCORED_NOVELTY = 0.5
+// One search ledger covers a whole consolidation run. The ceiling is the
+// run's own probe bounds (1 entity search, 30 novelty probes, up to maxEvents
+// similarity probes, 50 dedup probes, 50 prune probes) plus slack: it is
+// accounting with a runaway cap, not a throttle on normal work.
+const CONSOLIDATION_PROBE_CEILING = 200
 // Cap the facts fed to the reasoning phases so a large memory does not blow the
 // LLM context window or token budget on a single consolidation run.
 const REASONING_MAX_FACTS = 40
@@ -432,18 +445,45 @@ async function finishConsolidationRun(params: {
 	}
 }
 
-export async function consolidateMemory(params: {
+type ConsolidateMemoryParams = {
 	db: Db
 	prefix: string
 	agentId: string
 	options?: ConsolidationOptions
 	admission?: AdmissionToken
-}): Promise<ConsolidationResult> {
+}
+
+/**
+ * Run one consolidation. A failed phase never turns into a default decision:
+ * the unit that failed (a candidate event, the reasoning or dedup or prune
+ * phase, or the run) is left unacknowledged, the run row is marked failed with
+ * the error, and the error is thrown so the caller or job retries.
+ *
+ * The run opens one search ledger, or shares the job's ledger when the caller
+ * already holds one, so every probe it issues is charged once to one ledger.
+ */
+export async function consolidateMemory(
+	params: ConsolidateMemoryParams,
+): Promise<ConsolidationResult> {
+	const maxEvents = resolveConsolidationMaxEvents(params.options?.maxEvents)
+	const { value } = await runWithSearchBudget(
+		{
+			maxAggregations: maxEvents + CONSOLIDATION_PROBE_CEILING,
+			maxEmbeds: maxEvents + CONSOLIDATION_PROBE_CEILING,
+		},
+		() => runConsolidation(params, maxEvents),
+	)
+	return value
+}
+
+async function runConsolidation(
+	params: ConsolidateMemoryParams,
+	maxEvents: number,
+): Promise<ConsolidationResult> {
 	const { db, prefix, agentId, options } = params
 	const startMs = Date.now()
 	const runId = randomUUID()
 
-	const maxEvents = resolveConsolidationMaxEvents(options?.maxEvents)
 	const supplied = params.admission
 	if (
 		supplied !== undefined &&
@@ -471,47 +511,43 @@ export async function consolidateMemory(params: {
 
 	// Single LLM seam for the whole run: contradiction resolution (P4.4.2),
 	// deduction/induction (issue #31), and LLM-adjudicated dedup (P4.4.3) all
-	// share one provider resolution, so a misconfigured provider warns once
-	// and every LLM-dependent phase degrades together.
+	// share one provider resolution. No provider configured (or extraction
+	// switched off) is the declared deterministic-only mode: those phases are
+	// skipped together. A configured provider that cannot resolve throws
+	// EnrichmentConfigError before the gate is claimed, so the caller or job
+	// fails with retry state and no run row is left behind.
 	const llmUsage: { inputTokens?: number; outputTokens?: number; at: Date }[] =
 		[]
 	const embeddingUsage: { at: Date }[] = []
 	const llmProvider = (() => {
-		try {
-			// B1: MEMONGO_EXTRACTION_LLM=off makes the whole reasoning seam
-			// degrade together (zero provider calls) so the benchmark can
-			// ablate extraction without unsetting the enrichment env.
-			const resolved = isExtractionLlmDisabled(process.env)
-				? null
-				: resolveEnrichmentProvider(process.env)
-			// C-017: reasoning LLM calls land in the per-tenant cost ledger;
-			// the same seam feeds contradiction/deduction/induction/dedup.
-			return (
-				resolved &&
-				instrumentProviderCostSpend({
-					db,
-					prefix,
-					agentId,
-					provider: resolved,
-					onUsage: (usage) => {
-						if (
-							[usage.inputTokens, usage.outputTokens].some(
-								(count) =>
-									count !== undefined &&
-									Number.isFinite(count) &&
-									Math.floor(count) > 0,
-							)
+		// B1: MEMONGO_EXTRACTION_LLM=off makes the whole reasoning seam
+		// skip together (zero provider calls) so the benchmark can
+		// ablate extraction without unsetting the enrichment env.
+		const resolved = isExtractionLlmDisabled(process.env)
+			? null
+			: resolveEnrichmentProvider(process.env)
+		// C-017: reasoning LLM calls land in the per-tenant cost ledger;
+		// the same seam feeds contradiction/deduction/induction/dedup.
+		return (
+			resolved &&
+			instrumentProviderCostSpend({
+				db,
+				prefix,
+				agentId,
+				provider: resolved,
+				onUsage: (usage) => {
+					if (
+						[usage.inputTokens, usage.outputTokens].some(
+							(count) =>
+								count !== undefined &&
+								Number.isFinite(count) &&
+								Math.floor(count) > 0,
 						)
-							llmUsage.push(usage)
-					},
-				})
-			)
-		} catch (err) {
-			log.warn(
-				`enrichment provider resolution failed; LLM-dependent phases degrade: ${err instanceof Error ? err.message : String(err)}`,
-			)
-			return null
-		}
+					)
+						llmUsage.push(usage)
+				},
+			})
+		)
 	})()
 	const llmModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 
@@ -656,6 +692,9 @@ export async function consolidateMemory(params: {
 			heartbeat.throwIfFailed()
 			return runFencedWrite(fn)
 		})
+	// Set once the run row holds its terminal state, so the catch below marks a
+	// run failed only when nothing else already did.
+	let runFinished = false
 	try {
 		// Query un-dreamer-processed events
 		const eventsCol = eventsCollection(db, prefix)
@@ -676,24 +715,23 @@ export async function consolidateMemory(params: {
 			}
 		}
 
-		let events = await eventsCol
-			.find(filter)
-			.sort({ timestamp: -1 })
-			.limit(maxEvents)
-			.toArray()
-
-		// Post-query entity set filter: match events mentioning any of the entities
-		if (options?.entitySet?.length) {
-			const entityPattern = new RegExp(
-				options.entitySet
-					.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-					.join("|"),
-				"i",
-			)
-			events = events.filter(
-				(e) => typeof e.body === "string" && entityPattern.test(e.body),
-			)
-		}
+		// With an entity set, Search selects the batch: a text query over the
+		// entity names with the batch window in compound.filter. Otherwise the
+		// batch is the newest unprocessed events.
+		const events = options?.entitySet?.length
+			? await searchEntityBatch({
+					eventsCol,
+					prefix,
+					agentId,
+					entitySet: options.entitySet,
+					filter,
+					maxEvents,
+				})
+			: await eventsCol
+					.find(filter)
+					.sort({ timestamp: -1 })
+					.limit(maxEvents)
+					.toArray()
 
 		if (events.length === 0) {
 			const durationMs = Date.now() - startMs
@@ -712,8 +750,10 @@ export async function consolidateMemory(params: {
 					factsPruned: 0,
 					conflictsResolved: 0,
 					durationMs,
+					searchBudget: getSearchBudgetSnapshot(),
 				},
 			})
+			runFinished = true
 			return { ...emptyResult, durationMs }
 		}
 
@@ -721,8 +761,10 @@ export async function consolidateMemory(params: {
 		// Phase 1 — Orient ($facet parallel stats)
 		// ===================================================================
 
+		// Orient stats feed one log line and the result's orientStats field; no
+		// decision reads them, so a failure is declared best-effort.
 		let orientStats: DreamerOrientStats | undefined
-		try {
+		await bestEffort("consolidator-orient", async () => {
 			const orientFilter: Document = { agentId }
 			if (options?.scope) orientFilter.scope = options.scope
 			if (options?.scopeRef) orientFilter.scopeRef = options.scopeRef
@@ -790,17 +832,14 @@ export async function consolidateMemory(params: {
 					`orient: ${orientStats.unprocessedCount} unprocessed, ${orientStats.byRole.length} roles, ${orientStats.topScopes.length} top scopes`,
 				)
 			}
-		} catch (err) {
-			log.warn(
-				`orient phase failed, continuing without stats: ${err instanceof Error ? err.message : String(err)}`,
-			)
-		}
+		})
 
 		// ===================================================================
 		// Score each event (unchanged scoring model)
 		// ===================================================================
 
-		// Get novelty scores (graceful degradation if mongot unavailable).
+		// Get novelty scores. A scan failure throws a typed SearchLaneError and
+		// fails the run before any event is touched; it is never an empty report.
 		// The limit matters: scanNovelty defaults to scoring only 10 events, and
 		// this call used to omit it, so on a 100-event run 90 events came back
 		// unscored and were dropped by the score gate. Ask for as many as we are
@@ -980,18 +1019,17 @@ export async function consolidateMemory(params: {
 					continue
 				}
 
-				// Walk reasoning chain for provenance context (fire-and-forget)
-				traceReasoningChain({
-					db,
-					prefix,
-					agentId,
-					factId: candidate.eventId,
-					collection: "events",
-				}).catch((err) => {
-					log.warn(
-						`reasoning chain trace failed for event=${candidate.eventId}: ${String(err)}`,
-					)
-				})
+				// Walk reasoning chain for provenance context. Nothing reads the
+				// result, so it is declared best-effort and never gates the event.
+				void bestEffort("consolidator-reasoning-chain-trace", () =>
+					traceReasoningChain({
+						db,
+						prefix,
+						agentId,
+						factId: candidate.eventId,
+						collection: "events",
+					}),
+				)
 
 				// Check for conflicts with existing structured memory
 				const conflicted = await hasConflict({
@@ -1054,9 +1092,13 @@ export async function consolidateMemory(params: {
 				if (candidateScope) simFilter.scope = candidateScope
 				if (candidateScopeRef) simFilter.scopeRef = candidateScopeRef
 
-				let decision: "ADD" | "NOOP" = "ADD"
+				// A failed probe throws a typed SearchLaneError (or a budget denial):
+				// the event fails and stays unacknowledged. The probe's answer is
+				// the only thing that can authorize an ADD.
+				consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
+				let similarResults: Document[]
 				try {
-					const similarResults = await structuredCol
+					similarResults = await structuredCol
 						.aggregate([
 							{
 								$vectorSearch: {
@@ -1083,32 +1125,25 @@ export async function consolidateMemory(params: {
 							{ $limit: 5 },
 						])
 						.toArray()
-					// C-017: the executed probe embedded candidate.body server-side
-					// (autoEmbed) — bill one consolidation embedding unit.
-					embeddingUsage.push({ at: new Date() })
-
-					if (similarResults.length > 0) {
-						// Check the top result's similarity score
-						const topScore =
-							typeof similarResults[0].score === "number"
-								? similarResults[0].score
-								: 0
-						if (topScore > SIMILARITY_THRESHOLD_NOOP) {
-							decision = "NOOP"
-							log.info(
-								`NOOP: similar memory found for event=${candidate.eventId} (score=${topScore.toFixed(3)})`,
-							)
-						}
-					}
 				} catch (err) {
-					// Graceful degradation: if $vectorSearch fails, fall back to ADD
-					log.warn(
-						`similarity check failed for event=${candidate.eventId}, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`,
-					)
+					throw toTypedSearchError(err, "vector")
 				}
+				// C-017: the executed probe embedded candidate.body server-side
+				// (autoEmbed) — bill one consolidation embedding unit.
+				embeddingUsage.push({ at: new Date() })
 
-				if (decision === "NOOP") {
-					continue
+				if (similarResults.length > 0) {
+					// Check the top result's similarity score
+					const topScore =
+						typeof similarResults[0].score === "number"
+							? similarResults[0].score
+							: 0
+					if (topScore > SIMILARITY_THRESHOLD_NOOP) {
+						log.info(
+							`NOOP: similar memory found for event=${candidate.eventId} (score=${topScore.toFixed(3)})`,
+						)
+						continue
+					}
 				}
 
 				// Phase 3.7 — Quality filter: skip memories derivable from code/context
@@ -1286,10 +1321,9 @@ export async function consolidateMemory(params: {
 					err instanceof ConsolidationLeaseLostError
 				)
 					throw err
-				log.warn(
-					"entity extraction diagnostics failed",
-					settledFailureMeta(err, ""),
-				)
+				// Diagnostics rows and telemetry describe the extraction; they do not
+				// decide it. Declared best-effort: logged and counted.
+				recordBestEffortFailure("consolidator-entity-diagnostics", err)
 			}
 		}
 		try {
@@ -1474,29 +1508,17 @@ export async function consolidateMemory(params: {
 							scopeRef: group.scopeRef,
 							runId,
 						})
-						try {
-							const result = await withConsolidationWrite((session) =>
-								writeStructuredMemory({
-									db,
-									prefix,
-									entry,
-									embeddingMode: "automated",
-									session,
-									transactionalSideEffects: "inline",
-								}),
-							)
-							if (result.upserted) factsInferred++
-						} catch (err) {
-							if (
-								isErasureGateConflictError(err) ||
-								isMalformedGateError(err) ||
-								err instanceof ConsolidationLeaseLostError
-							)
-								throw err
-							log.warn(
-								`inferred fact write failed during consolidation: ${err instanceof Error ? err.message : String(err)}`,
-							)
-						}
+						const result = await withConsolidationWrite((session) =>
+							writeStructuredMemory({
+								db,
+								prefix,
+								entry,
+								embeddingMode: "automated",
+								session,
+								transactionalSideEffects: "inline",
+							}),
+						)
+						if (result.upserted) factsInferred++
 					}
 				}
 				if (factsInferred > 0) {
@@ -1511,8 +1533,13 @@ export async function consolidateMemory(params: {
 					err instanceof ConsolidationLeaseLostError
 				)
 					throw err
-				log.warn(
-					`consolidation reasoning phases failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
+				// Deduction and induction failed (provider, parse or store). The
+				// run records failed and every event stays unacknowledged, the same
+				// path as an entity-extraction phase failure, so the caller retries.
+				for (const event of events) failedEventIds.add(event.eventId as string)
+				firstCandidateError ??= err
+				log.error(
+					`consolidation reasoning phases failed; events left unacknowledged: ${err instanceof Error ? err.message : String(err)}`,
 				)
 			}
 		}
@@ -1527,8 +1554,10 @@ export async function consolidateMemory(params: {
 		// call would be wasted. On MERGE the kept (newer) fact gets the
 		// synthesized union text and the union of sourceEventIds as the
 		// proof-count analog (capped at MAX_SOURCE_EVENT_IDS); the merged-away
-		// (older) fact is invalidated via the same mechanism prune uses. LLM
-		// failure or malformed JSON is treated as no-merge — never throws.
+		// (older) fact is invalidated via the same mechanism prune uses. A
+		// provider, parse, probe or write failure is not a NO_MERGE verdict: it
+		// fails the phase, and the run records failed with its events
+		// unacknowledged.
 		// ===================================================================
 
 		let factsMerged = 0
@@ -1562,8 +1591,10 @@ export async function consolidateMemory(params: {
 						// Skip facts merged away by a prior iteration in this loop
 						if (retiredIds.has(factId)) continue
 
+						consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
+						let similars: Document[]
 						try {
-							const similars = await structuredCol
+							similars = await structuredCol
 								.aggregate([
 									{
 										$vectorSearch: {
@@ -1595,199 +1626,185 @@ export async function consolidateMemory(params: {
 									},
 								])
 								.toArray()
-							// C-017: the executed probe embedded fact.value server-side
-							// (autoEmbed) — bill one consolidation embedding unit.
-							embeddingUsage.push({ at: new Date() })
+						} catch (err) {
+							throw toTypedSearchError(err, "vector")
+						}
+						// C-017: the executed probe embedded fact.value server-side
+						// (autoEmbed) — bill one consolidation embedding unit.
+						embeddingUsage.push({ at: new Date() })
 
-							for (const dup of similars) {
-								// Tenant floor, belt-and-suspenders: never merge across
-								// scope/scopeRef, same as prune.
-								if (
-									dup.scope !== fact.scope ||
-									dup.scopeRef !== fact.scopeRef
-								) {
-									continue
-								}
-								const dupId = String(dup._id)
-								if (retiredIds.has(dupId)) continue
-								const dupScore = typeof dup.score === "number" ? dup.score : 0
-								if (
-									dupScore < LLM_DEDUP_MIN_SIMILARITY ||
-									dupScore > LLM_DEDUP_MAX_SIMILARITY
-								) {
-									continue
-								}
-								if (
-									(fact.provenance?.origin === "llm-inference") !==
-									(dup.provenance?.origin === "llm-inference")
+						for (const dup of similars) {
+							// Tenant floor, belt-and-suspenders: never merge across
+							// scope/scopeRef, same as prune.
+							if (dup.scope !== fact.scope || dup.scopeRef !== fact.scopeRef) {
+								continue
+							}
+							const dupId = String(dup._id)
+							if (retiredIds.has(dupId)) continue
+							const dupScore = typeof dup.score === "number" ? dup.score : 0
+							if (
+								dupScore < LLM_DEDUP_MIN_SIMILARITY ||
+								dupScore > LLM_DEDUP_MAX_SIMILARITY
+							) {
+								continue
+							}
+							if (
+								(fact.provenance?.origin === "llm-inference") !==
+								(dup.provenance?.origin === "llm-inference")
+							)
+								continue
+							// Adjudicate each unordered pair at most once per run.
+							const pairKey = [factId, dupId].sort().join(" ")
+							if (adjudicatedPairs.has(pairKey)) continue
+							adjudicatedPairs.add(pairKey)
+
+							const verdict = await adjudicateFactMerge({
+								provider: llmProvider,
+								model: llmModel,
+								factA: {
+									key: typeof fact.key === "string" ? fact.key : "",
+									value: fact.value,
+								},
+								factB: {
+									key: typeof dup.key === "string" ? dup.key : "",
+									value: String(dup.value ?? ""),
+								},
+							})
+							if (verdict.verdict !== "MERGE" || !verdict.mergedValue) {
+								continue
+							}
+
+							// Same winner rule as prune: the NEWER fact survives, the
+							// older one is merged away.
+							const dupUpdated =
+								dup.updatedAt instanceof Date ? dup.updatedAt : new Date(0)
+							const factUpdated =
+								fact.updatedAt instanceof Date ? fact.updatedAt : new Date(0)
+							const keptDoc = dupUpdated > factUpdated ? dup : fact
+							const mergedAwayDoc = dupUpdated > factUpdated ? fact : dup
+
+							if (
+								[keptDoc, mergedAwayDoc].some(
+									(doc) =>
+										doc._id === undefined ||
+										doc.agentId !== agentId ||
+										!isMemoryScopeValue(doc.scope) ||
+										typeof doc.scopeRef !== "string" ||
+										!doc.scopeRef.trim() ||
+										typeof doc.type !== "string" ||
+										!doc.type.trim() ||
+										typeof doc.key !== "string" ||
+										!doc.key.trim() ||
+										typeof doc.value !== "string" ||
+										!doc.value.trim() ||
+										!Number.isInteger(doc.revision) ||
+										doc.revision < 1 ||
+										doc.state !== "active",
 								)
-									continue
-								// Adjudicate each unordered pair at most once per run.
-								const pairKey = [factId, dupId].sort().join(" ")
-								if (adjudicatedPairs.has(pairKey)) continue
-								adjudicatedPairs.add(pairKey)
-
-								const verdict = await adjudicateFactMerge({
-									provider: llmProvider,
-									model: llmModel,
-									factA: {
-										key: typeof fact.key === "string" ? fact.key : "",
-										value: fact.value,
-									},
-									factB: {
-										key: typeof dup.key === "string" ? dup.key : "",
-										value: String(dup.value ?? ""),
-									},
-								})
-								if (verdict.verdict !== "MERGE" || !verdict.mergedValue) {
-									continue
-								}
-
-								// Same winner rule as prune: the NEWER fact survives, the
-								// older one is merged away.
-								const dupUpdated =
-									dup.updatedAt instanceof Date ? dup.updatedAt : new Date(0)
-								const factUpdated =
-									fact.updatedAt instanceof Date ? fact.updatedAt : new Date(0)
-								const keptDoc = dupUpdated > factUpdated ? dup : fact
-								const mergedAwayDoc = dupUpdated > factUpdated ? fact : dup
-
-								if (
-									[keptDoc, mergedAwayDoc].some(
-										(doc) =>
-											doc._id === undefined ||
-											doc.agentId !== agentId ||
-											!isMemoryScopeValue(doc.scope) ||
-											typeof doc.scopeRef !== "string" ||
-											!doc.scopeRef.trim() ||
-											typeof doc.type !== "string" ||
-											!doc.type.trim() ||
-											typeof doc.key !== "string" ||
-											!doc.key.trim() ||
-											typeof doc.value !== "string" ||
-											!doc.value.trim() ||
-											!Number.isInteger(doc.revision) ||
-											doc.revision < 1 ||
-											doc.state !== "active",
-									)
-								)
-									continue
-								const pair = [keptDoc, mergedAwayDoc].map((doc) => ({
-									_id: doc._id,
-									agentId,
-									scope: doc.scope,
-									scopeRef: doc.scopeRef,
-									type: doc.type,
-									key: doc.key,
-									revision: doc.revision,
-									state: "active",
-								}))
-								try {
-									await withConsolidationWrite(async (session) => {
-										for (const filter of pair) {
-											if (!(await structuredCol.findOne(filter, { session })))
-												throw new MemoryLifecycleConflictError({
-													reason: "stale-revision",
-													expectedRevision: filter.revision,
-													actualRevision: 0,
-												})
-										}
-										const updated = await writeStructuredMemory({
-											db,
-											prefix,
-											entry: {
-												...structuredEntryFromDoc(keptDoc, {
-													value: verdict.mergedValue,
-													sourceEventIds: foldSourceEventIds(
-														keptDoc.sourceEventIds,
-														mergedAwayDoc.sourceEventIds,
-													),
-												}),
-												state: "active",
-											},
-											embeddingMode: "automated",
-											session,
-											transactionalSideEffects: "inline",
-											expectedId: keptDoc._id,
-											expectedRevision: keptDoc.revision,
-											actorRole: "system",
-											mutationMeta: { reason: "llm-dedup-merge", runId },
-										})
-										if (updated.quarantined)
-											throw new MemoryQuarantinedWriteError(
-												updated.id,
-												updated.matchedPatterns ?? [],
-											)
-										const handle = {
-											family: "structured" as const,
-											id: [
-												"structured",
-												mergedAwayDoc.scope,
-												encodeURIComponent(mergedAwayDoc.scopeRef),
-												mergedAwayDoc.type,
-												mergedAwayDoc.key,
-											].join(":"),
-											agentId,
-											scope: mergedAwayDoc.scope,
-											scopeRef: mergedAwayDoc.scopeRef,
-											revision: mergedAwayDoc.revision,
-											state: "active" as const,
-											structured: {
-												type: mergedAwayDoc.type,
-												key: mergedAwayDoc.key,
-											},
-										}
-										const retired = await invalidateStructuredMemoryByHandle({
-											db,
-											prefix,
-											handle,
-											expectedId: mergedAwayDoc._id,
-											session,
-											transactionalSideEffects: "inline",
-											actorRole: "system",
-											invalidatedBy: { reason: "llm-dedup-merge", runId },
-										})
-										if (
-											!retired ||
-											retired.handle.state !== "invalidated" ||
-											retired.handle.revision !== handle.revision + 1
-										)
+							)
+								continue
+							const pair = [keptDoc, mergedAwayDoc].map((doc) => ({
+								_id: doc._id,
+								agentId,
+								scope: doc.scope,
+								scopeRef: doc.scopeRef,
+								type: doc.type,
+								key: doc.key,
+								revision: doc.revision,
+								state: "active",
+							}))
+							try {
+								await withConsolidationWrite(async (session) => {
+									for (const filter of pair) {
+										if (!(await structuredCol.findOne(filter, { session })))
 											throw new MemoryLifecycleConflictError({
 												reason: "stale-revision",
-												expectedRevision: handle.revision,
-												actualRevision: retired?.handle.revision ?? 0,
+												expectedRevision: filter.revision,
+												actualRevision: 0,
 											})
+									}
+									const updated = await writeStructuredMemory({
+										db,
+										prefix,
+										entry: {
+											...structuredEntryFromDoc(keptDoc, {
+												value: verdict.mergedValue,
+												sourceEventIds: foldSourceEventIds(
+													keptDoc.sourceEventIds,
+													mergedAwayDoc.sourceEventIds,
+												),
+											}),
+											state: "active",
+										},
+										embeddingMode: "automated",
+										session,
+										transactionalSideEffects: "inline",
+										expectedId: keptDoc._id,
+										expectedRevision: keptDoc.revision,
+										actorRole: "system",
+										mutationMeta: { reason: "llm-dedup-merge", runId },
 									})
-								} catch (err) {
+									if (updated.quarantined)
+										throw new MemoryQuarantinedWriteError(
+											updated.id,
+											updated.matchedPatterns ?? [],
+										)
+									const handle = {
+										family: "structured" as const,
+										id: [
+											"structured",
+											mergedAwayDoc.scope,
+											encodeURIComponent(mergedAwayDoc.scopeRef),
+											mergedAwayDoc.type,
+											mergedAwayDoc.key,
+										].join(":"),
+										agentId,
+										scope: mergedAwayDoc.scope,
+										scopeRef: mergedAwayDoc.scopeRef,
+										revision: mergedAwayDoc.revision,
+										state: "active" as const,
+										structured: {
+											type: mergedAwayDoc.type,
+											key: mergedAwayDoc.key,
+										},
+									}
+									const retired = await invalidateStructuredMemoryByHandle({
+										db,
+										prefix,
+										handle,
+										expectedId: mergedAwayDoc._id,
+										session,
+										transactionalSideEffects: "inline",
+										actorRole: "system",
+										invalidatedBy: { reason: "llm-dedup-merge", runId },
+									})
 									if (
-										isErasureGateConflictError(err) ||
-										isMalformedGateError(err) ||
-										err instanceof ConsolidationLeaseLostError
+										!retired ||
+										retired.handle.state !== "invalidated" ||
+										retired.handle.revision !== handle.revision + 1
 									)
-										throw err
-									log.warn(
-										`llm-dedup merge write failed for fact=${factId}: ${err instanceof Error ? err.message : String(err)}`,
-									)
-									continue
-								}
-								retiredIds.add(String(mergedAwayDoc._id))
-								factsMerged++
-								log.info(
-									`llm-dedup merged ${String(mergedAwayDoc._id)} into ${String(keptDoc._id)} (score=${dupScore.toFixed(3)})`,
+										throw new MemoryLifecycleConflictError({
+											reason: "stale-revision",
+											expectedRevision: handle.revision,
+											actualRevision: retired?.handle.revision ?? 0,
+										})
+								})
+							} catch (err) {
+								// A concurrent writer moved a pinned revision: the pair is
+								// stale, so the merge does not apply. Any other failure is
+								// not a NO_MERGE and fails the phase.
+								if (!(err instanceof MemoryLifecycleConflictError)) throw err
+								log.warn(
+									`llm-dedup merge skipped for fact=${factId}: ${err.message}`,
 								)
-								break
+								continue
 							}
-						} catch (err) {
-							if (
-								isErasureGateConflictError(err) ||
-								isMalformedGateError(err) ||
-								err instanceof ConsolidationLeaseLostError
+							retiredIds.add(String(mergedAwayDoc._id))
+							factsMerged++
+							log.info(
+								`llm-dedup merged ${String(mergedAwayDoc._id)} into ${String(keptDoc._id)} (score=${dupScore.toFixed(3)})`,
 							)
-								throw err
-							// Graceful degradation: a failed pair is a no-merge, never fatal
-							log.warn(
-								`llm-dedup adjudication failed for fact=${factId}: ${err instanceof Error ? err.message : String(err)}`,
-							)
+							break
 						}
 					}
 				} catch (err) {
@@ -1797,8 +1814,11 @@ export async function consolidateMemory(params: {
 						err instanceof ConsolidationLeaseLostError
 					)
 						throw err
-					log.warn(
-						`llm-dedup phase failed: ${err instanceof Error ? err.message : String(err)}`,
+					for (const event of events)
+						failedEventIds.add(event.eventId as string)
+					firstCandidateError ??= err
+					log.error(
+						`llm-dedup phase failed; events left unacknowledged: ${err instanceof Error ? err.message : String(err)}`,
 					)
 				}
 			}
@@ -1836,8 +1856,10 @@ export async function consolidateMemory(params: {
 				// Skip facts invalidated by a prior iteration in this loop
 				if (invalidatedIds.has(String(fact._id))) continue
 
+				consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
+				let duplicates: Document[]
 				try {
-					const duplicates = await structuredCol
+					duplicates = await structuredCol
 						.aggregate([
 							{
 								$vectorSearch: {
@@ -1871,109 +1893,100 @@ export async function consolidateMemory(params: {
 							},
 						])
 						.toArray()
-					// C-017: the executed probe embedded fact.value server-side
-					// (autoEmbed) — bill one consolidation embedding unit.
-					embeddingUsage.push({ at: new Date() })
+				} catch (err) {
+					throw toTypedSearchError(err, "vector")
+				}
+				// C-017: the executed probe embedded fact.value server-side
+				// (autoEmbed) — bill one consolidation embedding unit.
+				embeddingUsage.push({ at: new Date() })
 
-					for (const dup of duplicates) {
-						// Tenant floor, belt-and-suspenders: even if the store returns a
-						// cross-scope doc, never invalidate across scope/scopeRef.
-						if (dup.scope !== fact.scope || dup.scopeRef !== fact.scopeRef) {
-							continue
-						}
+				for (const dup of duplicates) {
+					// Tenant floor, belt-and-suspenders: even if the store returns a
+					// cross-scope doc, never invalidate across scope/scopeRef.
+					if (dup.scope !== fact.scope || dup.scopeRef !== fact.scopeRef) {
+						continue
+					}
+					if (
+						(fact.provenance?.origin === "llm-inference") !==
+						(dup.provenance?.origin === "llm-inference")
+					)
+						continue
+					const dupScore = typeof dup.score === "number" ? dup.score : 0
+					if (dupScore > SIMILARITY_THRESHOLD_PRUNE) {
+						// Invalidate the older duplicate
+						const dupUpdated =
+							dup.updatedAt instanceof Date ? dup.updatedAt : new Date(0)
+						const factUpdated =
+							fact.updatedAt instanceof Date ? fact.updatedAt : new Date(0)
+						const olderDoc = dupUpdated < factUpdated ? dup : fact
+
 						if (
-							(fact.provenance?.origin === "llm-inference") !==
-							(dup.provenance?.origin === "llm-inference")
+							olderDoc._id === undefined ||
+							olderDoc.agentId !== agentId ||
+							typeof olderDoc.scope !== "string" ||
+							!isMemoryScopeValue(olderDoc.scope) ||
+							typeof olderDoc.scopeRef !== "string" ||
+							!olderDoc.scopeRef ||
+							typeof olderDoc.type !== "string" ||
+							!olderDoc.type ||
+							typeof olderDoc.key !== "string" ||
+							!olderDoc.key ||
+							!Number.isInteger(olderDoc.revision) ||
+							olderDoc.revision < 1
 						)
 							continue
-						const dupScore = typeof dup.score === "number" ? dup.score : 0
-						if (dupScore > SIMILARITY_THRESHOLD_PRUNE) {
-							// Invalidate the older duplicate
-							const dupUpdated =
-								dup.updatedAt instanceof Date ? dup.updatedAt : new Date(0)
-							const factUpdated =
-								fact.updatedAt instanceof Date ? fact.updatedAt : new Date(0)
-							const olderDoc = dupUpdated < factUpdated ? dup : fact
-
-							if (
-								olderDoc._id === undefined ||
-								olderDoc.agentId !== agentId ||
-								typeof olderDoc.scope !== "string" ||
-								!isMemoryScopeValue(olderDoc.scope) ||
-								typeof olderDoc.scopeRef !== "string" ||
-								!olderDoc.scopeRef ||
-								typeof olderDoc.type !== "string" ||
-								!olderDoc.type ||
-								typeof olderDoc.key !== "string" ||
-								!olderDoc.key ||
-								!Number.isInteger(olderDoc.revision) ||
-								olderDoc.revision < 1
-							)
-								continue
-							const handle = {
-								family: "structured" as const,
-								id: [
-									"structured",
-									agentId,
-									olderDoc.scope,
-									olderDoc.scopeRef,
-									olderDoc.type,
-									olderDoc.key,
-								]
-									.map(encodeURIComponent)
-									.join(":"),
+						const handle = {
+							family: "structured" as const,
+							id: [
+								"structured",
 								agentId,
-								scope: olderDoc.scope,
-								scopeRef: olderDoc.scopeRef,
-								revision: olderDoc.revision as number,
-								state: "active" as const,
-								structured: { type: olderDoc.type, key: olderDoc.key },
-							}
-							let retired: Awaited<
-								ReturnType<typeof invalidateStructuredMemoryByHandle>
-							>
-							try {
-								retired = await withConsolidationWrite((session) =>
-									invalidateStructuredMemoryByHandle({
-										db,
-										prefix,
-										handle,
-										expectedId: olderDoc._id,
-										session,
-										transactionalSideEffects: "inline",
-										invalidatedBy: { reason: "near-duplicate-prune", runId },
-										actorRole: "system",
-									}),
-								)
-							} catch (err) {
-								if (err instanceof MemoryLifecycleConflictError) continue
-								throw err
-							}
-							if (
-								!retired ||
-								retired.handle.state !== "invalidated" ||
-								retired.handle.revision !== handle.revision + 1
-							)
-								continue
-							invalidatedIds.add(String(olderDoc._id))
-							prunedCount++
-							log.info(
-								`pruned near-duplicate: ${String(olderDoc._id)} (score=${dupScore.toFixed(3)})`,
-							)
-							if (olderDoc === fact) break
+								olderDoc.scope,
+								olderDoc.scopeRef,
+								olderDoc.type,
+								olderDoc.key,
+							]
+								.map(encodeURIComponent)
+								.join(":"),
+							agentId,
+							scope: olderDoc.scope,
+							scopeRef: olderDoc.scopeRef,
+							revision: olderDoc.revision as number,
+							state: "active" as const,
+							structured: { type: olderDoc.type, key: olderDoc.key },
 						}
+						let retired: Awaited<
+							ReturnType<typeof invalidateStructuredMemoryByHandle>
+						>
+						try {
+							retired = await withConsolidationWrite((session) =>
+								invalidateStructuredMemoryByHandle({
+									db,
+									prefix,
+									handle,
+									expectedId: olderDoc._id,
+									session,
+									transactionalSideEffects: "inline",
+									invalidatedBy: { reason: "near-duplicate-prune", runId },
+									actorRole: "system",
+								}),
+							)
+						} catch (err) {
+							if (err instanceof MemoryLifecycleConflictError) continue
+							throw err
+						}
+						if (
+							!retired ||
+							retired.handle.state !== "invalidated" ||
+							retired.handle.revision !== handle.revision + 1
+						)
+							continue
+						invalidatedIds.add(String(olderDoc._id))
+						prunedCount++
+						log.info(
+							`pruned near-duplicate: ${String(olderDoc._id)} (score=${dupScore.toFixed(3)})`,
+						)
+						if (olderDoc === fact) break
 					}
-				} catch (err) {
-					if (
-						isErasureGateConflictError(err) ||
-						isMalformedGateError(err) ||
-						err instanceof ConsolidationLeaseLostError
-					)
-						throw err
-					// Graceful degradation: if $vectorSearch fails during prune, skip
-					log.warn(
-						`prune similarity check failed for fact=${String(fact._id)}: ${err instanceof Error ? err.message : String(err)}`,
-					)
 				}
 			}
 		} catch (err) {
@@ -1983,8 +1996,12 @@ export async function consolidateMemory(params: {
 				err instanceof ConsolidationLeaseLostError
 			)
 				throw err
-			log.warn(
-				`prune phase failed: ${err instanceof Error ? err.message : String(err)}`,
+			// A failed similarity probe is not "no duplicates": the phase fails,
+			// the run records failed and its events stay unacknowledged.
+			for (const event of events) failedEventIds.add(event.eventId as string)
+			firstCandidateError ??= err
+			log.error(
+				`prune phase failed; events left unacknowledged: ${err instanceof Error ? err.message : String(err)}`,
 			)
 		}
 
@@ -2070,6 +2087,7 @@ export async function consolidateMemory(params: {
 				factsPruned: prunedCount,
 				conflictsResolved,
 				durationMs,
+				searchBudget: getSearchBudgetSnapshot(),
 				...(firstCandidateError
 					? {
 							error:
@@ -2080,6 +2098,7 @@ export async function consolidateMemory(params: {
 					: {}),
 			},
 		})
+		runFinished = true
 
 		if (firstCandidateError) {
 			throw firstCandidateError
@@ -2107,7 +2126,91 @@ export async function consolidateMemory(params: {
 			orientStats,
 			prunedCount,
 		}
+	} catch (err) {
+		// An error thrown outside the per-candidate and per-phase handlers (a
+		// novelty-scan failure, a failed batch read or ack) left the run row
+		// "running". Record it failed, with the error, so the gate is reclaimable
+		// at once and the failure is durable; the error itself still propagates.
+		if (
+			!runFinished &&
+			!isErasureGateConflictError(err) &&
+			!isMalformedGateError(err) &&
+			!(err instanceof ConsolidationLeaseLostError)
+		) {
+			await bestEffort("consolidation-run-failure-record", async () => {
+				await heartbeat.stop()
+				await finishConsolidationRun({
+					consolidationRuns,
+					gateKey,
+					runId,
+					leaseToken,
+					update: {
+						status: "failed",
+						completedAt: new Date(),
+						durationMs: Date.now() - startMs,
+						error: err instanceof Error ? err.message : String(err),
+						searchBudget: getSearchBudgetSnapshot(),
+					},
+				})
+			})
+		}
+		throw err
 	} finally {
 		await heartbeat.stop()
+	}
+}
+
+/**
+ * Batch selection through Search: a `text` query over the entity names on the
+ * events body, with the batch window (agent, scope, scopeRef, timestamp) in
+ * compound.filter. The index copy can lag a write and does not map
+ * dreamerProcessedAt, so the canonical filter is re-applied right after the
+ * Search stage. A failure throws a typed SearchLaneError; it never becomes an
+ * empty batch.
+ */
+async function searchEntityBatch(params: {
+	eventsCol: Collection
+	prefix: string
+	agentId: string
+	entitySet: string[]
+	filter: Document
+	maxEvents: number
+}): Promise<Document[]> {
+	const { eventsCol, prefix, agentId, entitySet, filter, maxEvents } = params
+	const windowFilter: Document[] = [
+		{ equals: { path: "agentId", value: agentId } },
+	]
+	if (typeof filter.scope === "string") {
+		windowFilter.push({ equals: { path: "scope", value: filter.scope } })
+	}
+	if (typeof filter.scopeRef === "string") {
+		windowFilter.push({ equals: { path: "scopeRef", value: filter.scopeRef } })
+	}
+	const window = filter.timestamp as { $gte: Date; $lte: Date } | undefined
+	if (window) {
+		windowFilter.push({
+			range: { path: "timestamp", gte: window.$gte, lte: window.$lte },
+		})
+	}
+	consumeSearchWorkOrThrow("atlas-search", { aggregations: 1, embeds: 0 })
+	try {
+		return await eventsCol
+			.aggregate([
+				{
+					$search: {
+						index: `${prefix}events_text`,
+						compound: {
+							filter: windowFilter,
+							must: [{ text: { query: entitySet, path: "body" } }],
+						},
+					},
+				},
+				{ $match: filter },
+				{ $sort: { timestamp: -1 } },
+				{ $limit: maxEvents },
+			])
+			.toArray()
+	} catch (err) {
+		throw toTypedSearchError(err, "atlas-search")
 	}
 }

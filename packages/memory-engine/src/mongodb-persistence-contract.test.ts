@@ -113,17 +113,20 @@ async function managerLoop(
 		if (transcript.includes("<transcript>")) {
 			extractionResponses.push({ transcript, facts })
 		}
+		const temporalRequest = request.messages.some((m) =>
+			m.content.includes('{"validFrom"'),
+		)
 		return new Response(
 			JSON.stringify({
 				model: "FW-DeepSeek-V4.1-Flash",
 				choices: [
 					{
 						message: {
-							content: JSON.stringify({
-								facts,
-								qa_pairs: [],
-								has_personal_content: true,
-							}),
+							content: JSON.stringify(
+								temporalRequest
+									? { validFrom: null, validTo: null }
+									: { facts, qa_pairs: [], has_personal_content: true },
+							),
 						},
 						finish_reason: "stop",
 					},

@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { detectContradictions } from "./mongodb-contradiction.js"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	detectContradictions,
+	invalidateContradictedFacts,
+} from "./mongodb-contradiction.js"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 
 const { invalidateByHandleMock, structuredMemCollectionMock } = vi.hoisted(
 	() => ({
@@ -110,31 +116,87 @@ describe("detectContradictions", () => {
 		expect(provider.chatCompletion).not.toHaveBeenCalled()
 	})
 
-	it("degrades to [] when the LLM call throws", async () => {
+	it("rejects when the LLM call throws, never an empty verdict", async () => {
+		const failure = new Error("network down")
 		const provider: EnrichmentProvider = {
 			name: "mock",
 			chatCompletion: vi.fn(async () => {
-				throw new Error("network down")
+				throw failure
 			}),
 		}
-		const result = await detectContradictions({
-			provider,
-			model: "m",
-			newFact: NEW_FACT,
-			existingFacts: EXISTING,
-		})
-		expect(result).toEqual([])
+		await expect(
+			detectContradictions({
+				provider,
+				model: "m",
+				newFact: NEW_FACT,
+				existingFacts: EXISTING,
+			}),
+		).rejects.toBe(failure)
 	})
 
-	it("degrades to [] on unparseable JSON", async () => {
+	it("rejects with a typed parse error on unparseable JSON, never an empty verdict", async () => {
 		const provider = providerReturning("not json")
-		const result = await detectContradictions({
-			provider,
-			model: "m",
-			newFact: NEW_FACT,
-			existingFacts: EXISTING,
-		})
-		expect(result).toEqual([])
+		await expect(
+			detectContradictions({
+				provider,
+				model: "m",
+				newFact: NEW_FACT,
+				existingFacts: EXISTING,
+			}),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
+
+	it("rejects a response with no contradictions list", async () => {
+		const provider = providerReturning(JSON.stringify({ result: "none" }))
+		await expect(
+			detectContradictions({
+				provider,
+				model: "m",
+				newFact: NEW_FACT,
+				existingFacts: EXISTING,
+			}),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
+
+	it("invalidateContradictedFacts rejects on a detection failure instead of returning 0", async () => {
+		const failure = new Error("network down")
+		const provider: EnrichmentProvider = {
+			name: "mock",
+			chatCompletion: vi.fn(async () => {
+				throw failure
+			}),
+		}
+		const findMock = vi
+			.fn()
+			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
+			.mockReturnValueOnce({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								key: "fact-berlin",
+								value: "The user lives in Berlin.",
+								revision: 1,
+							},
+						]),
+					})),
+				})),
+			})
+		structuredMemCollectionMock.mockReturnValue({
+			find: findMock,
+		} as unknown as import("mongodb").Collection)
+		await expect(
+			invalidateContradictedFacts({
+				db: {} as never,
+				prefix: "t_",
+				provider,
+				model: "m",
+				agentId: "a",
+				scope: "agent",
+				scopeRef: "agent:a",
+				newFacts: [NEW_FACT],
+			}),
+		).rejects.toBe(failure)
 	})
 
 	it("deduplicates repeated keys", async () => {

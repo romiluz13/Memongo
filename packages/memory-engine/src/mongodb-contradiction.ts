@@ -1,6 +1,9 @@
 import type { ClientSession, Db, MongoClient } from "mongodb"
-import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import type { MemoryScope } from "@memongo/lib"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
 import { invalidateStructuredMemoryByHandle } from "./mongodb-structured-memory.js"
 import {
@@ -19,11 +22,11 @@ import {
  * contradicts, so the caller can expire the superseded ones (Graphiti/mem0
  * style) via invalidateStructuredMemoryByHandle.
  *
- * Every failure path degrades to an empty result rather than throwing, so a
- * missing/misbehaving LLM never blocks a write.
+ * A provider or parse failure throws (the provider's own typed error, or
+ * EnrichmentParseError). It is never an empty result: "no contradictions" is a
+ * verdict only when the model returned a well-formed empty list. The caller
+ * marks the unit failed and retries.
  */
-
-const log = createSubsystemLogger("memory:mongodb:contradiction")
 
 const MAX_TOKENS = 2048
 // Bound the comparison set: an unbounded event could pit a new fact against
@@ -80,24 +83,16 @@ export async function detectContradictions(params: {
 	}
 	const validKeys = new Set(existingFacts.map((f) => f.key))
 
-	let content: string
-	try {
-		const response = await provider.chatCompletion({
-			model,
-			messages: [
-				{ role: "system", content: SYSTEM_PROMPT },
-				{ role: "user", content: buildUserPrompt(newFact, existingFacts) },
-			],
-			responseFormat: { type: "json_object" },
-			maxTokens: MAX_TOKENS,
-		})
-		content = response.content
-	} catch (err) {
-		log.warn("contradiction detection LLM call failed", {
-			error: err instanceof Error ? err.message : String(err),
-		})
-		return []
-	}
+	const response = await provider.chatCompletion({
+		model,
+		messages: [
+			{ role: "system", content: SYSTEM_PROMPT },
+			{ role: "user", content: buildUserPrompt(newFact, existingFacts) },
+		],
+		responseFormat: { type: "json_object" },
+		maxTokens: MAX_TOKENS,
+	})
+	const content = response.content
 
 	let parsed: unknown
 	try {
@@ -106,15 +101,20 @@ export async function detectContradictions(params: {
 			.replace(/\n?```\s*$/i, "")
 		parsed = JSON.parse(stripped)
 	} catch {
-		log.warn("contradiction detection JSON parse failed", {
-			preview: content.slice(0, 200),
-		})
-		return []
+		throw new EnrichmentParseError(
+			`contradiction detection JSON parse failed (provider=${provider.name})`,
+		)
 	}
 
-	if (!parsed || typeof parsed !== "object") return []
-	const raw = (parsed as Record<string, unknown>).contradictions
-	if (!Array.isArray(raw)) return []
+	const raw =
+		parsed && typeof parsed === "object"
+			? (parsed as Record<string, unknown>).contradictions
+			: undefined
+	if (!Array.isArray(raw)) {
+		throw new EnrichmentParseError(
+			`contradiction detection response has no contradictions list (provider=${provider.name})`,
+		)
+	}
 
 	const seen = new Set<string>()
 	const findings: ContradictionFinding[] = []
@@ -361,7 +361,8 @@ export async function persistPreparedContradictionInvalidations(params: {
  * strictly within the same (agentId, scope, scopeRef) tenant boundary — and
  * invalidates any it contradicts via invalidateStructuredMemoryByHandle, which
  * flips state to "invalidated", closes validTo, writes a revision, and records
- * `invalidatedBy` provenance. Returns the count invalidated. Never throws.
+ * `invalidatedBy` provenance. Returns the count invalidated. A detection or
+ * persistence failure throws; it never reads as "no conflict".
  */
 export async function invalidateContradictedFacts(params: {
 	db: Db
@@ -381,32 +382,25 @@ export async function invalidateContradictedFacts(params: {
 	const newFacts = params.newFacts.filter((f) => f.key && f.value)
 	if (newFacts.length === 0) return 0
 
-	try {
-		const prepared = await prepareContradictionInvalidations({
-			db,
-			prefix,
-			provider,
-			model,
-			agentId,
-			scope,
-			scopeRef,
-			newFacts,
-			requirePersistedSource: params.requirePersistedSource,
-		})
-		return persistPreparedContradictionInvalidations({
-			db,
-			prefix,
-			client,
-			agentId,
-			scope,
-			scopeRef,
-			prepared,
-			runId: params.runId,
-		})
-	} catch (err) {
-		log.warn("contradiction invalidation failed", {
-			error: err instanceof Error ? err.message : String(err),
-		})
-		return 0
-	}
+	const prepared = await prepareContradictionInvalidations({
+		db,
+		prefix,
+		provider,
+		model,
+		agentId,
+		scope,
+		scopeRef,
+		newFacts,
+		requirePersistedSource: params.requirePersistedSource,
+	})
+	return persistPreparedContradictionInvalidations({
+		db,
+		prefix,
+		client,
+		agentId,
+		scope,
+		scopeRef,
+		prepared,
+		runId: params.runId,
+	})
 }

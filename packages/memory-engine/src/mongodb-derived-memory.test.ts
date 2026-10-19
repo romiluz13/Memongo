@@ -1,6 +1,10 @@
 import type { ClientSession, Collection, Db } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
+	getBestEffortFailureCounts,
+	resetBestEffortFailureCounts,
+} from "./best-effort.js"
+import {
 	extractLlmStructuredCandidates,
 	extractProcedureCandidatesFromEvent,
 	extractStructuredCandidatesFromEvent,
@@ -10,12 +14,18 @@ import {
 	promoteDerivedMemoryFromEvent,
 	resolveStructuredCandidatesForPromotion,
 } from "./mongodb-derived-memory.js"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	EnrichmentParseError,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 
 function mockLlmProvider(content: string): EnrichmentProvider {
 	return {
 		name: "mock",
-		chatCompletion: async () => ({ content }),
+		chatCompletion: async (params) =>
+			JSON.stringify(params.messages).includes("validFrom")
+				? { content: JSON.stringify({ validFrom: null, validTo: null }) }
+				: { content },
 	}
 }
 
@@ -241,7 +251,9 @@ describe("mongodb-derived-memory", () => {
 				}),
 			})),
 		})
-		const chatCompletion = vi.fn(async () => ({ content: "{}" }))
+		const chatCompletion = vi.fn(async () => ({
+			content: JSON.stringify({ validFrom: null, validTo: null }),
+		}))
 		const provider = { name: "mock", chatCompletion }
 
 		const promotable = await resolveStructuredCandidatesForPromotion({
@@ -514,9 +526,68 @@ describe("mongodb-derived-memory", () => {
 		).toBe(true)
 	})
 
-	it("falls back to regex candidates when the LLM provider fails", async () => {
+	it("rejects when the LLM provider fails, never falling back to regex candidates", async () => {
 		const structuredCol = createMockCollection()
 		const eventsCol = createMockCollection()
+		const failure = new Error("llm upstream 500")
+		const failingProvider: EnrichmentProvider = {
+			name: "failing",
+			chatCompletion: async () => {
+				throw failure
+			},
+		}
+
+		await expect(
+			resolveStructuredCandidatesForPromotion({
+				db: createMockDb({
+					test_structured_mem: structuredCol,
+					test_events: eventsCol,
+				}),
+				prefix: "test_",
+				event: {
+					eventId: "evt-llm-fail-1",
+					agentId: "agent-1",
+					role: "user",
+					body: "Remember this: the launch codeword is Blue Finch.",
+					timestamp: new Date("2026-03-21T10:00:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
+				provider: failingProvider,
+				model: "gpt-4o-mini",
+			}),
+		).rejects.toBe(failure)
+	})
+
+	it("rejects with a typed parse error when the LLM extraction response is malformed", async () => {
+		const failing = mockLlmProvider("this is not json")
+		await expect(
+			resolveStructuredCandidatesForPromotion({
+				db: createMockDb({
+					test_structured_mem: createMockCollection(),
+					test_events: createMockCollection(),
+				}),
+				prefix: "test_",
+				event: {
+					eventId: "evt-llm-parse-1",
+					agentId: "agent-1",
+					role: "user",
+					body: "Remember this: the launch codeword is Blue Finch.",
+					timestamp: new Date("2026-03-21T10:00:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
+				provider: failing,
+				model: "gpt-4o-mini",
+			}),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+	})
+
+	it("promotes nothing and writes nothing when the extraction provider fails", async () => {
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		vi.mocked(writeStructuredMemory).mockClear()
 		const failingProvider: EnrichmentProvider = {
 			name: "failing",
 			chatCompletion: async () => {
@@ -524,27 +595,29 @@ describe("mongodb-derived-memory", () => {
 			},
 		}
 
-		const promotable = await resolveStructuredCandidatesForPromotion({
-			db: createMockDb({
-				test_structured_mem: structuredCol,
-				test_events: eventsCol,
+		await expect(
+			promoteDerivedMemoryFromEvent({
+				db: createMockDb({
+					test_structured_mem: createMockCollection(),
+					test_procedures: createMockCollection(),
+					test_events: createMockCollection(),
+				}),
+				prefix: "test_",
+				embeddingMode: "automated",
+				provider: failingProvider,
+				model: "gpt-4o-mini",
+				event: {
+					eventId: "evt-llm-fail-2",
+					agentId: "agent-1",
+					role: "user",
+					body: "Remember this: the launch codeword is Blue Finch.",
+					timestamp: new Date("2026-03-21T10:00:00Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
 			}),
-			prefix: "test_",
-			event: {
-				eventId: "evt-llm-fail-1",
-				agentId: "agent-1",
-				role: "user",
-				body: "Remember this: the launch codeword is Blue Finch.",
-				timestamp: new Date("2026-03-21T10:00:00Z"),
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-			},
-			provider: failingProvider,
-			model: "gpt-4o-mini",
-		})
-
-		expect(promotable).toHaveLength(1)
-		expect(promotable[0]?.value).toContain("Blue Finch")
+		).rejects.toThrow("llm upstream 500")
+		expect(writeStructuredMemory).not.toHaveBeenCalled()
 	})
 
 	it("extracts procedures from assistant workflow-style responses", () => {
@@ -813,7 +886,8 @@ describe("mongodb-derived-memory", () => {
 		expect(writtenKeys.size).toBe(2)
 	})
 
-	it("logs projection-run failures instead of swallowing them silently", async () => {
+	it("declares projection-run bookkeeping best-effort: a log line and a counter, never a failed promotion", async () => {
+		resetBestEffortFailureCounts()
 		const { recordProjectionRun } = await import("./mongodb-ops.js")
 		vi.mocked(recordProjectionRun).mockRejectedValue(
 			new Error("ops unavailable"),
@@ -849,8 +923,11 @@ describe("mongodb-derived-memory", () => {
 			skipped: false,
 		})
 		expect(loggerMocks.warn).toHaveBeenCalledWith(
-			expect.stringContaining("projection run recording failed"),
+			expect.stringContaining("projection-run failed: ops unavailable"),
 		)
+		expect(getBestEffortFailureCounts()).toMatchObject({
+			"structured promotion-projection-run": 1,
+		})
 	})
 })
 

@@ -1502,7 +1502,6 @@ export class MongoDBManagerBenchmarkOps {
 										scopeRef,
 										eventIds: sessionEventMap,
 										concurrency: enrichmentConcurrency,
-										strict: enrichmentStrict,
 										onProviderCall: (outcome) => {
 											const accounting = params.runContext.accounting
 											const metadata = {

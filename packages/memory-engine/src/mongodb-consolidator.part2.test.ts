@@ -1199,15 +1199,15 @@ describe("consolidateMemory", () => {
 		)
 	})
 
-	it("handles novelty scan failure gracefully", async () => {
+	it("a novelty scan failure fails the run typed and never scores events at the 0.5 default", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const { scanNovelty } = await import("./mongodb-novelty.js")
-		;(scanNovelty as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-			events: [],
-			scannedCount: 0,
-			error: "mongot_unavailable",
-			agentId: "agent-1",
+		const { SearchLaneError } = await import("./search-outcomes.js")
+		const failure = new SearchLaneError({
+			stage: "vector",
+			reason: "dependency-unavailable",
 		})
+		;(scanNovelty as ReturnType<typeof vi.fn>).mockRejectedValueOnce(failure)
 		const consolidationRunsCol = mockCollection({
 			findOne: vi.fn(async () => null),
 		})
@@ -1238,15 +1238,28 @@ describe("consolidateMemory", () => {
 			test_structured_mem: structuredCol,
 		})
 
-		// Should not throw, should still process events
-		const result = await consolidateMemory({
-			db,
-			prefix: "test_",
-			agentId: "agent-1",
-			options: { minCombinedScore: 0 },
-		})
+		await expect(
+			consolidateMemory({
+				db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { minCombinedScore: 0 },
+			}),
+		).rejects.toBe(failure)
 
-		expect(result.eventsProcessed).toBe(1)
+		// Nothing acknowledged, and the run row records the failure so the gate
+		// is reclaimable at once.
+		expect(eventsCol.updateMany).not.toHaveBeenCalled()
+		expect(consolidationRunsCol.updateOne).toHaveBeenCalledWith(
+			expect.objectContaining({ status: "running" }),
+			expect.objectContaining({
+				$set: expect.objectContaining({
+					status: "failed",
+					error: failure.message,
+				}),
+			}),
+			expect.anything(),
+		)
 	})
 
 	it("uses the caller scopeRef when scoring novelty", async () => {

@@ -1980,6 +1980,7 @@ export type NoveltyEvent = {
 export type NoveltyReport = {
 	events: NoveltyEvent[]
 	scannedCount: number
+	/** @deprecated Never set: a failed scan throws a typed SearchLaneError. */
 	error?: string
 	agentId: string
 }
@@ -2129,7 +2130,10 @@ export type ConsolidationOptions = {
 	scopeRef?: string
 	/** Bounded time window for scoped enrichment */
 	timeRange?: { from: Date; to: Date }
-	/** Filter events mentioning these entities (post-query regex filter) */
+	/**
+	 * Select events mentioning these entities with an Atlas Search `text` query
+	 * on the event body; the batch window rides in `compound.filter`.
+	 */
 	entitySet?: string[]
 	/**
 	 * Phase-0 gate lease duration. A run that crashes leaves the gate
