@@ -103,6 +103,11 @@ export const coreTools: readonly McpToolDefinition[] = [
 							},
 						},
 						needExactEvidence: { type: "boolean" },
+						rerank: {
+							type: "boolean",
+							description:
+								"A demand for a rerank stage. There is no reranker yet: true fails with rerank-unsupported; false is accepted.",
+						},
 						allowConstraintRelaxation: {
 							type: "boolean",
 							description:

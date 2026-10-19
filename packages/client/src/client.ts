@@ -447,6 +447,7 @@ export type MemongoSearchPass = {
 	pathsExecuted: string[]
 	resultCount: number
 	queryRewritten: boolean
+	/** Always false: there is no reranker. */
 	reranked: boolean
 	correctionApplied?: string
 }
@@ -490,6 +491,7 @@ export type MemongoSearchDetailedMetadata = {
 	pathsExecuted: string[]
 	resultsByPath: Record<string, number>
 	queryRewritten: boolean
+	/** Always false: there is no reranker. */
 	reranked: boolean
 	noDirectEvidenceReason?: string
 	constraintRelaxations?: Array<{ constraint: string; action: string }>

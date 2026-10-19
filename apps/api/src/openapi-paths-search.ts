@@ -89,6 +89,7 @@ const searchLaneOutcomeSchema = {
 				"dependency-unavailable",
 				"query-error",
 				"internal-error",
+				"rerank-unsupported",
 				"budget-aggregations",
 				"budget-embeds",
 				"budget-deadline",
@@ -118,6 +119,9 @@ const searchOutcomesSchema = {
  * #101 / resolution R3: the non-2xx search failures. The body is the ApiError
  * envelope plus `outcomes` (status "failed" and every row).
  */
+const RERANKED_DESCRIPTION =
+	"Always false: there is no reranker. The HTTP reranker was removed and native $rerank (Atlas only) is not implemented yet."
+
 const searchFailureResponses = {
 	"500": {
 		description:
@@ -348,6 +352,11 @@ export const searchPaths = {
 											},
 										},
 										needExactEvidence: { type: "boolean" },
+										rerank: {
+											type: "boolean",
+											description:
+												"A demand for a rerank stage. M2 has none: true is rejected with 400 RERANK_UNSUPPORTED (rerank-unsupported); false is accepted. Native $rerank (Atlas only) is not implemented yet.",
+										},
 										allowConstraintRelaxation: {
 											type: "boolean",
 											description:
@@ -524,6 +533,7 @@ export const searchPaths = {
 														},
 														reranked: {
 															type: "boolean",
+															description: RERANKED_DESCRIPTION,
 														},
 														correctionApplied: {
 															type: "string",
@@ -562,7 +572,10 @@ export const searchPaths = {
 												additionalProperties: { type: "number" },
 											},
 											queryRewritten: { type: "boolean" },
-											reranked: { type: "boolean" },
+											reranked: {
+												type: "boolean",
+												description: RERANKED_DESCRIPTION,
+											},
 											noDirectEvidenceReason: { type: "string" },
 											constraintRelaxations: {
 												type: "array",
@@ -615,6 +628,10 @@ export const searchPaths = {
 							},
 						},
 					},
+				},
+				"400": {
+					description:
+						"VALIDATION_ERROR: a malformed request. RERANK_UNSUPPORTED: searchConfig.rerank was true; there is no reranker, so the request fails instead of returning unreranked results.",
 				},
 				...searchFailureResponses,
 			},

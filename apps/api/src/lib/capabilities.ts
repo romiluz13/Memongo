@@ -37,6 +37,7 @@ export function formatCapabilityTable(lanes: SearchLanes): string {
 		`  hybrid:  ${status(lanes.hybrid)}`,
 		`  vector:  ${status(lanes.vector)}`,
 		`  keyword: ${status(lanes.keyword)}`,
+		"  rerank:  unsupported (native $rerank is not implemented; a rerank request fails with rerank-unsupported)",
 	].join("\n")
 }
 

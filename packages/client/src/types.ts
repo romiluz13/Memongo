@@ -82,6 +82,12 @@ export type SearchConfig = {
 	timeRange?: { preset?: string; start?: string; end?: string }
 	needExactEvidence?: boolean
 	/**
+	 * A demand for a rerank stage. There is no reranker yet: `true` fails with
+	 * 400 RERANK_UNSUPPORTED (rerank-unsupported); `false` is accepted. Native
+	 * `$rerank` (Atlas only) is not implemented yet.
+	 */
+	rerank?: boolean
+	/**
 	 * Opt-in for the executor's constraint-relaxation fallback (RET-01).
 	 * Default false: explicit constraints (timeRange, needExactEvidence)
 	 * stay hard and an empty constrained answer stays empty.
@@ -474,7 +480,19 @@ export type MemongoStatusResponse = {
 		lastError?: string
 		lastProvider?: string
 	}
-	custom?: Record<string, unknown>
+	custom?: Record<string, unknown> & { rerank?: MemongoRerankStatus }
+}
+
+/**
+ * Rerank support reported by status. There is no reranker: the engine does not
+ * implement native `$rerank` (Atlas only) yet and the server is not probed.
+ */
+export type MemongoRerankStatus = {
+	nativeRerank: { engineSupport: boolean; serverSupport: boolean | "unknown" }
+	lane: {
+		outcome: MemongoSearchLaneOutcomeStatus
+		reason: MemongoSearchOutcomeReason
+	}
 }
 
 export type MemongoConversationRecallCitation = {
@@ -969,6 +987,7 @@ export type MemongoSearchOutcomeReason =
 	| "dependency-unavailable"
 	| "query-error"
 	| "internal-error"
+	| "rerank-unsupported"
 	| "budget-aggregations"
 	| "budget-embeds"
 	| "budget-deadline"

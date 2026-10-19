@@ -3,6 +3,28 @@ import {
 	memoryScopeEnum,
 } from "./openapi-schemas.js"
 
+const rerankStatusSchema = {
+	type: "object",
+	description:
+		"There is no reranker. The engine does not implement native $rerank (Atlas only) yet, and the server is not probed.",
+	properties: {
+		nativeRerank: {
+			type: "object",
+			properties: {
+				engineSupport: { type: "boolean", enum: [false] },
+				serverSupport: { type: "string", enum: ["unknown"] },
+			},
+		},
+		lane: {
+			type: "object",
+			properties: {
+				outcome: { type: "string", enum: ["not-applicable"] },
+				reason: { type: "string", enum: ["capability-absent"] },
+			},
+		},
+	},
+}
+
 export const statusPaths = {
 	"/v1/profile": {
 		post: {
@@ -49,7 +71,20 @@ export const statusPaths = {
 			responses: {
 				"200": {
 					description:
-						"Status. Includes `version`, the Memongo release version of this server.",
+						"Status. Includes `version`, the Memongo release version of this server, and `custom.rerank`: native rerank is unsupported by the engine and unknown on the server, and the rerank lane is not-applicable (capability-absent).",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									custom: {
+										type: "object",
+										properties: { rerank: rerankStatusSchema },
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
