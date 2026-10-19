@@ -355,12 +355,12 @@ describe("benchmark run configuration identity", () => {
 					episodes: { enabled: true, minEventsForEpisode: 6 },
 				},
 			},
-			capabilities: {
-				vectorSearch: true,
-				textSearch: true,
-				scoreFusion: false,
-				rankFusion: true,
-			},
+			prefix: "benchmark_",
+			requiredManifest: [
+				{ name: "benchmark_chunks_vector" },
+				{ name: "benchmark_chunks_text" },
+			],
+			deploymentFacts: { scoreFusion: false, rankFusion: true },
 		} as unknown as MongoDBManagerHost
 		try {
 			const configuration = new MongoDBManagerBenchmarkScenarioOps(

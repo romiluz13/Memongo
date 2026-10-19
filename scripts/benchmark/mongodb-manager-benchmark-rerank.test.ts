@@ -41,12 +41,11 @@ function setup() {
 		config: resolved,
 		db,
 		prefix: "unit_",
-		capabilities: {
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: false,
-			rankFusion: true,
-		},
+		requiredManifest: [
+			{ name: "unit_chunks_vector" },
+			{ name: "unit_chunks_text" },
+		],
+		deploymentFacts: { scoreFusion: false, rankFusion: true },
 	} as unknown as MongoDBManagerHost
 	return { ops: new MongoDBManagerBenchmarkOps(host) }
 }

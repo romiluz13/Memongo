@@ -31,6 +31,7 @@ export type SearchLane =
 export type SearchStage =
 	| "plan"
 	| "request"
+	| "index-health"
 	| "lane"
 	| "reservation"
 	| "filter"
@@ -61,6 +62,11 @@ export type SearchFailureReason =
 	| "lane-unavailable"
 	| "index-missing"
 	| "index-not-ready"
+	// M2 decision 8: an index observed STALE or drifted from its manifest
+	// definition at request admission, and an index observed absent, building,
+	// FAILED, unqueryable or unreadable. Both are retryable unavailability.
+	| "index-stale"
+	| "index-unavailable"
 	| "query-timeout"
 	| "dependency-unavailable"
 	| "query-error"

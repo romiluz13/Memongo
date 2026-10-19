@@ -6,12 +6,9 @@ import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-
 
 /** Synthetic resolved host for the real configuration producer (no network). */
 export const SYNTHETIC_BENCHMARK_HOST = {
-	capabilities: {
-		vectorSearch: true,
-		textSearch: true,
-		scoreFusion: true,
-		rankFusion: true,
-	},
+	prefix: "p_",
+	requiredManifest: [{ name: "p_chunks_vector" }, { name: "p_chunks_text" }],
+	deploymentFacts: { scoreFusion: true, rankFusion: true },
 	config: {
 		mongodb: {
 			uri: "mongodb://synthetic.invalid:27017",

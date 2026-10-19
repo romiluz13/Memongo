@@ -406,7 +406,7 @@ describe("lifecycle wiring keeps the search outcomes (X-09)", () => {
 			buildConversationChunkFilter: () => ({}),
 			buildScopeAwareBridgeChunkFilter: () => ({}),
 			getBridgeChunkBudget: () => 0,
-			capabilities: {},
+			requestCapabilities: async () => ({}),
 		}
 		return new MongoDBManagerLifecycleOps(host as unknown as MongoDBManagerHost)
 	}

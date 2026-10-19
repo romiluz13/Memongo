@@ -477,6 +477,8 @@ export const contextPaths = {
 														"lane-unavailable",
 														"index-missing",
 														"index-not-ready",
+														"index-stale",
+														"index-unavailable",
 														"query-timeout",
 														"dependency-unavailable",
 														"query-error",

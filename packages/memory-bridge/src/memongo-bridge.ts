@@ -937,29 +937,29 @@ export async function memongoBridgeProbeVector(params: { agentId?: string }) {
 }
 
 /**
- * Serving capabilities detected by the engine at manager creation. Alias of
- * the engine's `DetectedCapabilities` (re-exported through the engine package
- * entry since P2.2 — previously redeclared here because the engine did not
- * export the type). vectorSearch/textSearch are true only when the concrete
- * serving Atlas Search indexes exist and are queryable — not merely when the
- * deployment could support them.
+ * Serving capabilities of one request. Alias of the engine's
+ * `DetectedCapabilities` (re-exported through the engine package entry since
+ * P2.2). vectorSearch/textSearch are true only when the concrete serving
+ * Atlas Search indexes were observed READY, queryable and serving their
+ * manifest definition by this call's own index-status read; there is no boot
+ * snapshot.
  */
 export type MemongoBridgeCapabilities = DetectedCapabilities
 
 /**
- * P1.9 boot capability surface: exposes the manager's detected serving
- * capabilities so deploy targets (memongo-api boot) can log a search-lane
- * table without re-probing Mongo themselves. M2: acquiring the manager runs
- * the startup contract, so a failed boot rejects here with its
- * MemongoBootError. B2a: the manager declares `capabilities` publicly, so this is
- * a typed read (the `| null` return shape is kept for callers compiled
- * against the pre-typed surface).
+ * P1.9 boot capability surface: reads the manager's serving capabilities
+ * live so deploy targets (memongo-api boot) can log a search-lane table
+ * without re-probing Mongo themselves. M2: acquiring the manager runs the
+ * startup contract, so a failed boot rejects here with its MemongoBootError;
+ * the capability view is then this call's own index-health snapshot (M2
+ * decision 8), never a value stored at boot. The `| null` return shape is
+ * kept for callers compiled against the pre-typed surface.
  */
 export async function memongoBridgeCapabilities(params: {
 	agentId?: string
 }): Promise<MemongoBridgeCapabilities | null> {
 	const m = await memongoBridgeGetManager(params.agentId)
-	return m.capabilities
+	return m.requestCapabilities()
 }
 
 /**

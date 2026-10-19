@@ -8,6 +8,7 @@ const bridge = vi.hoisted(() => ({
 	memongoBridgeSearchWithDegradation: vi.fn(),
 	memongoBridgeSearchKBWithDegradation: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
+	memongoBridgeRecallConversation: vi.fn(),
 }))
 vi.mock(
 	"@memongo/memory-bridge",
@@ -139,6 +140,13 @@ const failed = (lane: string, reason: string): Row => ({
 	outcome: "failed",
 	reason,
 })
+/** M2: an admission-time index-health failure carries its own stage. */
+const indexHealthFailed = (lane: string, reason: string): Row => ({
+	lane,
+	stage: "index-health",
+	outcome: "failed",
+	reason,
+})
 const denied = (lane: string, reason: string): Row => ({
 	lane,
 	stage: "lane",
@@ -164,6 +172,24 @@ const FAILED_ROWS: Array<{
 		],
 		status: 503,
 		code: "SEARCH_LANES_UNAVAILABLE",
+	},
+	{
+		name: "M2: index-stale and index-unavailable are retryable unavailability",
+		lanes: [
+			indexHealthFailed("hybrid:chunks", "index-stale"),
+			indexHealthFailed("kb", "index-unavailable"),
+		],
+		status: 503,
+		code: "SEARCH_LANES_UNAVAILABLE",
+	},
+	{
+		name: "M2: an index-health failure and a query-error failure map to 500 (defect first)",
+		lanes: [
+			indexHealthFailed("structured", "index-stale"),
+			failed("procedural", "query-error"),
+		],
+		status: 500,
+		code: "SEARCH_LANES_FAILED",
 	},
 	{
 		name: "every failure is a budget denial",
@@ -345,6 +371,30 @@ describe.each(ROUTES)("$path outcome mapping (R3)", (route) => {
 				outcome: "failed",
 				reason: "index-not-ready",
 			},
+		},
+		{
+			name: "SearchLaneError with index-stale",
+			err: {
+				name: "SearchLaneError",
+				lane: "kb",
+				stage: "index-health",
+				reason: "index-stale",
+			},
+			status: 503,
+			code: "SEARCH_LANES_UNAVAILABLE",
+			row: indexHealthFailed("kb", "index-stale"),
+		},
+		{
+			name: "SearchLaneError with index-unavailable",
+			err: {
+				name: "SearchLaneError",
+				lane: "hybrid:chunks",
+				stage: "index-health",
+				reason: "index-unavailable",
+			},
+			status: 503,
+			code: "SEARCH_LANES_UNAVAILABLE",
+			row: indexHealthFailed("hybrid:chunks", "index-unavailable"),
 		},
 		{
 			name: "SearchBudgetDeniedError",
@@ -621,6 +671,62 @@ describe("OpenAPI documents the outcome fields and statuses (#101)", () => {
 		"/v1/search",
 		"/v1/search-kb",
 		"/v1/search-detailed",
+	])("%s documents index-stale and index-unavailable as 503 reasons (M2)", async (path) => {
+		const op = await operation(path)
+		expect(op.responses["503"]?.description).toContain("index-stale")
+		expect(op.responses["503"]?.description).toContain("index-unavailable")
+	})
+
+	it("the outcome row schema enumerates both index-health reasons and stage (M2)", async () => {
+		const res = await createApp().request("/openapi.json")
+		const text = await res.text()
+		const doc = JSON.parse(text) as {
+			paths: Record<
+				string,
+				{
+					post: {
+						responses: Record<
+							string,
+							{
+								content?: {
+									"application/json"?: {
+										schema?: {
+											properties?: Record<
+												string,
+												{
+													properties?: Record<
+														string,
+														{
+															items?: {
+																properties?: Record<string, { enum?: string[] }>
+															}
+														}
+													>
+												}
+											>
+										}
+									}
+								}
+							}
+						>
+					}
+				}
+			>
+		}
+		const lanes =
+			doc.paths["/v1/search"].post.responses["200"].content?.[
+				"application/json"
+			]?.schema?.properties?.outcomes?.properties?.lanes
+		const reasons = lanes?.items?.properties?.reason?.enum ?? []
+		expect(reasons).toContain("index-stale")
+		expect(reasons).toContain("index-unavailable")
+		expect(lanes?.items?.properties?.stage).toBeDefined()
+	})
+
+	it.each([
+		"/v1/search",
+		"/v1/search-kb",
+		"/v1/search-detailed",
 	])("%s documents the 503 and 500 search failure codes", async (path) => {
 		const op = await operation(path)
 		expect(op.responses["503"]?.description).toContain(
@@ -631,5 +737,64 @@ describe("OpenAPI documents the outcome fields and statuses (#101)", () => {
 		)
 		expect(op.responses["500"]?.description).toContain("SEARCH_LANES_FAILED")
 		expect(op.responses["503"]?.description).toContain("outcomes")
+	})
+})
+
+describe("/v1/recall-conversation maps typed index-health failures (M2)", () => {
+	it.each([
+		"index-stale",
+		"index-unavailable",
+	] as const)("a recall gated on %s is a retryable 503 with the failing row", async (reason) => {
+		bridge.memongoBridgeRecallConversation.mockRejectedValue(
+			Object.assign(new Error("PRIVATE provider text"), {
+				name: "SearchLaneError",
+				lane: "search",
+				stage: "index-health",
+				reason,
+			}),
+		)
+
+		const res = await post("/v1/recall-conversation")
+
+		expect(res.status).toBe(503)
+		const text = await res.text()
+		expect(text).not.toContain("PRIVATE")
+		const json = JSON.parse(text) as {
+			error: { code: string }
+			outcomes: Summary
+		}
+		expect(json.error.code).toBe("SEARCH_LANES_UNAVAILABLE")
+		expect(json.outcomes).toEqual({
+			status: "failed",
+			lanes: [
+				{ lane: "search", stage: "index-health", outcome: "failed", reason },
+			],
+		})
+	})
+
+	it("an untyped recall failure keeps the route's internal error envelope", async () => {
+		bridge.memongoBridgeRecallConversation.mockRejectedValue(
+			new Error("mongodb memory unavailable"),
+		)
+
+		const res = await post("/v1/recall-conversation")
+
+		expect(res.status).toBe(500)
+		const json = (await res.json()) as Record<string, unknown>
+		expect(json).not.toHaveProperty("outcomes")
+	})
+
+	it("documents the typed failure statuses", async () => {
+		const res = await createApp().request("/openapi.json")
+		const json = (await res.json()) as {
+			paths: Record<
+				string,
+				{ post: { responses: Record<string, { description?: string }> } }
+			>
+		}
+		const responses = json.paths["/v1/recall-conversation"].post.responses
+		expect(responses["503"]?.description).toContain("index-stale")
+		expect(responses["503"]?.description).toContain("index-unavailable")
+		expect(responses["500"]?.description).toContain("SEARCH_LANES_FAILED")
 	})
 })

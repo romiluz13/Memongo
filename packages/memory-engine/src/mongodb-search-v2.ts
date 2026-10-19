@@ -18,6 +18,10 @@ import type { GraphExpansionResult } from "./mongodb-graph.js"
 import { derivationFromRole } from "./memory-derivation.js"
 import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
+import {
+	assertLaneIndexesHealthy,
+	capabilitiesFromActiveHealth,
+} from "./mongodb-index-health.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import type { ProcedureState } from "./mongodb-procedures.js"
 import {
@@ -432,16 +436,6 @@ export type SearchV2Context = {
 	hasEpisodes?: boolean
 	hasGraphData?: boolean
 	maxResults?: number
-	/**
-	 * C-016 + RET-13: invoked at the ACTUAL catch seam when an individual
-	 * lane, sub-lane, or phase fails at query time (non-strict mode). The
-	 * manager wires this to noteSearchLaneFailure() so index readiness is
-	 * re-polled and the outage is reflected in status instead of the
-	 * boot-time snapshot. Labels are seam-level strings — a path name
-	 * ("hybrid"), a sub-lane ("hybrid:chunks"), or a phase
-	 * ("phase:conversation-evidence", "kb:$text").
-	 */
-	onPathFailure?: (lane: string, error: unknown) => void
 	searchOptions?: {
 		minScore?: number
 		sessionKey?: string
@@ -632,14 +626,12 @@ async function searchV2WithBudget(
 		const maxResults = context.maxResults ?? 20
 		const minScore = context.searchOptions?.minScore ?? 0.01
 		const numCandidates = context.searchOptions?.numCandidates ?? 500
-		const capabilities = context.searchOptions?.capabilities ?? {
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: false,
-			rankFusion: true,
-			storedSource: false,
-			vectorIndexMethod: false,
-		}
+		// M2 decision 8: index health comes from this request's snapshot. A
+		// caller that passes no capabilities and runs outside any request scope
+		// is refused; nothing assumes the indexes are healthy.
+		const capabilities =
+			context.searchOptions?.capabilities ??
+			(await capabilitiesFromActiveHealth())
 		const fusionMethod = context.searchOptions?.fusionMethod ?? "scoreFusion"
 		const embeddingMode = context.searchOptions?.embeddingMode ?? "automated"
 		const queryEmbeddingModel =
@@ -941,9 +933,8 @@ async function searchV2WithBudget(
 		const perPathResults: Record<string, MemorySearchResult[]> = {}
 		// #101: the ONE failure policy used at every lane seam. Strict →
 		// rethrow typed so the search fails loudly; else record one value-free
-		// failure row at the seam that caught it, surface it through
-		// onPathFailure, and let sibling lanes stand. A lane that failed never
-		// also records ok.
+		// failure row at the seam that caught it, and let sibling lanes stand.
+		// A lane that failed never also records ok.
 		const emitLaneFailure = (lane: SearchLane, err: unknown): void => {
 			const typed = toTypedSearchError(err, "lane", lane)
 			log.warn("searchV2 lane failed", {
@@ -951,16 +942,6 @@ async function searchV2WithBudget(
 				...searchFailureLogFields(typed),
 			})
 			laneOutcomes.push(searchFailureRow(lane, "lane", typed))
-			// C-016: surface the failure so the manager can re-poll index
-			// readiness. Never let the hook break the remaining lanes.
-			try {
-				context.onPathFailure?.(lane, typed)
-			} catch (hookErr) {
-				log.warn(
-					"searchV2 onPathFailure hook failed",
-					searchFailureLogFields(hookErr),
-				)
-			}
 		}
 		const tierSink =
 			(lane: SearchLane): SearchTierOutcomeSink =>
@@ -980,6 +961,13 @@ async function searchV2WithBudget(
 		): Promise<MemorySearchResult[]> => {
 			const firstRow = laneOutcomes.length
 			try {
+				// M2 decision 8: a lane never runs against an index observed
+				// unhealthy at admission. The typed failure below is this lane's
+				// row, so siblings stand (partial) exactly as for any lane failure.
+				await assertLaneIndexesHealthy(lane, {
+					vectorOnly:
+						hybridMode === "vector-only" && lane.startsWith("hybrid:"),
+				})
 				const hits = await run(tierSink(lane))
 				const own = laneOutcomes
 					.slice(firstRow)

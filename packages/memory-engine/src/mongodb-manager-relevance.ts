@@ -125,6 +125,7 @@ export class MongoDBManagerRelevanceOps {
 		const { scope: searchScope, scopeRef: searchScopeRef } =
 			this.host.resolveSearchIdentity({ sessionKey: params.sessionKey })
 
+		const capabilities = await this.host.requestCapabilities()
 		const v2 = await searchV2(
 			this.host.db,
 			this.host.prefix,
@@ -136,17 +137,13 @@ export class MongoDBManagerRelevanceOps {
 				hasEpisodes: mongoCfg.episodes.enabled,
 				hasGraphData: mongoCfg.graph.enabled,
 				maxResults,
-				// C-016: re-poll index readiness when a lane fails at query
-				// time so status reflects the outage — same seam as search().
-				onPathFailure: (path, error) =>
-					this.host.noteSearchLaneFailure(path, error),
 				searchOptions: {
 					// Same default chain as search(), so the diagnostic runs
 					// the pipeline at the thresholds the served path uses.
 					minScore: params.minScore ?? 0.01,
 					sessionKey: params.sessionKey,
 					numCandidates: mongoCfg.numCandidates,
-					capabilities: this.host.capabilities,
+					capabilities,
 					fusionMethod: mongoCfg.fusionMethod,
 					embeddingMode: mongoCfg.embeddingMode,
 					queryEmbeddingModel: mongoCfg.queryEmbeddingModel,

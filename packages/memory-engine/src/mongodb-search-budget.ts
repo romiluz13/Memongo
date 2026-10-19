@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { createSubsystemLogger } from "@memongo/lib"
 import {
+	type IndexHealthStats,
+	type RequestIndexHealth,
+	activeIndexHealth,
+} from "./mongodb-index-health.js"
+import {
 	SearchBudgetDeniedError,
 	type SearchBudgetReason,
 	type SearchStage,
@@ -70,6 +75,13 @@ export type SearchBudgetSnapshot = SearchBudgetLimits & {
 	equivalentSkips: number
 	/** True when consumption hit either limit during the search. */
 	exhausted: boolean
+	/**
+	 * M2 decision 8: the request's index-status metadata reads, reported apart
+	 * from the retrieval work above. Metadata checks never consume an
+	 * aggregation or an embed. Absent when the request ran outside an
+	 * index-health scope.
+	 */
+	indexHealth?: IndexHealthStats
 }
 
 /** #101 decision 18: one attempt's charges, consumed together or not at all. */
@@ -148,6 +160,8 @@ type ActiveSearchBudget = {
 	admitted: boolean
 	/** Decision 18: completed retrievals of this request, by equivalence key. */
 	completed: Map<string, readonly unknown[]>
+	/** M2 decision 8: the request's index-health snapshot, when one is open. */
+	health?: RequestIndexHealth
 }
 
 type ReservationState = {
@@ -180,6 +194,7 @@ function toSnapshot(budget: ActiveSearchBudget): SearchBudgetSnapshot {
 		},
 		equivalentSkips: budget.equivalentSkips,
 		exhausted: budget.exhausted,
+		...(budget.health ? { indexHealth: budget.health.stats() } : {}),
 	}
 }
 
@@ -270,6 +285,7 @@ export function openSearchBudget(
 		exhausted: false,
 		admitted: options.admitted ?? true,
 		completed: new Map(),
+		health: activeIndexHealth(),
 		// RET-16: the request wall starts when the budget opens; nested
 		// re-entries keep the PARENT's deadline.
 		...(limits.maxWallMs != null

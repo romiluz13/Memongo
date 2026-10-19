@@ -8,8 +8,9 @@ import {
 	mergeRankedResultSets,
 	MongoDBMemoryManager,
 	scorePreferenceGroundingSignalBoost,
-	searchV2,
+	searchV2 as searchV2Core,
 } from "./mongodb-manager.js"
+import { withHealthyCapabilities } from "./test-helpers/search-capabilities.js"
 import type { MemorySearchResult } from "./types.js"
 import { SearchLaneError } from "./search-outcomes.js"
 import {
@@ -21,6 +22,7 @@ import {
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
+const searchV2 = withHealthyCapabilities(searchV2Core)
 
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
@@ -634,14 +636,13 @@ describe("searchV2", () => {
 		)
 	})
 
-	it("surfaces a whole-path failure at the actual seam: onPathFailure + laneOutcomes (RET-13)", async () => {
+	it("surfaces a whole-path failure at the actual seam: laneOutcomes (RET-13)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
 			reasoning: "episodic keywords",
 		})
 		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
-		const laneFailures: Array<{ lane: string; error: unknown }> = []
 
 		const result = await searchV2(
 			fakeDb,
@@ -650,7 +651,6 @@ describe("searchV2", () => {
 			"agent-1",
 			{
 				availablePaths: new Set(["episodic"]),
-				onPathFailure: (lane, error) => laneFailures.push({ lane, error }),
 				searchOptions: { allowHybridBackstop: false },
 			},
 		)
@@ -659,12 +659,6 @@ describe("searchV2", () => {
 		expect(result.results).toHaveLength(0)
 		expect(result.metadata.pathsExecuted).toContain("episodic")
 		expect(result.metadata.resultsByPath.episodic).toBeUndefined()
-		expect(laneFailures).toHaveLength(1)
-		expect(laneFailures[0].lane).toBe("episodic")
-		expect(laneFailures[0].error).toBeInstanceOf(SearchLaneError)
-		expect((laneFailures[0].error as Error).cause).toEqual(
-			new Error("episodic broke"),
-		)
 		expect(
 			result.metadata.laneOutcomes?.filter((row) => row.lane === "episodic"),
 		).toEqual([
@@ -743,7 +737,6 @@ describe("searchV2", () => {
 				updatedAt: new Date(),
 			},
 		])
-		const laneFailures: string[] = []
 
 		const result = await searchV2(
 			fakeDb,
@@ -752,7 +745,6 @@ describe("searchV2", () => {
 			"agent-1",
 			{
 				availablePaths: new Set(["kb", "episodic"]),
-				onPathFailure: (lane) => laneFailures.push(lane),
 				searchOptions: { allowHybridBackstop: false },
 			},
 		)
@@ -760,7 +752,6 @@ describe("searchV2", () => {
 		// K4/V4: the KB fusion error stops the lane — no weaker tier exists
 		// to run after it — and is reported once at its stage; the sibling
 		// episodic path keeps its results and the request is partial.
-		expect(laneFailures).toEqual(["kb"])
 		expect(result.metadata.pathsExecuted).toEqual(
 			expect.arrayContaining(["kb", "episodic"]),
 		)

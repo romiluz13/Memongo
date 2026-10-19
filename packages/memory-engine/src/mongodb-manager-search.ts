@@ -9,6 +9,7 @@ import { accessTargetFromSearchResult } from "./mongodb-access-tracker.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
+import { assertLaneIndexesHealthy } from "./mongodb-index-health.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import {
 	openSearchBudget,
@@ -556,6 +557,9 @@ export class MongoDBManagerSearchOps {
 			{ admitted: false },
 		)
 		try {
+			// M2 decision 8: this request's capability view comes from its own
+			// index-health snapshot; a metadata read failure surfaces per lane.
+			const capabilities = await this.host.requestCapabilities()
 			const v2 = await requestLedger.run(() =>
 				searchV2(this.host.db, this.host.prefix, cleaned, this.host.agentId, {
 					admission: readAdmission,
@@ -563,15 +567,11 @@ export class MongoDBManagerSearchOps {
 					hasEpisodes: mongoCfg.episodes.enabled,
 					hasGraphData: mongoCfg.graph.enabled,
 					maxResults,
-					// C-016: re-poll index readiness when a lane fails at query
-					// time so status reflects the outage.
-					onPathFailure: (path, error) =>
-						this.host.noteSearchLaneFailure(path, error),
 					searchOptions: {
 						minScore,
 						sessionKey: opts?.sessionKey,
 						numCandidates: mongoCfg.numCandidates,
-						capabilities: this.host.capabilities,
+						capabilities,
 						fusionMethod: mongoCfg.fusionMethod,
 						embeddingMode: mongoCfg.embeddingMode,
 						queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
@@ -919,6 +919,9 @@ export class MongoDBManagerSearchOps {
 		}
 
 		const searchStart = Date.now()
+		// M2 decision 8: one capability view per request, from the request's
+		// own index-health snapshot; every pass shares it.
+		const capabilities = await this.host.requestCapabilities()
 		const executeRequest = async () =>
 			executeMongoSearchPlan({
 				request: normalized,
@@ -939,15 +942,11 @@ export class MongoDBManagerSearchOps {
 							hasEpisodes: mongoCfg.episodes.enabled,
 							hasGraphData: mongoCfg.graph.enabled,
 							maxResults: resolvedSearchConfig.maxResults,
-							// C-016: re-poll index readiness when a lane fails at query
-							// time so status reflects the outage.
-							onPathFailure: (path, error) =>
-								this.host.noteSearchLaneFailure(path, error),
 							searchOptions: {
 								minScore: normalized.minScore ?? 0.1,
 								sessionKey: normalized.conversationScope?.sessionKey,
 								numCandidates: resolvedSearchConfig.numCandidates,
-								capabilities: this.host.capabilities,
+								capabilities,
 								fusionMethod: resolvedSearchConfig.fusionMethod,
 								embeddingMode: mongoCfg.embeddingMode,
 								queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
@@ -1276,7 +1275,12 @@ export class MongoDBManagerSearchOps {
 					reason: "budget-embeds",
 				})
 			}
-			const results = await requestLedger.run(runKBLane)
+			// M2 decision 8: the KB lane never runs against an index observed
+			// unhealthy at admission; the typed failure is this call's row.
+			const results = await requestLedger.run(async () => {
+				await assertLaneIndexesHealthy("kb")
+				return runKBLane()
+			})
 			lanes.push({
 				lane: "kb",
 				stage: "lane",

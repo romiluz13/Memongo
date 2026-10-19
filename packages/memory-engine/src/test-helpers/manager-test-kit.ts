@@ -107,14 +107,15 @@ export function buildMockManager(overrides?: Record<string, unknown>) {
 		agentScopeRef: "agent:agent-1",
 		workspaceScopeRef: "workspace:agent-1",
 		client: undefined,
-		capabilities: {
-			vectorSearch: false,
-			textSearch: false,
+		deploymentFacts: {
 			rankFusion: false,
 			storedSource: false,
 			vectorIndexMethod: false,
 			scoreFusion: false,
 		},
+		// An empty manifest gates nothing; tests of the index-health seams
+		// supply a real manifest and a fake Search db.
+		requiredManifest: [],
 		config: kitMongoConfig(),
 		extraMemoryPaths: [],
 		writeQueue: Promise.resolve(),

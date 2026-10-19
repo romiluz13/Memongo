@@ -93,6 +93,40 @@ KB search (`searchKB`, the `kb` lane of `searchV2`, `/v1/search-kb`) now runs on
 - **Explain.** Only the `fusionExplain` artifact is produced for KB search; the vector, keyword and `$text` explain artifacts are gone with their tiers.
 - **`/v1/search-kb` validates `fusionMethod`.** An unknown value used to be silently ignored. `js-merge`, any other string, `null` and non-string values now return `400 VALIDATION_ERROR` ("fusionMethod must be scoreFusion or rankFusion") and the engine is not called. Omitting the field keeps the configured fusion.
 
+## T2
+
+Index health is read per request (#111, decision 8). Every public search entry opens a request-local snapshot of the manifest indexes its planned operations use, reads each collection's `$listSearchIndexes` at most once, and shares the result with its nested passes. The claim is "never runs against an index observed unhealthy at admission". It does not cover a transition after the check or read-after-write freshness; the M1 write-token barrier stays the visibility witness.
+
+### Removed
+
+- **The boot snapshot is no longer live capability.** `status().custom.capabilities` and `status().custom.searchModes` are gone, and the manager has no `capabilities` field. `status().custom.deploymentFacts` now reports only deployment facts (`scoreFusion`, `rankFusion`, `storedSource`, `vectorIndexMethod`, `capabilityGates`); the fusion-stage and storedSource facts still come from boot, because they describe the server, not an index.
+- **`noteSearchLaneFailure` and its re-poll are removed**, with `searchLaneHealth`, `lastSearchLaneFailure` and the re-poll guard. A failed lane no longer triggers a throttled background probe whose result a later status call might show. Each request reads its own health, and a later request recovers on a healthy read.
+- **`getDetailedStatus().searchLanes.lastFailure` is removed.**
+- **`probeSearchLaneReadiness` is removed** from `mongodb-schema-capabilities.ts`. Nothing else called it.
+- **`searchV2` no longer assumes every capability is present when a caller omits `capabilities`.** The omitted view now comes from the request's snapshot. Outside any request scope it throws a typed `SearchLaneError` (stage `request`, reason `internal-error`) instead of assuming healthy indexes. Direct callers pass the view they want or run inside `runWithIndexHealth`.
+- **The `searchV2` `onPathFailure` hook is removed.** A lane failure is its outcome row. The manager no longer passes `onLaneFailure` to conversation recall, and the recall core's own `onLaneFailure` parameter now has no caller in the manager.
+- **`refreshNativeBitemporalVectorPrefilter` no longer checks the boot vector capability.** It asks the events vector index itself.
+
+### Changed
+
+- **Two new typed reasons and one stage.** A lane that planned to use an index observed non-READY, not queryable, drifted from its manifest definition, or with a failed metadata read fails before it runs, with stage `index-health` and reason `index-stale` (STALE, a drifted definition, or a definition still being applied) or `index-unavailable` (absent, BUILDING or otherwise not queryable, FAILED, unknown metadata, or a metadata read that failed). A failed read is `index-unavailable` and is remembered for the rest of that request, so no later lane reads it as healthy.
+- **Lane gate.** Each lane checks only the indexes it uses (for example `structured` checks `structured_mem` and `chunks`; `kb` checks `kb_chunks`). A failed gate is that lane's failed row, so sibling lanes stand and the request is `partial`; a request whose only lane failed is `failed` (R3 keeps its meaning). Direct `searchKB` fails with a typed `SearchLaneError` and the failed `kb` row; `raw-window` checks `events` and `chunks`. A recall with a query fails typed (lane `recall`, stage `index-health`) before the recall core runs, over the `events` indexes; a recall without a query is a plain find, reads no Search index and is not gated.
+- **A stale text or vector index no longer degrades a hybrid lane.** The lane fails typed. Previously its capability flag turned false and the search fell to a weaker tier. (T3 removes the ladder itself.)
+- **HTTP.** Both reasons are retryable unavailability: `503 SEARCH_LANES_UNAVAILABLE` when every required lane failed with them, with `outcomes` in the body. `/v1/recall-conversation` now maps typed search failures through the same table; previously every recall failure was a generic `500 RECALL_CONVERSATION_FAILED`. An untyped failure keeps that envelope. OpenAPI enumerates both reasons and the `index-health` stage, and documents the 500/503 bodies on recall.
+- **SDK and silent mode.** `MemongoSearchLaneOutcome` and its reason union carry both reasons. A silent client keeps `code` and `outcomes` on the degradation marker, for `recallConversation` as well as the search calls.
+- **MCP.** A tool call that fails with an API error carrying `outcomes` returns a tool error with `error`, `status`, `code` and the rows, so an agent reads `status: 503` as retryable for both new reasons.
+- **Metadata checks are reported apart from retrieval work.** The request ledger snapshot (`metadata.budget`) gains `indexHealth: { metadataReads, failedMetadataReads, indexesChecked }`. Metadata reads spend none of `maxAggregations`, `maxEmbeds` or a lane reservation, so a budget that fit before still fits.
+- **`getDetailedStatus().searchLanes` is read live for the call.** The shape is `{ vectorSearch, textSearch, probedAt, indexes }`. `probedAt` is always set (it was absent until the first probe), and `indexes` lists every required index with `healthy` and, when not, `reason` and `cause`. A failed metadata read is reported per index as `index-unavailable` / `metadata-read-failed`; it never reads as a healthy lane.
+- **`probeVectorAvailability` and `probeEmbeddingAvailability` answer from the same snapshot reader.** A serving index now means READY, queryable and serving its manifest definition, which is stricter than the old queryable check. A failed metadata read throws the typed `index-unavailable` instead of a transport error.
+- **`memongoBridgeCapabilities` is live.** It returns the manager's per-call view (`requestCapabilities()`), where it used to return the value stored at boot.
+- **Benchmark scenario identity.** `vectorSearch` and `textSearch` in the run identity come from the boot contract's manifest, and the convergence gates read a live request view.
+
+### Not covered, and unchanged
+
+- Only the search entries open a snapshot: `search`, `searchDetailed`, `searchKB`, `relevanceExplain`, `buildContextBundle` and `recallConversation`. The novelty scan, consolidation, memory jobs, the active slate, discovery projections, context expansion and the write paths do not check index health here: their Search reads still fail typed when an index is absent, but a STALE index serves out-of-date matches. The seam they can adopt is `runIndexHealthRequest` plus `assertCollectionIndexesHealthy`; discovery's single read is `searchDiscoveryCandidates`.
+- A post-commit barrier failure still reports the committed state: `awaitSearchBarrier` returns `committed: true`, `status: "not-yet-searchable"`, `reason: "probe-failed"` when its probe cannot run. The barrier's own pre-write target check and its probe are unchanged, and writes open no health scope.
+- A lane that is optional by mode (session or memory-evidence chunks) can still record `capability-absent` when the chunk indexes are unhealthy; the always-planned `hybrid:chunks` lane carries the typed `index-health` row in the same request.
+
 ## T10
 
 M2 ticket #119: bridge and API silent empties and swallowed errors. Each entry names what used to happen, what happens now and the inventory row.

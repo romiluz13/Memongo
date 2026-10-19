@@ -65,7 +65,7 @@ export const searchLaneOutcomeSchema = {
 		stage: {
 			type: "string",
 			description:
-				"Stage inside the lane (e.g. lane, vector, atlas-search, classic-text, score-fusion, reservation, explain). Explain rows are diagnostics and never change the status.",
+				"Stage inside the lane (e.g. lane, index-health, vector, atlas-search, classic-text, score-fusion, reservation, explain). An index-health row is an admission-time metadata check, reported separately from retrieval work; its reason is index-stale or index-unavailable. Explain rows are diagnostics and never change the status.",
 		},
 		outcome: {
 			type: "string",
@@ -85,6 +85,8 @@ export const searchLaneOutcomeSchema = {
 				"lane-unavailable",
 				"index-missing",
 				"index-not-ready",
+				"index-stale",
+				"index-unavailable",
 				"query-timeout",
 				"dependency-unavailable",
 				"query-error",
@@ -129,7 +131,7 @@ export const searchFailureResponses = {
 	},
 	"503": {
 		description:
-			"SEARCH_LANES_UNAVAILABLE: every required lane failed with a retryable reason (lane-unavailable, index-missing, index-not-ready, query-timeout, dependency-unavailable); it wins over budget. SEARCH_BUDGET_EXHAUSTED: every failure is a search budget denial. The body adds `outcomes` (status failed, every row). SERVICE_UNAVAILABLE: the database is unreachable.",
+			"SEARCH_LANES_UNAVAILABLE: every required lane failed with a retryable reason (lane-unavailable, index-missing, index-not-ready, index-stale, index-unavailable, query-timeout, dependency-unavailable); it wins over budget. SEARCH_BUDGET_EXHAUSTED: every failure is a search budget denial. The body adds `outcomes` (status failed, every row). SERVICE_UNAVAILABLE: the database is unreachable.",
 	},
 }
 

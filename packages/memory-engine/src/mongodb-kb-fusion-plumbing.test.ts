@@ -31,14 +31,14 @@ function makeManagerStub(
 				embeddingMode: "automated",
 			},
 		},
-		capabilities: {
-			vectorSearch: true,
-			textSearch: true,
+		deploymentFacts: {
 			scoreFusion: true,
 			rankFusion: true,
 			storedSource: false,
 			vectorIndexMethod: false,
 		},
+		requiredManifest: [],
+		runIndexHealthRequest: MongoDBMemoryManager.prototype.runIndexHealthRequest,
 		agentScopeRef: "agent:agent-1",
 	}
 }

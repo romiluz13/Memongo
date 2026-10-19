@@ -1,5 +1,6 @@
 import type { Db } from "mongodb"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 vi.mock("./mongodb-telemetry.js", () => ({
 	emitTelemetry: vi.fn().mockResolvedValue(undefined),
 }))
@@ -82,6 +83,7 @@ it.each([
 		searchOptions: {
 			referenceScope: scope as MemoryReferenceScope,
 			allowHybridBackstop: false,
+			capabilities: HEALTHY_TEST_CAPABILITIES,
 		},
 	})
 	expect(searchKB).toHaveBeenCalledOnce()
@@ -102,6 +104,7 @@ it.each([
 		searchOptions: {
 			structuredScope: scope as MemoryStructuredScope,
 			allowHybridBackstop: false,
+			capabilities: HEALTHY_TEST_CAPABILITIES,
 		},
 	})
 	expect(searchStructuredMemory).toHaveBeenCalledOnce()
