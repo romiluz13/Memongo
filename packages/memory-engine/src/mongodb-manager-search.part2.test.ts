@@ -551,9 +551,6 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 		} as never)
 		mocked(proceduresCollection).mockReturnValue({
 			aggregate: proceduresAggregate,
-			find: vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([]),
-			}),
 		} as never)
 
 		const result = await searchV2(
@@ -793,7 +790,7 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 		// The exact procedural backstop runs on this query; a healthy empty
 		// keeps the v2 answer `complete`, which M4 requires for the re-run.
 		mocked(proceduresCollection).mockReturnValue({
-			find: vi.fn().mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([]),
 			}),
 		} as never)
@@ -855,7 +852,7 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 				.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
 		} as never)
 		mocked(proceduresCollection).mockReturnValue({
-			find: vi.fn().mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
 				toArray: vi.fn().mockRejectedValue(new Error("procedures down")),
 			}),
 		} as never)
@@ -880,7 +877,7 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 		})
 		// Later suites in this file rely on a healthy procedures mock.
 		mocked(proceduresCollection).mockReturnValue({
-			find: vi.fn().mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([]),
 			}),
 		} as never)
