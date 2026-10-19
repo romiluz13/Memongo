@@ -46,14 +46,14 @@ const searchDegradationSchema = {
  * #101 / decision 16: the value-free outcome vocabulary of a search call
  * (enum values only; no query, body or provider text).
  */
-const searchOutcomeStatusSchema = {
+export const searchOutcomeStatusSchema = {
 	type: "string",
 	enum: ["complete", "partial", "failed"],
 	description:
 		"complete: no lane failed or was budget-denied. partial: some lanes failed or were denied and the rest answered (200, even with zero results). failed: no required lane answered (served as a non-2xx).",
 }
 
-const searchLaneOutcomeSchema = {
+export const searchLaneOutcomeSchema = {
 	type: "object",
 	required: ["lane", "stage", "outcome"],
 	properties: {
@@ -118,7 +118,7 @@ const searchOutcomesSchema = {
  * #101 / resolution R3: the non-2xx search failures. The body is the ApiError
  * envelope plus `outcomes` (status "failed" and every row).
  */
-const searchFailureResponses = {
+export const searchFailureResponses = {
 	"500": {
 		description:
 			"SEARCH_LANES_FAILED: every required lane failed and at least one failure is a defect (query-error or internal-error); this wins over the 503 codes. The body adds `outcomes` (status failed, every row). Other unexpected failures keep their route's internal error code.",

@@ -48,6 +48,7 @@ import type {
 	MemongoSearchLaneOutcome,
 	MemongoSearchOutcomes,
 	MemongoSearchResponse,
+	MemongoSectionFailure,
 	SearchConfig,
 	MemongoStatsResponse,
 	MemongoStatusResponse,
@@ -547,6 +548,8 @@ export type MemongoActiveSlateResponse = {
 		maxItems: number
 		truncated: boolean
 		partial: boolean
+		/** M2 T8: typed rows for the lanes that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
 		countsByKind: Record<string, number>
 		sourceCounts: Record<string, number>
 	}
@@ -599,6 +602,8 @@ export type MemongoDiscoveryProjectionResponse = {
 	}>
 	metadata: {
 		partial: boolean
+		/** M2 T8: typed rows for the sections that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
 		evidenceCount: number
 		sourceCounts: Record<string, number>
 		timeRange?: {
@@ -660,6 +665,13 @@ export type MemongoContextBundleResponse = {
 		tokenBudget: number
 		estimatedTokensUsed: number
 		partial: boolean
+		/** M2 T8: typed rows for the sections that failed while the rest answered. */
+		failures?: MemongoSectionFailure[]
+		/** X-09: the query-evidence search lane outcomes. */
+		laneOutcomes?: MemongoSearchLaneOutcome[]
+		outcomeStatus?: MemongoSearchOutcomes["status"]
+		/** Set when admission control denied the query-evidence search. */
+		throttled?: { retryAfterMs: number }
 		truncated: boolean
 		pathsExecuted: string[]
 		trustSummary?: {

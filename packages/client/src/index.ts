@@ -77,6 +77,7 @@ export type {
 	MemongoSearchOutcomeReason,
 	MemongoSearchOutcomes,
 	MemongoSearchOutcomeStatus,
+	MemongoSectionFailure,
 	MemongoSearchKBResponse,
 	MemongoSearchResponse,
 	SearchConfig,
