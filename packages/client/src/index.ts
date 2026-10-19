@@ -10,6 +10,7 @@ export type {
 	MemongoMemoryBlockLabel,
 	MemongoMemoryBlocksResponse,
 	MemongoSearchDetailedResponse,
+	MemongoStateFailure,
 	MemongoStateResponse,
 } from "./client.js"
 export type {

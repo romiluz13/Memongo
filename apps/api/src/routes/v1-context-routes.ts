@@ -23,6 +23,7 @@ import {
 	readScopeRef,
 	readScopeInputError,
 	readDiscoveryProjectionKind,
+	isErasureGateConflictError,
 	type V1RouterEnv,
 } from "./v1-helpers.js"
 
@@ -191,6 +192,14 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(out)
 		} catch (err) {
+			if (isErasureGateConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"ERASURE_IN_PROGRESS",
+					"read refused: an erasure is in progress for this agent",
+				)
+			}
 			return internalError(c, err, "READ_FILE_FAILED")
 		}
 	})

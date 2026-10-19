@@ -191,79 +191,19 @@ function embeddableChunkCollections(db: Db, prefix: string) {
 type EmbeddingCoverageMeasurement = EmbeddingStatusCoverage
 
 /**
- * Upper bound on the coverage probe below. `limit` is server-capped at 10k,
- * so a collection larger than this cannot be measured in one query — and we
- * report unknown rather than a partial count dressed up as a total.
- */
-const MAX_COVERAGE_PROBE_DOCS = 10_000
-
-/** Any non-empty text works; autoEmbed embeds it and ENN returns every doc. */
-const COVERAGE_PROBE_QUERY = "coverage probe"
-
-/**
- * Counts how many documents the vector index will actually return.
- *
- * This exists because Atlas does not report `numDocs` on $listSearchIndexes —
- * only the local atlas-local container does. Keying coverage on that field
- * meant coverage was permanently `unknown` against a real cluster, which is
- * the deployment that matters.
- *
- * Counting what the index will serve is also the better question: coverage
- * should mean "retrievable", not "claimed by a metadata field".
- *
- * WS-16 (C-032): the probe runs as EXACT nearest neighbor with no
- * `numCandidates`. An ANN probe could fabricate coverage that approximate
- * search would not reproduce at search time; exact search measures what is
- * truly retrievable, which is the question coverage exists to answer.
- *
- * Returns null when the probe cannot answer, so the caller can report unknown
- * rather than guess.
- */
-async function countRetrievableViaVectorIndex(params: {
-	collection: Collection
-	indexName: string
-	path: string
-	limit: number
-	/** W13: tenant pre-filter (`$vectorSearch.filter`) — scopes the probe's
-	 *  count to the tenant's documents. Optional; omitted probes count the
-	 *  whole index. */
-	filter?: Document
-}): Promise<number | null> {
-	try {
-		const rows: Document[] = await params.collection
-			.aggregate([
-				{
-					$vectorSearch: {
-						index: params.indexName,
-						path: params.path,
-						query: COVERAGE_PROBE_QUERY,
-						exact: true,
-						limit: params.limit,
-						...(params.filter ? { filter: params.filter } : {}),
-					},
-				},
-				{ $count: "n" },
-			])
-			.toArray()
-		const n = rows[0]?.n
-		return typeof n === "number" && Number.isFinite(n) && n >= 0
-			? Math.floor(n)
-			: null
-	} catch {
-		return null
-	}
-}
-
-/**
  * Measures embedding coverage for one collection.
  *
  * With `tenantFilter` (W13) every count is scoped to the tenant: the
- * stored-vector aggregation is prefixed with `$match`, the total counts only
- * tenant documents, and the search-index probe carries the filter into
- * `$vectorSearch`. `numDocs` from `$listSearchIndexes` is INDEX-WIDE — it
- * counts every tenant's documents — so when a tenant filter is present it
- * cannot answer a per-tenant question and the tenant-scoped probe is used
- * instead.
+ * stored-vector aggregation is prefixed with `$match` and the total counts
+ * only tenant documents. `numDocs` from `$listSearchIndexes` is INDEX-WIDE —
+ * it counts every tenant's documents — so when a tenant filter is present it
+ * cannot answer a per-tenant question, and Atlas reports no `numDocs` at all.
+ * Both cases report `unknown` for the automated (search-index) basis.
+ *
+ * M2 T10 (G3-75): the former `$vectorSearch` probe is removed. Its text query
+ * was embedded server-side on every call, so each `/stats` request spent
+ * provider embeddings four times outside the cost ledger. Unknown is the
+ * honest answer when the cheap metadata cannot give one.
  */
 export async function measureEmbeddingCoverage(params: {
 	collection: Collection
@@ -350,41 +290,17 @@ export async function measureEmbeddingCoverage(params: {
 			return unknownResult
 		}
 
-		let indexedCount: number | null
-		if (params.tenantFilter) {
-			// W13: numDocs is index-wide (every tenant's documents), so it
-			// cannot answer a per-tenant question. Go straight to the
-			// tenant-scoped probe.
-			indexedCount = null
-		} else {
-			indexedCount =
-				typeof indexed === "number" && Number.isFinite(indexed) && indexed >= 0
-					? Math.floor(indexed)
-					: null
-		}
-
+		// numDocs is index-wide, so it only answers a question that is not
+		// tenant-scoped.
+		const indexedCount =
+			!params.tenantFilter &&
+			typeof indexed === "number" &&
+			Number.isFinite(indexed) &&
+			indexed >= 0
+				? Math.floor(indexed)
+				: null
 		if (indexedCount === null) {
-			// Atlas serves a READY, queryable index but reports no numDocs. Ask the
-			// index directly how much it will return instead of giving up.
-			if (total > MAX_COVERAGE_PROBE_DOCS) {
-				return unknownResult
-			}
-			const autoEmbedPath = (fields as Document[]).find(
-				(field) => field?.type === "autoEmbed",
-			)?.path
-			if (typeof autoEmbedPath !== "string" || !autoEmbedPath.trim()) {
-				return unknownResult
-			}
-			indexedCount = await countRetrievableViaVectorIndex({
-				collection: params.collection,
-				indexName: params.indexName,
-				path: autoEmbedPath,
-				limit: Math.max(1, Math.min(total, MAX_COVERAGE_PROBE_DOCS)),
-				filter: params.tenantFilter,
-			})
-			if (indexedCount === null) {
-				return unknownResult
-			}
+			return unknownResult
 		}
 
 		const success = Math.min(total, indexedCount)

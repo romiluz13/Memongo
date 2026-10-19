@@ -88,7 +88,7 @@ export type SearchConfig = {
 	 */
 	allowConstraintRelaxation?: boolean
 	numCandidates?: number
-	fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+	fusionMethod?: "scoreFusion" | "rankFusion"
 	hybridMode?: "hybrid" | "vector-only"
 	allowHybridBackstop?: boolean
 	lexicalPrefilter?: "disabled" | "experimental"

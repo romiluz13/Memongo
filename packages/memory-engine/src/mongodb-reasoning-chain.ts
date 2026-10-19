@@ -50,6 +50,20 @@ const COLLECTION_ID_FIELDS: Record<ChainTraceCollectionValue, string> = {
 
 const DEFAULT_MAX_DEPTH = 3
 
+/**
+ * M2 T10 (G2-51): a collection outside the traversal allowlist is a caller
+ * error, not an empty chain. Direct engine callers get this typed error; the
+ * API route rejects the same names with a 400 before the engine is reached.
+ */
+export class ReasoningChainCollectionError extends Error {
+	readonly code = "CHAIN_TRACE_COLLECTION_INVALID"
+
+	constructor(readonly collection: string) {
+		super(`collection is not traversable: ${collection}`)
+		this.name = "ReasoningChainCollectionError"
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -88,10 +102,9 @@ export async function traceReasoningChain(params: {
 
 	// Validate collection name against the canonical traversal allowlist.
 	// The API route layer rejects names outside the allowlist with 400
-	// (WS-08 / C-015); this guard keeps the engine defensive for direct
-	// callers, returning an empty chain rather than fabricating one.
+	// (WS-08 / C-015); direct callers get the same rejection as a typed error.
 	if (!isChainTraceCollectionValue(collection)) {
-		return emptyResult
+		throw new ReasoningChainCollectionError(collection)
 	}
 	const idField = COLLECTION_ID_FIELDS[collection]
 

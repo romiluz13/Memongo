@@ -19,6 +19,8 @@ import type {
 	MemoryStableHandle,
 	MongoDBMemoryManager,
 	RelevanceExplainResult,
+	SearchBudgetReason,
+	SearchFailureReason,
 	SearchOutcomeSummary,
 	V2Status,
 } from "@memongo/memory-engine"
@@ -55,6 +57,9 @@ import type {
 } from "@memongo/memory-engine/internal"
 import {
 	type BootPreflightReport,
+	SearchBudgetDeniedError,
+	SearchLaneError,
+	classifySearchError,
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
 	isMemongoBootError,
@@ -117,27 +122,6 @@ export async function memongoBridgeGetManager(
 	return manager as MongoDBMemoryManager
 }
 
-export async function memongoBridgeSearch(params: {
-	query: string
-	agentId?: string
-	maxResults?: number
-	minScore?: number
-	sessionKey?: string
-	scope?: MemoryScope
-	scopeRef?: string
-	kbRestricted?: boolean
-}) {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.search(params.query, {
-		maxResults: params.maxResults,
-		minScore: params.minScore,
-		sessionKey: params.sessionKey,
-		scope: params.scope,
-		scopeRef: params.scopeRef,
-		kbRestricted: params.kbRestricted,
-	})
-}
-
 /**
  * #101 / decision 16: the per-call search envelope. `outcomes` is the
  * engine's value-free outcome summary for this call (complete, partial or
@@ -148,6 +132,51 @@ export type MemongoBridgeSearchEnvelope = {
 	results: MemorySearchResult[]
 	degradation?: MemorySearchDegradation
 	outcomes?: SearchOutcomeSummary
+}
+
+/**
+ * M2 T10 (X-01, X-02): a call whose outcome summary is `failed` has no
+ * answer, so the library accessors throw the engine's typed lane error
+ * instead of returning an empty envelope. The full summary rides on the
+ * error as `outcomes`. The HTTP routes use the WithDegradation accessors and
+ * map the same summary to a non-2xx themselves.
+ */
+function throwIfSearchFailed(envelope: MemongoBridgeSearchEnvelope): void {
+	const { outcomes } = envelope
+	if (outcomes?.status !== "failed") {
+		return
+	}
+	const failedRow = outcomes.lanes.find(
+		(row) => row.stage !== "explain" && row.outcome === "failed",
+	)
+	if (failedRow) {
+		throw Object.assign(
+			new SearchLaneError({
+				lane: failedRow.lane,
+				stage: failedRow.stage,
+				reason: (failedRow.reason as SearchFailureReason) ?? "internal-error",
+			}),
+			{ outcomes },
+		)
+	}
+	const deniedRow = outcomes.lanes.find(
+		(row) => row.stage !== "explain" && row.outcome === "budget-denied",
+	)
+	if (deniedRow) {
+		throw Object.assign(
+			new SearchBudgetDeniedError({
+				lane: deniedRow.lane,
+				stage: deniedRow.stage,
+				reason:
+					(deniedRow.reason as SearchBudgetReason) ?? "budget-reservation",
+			}),
+			{ outcomes },
+		)
+	}
+	throw Object.assign(
+		new SearchLaneError({ stage: "request", reason: "internal-error" }),
+		{ outcomes },
+	)
 }
 
 function searchEnvelope(
@@ -199,29 +228,13 @@ export async function memongoBridgeSearchWithDegradation(params: {
 	return searchEnvelope(results, degradation, outcomes)
 }
 
-export async function memongoBridgeSearchKB(params: {
-	query: string
-	agentId?: string
-	scope?: MemoryScope
-	sessionKey?: string
-	scopeRef?: string
-	maxResults?: number
-	minScore?: number
-	filter?: { tags?: string[]; category?: string; source?: string }
-	fusionMethod?: MemoryMongoDBFusionMethod
-}) {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.searchKB(params.query, {
-		maxResults: params.maxResults,
-		minScore: params.minScore,
-		// Explicit references win; otherwise searchKB derives an explicit scope.
-		// Omitted scope retains the legacy agent partition.
-		scope: params.scope,
-		sessionKey: params.sessionKey,
-		scopeRef: params.scopeRef,
-		filter: params.filter,
-		fusionMethod: params.fusionMethod,
-	})
+/** Library search: the WithDegradation envelope, thrown when the call failed. */
+export async function memongoBridgeSearch(
+	params: Parameters<typeof memongoBridgeSearchWithDegradation>[0],
+): Promise<MemongoBridgeSearchEnvelope> {
+	const envelope = await memongoBridgeSearchWithDegradation(params)
+	throwIfSearchFailed(envelope)
+	return envelope
 }
 
 /**
@@ -262,6 +275,15 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 		},
 	})
 	return searchEnvelope(results, degradation, outcomes)
+}
+
+/** Library KB search: the WithDegradation envelope, thrown when the call failed. */
+export async function memongoBridgeSearchKB(
+	params: Parameters<typeof memongoBridgeSearchKBWithDegradation>[0],
+): Promise<MemongoBridgeSearchEnvelope> {
+	const envelope = await memongoBridgeSearchKBWithDegradation(params)
+	throwIfSearchFailed(envelope)
+	return envelope
 }
 
 export async function memongoBridgeReadFile(params: {
@@ -1156,12 +1178,39 @@ export async function memongoBridgeSelfEdit(params: {
 	})
 }
 
+export type MemongoStateSection = keyof MemoryStateFamily
+
+/**
+ * M2 T10 (X-03): one typed row per rejected state section. The reason is the
+ * engine's value-free failure enum, or `erasure-in-progress` when the tenant
+ * is being erased; the raw error never rides on the row.
+ */
+export type MemongoStateFailure = {
+	section: MemongoStateSection
+	reason: SearchFailureReason | "erasure-in-progress"
+}
+
+/**
+ * A section that could not be read is absent and named in `failures`; it is
+ * never replaced by an empty object that reads as a healthy empty section.
+ */
+export type MemongoBridgeState = Partial<MemoryStateFamily> & {
+	partial?: true
+	failures?: MemongoStateFailure[]
+}
+
+function stateFailureReason(error: unknown): MemongoStateFailure["reason"] {
+	return error instanceof Error && error.name === "ErasureGateConflictError"
+		? "erasure-in-progress"
+		: classifySearchError(error)
+}
+
 export async function memongoBridgeGetState(params: {
 	agentId?: string
 	scope?: MemoryScope
 	scopeRef?: string
 	kbRestricted?: boolean
-}): Promise<MemoryStateFamily & { partial?: boolean }> {
+}): Promise<MemongoBridgeState> {
 	const results = await Promise.allSettled([
 		memongoBridgeProfile({
 			agentId: params.agentId,
@@ -1189,20 +1238,34 @@ export async function memongoBridgeGetState(params: {
 			"all unified state reads failed",
 		)
 	}
-	const partial = results.some((r) => r.status === "rejected")
-	const profile =
-		results[0].status === "fulfilled"
-			? results[0].value
-			: ({} as MemoryStateFamily["profile"])
-	const slate = results[1].status === "fulfilled" ? results[1].value : null
-	const bundle =
-		results[2].status === "fulfilled"
-			? results[2].value
-			: ({} as MemoryStateFamily["bundle"])
-	const blocks = slate
-		? materializeBlocks(slate)
-		: { blocks: [], totalTokenBudget: 0, totalActualTokens: 0 }
-	return { profile, blocks, bundle, ...(partial ? { partial: true } : {}) }
+	const [profile, slate, bundle] = results
+	const failures: MemongoStateFailure[] = []
+	const state: MemongoBridgeState = {}
+	if (profile.status === "fulfilled") {
+		state.profile = profile.value
+	} else {
+		failures.push({
+			section: "profile",
+			reason: stateFailureReason(profile.reason),
+		})
+	}
+	if (slate.status === "fulfilled") {
+		state.blocks = materializeBlocks(slate.value)
+	} else {
+		failures.push({
+			section: "blocks",
+			reason: stateFailureReason(slate.reason),
+		})
+	}
+	if (bundle.status === "fulfilled") {
+		state.bundle = bundle.value
+	} else {
+		failures.push({
+			section: "bundle",
+			reason: stateFailureReason(bundle.reason),
+		})
+	}
+	return failures.length > 0 ? { ...state, partial: true, failures } : state
 }
 
 export async function memongoBridgeListRecallTraces(params: {

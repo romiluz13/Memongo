@@ -373,10 +373,12 @@ export const contextPaths = {
 								properties: {
 									profile: {
 										type: "object",
-										description: "Profile synthesis payload from /v1/profile",
+										description:
+											"Profile synthesis payload from /v1/profile. Absent when its read failed.",
 									},
 									blocks: {
 										type: "object",
+										description: "Absent when the active slate read failed.",
 										properties: {
 											blocks: {
 												type: "array",
@@ -404,7 +406,38 @@ export const contextPaths = {
 										description:
 											"Context bundle payload from /v1/context-bundle",
 									},
-									partial: { type: "boolean" },
+									partial: {
+										type: "boolean",
+										description:
+											"True when at least one section could not be read. The unreadable sections are absent and named in failures.",
+									},
+									failures: {
+										type: "array",
+										description:
+											"One row per unreadable section (profile, blocks or bundle) with a typed reason. Present only with partial.",
+										items: {
+											type: "object",
+											properties: {
+												section: {
+													type: "string",
+													enum: ["profile", "blocks", "bundle"],
+												},
+												reason: {
+													type: "string",
+													enum: [
+														"lane-unavailable",
+														"index-missing",
+														"index-not-ready",
+														"query-timeout",
+														"dependency-unavailable",
+														"query-error",
+														"internal-error",
+														"erasure-in-progress",
+													],
+												},
+											},
+										},
+									},
 								},
 							},
 						},
@@ -436,7 +469,13 @@ export const contextPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "File read result" } },
+			responses: {
+				"200": { description: "File read result" },
+				"409": {
+					description:
+						"ERASURE_IN_PROGRESS: an erasure is in progress for the agent, so the read is refused rather than answered with an empty miss. Retry after the erasure finishes.",
+				},
+			},
 		},
 	},
 } as const

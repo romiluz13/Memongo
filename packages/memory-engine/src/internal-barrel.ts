@@ -386,6 +386,7 @@ export {
 	withTieredSummaries,
 } from "./mongodb-tiered-summary.js"
 export {
+	ReasoningChainCollectionError,
 	traceReasoningChain,
 	type ReasoningChain,
 	type ReasoningChainNode,
