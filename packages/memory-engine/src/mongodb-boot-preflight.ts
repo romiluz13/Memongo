@@ -8,14 +8,18 @@ import {
 	resolveMemoryBackendConfig,
 } from "./backend-config.js"
 import {
-	observeManifest,
+	BOOT_READINESS_DEADLINE_MS,
+	observeManifestPerCollection,
 	verifySearchPrivileges,
 	verifyServerVersion,
 } from "./mongodb-boot-contract.js"
+import { createBootBudget } from "./mongodb-boot-budget.js"
 import {
 	type MemongoBootFailureDetail,
 	describeDriverError,
 	isMemongoBootError,
+	safeBootText,
+	sanitizeBootDetail,
 } from "./mongodb-boot-errors.js"
 import { mongodbDeploymentIdentity } from "./mongodb-capability-registry.js"
 import { assessRequiredIndex, unmetDetail } from "./mongodb-index-assessment.js"
@@ -23,7 +27,6 @@ import {
 	type RequiredIndexManifestOptions,
 	buildRequiredIndexManifest,
 } from "./mongodb-required-index-manifest.js"
-import type { SearchIndexDescription } from "./mongodb-schema-search-readiness.js"
 
 export type BootPreflightUnmet = MemongoBootFailureDetail & {
 	message: string
@@ -38,88 +41,137 @@ export type BootPreflightReport = {
 	unmet: BootPreflightUnmet[]
 }
 
+function unmetEntry(
+	detail: MemongoBootFailureDetail,
+	message: string,
+	repairable: boolean,
+): BootPreflightUnmet {
+	return {
+		...sanitizeBootDetail(detail),
+		message: safeBootText(message),
+		repairable,
+	}
+}
+
 function toUnmet(err: unknown): BootPreflightUnmet[] {
 	if (!isMemongoBootError(err)) {
 		return [
-			{
-				code: "index-metadata-unknown",
-				requirement: "a completed preflight check",
-				message: describeDriverError(err),
-				repairable: false,
-			},
+			unmetEntry(
+				{
+					code: "index-metadata-unknown",
+					requirement: "a completed preflight check",
+				},
+				describeDriverError(err),
+				false,
+			),
 		]
 	}
-	return err.failures.map((detail) => ({
-		...detail,
-		message: err.message,
-		repairable: false,
-	}))
+	return err.failures.map((detail) => unmetEntry(detail, err.message, false))
+}
+
+export type BootPreflightOptions = RequiredIndexManifestOptions & {
+	requiredCollections?: string[]
+	/** The one total deadline for every check; defaults to the boot deadline. */
+	deadlineMs?: number
+	now?: () => number
 }
 
 /**
  * One read-only pass over every boot requirement. Reports each unmet one and
- * never writes: no collection, index or document is created or changed.
+ * never writes: no collection, index or document is created or changed. Each
+ * check runs independently inside one total deadline: a failed check, or a
+ * collection whose Search indexes cannot be listed, does not hide the unmet
+ * requirements of the others. Once the deadline expires no further check
+ * starts and the report says so.
  */
 export async function runBootPreflight(
 	db: Db,
-	options: RequiredIndexManifestOptions & { requiredCollections?: string[] },
+	options: BootPreflightOptions,
 ): Promise<BootPreflightReport> {
+	const budget = createBootBudget({
+		deadlineMs: options.deadlineMs ?? BOOT_READINESS_DEADLINE_MS,
+		now: options.now,
+	})
 	const unmet: BootPreflightUnmet[] = []
-	let serverVersion: number[] | undefined
-	try {
-		serverVersion = await verifyServerVersion(db)
-	} catch (err) {
-		unmet.push(...toUnmet(err))
+	let deadlineExpired = false
+	const check = async <T>(
+		operation: () => Promise<T>,
+	): Promise<T | undefined> => {
+		if (deadlineExpired) return undefined
+		try {
+			return await operation()
+		} catch (err) {
+			unmet.push(...toUnmet(err))
+			if (isMemongoBootError(err) && err.code === "boot-deadline-exceeded") {
+				deadlineExpired = true
+			}
+			return undefined
+		}
 	}
+	const serverVersion = await check(() => verifyServerVersion(db, budget))
 	const manifest = buildRequiredIndexManifest({
 		...options,
 		serverVersionArray: serverVersion,
 	})
-	try {
-		await verifySearchPrivileges(db, manifest)
-	} catch (err) {
-		unmet.push(...toUnmet(err))
-	}
-	if (options.requiredCollections?.length) {
-		try {
-			const existing = new Set(
-				(await db.listCollections({}, { nameOnly: true }).toArray()).map(
-					(collection) => collection.name,
+	await check(() => verifySearchPrivileges(db, manifest, budget))
+	const requiredCollections = options.requiredCollections ?? []
+	if (requiredCollections.length > 0) {
+		const existing = await check(
+			async () =>
+				new Set(
+					(
+						await budget.run("listCollections", (timeoutMS) =>
+							db.listCollections({}, { nameOnly: true, timeoutMS }).toArray(),
+						)
+					).map((collection) => collection.name),
 				),
-			)
-			for (const name of options.requiredCollections) {
-				if (!existing.has(name)) {
-					unmet.push({
-						code: "collection-absent",
-						requirement: "the collection exists",
-						collection: name,
-						message: `collection ${name} is absent; boot creates it`,
-						repairable: true,
-					})
-				}
+		)
+		if (existing) {
+			for (const name of requiredCollections) {
+				if (existing.has(name)) continue
+				unmet.push(
+					unmetEntry(
+						{
+							code: "collection-absent",
+							requirement: "the collection exists",
+							collection: name,
+						},
+						`collection ${name} is absent; boot creates it`,
+						true,
+					),
+				)
 			}
-		} catch (err) {
-			unmet.push(...toUnmet(err))
 		}
 	}
-	let observed: Map<string, SearchIndexDescription> | undefined
-	try {
-		observed = await observeManifest(db, manifest)
-	} catch (err) {
-		unmet.push(...toUnmet(err))
-	}
-	if (observed) {
+	if (!deadlineExpired) {
+		const observation = await observeManifestPerCollection(db, manifest, budget)
+		for (const failure of observation.failures.values()) {
+			unmet.push(...toUnmet(failure))
+			if (failure.code === "boot-deadline-exceeded") deadlineExpired = true
+		}
 		for (const entry of manifest) {
-			const assessment = assessRequiredIndex(entry, observed.get(entry.name))
+			if (observation.failures.has(entry.collectionName)) continue
+			const assessment = assessRequiredIndex(
+				entry,
+				observation.indexes.get(entry.name),
+			)
 			if (assessment.state === "serving") continue
 			const { detail, reason } = unmetDetail(entry, assessment)
-			unmet.push({
-				...detail,
-				message: `${entry.name} (${entry.collectionName}) ${reason}; requires ${detail.requirement}`,
-				repairable:
+			unmet.push(
+				unmetEntry(
+					detail,
+					`${entry.name} (${entry.collectionName}) ${reason}; requires ${detail.requirement}`,
 					assessment.state === "absent" ||
-					(assessment.state === "drift" && !assessment.autoEmbedMissing),
-			})
+						(assessment.state === "drift" && !assessment.autoEmbedMissing),
+				),
+			)
+		}
+	}
+	if (deadlineExpired) {
+		for (const entry of unmet) {
+			if (entry.code === "boot-deadline-exceeded") {
+				entry.message = `${entry.message}; the checks that had not run were skipped`
+			}
 		}
 	}
 	return {
@@ -157,13 +209,15 @@ export async function runMemongoPreflight(params: {
 			ok: false,
 			manifest: [],
 			unmet: [
-				{
-					code: "config-invalid",
-					requirement: "a MongoDB memory backend",
-					setting: "memory.backend",
-					message: "the resolved memory backend has no MongoDB config",
-					repairable: false,
-				},
+				unmetEntry(
+					{
+						code: "config-invalid",
+						requirement: "a MongoDB memory backend",
+						setting: "memory.backend",
+					},
+					"the resolved memory backend has no MongoDB config",
+					false,
+				),
 			],
 		}
 	}
@@ -181,12 +235,14 @@ export async function runMemongoPreflight(params: {
 				ok: false,
 				manifest: [],
 				unmet: [
-					{
-						code: "server-unreachable",
-						requirement: "a reachable MongoDB deployment",
-						message: `MongoDB is unreachable (${describeDriverError(err)})`,
-						repairable: false,
-					},
+					unmetEntry(
+						{
+							code: "server-unreachable",
+							requirement: "a reachable MongoDB deployment",
+						},
+						`MongoDB is unreachable (${describeDriverError(err)})`,
+						false,
+					),
 				],
 			}
 		}

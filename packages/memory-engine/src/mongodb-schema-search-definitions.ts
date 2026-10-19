@@ -443,7 +443,7 @@ export function parsePositiveIntegerEnv(
 	if (!Number.isInteger(parsed) || parsed <= 0) {
 		throw bootConfigError(
 			setting,
-			`${setting} "${value}" is not a positive integer number of milliseconds`,
+			`${setting} is not a positive integer number of milliseconds`,
 		)
 	}
 	return parsed

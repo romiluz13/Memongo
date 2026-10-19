@@ -1,8 +1,10 @@
 import {
+	type BootPreflightReport,
 	isMemongoBootError,
 	type MemongoBridgeCapabilities,
+	safeBootText,
 } from "@memongo/memory-bridge"
-import { formatErrorMessage, redactSensitiveText } from "@memongo/lib"
+import { formatErrorMessage } from "@memongo/lib"
 
 /**
  * API boot (X-06). Creating the engine manager runs the M2 startup contract:
@@ -50,13 +52,30 @@ export function logCapabilityTable(
 
 /**
  * The boot refusal line. A typed boot failure names its code and the index or
- * setting; every message is redacted so no URI, key or secret is printed.
+ * setting; every message goes through the boot safe renderer, so no URI, host
+ * or secret is printed, whether the failure is typed or not.
  */
 export function formatBootFailure(err: unknown): string {
 	if (isMemongoBootError(err)) {
-		return `memongo-api refused to start: boot failure ${err.code}: ${redactSensitiveText(err.message)}`
+		return `memongo-api refused to start: boot failure ${err.code}: ${safeBootText(err.message)}`
 	}
-	return `memongo-api refused to start: ${formatErrorMessage(err)}`
+	return `memongo-api refused to start: ${safeBootText(formatErrorMessage(err))}`
+}
+
+function safeBootValue(value: unknown): unknown {
+	if (typeof value === "string") return safeBootText(value)
+	if (Array.isArray(value)) return value.map(safeBootValue)
+	if (value !== null && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [key, safeBootValue(entry)]),
+		)
+	}
+	return value
+}
+
+/** The preflight JSON: every string field goes through the boot safe renderer. */
+export function formatPreflightReport(report: BootPreflightReport): string {
+	return JSON.stringify(safeBootValue(report), null, 2)
 }
 
 /**

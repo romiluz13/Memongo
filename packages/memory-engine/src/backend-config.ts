@@ -299,11 +299,10 @@ export function resolveMemoryBackendConfig(params: {
 			rawDeploymentProfile !== "atlas-local-preview" &&
 			rawDeploymentProfile !== "atlas-managed"
 		) {
-			const unsupportedDeploymentProfile = String(mongoCfg?.deploymentProfile)
 			throw bootConfigError(
 				"memory.mongodb.deploymentProfile",
 				[
-					`memory.mongodb.deploymentProfile "${unsupportedDeploymentProfile}" is not supported in Memongo.`,
+					"memory.mongodb.deploymentProfile is not supported in Memongo.",
 					'Use deploymentProfile "atlas-local-preview" or "atlas-managed".',
 				].join(" "),
 			)
@@ -344,7 +343,7 @@ export function resolveMemoryBackendConfig(params: {
 		) {
 			throw bootConfigError(
 				"memory.mongodb.numDimensions",
-				`memory.mongodb.numDimensions ${String(mongoCfg.numDimensions)} does not match the autoEmbed model ${INDEX_AUTOEMBED_MODEL} (${autoEmbedDimensions} dimensions); unset it or set ${autoEmbedDimensions}`,
+				`memory.mongodb.numDimensions does not match the autoEmbed model ${INDEX_AUTOEMBED_MODEL} (${autoEmbedDimensions} dimensions); unset it or set ${autoEmbedDimensions}`,
 			)
 		}
 		// M2: LLM entity extraction has no provider wiring, so "llm" used to run
@@ -839,7 +838,7 @@ function resolveTtlSettings(ttlCfg?: {
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
 		throw bootConfigError(
 			"memory.mongodb.ttl.sessionDays",
-			`memory.mongodb.ttl.sessionDays "${String(raw)}" is not a positive number of days`,
+			"memory.mongodb.ttl.sessionDays is not a positive number of days",
 		)
 	}
 	return { enabled: ttlCfg?.enabled === true, sessionDays: raw }
@@ -851,7 +850,7 @@ function resolveMemoryTtlDays(raw: unknown): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
 		throw bootConfigError(
 			"memory.mongodb.memoryTtlDays",
-			`memory.mongodb.memoryTtlDays "${String(raw)}" is not a non-negative number of days`,
+			"memory.mongodb.memoryTtlDays is not a non-negative number of days",
 		)
 	}
 	return Math.floor(raw)
@@ -865,7 +864,7 @@ function resolveEnvBoolean(envKey: string, fallback: boolean): boolean {
 	if (["0", "false", "no", "off", "disabled"].includes(raw)) return false
 	throw bootConfigError(
 		envKey,
-		`${envKey} "${process.env[envKey]}" is not a boolean; use true/false, 1/0, yes/no, on/off or enabled/disabled`,
+		`${envKey} is not a boolean; use true/false, 1/0, yes/no, on/off or enabled/disabled`,
 	)
 }
 
@@ -886,7 +885,7 @@ function resolveFusionMethod(configValue: unknown): MemoryMongoDBFusionMethod {
 	}
 	throw bootConfigError(
 		setting,
-		`${setting} "${String(value)}" is not supported; use "scoreFusion" or "rankFusion" (js-merge was removed)`,
+		`${setting} is not supported; use "scoreFusion" or "rankFusion" (js-merge was removed)`,
 	)
 }
 

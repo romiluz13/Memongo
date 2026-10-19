@@ -15,6 +15,11 @@ import {
 	isMemongoBootError,
 	isPrivilegeDenial,
 } from "./mongodb-boot-errors.js"
+import {
+	type BootBudget,
+	createBootBudget,
+	runBounded,
+} from "./mongodb-boot-budget.js"
 import { serverVersionAtLeast } from "./mongodb-capability-registry.js"
 import {
 	type RequiredIndexManifestOptions,
@@ -47,12 +52,20 @@ const SEARCH_MANAGEMENT_ACTIONS = [
 // Server version and Search management
 // ---------------------------------------------------------------------------
 
-export async function verifyServerVersion(db: Db): Promise<number[]> {
+export async function verifyServerVersion(
+	db: Db,
+	budget?: BootBudget,
+): Promise<number[]> {
 	let versionArray: unknown
 	try {
-		const buildInfo = await db.admin().command({ buildInfo: 1 })
+		const buildInfo = await runBounded(budget, "buildInfo", (timeoutMS) =>
+			timeoutMS === undefined
+				? db.admin().command({ buildInfo: 1 })
+				: db.admin().command({ buildInfo: 1 }, { timeoutMS }),
+		)
 		versionArray = (buildInfo as { versionArray?: unknown }).versionArray
 	} catch (err) {
+		if (isMemongoBootError(err)) throw err
 		throw new MemongoBootError(
 			{
 				code: "server-version-unreadable",
@@ -126,11 +139,18 @@ function resourceCovers(
 export async function findMissingSearchPrivileges(
 	db: Db,
 	collectionNames: readonly string[],
+	budget?: BootBudget,
 ): Promise<Array<{ action: string; collection: string }>> {
 	let status: Document
 	try {
-		status = await db.command({ connectionStatus: 1, showPrivileges: true })
+		const command = { connectionStatus: 1, showPrivileges: true }
+		status = await runBounded(budget, "connectionStatus", (timeoutMS) =>
+			timeoutMS === undefined
+				? db.command(command)
+				: db.command(command, { timeoutMS }),
+		)
 	} catch (err) {
+		if (isMemongoBootError(err)) throw err
 		throw new MemongoBootError(
 			{
 				code: "index-metadata-unknown",
@@ -199,10 +219,20 @@ function privilegeFailure(
 /** Classify a $listSearchIndexes / search-index command error. */
 export function classifySearchIndexError(
 	err: unknown,
-	context: { collection: string; index?: string; operation: string },
+	context: {
+		collection: string
+		index?: string
+		operation: string
+		database?: string
+	},
 ): MemongoBootError {
 	if (isMemongoBootError(err)) return err
 	const diagnostic = describeDriverError(err)
+	// Only a definition the server refused may show the server's wording.
+	const refusal = describeDriverError(err, {
+		excerpt: true,
+		database: context.database,
+	})
 	const where = context.index
 		? `${context.index} on ${context.collection}`
 		: context.collection
@@ -228,7 +258,7 @@ export function classifySearchIndexError(
 				collection: context.collection,
 				index: context.index,
 			},
-			`boot refused: the deployment rejected the autoEmbed definition of ${where} (${diagnostic}); autoEmbed requires the atlas-local preview image or Atlas`,
+			`boot refused: the deployment rejected the autoEmbed definition of ${where} (${refusal}); autoEmbed requires the atlas-local preview image or Atlas`,
 		)
 	}
 	// A listing failure means Search management cannot be used; a create or
@@ -244,7 +274,7 @@ export function classifySearchIndexError(
 				collection: context.collection,
 				index: context.index,
 			},
-			`boot refused: the deployment rejected ${context.operation} on ${where} (${diagnostic})`,
+			`boot refused: the deployment rejected ${context.operation} on ${where} (${refusal})`,
 		)
 	}
 	return new MemongoBootError(
@@ -262,17 +292,29 @@ export function classifySearchIndexError(
 
 async function listCollectionSearchIndexes(
 	collection: Collection,
+	budget?: BootBudget,
 ): Promise<SearchIndexDescription[]> {
 	try {
-		return (await collection
-			.aggregate([{ $listSearchIndexes: {} }])
-			.toArray()) as SearchIndexDescription[]
+		return (await runBounded(
+			budget,
+			`$listSearchIndexes on ${collection.collectionName}`,
+			(timeoutMS) => {
+				const pipeline = [{ $listSearchIndexes: {} }]
+				return (
+					timeoutMS === undefined
+						? collection.aggregate(pipeline)
+						: collection.aggregate(pipeline, { timeoutMS })
+				).toArray()
+			},
+		)) as SearchIndexDescription[]
 	} catch (err) {
+		if (isMemongoBootError(err)) throw err
 		// A collection that does not exist yet has no Search indexes.
 		if (driverErrorCode(err) === 26) return []
 		throw classifySearchIndexError(err, {
 			collection: collection.collectionName,
 			operation: "$listSearchIndexes",
+			database: collection.dbName,
 		})
 	}
 }
@@ -293,15 +335,19 @@ type SearchIndexCollection = Collection & {
 async function createRequiredIndex(
 	collection: SearchIndexCollection,
 	entry: RequiredSearchIndex,
+	budget?: BootBudget,
 ): Promise<void> {
 	try {
-		await collection.createSearchIndex({
-			name: entry.name,
-			type: entry.type,
-			definition: entry.definition,
-		})
+		await runBounded(budget, `createSearchIndex ${entry.name}`, () =>
+			collection.createSearchIndex({
+				name: entry.name,
+				type: entry.type,
+				definition: entry.definition,
+			}),
+		)
 		log.info(`created ${entry.label} search index ${entry.name}`)
 	} catch (err) {
+		if (isMemongoBootError(err)) throw err
 		const message = err instanceof Error ? err.message : String(err)
 		// A concurrent boot created it first; the readiness wait verifies it.
 		if (/already exists|duplicate/i.test(message)) return
@@ -309,6 +355,7 @@ async function createRequiredIndex(
 			collection: entry.collectionName,
 			index: entry.name,
 			operation: "createSearchIndex",
+			database: collection.dbName,
 		})
 	}
 }
@@ -316,15 +363,19 @@ async function createRequiredIndex(
 async function updateRequiredIndex(
 	collection: SearchIndexCollection,
 	entry: RequiredSearchIndex,
+	budget?: BootBudget,
 ): Promise<void> {
 	try {
-		await collection.updateSearchIndex(entry.name, entry.definition)
+		await runBounded(budget, `updateSearchIndex ${entry.name}`, () =>
+			collection.updateSearchIndex(entry.name, entry.definition),
+		)
 		log.info(`updated ${entry.label} search index ${entry.name}`)
 	} catch (err) {
 		throw classifySearchIndexError(err, {
 			collection: entry.collectionName,
 			index: entry.name,
 			operation: "updateSearchIndex",
+			database: collection.dbName,
 		})
 	}
 }
@@ -337,16 +388,17 @@ export async function reconcileRequiredIndex(
 	collection: Collection,
 	entry: RequiredSearchIndex,
 	existing?: SearchIndexDescription,
+	budget?: BootBudget,
 ): Promise<"created" | "updated" | "unchanged"> {
 	const searchCollection = collection as SearchIndexCollection
 	const current =
 		existing ??
-		(await listCollectionSearchIndexes(collection)).find(
+		(await listCollectionSearchIndexes(collection, budget)).find(
 			(index) => index.name === entry.name,
 		)
 	const assessment = assessRequiredIndex(entry, current)
 	if (assessment.state === "absent") {
-		await createRequiredIndex(searchCollection, entry)
+		await createRequiredIndex(searchCollection, entry, budget)
 		return "created"
 	}
 	if (
@@ -363,7 +415,7 @@ export async function reconcileRequiredIndex(
 		assessment.state === "drift" ||
 		(serving !== undefined && !definitionServes(entry.definition, serving))
 	) {
-		await updateRequiredIndex(searchCollection, entry)
+		await updateRequiredIndex(searchCollection, entry, budget)
 		return "updated"
 	}
 	return "unchanged"
@@ -397,14 +449,17 @@ export function manifestCollections(manifest: RequiredSearchIndex[]): string[] {
 	return [...new Set(manifest.map((entry) => entry.collectionName))]
 }
 
+/** Boot is fail-fast: the first collection that cannot be listed throws. */
 export async function observeManifest(
 	db: Db,
 	manifest: RequiredSearchIndex[],
+	budget?: BootBudget,
 ): Promise<Map<string, SearchIndexDescription>> {
 	const observed = new Map<string, SearchIndexDescription>()
 	for (const collectionName of manifestCollections(manifest)) {
 		const indexes = await listCollectionSearchIndexes(
 			db.collection(collectionName),
+			budget,
 		)
 		for (const index of indexes) {
 			if (typeof index.name === "string") observed.set(index.name, index)
@@ -413,13 +468,54 @@ export async function observeManifest(
 	return observed
 }
 
+export type ManifestObservation = {
+	indexes: Map<string, SearchIndexDescription>
+	/** Per collection: why its Search indexes could not be listed. */
+	failures: Map<string, MemongoBootError>
+}
+
+/**
+ * Preflight reads every collection independently: a listing that fails is
+ * recorded against its collection and the others are still observed. An
+ * expired deadline stops the remaining reads, since none could start.
+ */
+export async function observeManifestPerCollection(
+	db: Db,
+	manifest: RequiredSearchIndex[],
+	budget?: BootBudget,
+): Promise<ManifestObservation> {
+	const indexes = new Map<string, SearchIndexDescription>()
+	const failures = new Map<string, MemongoBootError>()
+	for (const collectionName of manifestCollections(manifest)) {
+		try {
+			for (const index of await listCollectionSearchIndexes(
+				db.collection(collectionName),
+				budget,
+			)) {
+				if (typeof index.name === "string") indexes.set(index.name, index)
+			}
+		} catch (err) {
+			const failure = classifySearchIndexError(err, {
+				collection: collectionName,
+				operation: "$listSearchIndexes",
+				database: db.databaseName,
+			})
+			failures.set(collectionName, failure)
+			if (failure.code === "boot-deadline-exceeded") break
+		}
+	}
+	return { indexes, failures }
+}
+
 export async function verifySearchPrivileges(
 	db: Db,
 	manifest: RequiredSearchIndex[],
+	budget?: BootBudget,
 ): Promise<void> {
 	const missing = await findMissingSearchPrivileges(
 		db,
 		manifestCollections(manifest),
+		budget,
 	)
 	if (missing.length > 0) throw privilegeFailure(missing)
 }
@@ -435,16 +531,18 @@ export async function enforceBootContract(
 ): Promise<BootContractResult> {
 	const now = options.now ?? Date.now
 	const sleep = options.sleep ?? defaultSleep
-	const deadline = now() + (options.deadlineMs ?? BOOT_READINESS_DEADLINE_MS)
+	const deadlineMs = options.deadlineMs ?? BOOT_READINESS_DEADLINE_MS
+	const deadline = now() + deadlineMs
+	const budget = createBootBudget({ deadlineMs, now })
 	const pollMs = options.pollMs ?? BOOT_READINESS_POLL_MS
 
-	const serverVersion = await verifyServerVersion(db)
+	const serverVersion = await verifyServerVersion(db, budget)
 	const manifest = buildRequiredIndexManifest({
 		...options,
 		serverVersionArray: serverVersion,
 	})
-	await verifySearchPrivileges(db, manifest)
-	let observed = await observeManifest(db, manifest)
+	await verifySearchPrivileges(db, manifest, budget)
+	let observed = await observeManifest(db, manifest, budget)
 	const assess = () =>
 		manifest.map((entry) => ({
 			entry,
@@ -469,7 +567,8 @@ export async function enforceBootContract(
 		}
 	}
 	throwOnTerminal(assess())
-	await options.beforeRepair?.()
+	const beforeRepair = options.beforeRepair
+	if (beforeRepair) await budget.run("beforeRepair", () => beforeRepair())
 
 	if (options.mode === "repair") {
 		for (const entry of manifest) {
@@ -480,22 +579,24 @@ export async function enforceBootContract(
 					db.collection(entry.collectionName),
 					entry,
 					observed.get(entry.name),
+					budget,
 				)
 			}
 		}
 	}
 
 	for (;;) {
-		observed = await observeManifest(db, manifest)
+		observed = await observeManifest(db, manifest, budget)
 		const assessments = assess()
 		throwOnTerminal(assessments)
 		const unmet = assessments.filter(
 			({ assessment }) => assessment.state !== "serving",
 		)
 		if (unmet.length === 0) {
+			budget.assertLive("the final readiness check")
 			return { serverVersion, manifest, indexes: observed }
 		}
-		if (options.mode === "verify" || now() + pollMs > deadline) {
+		if (options.mode === "verify" || now() + pollMs >= deadline) {
 			throw bootFailure(
 				unmet.map(({ entry, assessment }) =>
 					unmetDetail(
@@ -505,7 +606,7 @@ export async function enforceBootContract(
 				),
 				options.mode === "verify"
 					? "required Search indexes are not serving"
-					: `boot refused after the ${Math.round((options.deadlineMs ?? BOOT_READINESS_DEADLINE_MS) / 1000)} s readiness deadline`,
+					: `boot refused after the ${Math.round(deadlineMs / 1000)} s readiness deadline`,
 			)
 		}
 		await sleep(pollMs)

@@ -146,3 +146,61 @@ describe("boot config rejections (M2 T1)", () => {
 		).toBeUndefined()
 	})
 })
+
+describe("boot config rejections never echo the rejected value", () => {
+	const HOSTILE = [
+		"mongodb+srv://cfg-user:",
+		"s3cr3t-cfg",
+		"@private-host.example.net/tenant-db",
+	].join("")
+	const echoRows: Array<{
+		row: string
+		mongodb?: Record<string, unknown>
+		env?: Record<string, string>
+	}> = [
+		{ row: "deploymentProfile", mongodb: { deploymentProfile: HOSTILE } },
+		{ row: "fusionMethod from config", mongodb: { fusionMethod: HOSTILE } },
+		{
+			row: "fusionMethod from env",
+			env: { MEMONGO_MONGODB_FUSION_METHOD: HOSTILE },
+		},
+		{
+			row: "ttl.sessionDays",
+			mongodb: { ttl: { enabled: true, sessionDays: HOSTILE } },
+		},
+		{ row: "memoryTtlDays", mongodb: { memoryTtlDays: HOSTILE } },
+		{ row: "numDimensions", mongodb: { numDimensions: HOSTILE } },
+		{ row: "a boolean env value", env: { MEMONGO_RERANKING_ENABLED: HOSTILE } },
+	]
+
+	it.each(echoRows)("keeps $row out of the message and fields", (row) => {
+		const err = resolveWith(row.mongodb ?? {}, row.env)
+		expect(err).toBeInstanceOf(MemongoBootError)
+		const text = JSON.stringify({
+			message: (err as Error).message,
+			failures: (err as MemongoBootError).failures,
+		})
+		for (const forbidden of [
+			"s3cr3t-cfg",
+			"private-host",
+			"tenant-db",
+			"mongodb+srv://",
+		]) {
+			expect(text).not.toContain(forbidden)
+		}
+	})
+
+	it("keeps a hostile readiness timeout out of the message", () => {
+		let err: unknown
+		try {
+			resolveSearchIndexReadinessTiming({
+				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: HOSTILE,
+			})
+		} catch (error) {
+			err = error
+		}
+		expect(err).toBeInstanceOf(MemongoBootError)
+		expect((err as Error).message).not.toContain("s3cr3t-cfg")
+		expect((err as Error).message).not.toContain("private-host")
+	})
+})

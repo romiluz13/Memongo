@@ -76,6 +76,33 @@ Each of these settings now fails boot with `config-invalid`, naming the setting:
 
 - The `mongodb-atlas-local` image is pinned to `preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014` in CI, the nightly workflow and Docker Compose. The `8.2.6` local override is replaced, because boot requires 8.3. `publish.yml` pins the same digest for its MongoDB service.
 
+### Review fixes (F1, F3, F5, F6 of review 1232)
+
+- **The 180 s deadline bounds the work, not only the polling (F1).**
+  - Previously, the deadline was tested between polls. `buildInfo`, the privilege read, the metadata reads, `beforeRepair`, creates and updates ran with no limit, so a stalled call never reached the test, and a metadata command that completed after the deadline with every index READY booted.
+  - Now one deadline covers every contract operation. An operation starts only while time remains, and a repair is not started after the deadline.
+  - The reads (`buildInfo`, `connectionStatus`, `$listSearchIndexes`) receive the remaining time as the driver `timeoutMS`, which the driver also sends to the server as `maxTimeMS` where the command takes one. It is never 0, because the driver reads 0 as no timeout.
+  - `createSearchIndex`, `updateSearchIndex` and `beforeRepair` accept no timeout option (mongodb 7.7), so each is raced against the deadline. A timed-out call stops being awaited and may still finish on the server; the factory closes an owned client after the failed boot, and a shared client is released to its registry instead.
+  - An operation that completes after the deadline fails, even when every index is then READY.
+  - Expiry is the new typed failure `boot-deadline-exceeded`, naming the operation that was running. An index still BUILDING at the last poll still fails as `index-not-ready`.
+  - The last poll sleep now leaves time for one more read (`now + poll >= deadline` stops), so the final read is never started after the deadline.
+  - Preflight and `/ready` use the same machinery with the same 180 s default. They report the expiry once, as an unmet entry, and run no further check.
+- **Partial host metadata no longer authorizes serving (F3).**
+  - Previously, a READY host `mainIndex` with neither `definitionVersion` nor `definition`, beside `latestDefinitionVersion`, passed on the requested `latestDefinition` alone.
+  - Now, once `statusDetail` is present, each host must report its serving `definition`, or a `definitionVersion` that can be compared with `latestDefinitionVersion`. Otherwise the index fails as `index-metadata-unknown`. A `statusDetail` that is not a list fails the same way.
+  - Complete absence of `statusDetail` (atlas-local today) is unchanged.
+  - Diagnostics name a host by its position (`host 2`), never by its reported hostname.
+- **No URI, host, database or secret in boot or preflight output (F5).**
+  - Previously, `describeDriverError` forwarded the driver message after masking passwords only, so `connection to mongodb://private-host.example/tenant-db failed` reached the typed message, the preflight JSON and the API refusal line.
+  - Now a driver error is rendered as its server code name or error class and numeric code only (`HostUnreachable (code 6)`). The driver's message text is no longer printed, with one exception: when the server refuses a definition (`index-definition-rejected`, or an unavailable autoEmbed), its wording is shown as a scrubbed excerpt (URI, host, address and database tokens replaced, secret shapes redacted, 200 characters at most) because that wording is the operator's remedy. The typed code, collection, index and requirement name the failure.
+  - Every `MemongoBootError` message and field, every preflight entry and the API refusal line go through `safeBootText`. It replaces whole URI tokens (any scheme, `mongodb://` and `mongodb+srv://` included, credentialed or not), host:port and IP tokens, and `ENOTFOUND` hosts, then redacts known secret shapes. It is exported from `@memongo/memory-engine` and `@memongo/memory-bridge`.
+  - Provider-reported index statuses, types and `queryable` values are echoed only when they are short plain tokens.
+  - Config rejections no longer repeat the rejected value (`deploymentProfile`, `fusionMethod`, `ttl.sessionDays`, `memoryTtlDays`, `numDimensions`, boolean env values and the readiness timeout and poll settings). They still name the setting.
+  - `bun run --filter @memongo/api preflight` renders every string in its JSON through `safeBootText`, and prints a safe one-line failure if the preflight itself throws.
+- **Preflight reports every unmet requirement across collections (F6).**
+  - Previously, one collection whose `$listSearchIndexes` failed made preflight skip every index assessment.
+  - Now preflight keeps one error per failed collection (one unmet entry each) and still assesses every collection it could read. Boot stays fail-fast on the first failed collection.
+
 ## T4
 
 KB search (`searchKB`, the `kb` lane of `searchV2`, `/v1/search-kb`) now runs one native fusion over `kb_chunks`. The fusion is `$scoreFusion` (minMaxScaler, `avg`, MongoDB 8.3+) by default or `$rankFusion`, chosen by configuration before the query runs. Nothing runs after it.

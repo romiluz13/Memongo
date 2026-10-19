@@ -64,6 +64,7 @@ import {
 	getMemorySearchManager,
 	isMemongoBootError,
 	MemongoBootError,
+	safeBootText,
 } from "@memongo/memory-engine"
 import {
 	materializeBlocks,
@@ -987,7 +988,7 @@ export async function memongoBridgePreflight(params: {
 }
 
 export type { BootPreflightReport }
-export { isMemongoBootError, MemongoBootError }
+export { isMemongoBootError, MemongoBootError, safeBootText }
 
 /**
  * Readiness probe for the Mongo lane (P1.7). This probe forces a live,

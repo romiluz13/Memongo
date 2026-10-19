@@ -17,6 +17,7 @@ export type MemongoBootFailureCode =
 	| "index-type-mismatch"
 	| "index-metadata-unknown"
 	| "index-definition-rejected"
+	| "boot-deadline-exceeded"
 	| "collection-absent"
 	| "config-invalid"
 	| "config-removed"
@@ -30,6 +31,62 @@ export type MemongoBootFailureDetail = {
 	collection?: string
 	status?: string
 	setting?: string
+}
+
+const URI_TOKEN = /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`\\]*/gi
+const HOST_TOKENS: RegExp[] = [
+	/\[[0-9a-f:]{2,}\](?::\d{2,5})?/gi,
+	/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{2,5})?\b/g,
+	/\b(?:[a-z0-9-]+\.)+[a-z0-9-]+:\d{2,5}\b/gi,
+	/\blocalhost:\d{2,5}\b/gi,
+	/\b(ENOTFOUND|EAI_AGAIN)\s+\S+/g,
+]
+
+/**
+ * Boot-specific safe text: whole URI tokens (any scheme, credentialed or not,
+ * so mongodb:// and mongodb+srv:// included) and host or address tokens are
+ * replaced, then known secret shapes are redacted. Everything a boot
+ * diagnostic prints goes through it; it is a floor, not a license to echo
+ * driver, config or provider text.
+ */
+export function safeBootText(text: string): string {
+	let safe = text.replace(URI_TOKEN, "<uri>")
+	for (const pattern of HOST_TOKENS) {
+		safe = safe.replace(pattern, (_match, resolver: unknown) =>
+			typeof resolver === "string" ? `${resolver} <host>` : "<host>",
+		)
+	}
+	return redactSensitiveText(safe)
+}
+
+/**
+ * A provider-reported scalar (an index status, type or queryable flag)
+ * rendered for a diagnostic: kept only when it is a boolean, a number or a
+ * short plain token, and never echoed raw.
+ */
+export function safeScalar(value: unknown): string {
+	if (value === undefined || value === null) return "absent"
+	if (typeof value === "boolean" || typeof value === "number") {
+		return String(value)
+	}
+	return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(value)
+		? value
+		: "<unreadable>"
+}
+
+export function sanitizeBootDetail(
+	detail: MemongoBootFailureDetail,
+): MemongoBootFailureDetail {
+	const safe: MemongoBootFailureDetail = {
+		code: detail.code,
+		requirement: safeBootText(detail.requirement),
+	}
+	if (detail.index !== undefined) safe.index = safeBootText(detail.index)
+	if (detail.collection !== undefined)
+		safe.collection = safeBootText(detail.collection)
+	if (detail.status !== undefined) safe.status = safeBootText(detail.status)
+	if (detail.setting !== undefined) safe.setting = safeBootText(detail.setting)
+	return safe
 }
 
 export class MemongoBootError extends Error {
@@ -47,15 +104,16 @@ export class MemongoBootError extends Error {
 		message: string,
 		failures?: MemongoBootFailureDetail[],
 	) {
-		super(redactSensitiveText(message))
+		super(safeBootText(message))
+		const safe = sanitizeBootDetail(detail)
 		this.name = "MemongoBootError"
-		this.code = detail.code
-		this.requirement = detail.requirement
-		this.index = detail.index
-		this.collection = detail.collection
-		this.status = detail.status
-		this.setting = detail.setting
-		this.failures = failures ?? [detail]
+		this.code = safe.code
+		this.requirement = safe.requirement
+		this.index = safe.index
+		this.collection = safe.collection
+		this.status = safe.status
+		this.setting = safe.setting
+		this.failures = (failures ?? [detail]).map(sanitizeBootDetail)
 	}
 }
 
@@ -69,21 +127,53 @@ export function isMemongoBootError(err: unknown): err is MemongoBootError {
 	)
 }
 
-const DRIVER_MESSAGE_MAX_LENGTH = 200
+const DOTTED_HOST = /\b(?:[a-z0-9-]+\.){2,}[a-z]{2,}\b/gi
+const EXCERPT_MAX_LENGTH = 200
 
 /**
- * A driver error rendered for a boot diagnostic: its code name and a redacted,
- * length-capped message. Driver messages can echo hosts or URIs, so nothing
- * from them reaches a boot message unredacted.
+ * The server's own wording about a definition it refused, made safe to print:
+ * URI, host and address tokens are replaced (including dotted host names),
+ * the database name is dropped, known secret shapes are redacted and the
+ * length is capped.
  */
-export function describeDriverError(err: unknown): string {
-	const codeName =
-		typeof (err as { codeName?: unknown })?.codeName === "string"
-			? (err as { codeName: string }).codeName
+function definitionExcerpt(message: string, database?: string): string {
+	let excerpt = safeBootText(message).replace(DOTTED_HOST, "<host>")
+	if (database && database.length >= 3) {
+		excerpt = excerpt.split(database).join("<database>")
+	}
+	return excerpt.replace(/\s+/g, " ").trim().slice(0, EXCERPT_MAX_LENGTH)
+}
+
+/**
+ * A driver error rendered for a boot diagnostic: its server code name (or
+ * error class) and numeric code. The driver's message text is not forwarded,
+ * because it echoes connection strings, hosts, database names and whole
+ * commands; the typed code, collection and index name the failure. The one
+ * exception is `excerpt`, which a caller sets only for a definition the
+ * server refused: the server's wording is then the operator's remedy
+ * ("Omit quantization to use the default"), and it is printed scrubbed.
+ */
+export function describeDriverError(
+	err: unknown,
+	options?: { excerpt?: boolean; database?: string },
+): string {
+	const identifier = (value: unknown): string | undefined =>
+		typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value)
+			? value
 			: undefined
-	const raw = err instanceof Error ? err.message : String(err)
-	const message = redactSensitiveText(raw).slice(0, DRIVER_MESSAGE_MAX_LENGTH)
-	return codeName ? `${codeName}: ${message}` : message
+	const named = err as { codeName?: unknown; name?: unknown; code?: unknown }
+	const label =
+		identifier(named?.codeName) ?? identifier(named?.name) ?? "unreadable error"
+	const code =
+		typeof named?.code === "number"
+			? ` (code ${named.code})`
+			: identifier(named?.code)
+				? ` (${named.code})`
+				: ""
+	const raw = err instanceof Error ? err.message : ""
+	const excerpt =
+		options?.excerpt && raw ? definitionExcerpt(raw, options.database) : ""
+	return `${label}${code}${excerpt ? `: ${excerpt}` : ""}`
 }
 
 export function driverErrorCode(err: unknown): number | undefined {
