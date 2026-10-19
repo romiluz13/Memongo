@@ -5,7 +5,6 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { ensureCollections } from "./mongodb-schema.js"
 import { ensureCoreStandardIndexes } from "./mongodb-schema-standard-indexes-core.js"
-import { shouldEnsureTextFallbackIndexes } from "./mongodb-schema-standard-indexes.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 const uri = process.env.MEMONGO_TEST_MONGODB_URI
 if (
@@ -84,9 +83,15 @@ beforeAll(async () => {
 	evidence("fixture-worker", { fixturePid: process.pid })
 	await client.connect()
 	await ensureCollections(db, prefix)
-	await ensureCoreStandardIndexes(db, prefix, {
-		textFallbackIndexes: shouldEnsureTextFallbackIndexes(capabilities),
-	})
+	await ensureCoreStandardIndexes(db, prefix)
+	// M2 T1: boot no longer creates $text indexes. This fixture for the legacy
+	// $text lane creates them itself until that lane is removed.
+	await db
+		.collection(`${prefix}chunks`)
+		.createIndex({ text: "text" }, { name: "idx_chunks_text" })
+	await db
+		.collection(`${prefix}kb_chunks`)
+		.createIndex({ text: "text" }, { name: "idx_kbchunks_text" })
 	const indexes = await db
 		.collection(`${prefix}kb_chunks`)
 		.listIndexes()

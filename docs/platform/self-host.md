@@ -4,7 +4,7 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 
 ## Components
 
-1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local:preview` (floating tag in `docker/docker-compose.yml`; record its resolved digest when validating a deployment).
+1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014` (the digest pin in `docker/docker-compose.yml`; boot requires MongoDB 8.3 or later).
 2. `apps/api` - stateless HTTP service.
 3. Optional: `apps/web` and `apps/mcp`.
 

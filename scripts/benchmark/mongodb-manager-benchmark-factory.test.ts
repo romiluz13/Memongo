@@ -183,7 +183,6 @@ const W17_URI = "mongodb://w17-unwind-unit:27017/w17"
 
 const STRICT_ENV_KEYS = [
 	"MEMONGO_BENCHMARK_STRICT",
-	"MEMONGO_STRICT_SEARCH_INDEX_READY",
 	"MEMONGO_FORCE_MONGODB_URI",
 	"MEMONGO_MONGODB_URI",
 ] as const
@@ -223,9 +222,6 @@ function resetFactoryMocks(): void {
 		textSearch: false,
 		vectorSearch: false,
 	} as never)
-	vi.mocked(schemaModule.isSearchIndexManagementAvailable).mockResolvedValue(
-		false,
-	)
 	vi.mocked(schemaModule.ensureCollections).mockResolvedValue(
 		undefined as never,
 	)

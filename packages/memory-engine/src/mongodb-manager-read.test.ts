@@ -198,6 +198,44 @@ describe("MongoDBMemoryManager conversation recall", () => {
 			}),
 		)
 	})
+
+	it("propagates a failed bitemporal prefilter readiness probe instead of disabling the prefilter (G4-77)", async () => {
+		const { recallConversation } = await import(
+			"./mongodb-conversation-recall.js"
+		)
+		const { eventsCollection, isEventsVectorBitemporalPrefilterReady } =
+			await import("./mongodb-schema.js")
+		mocked(recallConversation).mockClear()
+		mocked(isEventsVectorBitemporalPrefilterReady).mockRejectedValue(
+			new Error("$listSearchIndexes failed on test_events"),
+		)
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+				capabilities: {
+					vectorSearch: true,
+					textSearch: true,
+					rankFusion: true,
+					storedSource: false,
+					vectorIndexMethod: false,
+					scoreFusion: false,
+				},
+				nativeBitemporalVectorPrefilter: true,
+				nativeBitemporalPrefilterCheckedAt: 0,
+			},
+		) as MongoDBMemoryManager
+
+		await expect(
+			manager.recallConversation({ query: "deployment" }),
+		).rejects.toThrow("$listSearchIndexes failed on test_events")
+		expect(recallConversation).not.toHaveBeenCalled()
+	})
 })
 
 describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {

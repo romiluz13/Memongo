@@ -12,12 +12,11 @@ set -euo pipefail
 
 : "${MEMONGO_MONGODB_URI:?MEMONGO_MONGODB_URI must point at the job MongoDB}"
 : "${PROOF_PACK_OUT_DIR:?PROOF_PACK_OUT_DIR must name the evidence directory}"
-# Strict readiness: the API waits up to 180 s for every search index to be
-# queryable and refuses to start otherwise, instead of booting with lanes off.
+# The startup contract (M2) is the only mode: the API waits up to 180 s for
+# every manifest index to be READY and refuses to start otherwise.
 ready_timeout_seconds="${PROOF_PACK_READY_TIMEOUT_SECONDS:-240}"
 run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 
-export MEMONGO_STRICT_SEARCH_INDEX_READY=1
 export MEMONGO_API_HOST=127.0.0.1
 export MEMONGO_API_PORT=3847
 export MEMONGO_API_URL="http://${MEMONGO_API_HOST}:${MEMONGO_API_PORT}"

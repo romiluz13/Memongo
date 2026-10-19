@@ -9,7 +9,7 @@
  * a nested-transaction error.
  *
  * Run: bun run --filter @memongo/memory-engine test:e2e
- * (auto-discovers the running mongodb/mongodb-atlas-local:preview container)
+ * (auto-discovers the running mongodb/mongodb-atlas-local container)
  */
 import { randomUUID } from "node:crypto"
 import { type Db, MongoClient } from "mongodb"
