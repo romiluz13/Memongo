@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 75
     services:
       mongodb:
-        image: mongodb/mongodb-atlas-local:preview
+        image: mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
         ports:
           - 27017:27017
           # Older fixtures use 27017; owned safety fixtures require 27218.
@@ -121,7 +121,7 @@ jobs:
     timeout-minutes: 60
     services:
       mongodb:
-        image: mongodb/mongodb-atlas-local:preview
+        image: mongodb/mongodb-atlas-local:preview@sha256:ff75fd47e918952cc91094e888e8aeb7529aeb70f987b075aeef3944c9bd8014
         ports:
           - 27017:27017
         env:
