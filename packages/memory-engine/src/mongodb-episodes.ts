@@ -16,7 +16,7 @@ import {
 	withFencedWrite,
 } from "./mongodb-write-fence.js"
 import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
-import { resolveScopeRef } from "./mongodb-scope.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	type SearchTierOutcomeSink,
 	searchFailureLogFields,
@@ -280,8 +280,8 @@ export async function materializeEpisode(params: {
 	agentId: string
 	type: EpisodeType
 	timeRange: { start: Date; end: Date }
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	summarizer: EpisodeSummarizer
 	/**
 	 * Pre-selected events for this episode. When provided, the time-range
@@ -297,7 +297,11 @@ export async function materializeEpisode(params: {
 		timestamp: Date
 	}>
 }): Promise<Episode | null> {
-	const { db, prefix, agentId, type, timeRange, scope, summarizer } = params
+	const { db, prefix, agentId, type, timeRange, summarizer } = params
+	const { scope, scopeRef } = requireTenantIdentity(
+		"materializeEpisode",
+		params,
+	)
 	const startMs = Date.now()
 	if (
 		params.admission &&
@@ -306,12 +310,6 @@ export async function materializeEpisode(params: {
 	)
 		throw new ErasureGateConflictError(agentId)
 	try {
-		const resolvedScope = scope ?? "agent"
-		const scopeRef = resolveScopeRef({
-			scope: resolvedScope,
-			scopeRef: params.scopeRef,
-			agentId,
-		})
 		// 1. Read raw events for the time range — unless the caller already
 		//    selected the exact event set (auto-trigger path).
 		const events =
@@ -322,7 +320,7 @@ export async function materializeEpisode(params: {
 				agentId,
 				start: timeRange.start,
 				end: timeRange.end,
-				scope: resolvedScope,
+				scope,
 				scopeRef,
 			}))
 
@@ -402,7 +400,7 @@ export async function materializeEpisode(params: {
 			title,
 			summary,
 			agentId,
-			scope: resolvedScope,
+			scope,
 			scopeRef,
 			timeRange: { start: timeRange.start, end: timeRange.end },
 			sourceEventCount: events.length,
@@ -443,7 +441,7 @@ export async function materializeEpisode(params: {
 		const identityFilter = {
 			agentId,
 			type,
-			scope: resolvedScope,
+			scope,
 			scopeRef,
 			sourceEventsHash,
 		}
@@ -504,7 +502,7 @@ export async function materializeEpisode(params: {
 					db,
 					prefix,
 					agentId,
-					scope: resolvedScope,
+					scope,
 					scopeRef,
 					cap,
 				}
@@ -531,7 +529,7 @@ export async function materializeEpisode(params: {
 			title,
 			summary,
 			agentId,
-			scope: resolvedScope,
+			scope,
 			scopeRef,
 			timeRange: { start: timeRange.start, end: timeRange.end },
 			sourceEventCount: events.length,
@@ -587,29 +585,24 @@ export async function getEpisodesByTimeRange(params: {
 	start: Date
 	end: Date
 	type?: EpisodeType
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<Episode[]> {
-	const { db, prefix, agentId, start, end, type, scope, scopeRef } = params
+	const { db, prefix, start, end, type } = params
+	const tenant = requireTenantIdentity("getEpisodesByTimeRange", params)
 	try {
 		const col = episodesCollection(db, prefix)
 
 		// Overlap condition: episode.timeRange.start <= query.end AND episode.timeRange.end >= query.start
 		// Status filter: $ne "deleted" matches docs where field is absent OR any value other than "deleted"
 		const filter: Document = {
-			agentId,
+			...tenant,
 			"timeRange.start": { $lte: end },
 			"timeRange.end": { $gte: start },
 			status: { $ne: "deleted" },
 		}
 		if (type) {
 			filter.type = type
-		}
-		if (scope) {
-			filter.scope = scope
-		}
-		if (scopeRef) {
-			filter.scopeRef = scopeRef
 		}
 
 		// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
@@ -637,21 +630,20 @@ export async function getEpisodesByType(params: {
 	prefix: string
 	agentId: string
 	type: EpisodeType
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<Episode[]> {
-	const { db, prefix, agentId, type, scope, scopeRef, limit } = params
+	const { db, prefix, type, limit } = params
+	const tenant = requireTenantIdentity("getEpisodesByType", params)
 	try {
 		const col = episodesCollection(db, prefix)
 
 		const docs = await col
 			.find({
-				agentId,
+				...tenant,
 				type,
 				status: { $ne: "deleted" },
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
 			})
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ updatedAt: -1 })
@@ -686,15 +678,15 @@ export async function searchEpisodes(params: {
 	prefix: string
 	query: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	timeRange?: { start: Date; end: Date }
 	limit?: number
 	/** #101: per-call sink for this lane's tier outcome rows. */
 	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<Episode[]> {
-	const { db, prefix, query, agentId, scope, scopeRef, timeRange, limit } =
-		params
+	const { db, prefix, query, timeRange, limit } = params
+	const tenant: Document = requireTenantIdentity("searchEpisodes", params)
 	const report = (count: number): void => {
 		params.onTierOutcome?.({
 			stage: "atlas-search",
@@ -717,13 +709,6 @@ export async function searchEpisodes(params: {
 	const col = episodesCollection(db, prefix)
 
 	try {
-		const tenant: Document = { agentId }
-		if (scope) {
-			tenant.scope = scope
-		}
-		if (scopeRef) {
-			tenant.scopeRef = scopeRef
-		}
 		const current: Document = { ...tenant, status: { $ne: "deleted" } }
 		if (timeRange) {
 			current["timeRange.start"] = { $lte: timeRange.end }
@@ -768,13 +753,16 @@ export async function updateEpisodeStatus(params: {
 	prefix: string
 	episodeId: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	status: EpisodeStatus
 }): Promise<boolean> {
-	const { db, prefix, episodeId, agentId, status } = params
+	const { db, prefix, episodeId, status } = params
+	const tenant = requireTenantIdentity("updateEpisodeStatus", params)
 	try {
 		const col = episodesCollection(db, prefix)
 		const result = await col.updateOne(
-			{ episodeId, agentId },
+			{ episodeId, ...tenant },
 			{ $set: { status, updatedAt: new Date() } },
 		)
 		return result.matchedCount > 0
@@ -795,10 +783,13 @@ export async function getEpisodesByIds(params: {
 	prefix: string
 	episodeIds: string[]
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	/** @deprecated searchV2 owns ids-only projection; this reopen helper always returns full episodes. */
 	projection?: "full" | "ids-only"
 }): Promise<Episode[]> {
-	const { db, prefix, episodeIds, agentId } = params
+	const { db, prefix, episodeIds } = params
+	const tenant = requireTenantIdentity("getEpisodesByIds", params)
 	if (episodeIds.length === 0) {
 		return []
 	}
@@ -807,7 +798,7 @@ export async function getEpisodesByIds(params: {
 		const docs = await col
 			.find({
 				episodeId: { $in: episodeIds },
-				agentId,
+				...tenant,
 				status: { $ne: "deleted" },
 			})
 			.toArray()
@@ -841,15 +832,14 @@ async function hasRecentEpisodeWrite(params: {
 	prefix: string
 	agentId: string
 	since: Date
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<boolean> {
+	const tenant = requireTenantIdentity("hasRecentEpisodeWrite", params)
 	const recent = await episodesCollection(params.db, params.prefix)
 		.find({
-			agentId: params.agentId,
+			...tenant,
 			status: { $ne: "deleted" },
-			...(params.scope ? { scope: params.scope } : {}),
-			...(params.scopeRef ? { scopeRef: params.scopeRef } : {}),
 			// updatedAt is set on both insert and re-materialization, so this
 			// measures episode write recency rather than source-event recency.
 			updatedAt: { $gte: params.since },
@@ -877,22 +867,19 @@ const autoEpisodeNegativeMemo = new Map<string, number>()
 function autoEpisodeNegativeMemoKey(params: {
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 }): string {
-	return [
-		params.prefix,
-		params.agentId,
-		params.scope ?? "",
-		params.scopeRef ?? "",
-	].join("|")
+	return [params.prefix, params.agentId, params.scope, params.scopeRef].join(
+		"|",
+	)
 }
 
 function hasFreshNegativeMemo(params: {
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	now?: number
 }): boolean {
 	const memoizedAt = autoEpisodeNegativeMemo.get(
@@ -906,8 +893,8 @@ function hasFreshNegativeMemo(params: {
 function rememberNegativeMemo(params: {
 	prefix: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	now?: number
 }): void {
 	autoEpisodeNegativeMemo.set(
@@ -945,8 +932,8 @@ export async function checkAutoEpisodeTriggers(params: {
 	prefix: string
 	agentId: string
 	summarizer: EpisodeSummarizer
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	sessionGapMinutes?: number
 	maxEventsWithoutEpisode?: number
 	rateLimitMinutes?: number
@@ -957,13 +944,16 @@ export async function checkAutoEpisodeTriggers(params: {
 		prefix,
 		agentId,
 		summarizer,
-		scope,
-		scopeRef,
 		sessionGapMinutes = 30,
 		maxEventsWithoutEpisode = 50,
 		rateLimitMinutes = 60,
 		force = false,
 	} = params
+
+	const { scope, scopeRef } = requireTenantIdentity(
+		"checkAutoEpisodeTriggers",
+		params,
+	)
 
 	if (
 		params.admission &&
@@ -985,8 +975,8 @@ export async function checkAutoEpisodeTriggers(params: {
 				prefix,
 				agentId,
 				since: rateLimitWindow,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
+				scope,
+				scopeRef,
 			})
 			if (rateLimited) {
 				return { triggered: false, reason: "rate_limited" }

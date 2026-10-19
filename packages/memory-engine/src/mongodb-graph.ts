@@ -34,6 +34,7 @@ import {
 	toTypedSearchError,
 } from "./search-outcomes.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	buildRelationLifecycleClause,
 	mergeQueryClauses,
@@ -817,16 +818,15 @@ export async function setEntityLinkStatus(params: {
 	fromEntityId: string
 	toEntityId: string
 	linkType: EntityLinkType
-	scopeRef?: string
+	scopeRef: string
 	status: EntityLinkStatus
 }): Promise<boolean> {
-	const { db, prefix, agentId, scope, linkType, status } = params
+	const { db, prefix, linkType, status } = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"setEntityLinkStatus",
+		params,
+	)
 	const collection = entityLinksCollection(db, prefix)
-	const scopeRef = resolveScopeRef({
-		scope,
-		scopeRef: params.scopeRef,
-		agentId,
-	})
 	const pair = canonicalizeEntityPair(params.fromEntityId, params.toEntityId)
 	const result = await collection.updateOne(
 		{
@@ -847,33 +847,23 @@ export async function getEntityLinks(params: {
 	prefix: string
 	agentId: string
 	entityId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	status?: EntityLinkStatus
 	linkTypes?: EntityLinkType[]
 	limit?: number
 }): Promise<EntityLink[]> {
-	const {
-		db,
-		prefix,
-		agentId,
-		entityId,
-		scope,
-		scopeRef,
-		status,
-		linkTypes,
-		limit,
-	} = params
+	const { db, prefix, entityId, status, linkTypes, limit } = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"getEntityLinks",
+		params,
+	)
 	const collection = entityLinksCollection(db, prefix)
 	const filter: Document = {
 		agentId,
+		scope,
+		scopeRef,
 		$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-	}
-	if (scope) {
-		filter.scope = scope
-	}
-	if (scopeRef) {
-		filter.scopeRef = scopeRef
 	}
 	if (status) {
 		filter.status = status
@@ -914,24 +904,18 @@ export async function findEntitiesByName(params: {
 	prefix: string
 	query: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<Entity[]> {
-	const { db, prefix, agentId, scope, scopeRef, limit } = params
+	const { db, prefix, limit } = params
+	const tenant: Document = requireTenantIdentity("findEntitiesByName", params)
 	const name = params.query.trim()
 	if (!name) {
 		return []
 	}
 	try {
 		const collection = entitiesCollection(db, prefix)
-		const tenant: Document = { agentId }
-		if (scope) {
-			tenant.scope = scope
-		}
-		if (scopeRef) {
-			tenant.scopeRef = scopeRef
-		}
 		const pipeline: Document[] = [
 			{
 				$search: {
@@ -974,21 +958,20 @@ export async function getEntitiesByType(params: {
 	prefix: string
 	type: EntityType
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	limit?: number
 }): Promise<Entity[]> {
-	const { db, prefix, type, agentId, scope, scopeRef, limit } = params
+	const { db, prefix, type, limit } = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"getEntitiesByType",
+		params,
+	)
 	try {
 		const collection = entitiesCollection(db, prefix)
 
 		const docs = await collection
-			.find({
-				agentId,
-				type,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
-			})
+			.find({ agentId, scope, scopeRef, type })
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ updatedAt: -1 })
 			.limit(limit ?? 50)
@@ -1017,8 +1000,8 @@ export async function expandGraph(params: {
 	prefix: string
 	entityId: string
 	agentId: string
-	scope?: MemoryScope
-	scopeRef?: string
+	scope: MemoryScope
+	scopeRef: string
 	maxDepth?: number
 	bidirectional?: boolean
 	maxConnections?: number
@@ -1028,14 +1011,15 @@ export async function expandGraph(params: {
 		db,
 		prefix,
 		entityId,
-		agentId,
-		scope,
-		scopeRef,
 		maxDepth,
 		bidirectional,
 		maxConnections,
 		asOf,
 	} = params
+	const { agentId, scope, scopeRef } = requireTenantIdentity(
+		"expandGraph",
+		params,
+	)
 	const graphStart = Date.now()
 	try {
 		const entCol = entitiesCollection(db, prefix)
@@ -1045,8 +1029,8 @@ export async function expandGraph(params: {
 		const rootEntity = (await entCol.findOne({
 			entityId,
 			agentId,
-			...(scope ? { scope } : {}),
-			...(scopeRef ? { scopeRef } : {}),
+			scope,
+			scopeRef,
 		})) as unknown as Entity | null
 		if (!rootEntity) {
 			return null
@@ -1095,8 +1079,8 @@ export async function expandGraph(params: {
 						{
 							fromEntityId: entityId,
 							agentId,
-							...(scope ? { scope } : {}),
-							...(scopeRef ? { scopeRef } : {}),
+							scope,
+							scopeRef,
 						},
 						relationTraversalClause,
 					),
@@ -1114,8 +1098,8 @@ export async function expandGraph(params: {
 						restrictSearchWithMatch: mergeQueryClauses(
 							{
 								agentId,
-								...(scope ? { scope } : {}),
-								...(scopeRef ? { scopeRef } : {}),
+								scope,
+								scopeRef,
 							},
 							relationTraversalClause,
 						),
@@ -1129,8 +1113,8 @@ export async function expandGraph(params: {
 						{
 							toEntityId: entityId,
 							agentId,
-							...(scope ? { scope } : {}),
-							...(scopeRef ? { scopeRef } : {}),
+							scope,
+							scopeRef,
 						},
 						relationTraversalClause,
 					),
@@ -1148,8 +1132,8 @@ export async function expandGraph(params: {
 						restrictSearchWithMatch: mergeQueryClauses(
 							{
 								agentId,
-								...(scope ? { scope } : {}),
-								...(scopeRef ? { scopeRef } : {}),
+								scope,
+								scopeRef,
 							},
 							relationTraversalClause,
 						),
@@ -1171,8 +1155,8 @@ export async function expandGraph(params: {
 						{
 							fromEntityId: entityId,
 							agentId,
-							...(scope ? { scope } : {}),
-							...(scopeRef ? { scopeRef } : {}),
+							scope,
+							scopeRef,
 						},
 						relationTraversalClause,
 					),
@@ -1190,8 +1174,8 @@ export async function expandGraph(params: {
 						restrictSearchWithMatch: mergeQueryClauses(
 							{
 								agentId,
-								...(scope ? { scope } : {}),
-								...(scopeRef ? { scopeRef } : {}),
+								scope,
+								scopeRef,
 							},
 							relationTraversalClause,
 						),
@@ -1222,8 +1206,8 @@ export async function expandGraph(params: {
 				.find({
 					entityId: { $in: Array.from(connectedEntityIds) },
 					agentId,
-					...(scope ? { scope } : {}),
-					...(scopeRef ? { scopeRef } : {}),
+					scope,
+					scopeRef,
 				})
 				.toArray()
 			for (const doc of entityDocs) {
@@ -1317,25 +1301,28 @@ export async function deleteEntity(params: {
 	prefix: string
 	entityId: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 }): Promise<{
 	deletedEntity: boolean
 	deletedRelations: number
 	/** C-024: entity_links removed alongside the entity (from/to either side). */
 	deletedEntityLinks: number
 }> {
-	const { db, prefix, entityId, agentId } = params
+	const { db, prefix, entityId } = params
+	const tenant = requireTenantIdentity("deleteEntity", params)
 	try {
 		const entCol = entitiesCollection(db, prefix)
 		const relCol = relationsCollection(db, prefix)
 		const linkCol = entityLinksCollection(db, prefix)
 
-		// Delete entity scoped by agentId
-		const entityResult = await entCol.deleteOne({ entityId, agentId })
+		// Delete the entity inside its tenant (agent, scope, scopeRef)
+		const entityResult = await entCol.deleteOne({ entityId, ...tenant })
 
-		// Cascade delete all relations involving this entity, scoped by agentId
+		// Cascade delete the relations of this entity in the same tenant
 		const relResult = await relCol.deleteMany({
 			$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-			agentId,
+			...tenant,
 		})
 
 		// C-024: cascade delete all entity_links involving this entity too —
@@ -1344,7 +1331,7 @@ export async function deleteEntity(params: {
 		// detects. Same $or + agentId scoping as the relation cascade.
 		const linkResult = await linkCol.deleteMany({
 			$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-			agentId,
+			...tenant,
 		})
 
 		log.info(
@@ -1385,6 +1372,8 @@ export async function deleteEntityConservative(params: {
 	prefix: string
 	entityId: string
 	agentId: string
+	scope: MemoryScope
+	scopeRef: string
 	force?: boolean
 }): Promise<{
 	deletedEntity: boolean
@@ -1395,7 +1384,9 @@ export async function deleteEntityConservative(params: {
 	conflictingRelationCount?: number
 	auditRecorded: boolean
 }> {
-	const { db, prefix, entityId, agentId, force } = params
+	const { db, prefix, entityId, force } = params
+	const tenant = requireTenantIdentity("deleteEntityConservative", params)
+	const { agentId } = tenant
 	try {
 		const entCol = entitiesCollection(db, prefix)
 		const relCol = relationsCollection(db, prefix)
@@ -1403,7 +1394,7 @@ export async function deleteEntityConservative(params: {
 		// 1. Check for conflicting relations
 		const relationCount = await relCol.countDocuments({
 			$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
-			agentId,
+			...tenant,
 		})
 
 		// 2. If relations exist and force is not true, block the delete
@@ -1422,7 +1413,7 @@ export async function deleteEntityConservative(params: {
 		}
 
 		// 3. Read entity doc before delete (for audit oldValue snapshot)
-		const entityDoc = await entCol.findOne({ entityId, agentId })
+		const entityDoc = await entCol.findOne({ entityId, ...tenant })
 		if (!entityDoc) {
 			log.info(
 				`deleteEntityConservative: entity=${entityId} not found for agent=${agentId}`,
@@ -1437,7 +1428,7 @@ export async function deleteEntityConservative(params: {
 		}
 
 		// 4. Proceed with delete via existing deleteEntity
-		const deleteResult = await deleteEntity({ db, prefix, entityId, agentId })
+		const deleteResult = await deleteEntity({ db, prefix, entityId, ...tenant })
 
 		// 5. Fire-and-forget audit record
 		let auditRecorded = false

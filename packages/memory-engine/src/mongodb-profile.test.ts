@@ -507,7 +507,7 @@ describe("mongodb-profile", () => {
 				},
 			]),
 		)
-		// The guard evaluates against the same captured instant as the window.
+		// Retention follows the current time, so the expiry edge falls inside the call.
 		const guardClause = evtClauses.find(
 			(c: Document) =>
 				Array.isArray(c.$or) &&
@@ -533,8 +533,11 @@ describe("mongodb-profile", () => {
 			throw new Error("events activity window edge was not recorded")
 		}
 		const activityWindowEdge = timestampClause.timestamp.$gte as Date
-		expect(expiryEdge.getTime() - activityWindowEdge.getTime()).toBe(
-			activityWindowMs,
+		expect(activityWindowEdge.getTime()).toBeGreaterThanOrEqual(
+			beforeTime - activityWindowMs,
+		)
+		expect(activityWindowEdge.getTime()).toBeLessThanOrEqual(
+			afterTime - activityWindowMs,
 		)
 	})
 

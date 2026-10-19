@@ -661,6 +661,8 @@ describe("mongodb-graph", () => {
 			})
 
 			await expandGraph({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "root-1",
@@ -696,6 +698,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -730,6 +734,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -768,6 +774,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",
@@ -797,6 +805,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-nonexistent",
@@ -830,6 +840,8 @@ describe("mongodb-graph", () => {
 			})
 
 			const result = await deleteEntityConservative({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				entityId: "ent-1",

@@ -1030,6 +1030,17 @@ class FakeCollection {
 		return { acknowledged: true, deletedCount }
 	}
 
+	async deleteOne(filter: Document): Promise<{
+		acknowledged: true
+		deletedCount: number
+	}> {
+		this.gate("deleteOne")
+		const index = this.docs.findIndex((doc) => matchesFilter(doc, filter))
+		if (index === -1) return { acknowledged: true, deletedCount: 0 }
+		this.docs.splice(index, 1)
+		return { acknowledged: true, deletedCount: 1 }
+	}
+
 	async countDocuments(filter: Document = {}): Promise<number> {
 		this.gate("countDocuments")
 		return this.matchingDocs(filter).length

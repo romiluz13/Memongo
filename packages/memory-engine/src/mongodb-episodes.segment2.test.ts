@@ -165,6 +165,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -236,6 +238,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -280,6 +284,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -316,6 +322,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -369,6 +377,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -423,6 +433,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -541,6 +553,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -585,6 +599,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -612,6 +628,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await checkAutoEpisodeTriggers({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				agentId: AGENT_ID,
@@ -644,6 +662,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await getEpisodesByIds({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				episodeIds: ["ep-1", "ep-2"],
@@ -654,6 +674,8 @@ describe("mongodb-episodes", () => {
 			expect(findFn).toHaveBeenCalledWith({
 				episodeId: { $in: ["ep-1", "ep-2"] },
 				agentId: AGENT_ID,
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				status: { $ne: "deleted" },
 			})
 		})
@@ -663,6 +685,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			const result = await getEpisodesByIds({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				episodeIds: [],
@@ -679,6 +703,8 @@ describe("mongodb-episodes", () => {
 			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
 
 			await getEpisodesByIds({
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				db,
 				prefix: PREFIX,
 				episodeIds: ["ep-1"],
@@ -688,6 +714,8 @@ describe("mongodb-episodes", () => {
 			expect(findFn).toHaveBeenCalledWith({
 				episodeId: { $in: ["ep-1"] },
 				agentId: "other-agent",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
 				status: { $ne: "deleted" },
 			})
 		})
