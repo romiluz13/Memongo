@@ -184,7 +184,7 @@ describe("resolveMemoryBackendConfig", () => {
 					} as unknown as MemongoConfig,
 					agentId: "main",
 				}),
-			).toThrow(/memory\.mongodb\.deploymentProfile "community-mongot"/)
+			).toThrow(/memory\.mongodb\.deploymentProfile is not supported/)
 		})
 
 		it("throws when the resolved pair drifts outside the declared contract", () => {
@@ -494,7 +494,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/memory\.mongodb\.numDimensions 768 does not match/,
+			/memory\.mongodb\.numDimensions does not match/,
 		)
 	})
 
@@ -783,7 +783,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/deploymentProfile "community-bare" is not supported/,
+			/deploymentProfile is not supported/,
 		)
 	})
 
@@ -799,7 +799,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/deploymentProfile "atlas-m0" is not supported/,
+			/deploymentProfile is not supported/,
 		)
 	})
 

@@ -6,6 +6,7 @@
 import {
 	type MemongoBootFailureDetail,
 	MemongoBootError,
+	safeScalar,
 } from "./mongodb-boot-errors.js"
 import type { RequiredSearchIndex } from "./mongodb-required-index-manifest.js"
 import {
@@ -114,7 +115,7 @@ export function assessRequiredIndex(
 		return terminal(
 			"index-metadata-unknown",
 			"a readable index type",
-			`reports type ${JSON.stringify(index.type ?? null)} with no search or vectorSearch definition`,
+			`reports type ${safeScalar(index.type)} with no search or vectorSearch definition`,
 		)
 	}
 	if (servedType !== entry.type) {
@@ -129,13 +130,27 @@ export function assessRequiredIndex(
 		return terminal(
 			"index-metadata-unknown",
 			"a documented index status",
-			`reports unknown status ${JSON.stringify(index.status ?? null)}`,
-			status || undefined,
+			`reports unknown status ${safeScalar(index.status)}`,
+			safeScalar(index.status),
 		)
 	}
-	const details = (
-		Array.isArray(index.statusDetail) ? index.statusDetail : []
-	) as HostStatusDetail[]
+	// Complete absence of statusDetail (atlas-local today) leaves the
+	// top-level metadata as the only evidence. Once it is present it must be a
+	// host list, and every host must then prove what it serves.
+	const rawStatusDetail = (index as { statusDetail?: unknown }).statusDetail
+	if (
+		rawStatusDetail !== undefined &&
+		rawStatusDetail !== null &&
+		!Array.isArray(rawStatusDetail)
+	) {
+		return terminal(
+			"index-metadata-unknown",
+			"per-host serving index metadata as a host list",
+			"reports statusDetail that is not a list of hosts",
+			status,
+		)
+	}
+	const details = (rawStatusDetail ?? []) as HostStatusDetail[]
 	const hostStatuses = details.flatMap((host) =>
 		[host.status, host.mainIndex?.status, host.stagedIndex?.status].map(upper),
 	)
@@ -163,7 +178,7 @@ export function assessRequiredIndex(
 		return terminal(
 			"index-metadata-unknown",
 			"queryable: true on a READY index",
-			`reports READY with queryable ${JSON.stringify(index.queryable ?? null)}`,
+			`reports READY with queryable ${safeScalar(index.queryable)}`,
 			status,
 		)
 	}
@@ -172,8 +187,10 @@ export function assessRequiredIndex(
 	).latestDefinitionVersion?.version
 	let servingDefinition: unknown =
 		index.latestDefinition ?? index.definition ?? undefined
-	for (const host of details) {
-		const hostName = typeof host.hostname === "string" ? host.hostname : "host"
+	for (const [position, host] of details.entries()) {
+		// A hostname is deployment topology, so a diagnostic names the host by
+		// its position in statusDetail, never by its reported name.
+		const hostName = `host ${position + 1}`
 		if (host.stagedIndex) {
 			return {
 				state: "pending",
@@ -202,15 +219,25 @@ export function assessRequiredIndex(
 			return terminal(
 				"index-metadata-unknown",
 				"a READY, queryable serving index on every host",
-				`${hostName} reports ${mainStatus || "no status"} with queryable ${JSON.stringify(main.queryable ?? null)}`,
+				`${hostName} reports ${mainStatus ? safeScalar(mainStatus) : "no status"} with queryable ${safeScalar(main.queryable)}`,
 				status,
 			)
 		}
 		const servingVersion = main.definitionVersion?.version
-		if (
-			typeof latestVersion === "number" &&
-			typeof servingVersion === "number"
-		) {
+		const comparableVersions =
+			typeof latestVersion === "number" && typeof servingVersion === "number"
+		// The requested latestDefinition proves nothing about what a host
+		// serves: each host must report either its own serving definition or a
+		// generation that can be compared with latestDefinitionVersion.
+		if (!comparableVersions && main.definition === undefined) {
+			return terminal(
+				"index-metadata-unknown",
+				"evidence that every host serves the intended definition",
+				`${hostName} reports neither a serving definition nor a definition version comparable with latestDefinitionVersion`,
+				status,
+			)
+		}
+		if (comparableVersions) {
 			if (servingVersion < latestVersion) {
 				return {
 					state: "pending",

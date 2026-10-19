@@ -92,7 +92,7 @@ function serving(
 }
 
 function boot(fake: Parameters<typeof createFakeSearchDb>[0]) {
-	const { db, calls, indexes } = createFakeSearchDb(fake)
+	const { db, calls, indexes, advanceRollouts } = createFakeSearchDb(fake)
 	let at = 0
 	const run = () =>
 		enforceBootContract(db, {
@@ -104,6 +104,7 @@ function boot(fake: Parameters<typeof createFakeSearchDb>[0]) {
 			now: () => at,
 			sleep: vi.fn(async (ms: number) => {
 				at += ms
+				advanceRollouts()
 			}),
 		})
 	return { calls, indexes, run }

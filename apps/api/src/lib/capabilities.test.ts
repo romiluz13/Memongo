@@ -5,6 +5,7 @@ import {
 	deriveSearchLanes,
 	formatBootFailure,
 	formatCapabilityTable,
+	formatPreflightReport,
 } from "./capabilities.js"
 
 // Connection strings are assembled at runtime so no literal credential-bearing
@@ -115,5 +116,78 @@ describe("formatBootFailure", () => {
 			`boot refused: ${mongoUri("dummy-cred-11111111")} has no Search`,
 		)
 		expect(formatBootFailure(failure)).not.toContain("dummy-cred-11111111")
+	})
+})
+
+describe("boot output carries no URI, host, database or secret (F5)", () => {
+	const SECRET = "dummy-cred-22222222"
+	const URI = mongoUri(SECRET).replace(
+		"mongo.internal:27017/memongo",
+		"private-host.example.net/tenant-db",
+	)
+	const FORBIDDEN = [
+		SECRET,
+		"private-host",
+		"tenant-db",
+		"mongodb://",
+		"10.1.2.3",
+	]
+
+	function expectClean(text: string) {
+		for (const forbidden of FORBIDDEN) expect(text).not.toContain(forbidden)
+	}
+
+	it("removes a whole URI from a typed boot failure line", () => {
+		const failure = new MemongoBootError(
+			{ code: "index-not-ready", requirement: "READY index", index: "idx" },
+			`boot refused: connection to ${URI} failed`,
+		)
+		const line = formatBootFailure(failure)
+		expectClean(line)
+		expect(line).toContain("boot failure index-not-ready")
+	})
+
+	it("removes a URI, host and address from an untyped failure line", () => {
+		const line = formatBootFailure(
+			new Error(
+				`failed to connect to MongoDB (${URI}): connect ECONNREFUSED 10.1.2.3:27017`,
+			),
+		)
+		expectClean(line)
+		expect(line).toContain("refused to start")
+	})
+
+	it("writes the refusal line to the error channel without a URI", async () => {
+		const deps = refusalDeps()
+		await expect(
+			bootOrRefuse(async () => {
+				throw new Error(`connect failed for ${URI}`)
+			}, deps),
+		).rejects.toThrow(ExitCalled)
+		expectClean(deps.error.mock.calls.map((call) => call.join(" ")).join("\n"))
+	})
+
+	it("serializes the preflight report with every string rendered safe", () => {
+		const report = {
+			ok: false,
+			serverVersion: "8.3.0",
+			manifest: [{ collection: "c", index: "i", type: "search" }],
+			unmet: [
+				{
+					code: "server-unreachable" as const,
+					requirement: `reachable ${URI}`,
+					collection: URI,
+					message: `MongoDB is unreachable (${URI}) at 10.1.2.3:27017`,
+					repairable: false,
+				},
+			],
+		}
+		const json = formatPreflightReport(report)
+		expectClean(json)
+		expect(JSON.parse(json)).toMatchObject({
+			ok: false,
+			serverVersion: "8.3.0",
+			unmet: [{ code: "server-unreachable", repairable: false }],
+		})
 	})
 })

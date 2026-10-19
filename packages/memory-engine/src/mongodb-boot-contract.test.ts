@@ -55,22 +55,29 @@ function withIndex(
 	)
 }
 
-function fakeClock() {
+function fakeClock(onSleep?: () => void) {
 	let at = 0
 	return {
 		now: () => at,
+		advance: (ms: number) => {
+			at += ms
+		},
 		sleep: vi.fn(async (ms: number) => {
 			at += ms
+			onSleep?.()
 		}),
 	}
 }
 
+// Time passing between polls is what lets a staged update finish building, so
+// the harness advances rollouts on every poll sleep unless a test opts out.
 function harness(
 	fake: FakeSearchDbOptions,
 	extra?: Partial<BootContractOptions>,
+	rollouts: "on-poll" | "manual" = "on-poll",
 ) {
-	const { db, calls, indexes } = createFakeSearchDb(fake)
-	const clock = fakeClock()
+	const { db, calls, indexes, advanceRollouts } = createFakeSearchDb(fake)
+	const clock = fakeClock(rollouts === "on-poll" ? advanceRollouts : undefined)
 	const run = () =>
 		enforceBootContract(db, {
 			prefix: PREFIX,
@@ -82,7 +89,7 @@ function harness(
 			sleep: clock.sleep,
 			...extra,
 		})
-	return { db, calls, indexes, clock, run }
+	return { db, calls, indexes, clock, advanceRollouts, run }
 }
 
 async function bootError(promise: Promise<unknown>): Promise<MemongoBootError> {
@@ -326,28 +333,32 @@ describe("enforceBootContract: index states", () => {
 	})
 
 	it("does not accept a staged index still building the updated definition", async () => {
-		const { run } = harness({
-			indexes: withIndex("t_chunks_text", (entry) => ({
-				...readyIndex(entry.name, entry.type, entry.definition),
-				statusDetail: [
-					{
-						hostname: "shard-00",
-						status: "READY",
-						queryable: true,
-						mainIndex: {
+		const { run } = harness(
+			{
+				indexes: withIndex("t_chunks_text", (entry) => ({
+					...readyIndex(entry.name, entry.type, entry.definition),
+					statusDetail: [
+						{
+							hostname: "shard-00",
 							status: "READY",
 							queryable: true,
-							definition: entry.definition,
+							mainIndex: {
+								status: "READY",
+								queryable: true,
+								definition: entry.definition,
+							},
+							stagedIndex: {
+								status: "BUILDING",
+								queryable: false,
+								definition: entry.definition,
+							},
 						},
-						stagedIndex: {
-							status: "BUILDING",
-							queryable: false,
-							definition: entry.definition,
-						},
-					},
-				],
-			})),
-		})
+					],
+				})),
+			},
+			undefined,
+			"manual",
+		)
 		const err = await bootError(run())
 		expect(err.code).toBe("index-not-ready")
 		expect(err.message).toContain("still building the updated definition")
@@ -747,22 +758,359 @@ describe("enforceBootContract: no paid call", () => {
 	})
 })
 
-describe("enforceBootContract: safe diagnostics", () => {
-	it("never carries a connection string or credential from a driver error", async () => {
-		const uri = [
-			"mongodb+srv://boot-user:",
-			"s3cr3t-pass",
-			"@cluster0.example.net",
-		].join("")
-		const { run } = harness({
-			listError: () =>
-				Object.assign(new Error(`connection to ${uri} failed`), {
-					code: 6,
-					codeName: "HostUnreachable",
-				}),
+describe("enforceBootContract: host serving proof", () => {
+	const READY_HOST = { status: "READY", queryable: true } as const
+
+	it("refuses a READY host with neither a serving definition nor a definition version, beside latestDefinitionVersion", async () => {
+		const { calls, clock, run } = harness({
+			indexes: withIndex("t_chunks_text", (entry) => ({
+				...readyIndex(entry.name, entry.type, entry.definition),
+				latestDefinitionVersion: { version: 2 },
+				statusDetail: [
+					{ hostname: "shard-00", ...READY_HOST, mainIndex: { ...READY_HOST } },
+				],
+			})),
 		})
 		const err = await bootError(run())
-		expect(err.message).not.toContain("s3cr3t-pass")
-		expect(JSON.stringify(err.failures)).not.toContain("s3cr3t-pass")
+		expect(err.code).toBe("index-metadata-unknown")
+		expect(err.index).toBe("t_chunks_text")
+		expect(err.message).toContain("neither a serving definition")
+		expect(clock.sleep).not.toHaveBeenCalled()
+		expect(writeCalls(calls)).toEqual([])
+	})
+
+	it("refuses a host that reports a generation when the listing has no latestDefinitionVersion to compare", async () => {
+		const { run } = harness({
+			indexes: withIndex("t_chunks_text", (entry) => ({
+				...readyIndex(entry.name, entry.type, entry.definition),
+				statusDetail: [
+					{
+						hostname: "shard-00",
+						...READY_HOST,
+						mainIndex: { ...READY_HOST, definitionVersion: { version: 1 } },
+					},
+				],
+			})),
+		})
+		expect((await bootError(run())).code).toBe("index-metadata-unknown")
+	})
+
+	it("refuses when only one of several hosts lacks proof", async () => {
+		const { run } = harness({
+			indexes: withIndex("t_chunks_text", (entry) => ({
+				...readyIndex(entry.name, entry.type, entry.definition),
+				latestDefinitionVersion: { version: 2 },
+				statusDetail: [
+					{
+						hostname: "shard-00",
+						...READY_HOST,
+						mainIndex: { ...READY_HOST, definitionVersion: { version: 2 } },
+					},
+					{ hostname: "shard-01", ...READY_HOST, mainIndex: { ...READY_HOST } },
+				],
+			})),
+		})
+		const err = await bootError(run())
+		expect(err.code).toBe("index-metadata-unknown")
+		expect(err.message).toContain("host 2")
+		expect(err.message).not.toContain("shard-01")
+	})
+
+	it("refuses a statusDetail that is not a host list", async () => {
+		const { run } = harness({
+			indexes: withIndex("t_chunks_text", (entry) => ({
+				...readyIndex(entry.name, entry.type, entry.definition),
+				statusDetail: "READY",
+			})),
+		})
+		expect((await bootError(run())).code).toBe("index-metadata-unknown")
+	})
+
+	it("serves when each host proves its generation or its definition", async () => {
+		const { calls, run } = harness({
+			indexes: withIndex("t_chunks_text", (entry) => ({
+				...readyIndex(entry.name, entry.type, entry.definition),
+				latestDefinitionVersion: { version: 2 },
+				statusDetail: [
+					{
+						hostname: "shard-00",
+						...READY_HOST,
+						mainIndex: { ...READY_HOST, definitionVersion: { version: 2 } },
+					},
+					{
+						hostname: "shard-01",
+						...READY_HOST,
+						mainIndex: { ...READY_HOST, definition: entry.definition },
+					},
+				],
+			})),
+		})
+		await expect(run()).resolves.toBeDefined()
+		expect(writeCalls(calls)).toEqual([])
+	})
+
+	it("still serves an index whose listing carries no statusDetail at all (atlas-local)", async () => {
+		const { run } = harness({ indexes: servingIndexes() })
+		await expect(run()).resolves.toBeDefined()
+	})
+})
+
+describe("fake search db: an update is asynchronous", () => {
+	function eventsText(): RequiredSearchIndex {
+		const target = manifest().find((entry) => entry.name === "t_events_text")
+		if (!target) throw new Error("manifest has no t_events_text")
+		return target
+	}
+
+	it("keeps the old main generation and a staged build until the rollout advances", async () => {
+		const target = eventsText()
+		const { db, advanceRollouts } = createFakeSearchDb({
+			indexes: {
+				[target.collectionName]: [
+					readyIndex(target.name, target.type, { mappings: { dynamic: true } }),
+				],
+			},
+		})
+		const events = db.collection(target.collectionName) as unknown as {
+			updateSearchIndex: (name: string, definition: Document) => Promise<void>
+			listSearchIndexes: (name: string) => {
+				toArray: () => Promise<Document[]>
+			}
+		}
+		await events.updateSearchIndex(target.name, target.definition)
+		const [staged] = await events.listSearchIndexes(target.name).toArray()
+		expect(staged.latestDefinition).toEqual(target.definition)
+		expect(staged.statusDetail[0].mainIndex.definition).toEqual({
+			mappings: { dynamic: true },
+		})
+		expect(staged.statusDetail[0].stagedIndex.status).toBe("BUILDING")
+
+		expect(advanceRollouts()).toBe(1)
+		const [advanced] = await events.listSearchIndexes(target.name).toArray()
+		expect(advanced.statusDetail[0].mainIndex.definition).toEqual(
+			target.definition,
+		)
+		expect(advanced.statusDetail[0].stagedIndex).toBeUndefined()
+		expect(advanceRollouts()).toBe(0)
+	})
+
+	it("is not ready before the rollout advances: boot does not pass on the requested definition", async () => {
+		const stuck = harness(
+			{
+				indexes: withIndex("t_events_text", (entry) =>
+					readyIndex(entry.name, entry.type, { mappings: { dynamic: true } }),
+				),
+			},
+			undefined,
+			"manual",
+		)
+		const err = await bootError(stuck.run())
+		expect(err.code).toBe("index-not-ready")
+		expect(err.index).toBe("t_events_text")
+		expect(err.message).toContain("still building the updated definition")
+		expect(writeCalls(stuck.calls)).toEqual([
+			{
+				op: "updateSearchIndex",
+				collection: "t_events",
+				name: "t_events_text",
+			},
+		])
+	})
+})
+
+describe("enforceBootContract: safe diagnostics", () => {
+	const SENTINEL_PASSWORD = "s3cr3t-pass"
+	const CREDENTIALED_URI = [
+		"mongodb+srv://boot-user:",
+		SENTINEL_PASSWORD,
+		"@private-host.example.net/tenant-db?retryWrites=true",
+	].join("")
+	const BARE_URI = "mongodb://private-host.example.net:27017/tenant-db"
+	const FORBIDDEN = [
+		SENTINEL_PASSWORD,
+		"private-host",
+		"tenant-db",
+		"mongodb://",
+		"mongodb+srv://",
+		"10.1.2.3",
+		"memongo_test",
+		"mongot-svc",
+	]
+
+	function driverFailure(text: string) {
+		return Object.assign(new Error(text), {
+			code: 6,
+			codeName: "HostUnreachable",
+		})
+	}
+
+	const hostileTexts = [
+		`connection to ${CREDENTIALED_URI} failed`,
+		`connection to ${BARE_URI} failed`,
+		`connect ECONNREFUSED 10.1.2.3:27017 (${BARE_URI})`,
+		"getaddrinfo ENOTFOUND private-host.example.net",
+		`not authorized on tenant-db to execute command { aggregate: "x", uri: "${BARE_URI}" }`,
+		"index memongo_test.t_chunks rejected by mongot-0.mongot-svc.example.internal",
+		'{ createSearchIndexes: "t_chunks", $db: "memongo_test" } failed',
+	]
+
+	function serialized(err: MemongoBootError): string {
+		return JSON.stringify({
+			message: err.message,
+			failures: err.failures,
+			code: err.code,
+			requirement: err.requirement,
+			index: err.index,
+			collection: err.collection,
+			status: err.status,
+			setting: err.setting,
+		})
+	}
+
+	function expectNoLeak(text: string) {
+		for (const forbidden of FORBIDDEN) expect(text).not.toContain(forbidden)
+	}
+
+	const surfaces: Array<[string, (text: string) => FakeSearchDbOptions]> = [
+		["buildInfo", (text) => ({ buildInfoError: driverFailure(text) })],
+		[
+			"connectionStatus",
+			(text) => ({ connectionStatusError: driverFailure(text) }),
+		],
+		[
+			"$listSearchIndexes",
+			(text) => ({ listError: () => driverFailure(text) }),
+		],
+		[
+			"createSearchIndex",
+			(text) => ({ indexes: {}, createError: () => driverFailure(text) }),
+		],
+		[
+			"updateSearchIndex",
+			(text) => ({
+				indexes: withIndex("t_events_text", (entry) =>
+					readyIndex(entry.name, entry.type, { mappings: { dynamic: true } }),
+				),
+				updateError: () => driverFailure(text),
+			}),
+		],
+	]
+
+	it.each(
+		surfaces,
+	)("never carries a URI, host, database or secret from a %s driver error", async (_surface, build) => {
+		for (const text of hostileTexts) {
+			const { run } = harness(build(text))
+			const err = await bootError(run())
+			expectNoLeak(serialized(err))
+			expect(err.message).toContain("HostUnreachable")
+		}
+	})
+
+	it("keeps the typed code, index and requirement on a rejected definition", async () => {
+		const { run } = harness({
+			indexes: {},
+			createError: () => driverFailure(`rejected ${CREDENTIALED_URI}`),
+		})
+		const err = await bootError(run())
+		expect(err.code).toBe("index-definition-rejected")
+		expect(err.index).toBeDefined()
+		expect(err.collection).toBeDefined()
+		expect(err.requirement).toBe("a definition the deployment accepts")
+	})
+
+	it("shows the server's wording about a refused definition, scrubbed, and only there", async () => {
+		const wording = "Omit quantization to use the default (float)"
+		const { run } = harness({
+			indexes: {},
+			createError: () =>
+				driverFailure(
+					`${wording} for memongo_test.t_chunks via ${BARE_URI} on 10.1.2.3:27017`,
+				),
+		})
+		const err = await bootError(run())
+		expect(err.code).toBe("index-definition-rejected")
+		expect(err.message).toContain(wording)
+		expectNoLeak(serialized(err))
+
+		const privilege = await bootError(
+			harness({
+				indexes: {},
+				createError: () =>
+					Object.assign(new Error(`not authorized: ${wording}`), {
+						code: 13,
+						codeName: "Unauthorized",
+					}),
+			}).run(),
+		)
+		expect(privilege.code).toBe("search-privileges-denied")
+		expect(privilege.message).not.toContain(wording)
+	})
+
+	it("scrubs a URI out of any typed boot error message and field, wherever it came from", () => {
+		const err = new MemongoBootError(
+			{
+				code: "config-invalid",
+				requirement: `valid ${BARE_URI}`,
+				setting: CREDENTIALED_URI,
+				index: BARE_URI,
+				collection: BARE_URI,
+				status: BARE_URI,
+			},
+			`boot refused: ${CREDENTIALED_URI} and ${BARE_URI}`,
+		)
+		expectNoLeak(serialized(err))
+	})
+
+	it("never echoes a provider-reported status, type or host name", async () => {
+		const hostile = `STATUS-${BARE_URI}`
+		const { run } = harness({
+			indexes: withIndex("t_events_text", (entry) => ({
+				...readyIndex(entry.name, entry.type, entry.definition),
+				status: hostile,
+				type: hostile,
+			})),
+		})
+		expectNoLeak(serialized(await bootError(run())))
+		const { run: hostRun } = harness({
+			indexes: withIndex("t_events_text", (entry) => ({
+				...readyIndex(entry.name, entry.type, entry.definition),
+				statusDetail: [
+					{
+						hostname: "private-host.example.net:27017",
+						status: "READY",
+						queryable: true,
+					},
+				],
+			})),
+		})
+		expectNoLeak(serialized(await bootError(hostRun())))
+	})
+
+	it("writes no URI, host, database or secret to the logs, on a repaired boot or a failed one", async () => {
+		const previous = process.env.MEMONGO_LOG_LEVEL
+		process.env.MEMONGO_LOG_LEVEL = "debug"
+		const sinks = (["log", "info", "warn", "error", "debug"] as const).map(
+			(method) => vi.spyOn(console, method).mockImplementation(() => {}),
+		)
+		try {
+			await harness({ indexes: {} }).run()
+			await harness({
+				indexes: {},
+				createError: () => driverFailure(`rejected ${CREDENTIALED_URI}`),
+			})
+				.run()
+				.catch(() => undefined)
+			const logged = sinks
+				.flatMap((sink) => sink.mock.calls)
+				.map((args) => args.join(" "))
+				.join("\n")
+			expect(logged).toContain("created")
+			expectNoLeak(logged)
+		} finally {
+			for (const sink of sinks) sink.mockRestore()
+			if (previous === undefined) delete process.env.MEMONGO_LOG_LEVEL
+			else process.env.MEMONGO_LOG_LEVEL = previous
+		}
 	})
 })

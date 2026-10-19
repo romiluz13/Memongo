@@ -150,3 +150,195 @@ describe("runBootPreflight", () => {
 		expect(fetchSpy).not.toHaveBeenCalled()
 	})
 })
+
+describe("runBootPreflight: every unmet requirement across collections (F6)", () => {
+	const denied = () =>
+		Object.assign(new Error("not authorized on memongo_test"), {
+			code: 13,
+			codeName: "Unauthorized",
+		})
+
+	it("reports a failed listing on one collection together with a missing and a STALE index on others", async () => {
+		const { db, calls } = createFakeSearchDb({
+			indexes: indexesExcept({
+				t_events_text: null,
+				t_procedures_text: {
+					...readyIndex("t_procedures_text", "search", {}),
+					status: "STALE",
+				},
+			}),
+			listError: (collection) =>
+				collection === "t_chunks" ? denied() : undefined,
+		})
+		const report = await runBootPreflight(db, { prefix: PREFIX, env: ENV })
+		expect(report.ok).toBe(false)
+		expect(
+			report.unmet.map((unmet) => [unmet.code, unmet.collection, unmet.index]),
+		).toEqual(
+			expect.arrayContaining([
+				["search-privileges-denied", "t_chunks", undefined],
+				["index-absent", "t_events", "t_events_text"],
+				["index-stale", "t_procedures", "t_procedures_text"],
+			]),
+		)
+		expect(
+			report.unmet.filter((unmet) => unmet.collection === "t_chunks"),
+		).toHaveLength(1)
+		expect(writeCalls(calls)).toEqual([])
+	})
+
+	it("does not call an unlisted collection's indexes absent", async () => {
+		const { db } = createFakeSearchDb({
+			indexes: {},
+			listError: (collection) =>
+				collection === "t_chunks" ? denied() : undefined,
+		})
+		const report = await runBootPreflight(db, { prefix: PREFIX, env: ENV })
+		const chunkIndexNames = manifest
+			.filter((entry) => entry.collectionName === "t_chunks")
+			.map((entry) => entry.name)
+		expect(chunkIndexNames.length).toBeGreaterThan(0)
+		for (const name of chunkIndexNames) {
+			expect(
+				report.unmet.some(
+					(unmet) => unmet.code === "index-absent" && unmet.index === name,
+				),
+			).toBe(false)
+		}
+		expect(
+			report.unmet.some(
+				(unmet) =>
+					unmet.code === "index-absent" && unmet.index === "t_events_text",
+			),
+		).toBe(true)
+	})
+
+	it("reports one entry per collection whose listing failed", async () => {
+		const { db } = createFakeSearchDb({
+			indexes: indexesExcept({}),
+			listError: (collection) =>
+				collection === "t_chunks" || collection === "t_events"
+					? denied()
+					: undefined,
+		})
+		const report = await runBootPreflight(db, { prefix: PREFIX, env: ENV })
+		expect(
+			report.unmet
+				.filter((unmet) => unmet.code === "search-privileges-denied")
+				.map((unmet) => unmet.collection)
+				.sort(),
+		).toEqual(["t_chunks", "t_events"])
+	})
+
+	it("keeps the other checks when the version and privilege checks fail too", async () => {
+		const { db } = createFakeSearchDb({
+			versionArray: [8, 2, 6, 0],
+			connectionStatusError: new Error("connectionStatus failed"),
+			indexes: indexesExcept({ t_events_text: null }),
+			listError: (collection) =>
+				collection === "t_chunks" ? denied() : undefined,
+		})
+		const report = await runBootPreflight(db, { prefix: PREFIX, env: ENV })
+		expect(report.unmet.map((unmet) => unmet.code)).toEqual(
+			expect.arrayContaining([
+				"server-version-unsupported",
+				"index-metadata-unknown",
+				"search-privileges-denied",
+				"index-absent",
+			]),
+		)
+	})
+})
+
+describe("runBootPreflight: the deadline bounds the checks", () => {
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	it("reports the expired deadline once, runs no further check and does not hang", async () => {
+		vi.useFakeTimers()
+		const { db, calls } = createFakeSearchDb({
+			indexes: indexesExcept({}),
+			before: (op) =>
+				op.kind === "listSearchIndexes"
+					? new Promise<void>(() => {})
+					: undefined,
+		})
+		const pending = runBootPreflight(db, {
+			prefix: PREFIX,
+			env: ENV,
+			deadlineMs: 5_000,
+		})
+		await vi.advanceTimersByTimeAsync(5_001)
+		const report = await pending
+		expect(report.ok).toBe(false)
+		const expired = report.unmet.filter(
+			(unmet) => unmet.code === "boot-deadline-exceeded",
+		)
+		expect(expired).toHaveLength(1)
+		expect(expired[0].message).toContain("skipped")
+		expect(calls.filter((call) => call.op === "aggregate")).toHaveLength(1)
+		expect(vi.getTimerCount()).toBe(0)
+	})
+})
+
+describe("runBootPreflight: no URI, host, database or secret in the report (F5)", () => {
+	const SECRET = "s3cr3t-pf"
+	const URI = `mongodb+srv://pf-user:${SECRET}@private-host.example.net/tenant-db`
+	const FORBIDDEN = [SECRET, "private-host", "tenant-db", "mongodb+srv://"]
+
+	function hostile(text: string) {
+		return Object.assign(new Error(text), {
+			code: 6,
+			codeName: "HostUnreachable",
+		})
+	}
+
+	it("serializes a report free of every driver-supplied URI, host and database", async () => {
+		const texts = [
+			`connection to ${URI} failed`,
+			"getaddrinfo ENOTFOUND private-host.example.net",
+			`not authorized on tenant-db to execute command { uri: "${URI}" }`,
+		]
+		for (const text of texts) {
+			const { db } = createFakeSearchDb({
+				buildInfoError: hostile(text),
+				connectionStatusError: hostile(text),
+				listError: () => hostile(text),
+			})
+			const report = await runBootPreflight(db, {
+				prefix: PREFIX,
+				env: ENV,
+				requiredCollections: collections,
+			})
+			expect(report.unmet.length).toBeGreaterThan(0)
+			const json = JSON.stringify(report)
+			for (const forbidden of FORBIDDEN) expect(json).not.toContain(forbidden)
+		}
+	})
+
+	it("serializes a report free of a provider-reported host name and status", async () => {
+		const { db } = createFakeSearchDb({
+			indexes: indexesExcept({
+				t_events_text: {
+					...readyIndex("t_events_text", "search", {}),
+					status: `ACTIVE-${URI}`,
+				},
+				t_chunks_text: {
+					...readyIndex("t_chunks_text", "search", {}),
+					statusDetail: [
+						{
+							hostname: "private-host.example.net:27017",
+							status: "READY",
+							queryable: true,
+						},
+					],
+				},
+			}),
+		})
+		const report = await runBootPreflight(db, { prefix: PREFIX, env: ENV })
+		expect(report.unmet.length).toBeGreaterThan(0)
+		const json = JSON.stringify(report)
+		for (const forbidden of FORBIDDEN) expect(json).not.toContain(forbidden)
+	})
+})

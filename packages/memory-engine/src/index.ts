@@ -85,6 +85,7 @@ export {
 	MemongoBootError,
 	type MemongoBootFailureCode,
 	type MemongoBootFailureDetail,
+	safeBootText,
 } from "./mongodb-boot-errors.js"
 export type {
 	BootPreflightReport,
