@@ -472,7 +472,7 @@ export type MemongoSearchDetailedMetadata = {
 		needExactEvidence: boolean
 		allowConstraintRelaxation: boolean
 		numCandidates: number
-		fusionMethod: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod: "scoreFusion" | "rankFusion"
 		hybridMode: "hybrid" | "vector-only"
 		allowHybridBackstop: boolean
 		lexicalPrefilter: "disabled" | "experimental"
@@ -918,7 +918,7 @@ export class MemongoClient {
 		minScore?: number
 		filter?: { tags?: string[]; category?: string; source?: string }
 		/** Server-side fusion preference for the KB lane (P0.10). */
-		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
+		fusionMethod?: "scoreFusion" | "rankFusion"
 	}): Promise<MemongoSearchKBResponse> {
 		return this._silently<MemongoSearchKBResponse>({ results: [] }, () =>
 			apiPost(this._opts, "/v1/search-kb", {

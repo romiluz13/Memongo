@@ -356,7 +356,7 @@ export const searchPaths = {
 										numCandidates: { type: "number" },
 										fusionMethod: {
 											type: "string",
-											enum: ["scoreFusion", "rankFusion", "js-merge"],
+											enum: ["scoreFusion", "rankFusion"],
 										},
 										hybridMode: {
 											type: "string",

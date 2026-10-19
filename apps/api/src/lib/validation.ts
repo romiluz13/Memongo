@@ -254,7 +254,7 @@ export const searchConfigSchema = z
 		needExactEvidence: z.boolean().optional(),
 		allowConstraintRelaxation: z.boolean().optional(),
 		numCandidates: z.number().int().positive().optional(),
-		fusionMethod: z.enum(["scoreFusion", "rankFusion", "js-merge"]).optional(),
+		fusionMethod: z.enum(["scoreFusion", "rankFusion"]).optional(),
 		hybridMode: z.enum(["hybrid", "vector-only"]).optional(),
 		allowHybridBackstop: z.boolean().optional(),
 		lexicalPrefilter: z.enum(["disabled", "experimental"]).optional(),

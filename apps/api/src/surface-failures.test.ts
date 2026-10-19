@@ -236,3 +236,82 @@ describe("POST /v1/admin/relevance/explain (X-11)", () => {
 		expect((await json(response)).error?.code).toBe("SEARCH_LANES_FAILED")
 	})
 })
+
+describe("POST /v1/read-file (G2-69)", () => {
+	const erasing = () =>
+		Object.assign(new Error("private gate detail"), {
+			name: "ErasureGateConflictError",
+		})
+
+	it("maps an active erasure to a typed 409, not an empty miss", async () => {
+		bridge.memongoBridgeReadFile.mockRejectedValue(erasing())
+
+		const response = await post("/v1/read-file", { relPath: "notes/a.md" })
+
+		expect(response.status).toBe(409)
+		const body = await json(response)
+		expect(body.error?.code).toBe("ERASURE_IN_PROGRESS")
+		expect(JSON.stringify(body)).not.toContain("private")
+	})
+
+	it("keeps an untyped failure on the route's internal error code", async () => {
+		bridge.memongoBridgeReadFile.mockRejectedValue(new Error("private text"))
+
+		const response = await post("/v1/read-file", { relPath: "notes/a.md" })
+
+		expect(response.status).toBe(500)
+		expect((await json(response)).error?.code).toBe("READ_FILE_FAILED")
+	})
+
+	it("serves a real read as a 200", async () => {
+		bridge.memongoBridgeReadFile.mockResolvedValue({
+			text: "hi",
+			path: "notes/a.md",
+		})
+
+		const response = await post("/v1/read-file", { relPath: "notes/a.md" })
+
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ text: "hi", path: "notes/a.md" })
+	})
+})
+
+describe("POST /v1/search-detailed searchConfig.fusionMethod (X-05)", () => {
+	const detailed = {
+		results: [],
+		metadata: { outcomeStatus: "complete", laneOutcomes: [] },
+	}
+
+	it.each([
+		"js-merge",
+		"reciprocal",
+	])("rejects %s with a typed 400 before the engine runs", async (fusionMethod) => {
+		const response = await post("/v1/search-detailed", {
+			query: "q",
+			searchConfig: { fusionMethod },
+		})
+
+		expect(response.status).toBe(400)
+		const body = await json(response)
+		expect(body.error?.code).toBe("VALIDATION_ERROR")
+		expect(body.error?.message).toContain("searchConfig.fusionMethod")
+		expect(bridge.memongoBridgeSearchDetailed).not.toHaveBeenCalled()
+	})
+
+	it.each([
+		"scoreFusion",
+		"rankFusion",
+	])("accepts the native %s mode", async (fusionMethod) => {
+		bridge.memongoBridgeSearchDetailed.mockResolvedValue(detailed)
+
+		const response = await post("/v1/search-detailed", {
+			query: "q",
+			searchConfig: { fusionMethod },
+		})
+
+		expect(response.status).toBe(200)
+		expect(bridge.memongoBridgeSearchDetailed).toHaveBeenCalledWith(
+			expect.objectContaining({ searchConfig: { fusionMethod } }),
+		)
+	})
+})

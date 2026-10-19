@@ -469,7 +469,13 @@ export const contextPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "File read result" } },
+			responses: {
+				"200": { description: "File read result" },
+				"409": {
+					description:
+						"ERASURE_IN_PROGRESS: an erasure is in progress for the agent, so the read is refused rather than answered with an empty miss. Retry after the erasure finishes.",
+				},
+			},
 		},
 	},
 } as const

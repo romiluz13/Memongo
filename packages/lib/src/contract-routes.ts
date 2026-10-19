@@ -291,7 +291,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Read a memory file by relative path",
 		requiredFields: ["relPath"],
 		optionalFields: ["agentId", "from", "lines"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 409, 500],
 		tools: ["memongo_read_file"],
 	},
 	{
