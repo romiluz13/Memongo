@@ -356,9 +356,9 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "path" },
 				// Tenant isolation pre-filter for KB vector search (issue #27).
 				{ type: "filter", path: "scopeRef" },
-				// W13: the stats coverage probe filters by agentId — mirroring
-				// chunks_vector and structured_mem_vector, the tenant field must
-				// be a declared filter path or mongot rejects the probe.
+				// W13: declared for the stats coverage probe, which M2 T10 removed.
+				// Kept so the index definition does not change (a definition edit
+				// rebuilds the index); no query filters on it now.
 				{ type: "filter", path: "agentId" },
 			]
 

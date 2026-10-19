@@ -52,10 +52,6 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 						path: "text",
 						model: "voyage-4-large",
 					},
-					// W13: the tenant-scoped coverage probe filters by agentId
-					// inside $vectorSearch — the field must be a declared filter
-					// path or mongot rejects the probe.
-					{ type: "filter", path: "agentId" },
 				],
 			},
 		})
@@ -66,58 +62,34 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 		await client?.close()
 	})
 
-	it("reports queryable Search-index coverage without inventing pending state when the index is unobservable", async () => {
-		const readiness = await waitForSearchIndexesQueryable(
-			db.collection("chunks"),
-			{
-				indexNames: [INDEX],
-				timeoutMs: 180_000,
-				pollMs: 2_000,
-			},
-		)
-		if (!readiness.ready) {
-			const stats = await getMemoryStats(db, "", "coverage-agent", undefined, {
-				embeddingMode: "automated",
-			})
-			expect(stats.embeddingCoverage).toMatchObject({
-				withEmbedding: 0,
-				withoutEmbedding: 0,
-				unknown: 3,
-				total: 3,
-				coveragePercent: null,
-				basis: "search-index",
-			})
-			return
-		}
+	it("reports tenant coverage as unknown, never a probe-derived number or an invented pending state", async () => {
+		// M2 T10 (G3-75): /stats no longer runs a $vectorSearch probe (its text
+		// query was embedded on every call, outside the cost ledger). Whether the
+		// index is queryable yet or not, the per-tenant answer is unknown.
+		await waitForSearchIndexesQueryable(db.collection("chunks"), {
+			indexNames: [INDEX],
+			timeoutMs: 180_000,
+			pollMs: 2_000,
+		})
 
-		const deadline = Date.now() + 180_000
-		let stats = await getMemoryStats(db, "", "coverage-agent", undefined, {
+		const stats = await getMemoryStats(db, "", "coverage-agent", undefined, {
 			embeddingMode: "automated",
 		})
-		while (
-			Date.now() < deadline &&
-			stats.embeddingCoverage.withEmbedding !== 3
-		) {
-			await new Promise((resolve) => setTimeout(resolve, 2_000))
-			stats = await getMemoryStats(db, "", "coverage-agent", undefined, {
-				embeddingMode: "automated",
-			})
-		}
 
 		expect(stats.embeddingCoverage).toEqual({
-			withEmbedding: 3,
+			withEmbedding: 0,
 			withoutEmbedding: 0,
-			unknown: 0,
+			unknown: 3,
 			total: 3,
-			coveragePercent: 100,
+			coveragePercent: null,
 			basis: "search-index",
 		})
 		expect(stats.embeddingStatusCoverage).toEqual({
 			total: 3,
-			success: 3,
+			success: 0,
 			failed: 0,
 			pending: 0,
-			unknown: 0,
+			unknown: 3,
 			basis: "search-index",
 		})
 	})
