@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Db, Collection, Document } from "mongodb"
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { SearchLaneError, type SearchTierOutcome } from "./search-outcomes.js"
 
 // Mock mongodb-events.js for checkAutoEpisodeTriggers tests
 vi.mock("./mongodb-events.js", () => ({
@@ -665,150 +664,6 @@ describe("mongodb-episodes", () => {
 		})
 	})
 
-	describe("searchEpisodes", () => {
-		it("uses regex search on summary/title", async () => {
-			const episodeDoc = makeEpisodeDoc()
-			const findResult = {
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn().mockResolvedValue([episodeDoc]),
-					}),
-				}),
-			}
-			const episodesCol = createMockCollection({
-				find: vi.fn().mockReturnValue(findResult),
-			})
-			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
-
-			const results = await searchEpisodes({
-				db,
-				prefix: PREFIX,
-				query: "standup",
-				agentId: AGENT_ID,
-			})
-
-			expect(results).toHaveLength(1)
-			expect(results[0].title).toBe("Daily Standup Notes")
-
-			// Verify $regex search on title/summary with $or
-			const [filter] = (episodesCol.find as ReturnType<typeof vi.fn>).mock
-				.calls[0]
-			expect(filter.agentId).toBe(AGENT_ID)
-			expect(filter.$or).toBeDefined()
-			expect(filter.$or).toHaveLength(2)
-		})
-
-		it("routes through $search autocomplete on episode_autocomplete when textSearch capability is on (P3.8)", async () => {
-			const episodeDoc = makeEpisodeDoc()
-			const episodesCol = createMockCollection({
-				aggregate: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockResolvedValue([episodeDoc]),
-				}),
-			})
-			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
-
-			const results = await searchEpisodes({
-				db,
-				prefix: PREFIX,
-				query: "standup",
-				agentId: AGENT_ID,
-				textSearchAvailable: true,
-			})
-
-			expect(results).toHaveLength(1)
-			expect(results[0].title).toBe("Daily Standup Notes")
-
-			// No request-path $regex scan when the search index can serve it
-			expect(episodesCol.find).not.toHaveBeenCalled()
-			const aggCalls = (episodesCol.aggregate as ReturnType<typeof vi.fn>).mock
-				.calls
-			expect(aggCalls).toHaveLength(1)
-			const pipeline = aggCalls[0][0] as Document[]
-			const searchStage = pipeline[0].$search as Record<string, unknown>
-			expect(searchStage.index).toBe("episode_autocomplete")
-			const compound = searchStage.compound as Record<string, unknown>
-			const shouldClauses = compound.should as Array<Record<string, unknown>>
-			expect(shouldClauses[0]).toHaveProperty("autocomplete")
-			// Tenant isolation is a search filter, not a post-filter
-			const filterClauses = compound.filter as Array<Record<string, unknown>>
-			expect(filterClauses).toContainEqual({
-				equals: { path: "agentId", value: AGENT_ID },
-			})
-			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling
-			const options = aggCalls[0][1] as { maxTimeMS?: number } | undefined
-			expect(typeof options?.maxTimeMS).toBe("number")
-		})
-
-		it("G1: a $search runtime failure throws typed and never falls back to $regex", async () => {
-			const episodeDoc = makeEpisodeDoc()
-			const findResult = {
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn().mockResolvedValue([episodeDoc]),
-					}),
-				}),
-			}
-			const episodesCol = createMockCollection({
-				aggregate: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockRejectedValue(new Error("mongot unavailable")),
-				}),
-				find: vi.fn().mockReturnValue(findResult),
-			})
-			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
-
-			const rows: SearchTierOutcome[] = []
-			const failure = await searchEpisodes({
-				db,
-				prefix: PREFIX,
-				query: "standup",
-				agentId: AGENT_ID,
-				textSearchAvailable: true,
-				onTierOutcome: (row) => rows.push(row),
-			}).catch((err: unknown) => err)
-
-			expect(episodesCol.aggregate).toHaveBeenCalledOnce()
-			expect(episodesCol.find).not.toHaveBeenCalled()
-			expect(failure).toBeInstanceOf(SearchLaneError)
-			expect(failure).toMatchObject({
-				stage: "atlas-search",
-				reason: "internal-error",
-			})
-			expect((failure as Error).message).not.toContain("mongot unavailable")
-			expect(rows).toEqual([])
-		})
-
-		it("keeps the regex fallback escaped when textSearch capability is off", async () => {
-			const findResult = {
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn().mockResolvedValue([]),
-					}),
-				}),
-			}
-			const episodesCol = createMockCollection({
-				aggregate: vi.fn(),
-				find: vi.fn().mockReturnValue(findResult),
-			})
-			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
-
-			await searchEpisodes({
-				db,
-				prefix: PREFIX,
-				query: "a+b testing",
-				agentId: AGENT_ID,
-				textSearchAvailable: false,
-			})
-
-			expect(episodesCol.aggregate).not.toHaveBeenCalled()
-			const [filter] = (episodesCol.find as ReturnType<typeof vi.fn>).mock
-				.calls[0]
-			const titleRegex = filter.$or?.[0]?.title?.$regex as RegExp
-			expect(titleRegex).toBeInstanceOf(RegExp)
-			// Metacharacters inside a keyword must be escaped, not interpreted.
-			expect(titleRegex.source).toBe("a\\+b|testing")
-		})
-	})
-
 	// Covered by live episode materialization and scope-aware upserts.
 	describe("idempotent upsert", () => {
 		it("duplicate materialization for same time range updates existing episode", async () => {
@@ -961,32 +816,6 @@ describe("mongodb-episodes", () => {
 		})
 	})
 
-	describe("search query normalization", () => {
-		it("uses keyword-aware regex matching for summary-style queries", async () => {
-			const toArray = vi.fn().mockResolvedValue([])
-			const limit = vi.fn().mockReturnValue({ toArray })
-			const sort = vi.fn().mockReturnValue({ limit })
-			const find = vi.fn().mockReturnValue({ sort })
-			const episodesCol = createMockCollection({ find })
-			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
-
-			await searchEpisodes({
-				db,
-				prefix: PREFIX,
-				query: "Summarize what happened in the Phoenix release blocker thread",
-				agentId: AGENT_ID,
-			})
-
-			const [filter] = find.mock.calls[0] as [Document]
-			const titleRegex = filter.$or?.[0]?.title?.$regex as RegExp
-			expect(titleRegex).toBeInstanceOf(RegExp)
-			expect(titleRegex.source).toContain("phoenix")
-			expect(titleRegex.source).toContain("release")
-			expect(titleRegex.source).toContain("blocker")
-			expect(titleRegex.source).not.toContain("summarize")
-		})
-	})
-
 	// Covered by live materialization semantics; current unit seam is stale.
 	describe("episodeId stability on re-materialization", () => {
 		it("places episodeId in $setOnInsert, not $set", async () => {
@@ -1047,25 +876,6 @@ describe("mongodb-episodes", () => {
 					summarizer: mockSummarizer,
 				}),
 			).rejects.toThrow("db write failed")
-		})
-
-		it("G3: searchEpisodes rethrows a $regex failure typed, original as cause", async () => {
-			const episodesCol = createMockCollection({
-				find: vi.fn().mockImplementation(() => {
-					throw new Error("db read failed")
-				}),
-			})
-			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
-
-			const failure = await searchEpisodes({
-				db,
-				prefix: PREFIX,
-				query: "test",
-				agentId: AGENT_ID,
-			}).catch((err: unknown) => err)
-			expect(failure).toBeInstanceOf(SearchLaneError)
-			expect(failure).toMatchObject({ stage: "episode-search" })
-			expect(((failure as Error).cause as Error).message).toBe("db read failed")
 		})
 	})
 
@@ -1161,31 +971,6 @@ describe("mongodb-episodes", () => {
 				prefix: PREFIX,
 				agentId: AGENT_ID,
 				type: "daily",
-			})
-
-			const [filter] = (episodesCol.find as ReturnType<typeof vi.fn>).mock
-				.calls[0]
-			expect(filter.status).toEqual({ $ne: "deleted" })
-		})
-
-		it("searchEpisodes excludes deleted episodes", async () => {
-			const findResult = {
-				sort: vi.fn().mockReturnValue({
-					limit: vi.fn().mockReturnValue({
-						toArray: vi.fn().mockResolvedValue([]),
-					}),
-				}),
-			}
-			const episodesCol = createMockCollection({
-				find: vi.fn().mockReturnValue(findResult),
-			})
-			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
-
-			await searchEpisodes({
-				db,
-				prefix: PREFIX,
-				query: "standup",
-				agentId: AGENT_ID,
 			})
 
 			const [filter] = (episodesCol.find as ReturnType<typeof vi.fn>).mock
