@@ -15,7 +15,7 @@ import {
 	ErasureGateConflictError,
 	withFencedWrite,
 } from "./mongodb-write-fence.js"
-import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
+import { runSearchAggregateWithRetry } from "./mongodb-search.js"
 import { requireTenantIdentity } from "./mongodb-tenant-identity.js"
 import {
 	type SearchTierOutcomeSink,
@@ -731,10 +731,11 @@ export async function searchEpisodes(params: {
 			{ $match: current },
 			{ $limit: limit ?? 50 },
 		]
-		const docs = await col
-			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
-			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-			.toArray()
+		// #122 R1: the charged executor charges this search to the request
+		// ledger (one aggregation) and carries the user-search maxTimeMS.
+		const docs = await runSearchAggregateWithRetry(col, pipeline, {
+			stage: "atlas-search",
+		})
 		report(docs.length)
 		return docs as unknown as Episode[]
 	} catch (err) {

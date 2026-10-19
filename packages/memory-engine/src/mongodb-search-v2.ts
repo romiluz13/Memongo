@@ -79,6 +79,9 @@ import {
 import {
 	addSearchCosts,
 	conversationEvidenceLaneCost,
+	episodicLaneCost,
+	GRAPH_LANE_MAX_LOOKUPS,
+	graphLaneCost,
 	kbLaneCost,
 	nativeFusionCost,
 	NO_SEARCH_COST,
@@ -1225,17 +1228,19 @@ async function searchV2WithBudget(
 					if (constrainedGraphCandidates.length > 0) {
 						const candidateEntities = (
 							await Promise.all(
-								constrainedGraphCandidates.slice(0, 4).map((name) =>
-									searchEntitiesAutocomplete({
-										db,
-										prefix,
-										query: name,
-										agentId,
-										scope,
-										scopeRef: agentScopeRef,
-										limit: 5,
-									}),
-								),
+								constrainedGraphCandidates
+									.slice(0, GRAPH_LANE_MAX_LOOKUPS)
+									.map((name) =>
+										searchEntitiesAutocomplete({
+											db,
+											prefix,
+											query: name,
+											agentId,
+											scope,
+											scopeRef: agentScopeRef,
+											limit: 5,
+										}),
+									),
 							)
 						).flat()
 						const entity = pickBestEntityMatch(candidateEntities, query)
@@ -1771,6 +1776,10 @@ async function searchV2WithBudget(
 					return conversationEvidenceLaneCost({ capabilities, embeddingMode })
 				case "raw-window":
 					return rawWindowLaneCost()
+				case "graph":
+					return graphLaneCost(constrainedGraphCandidates.length)
+				case "episodic":
+					return episodicLaneCost()
 				default:
 					return NO_SEARCH_COST
 			}
@@ -1803,6 +1812,11 @@ async function searchV2WithBudget(
 						conversationScope: context.searchOptions?.conversationScope,
 						sourcePreference: context.searchOptions?.sourcePreference,
 						needExactEvidence: context.searchOptions?.needExactEvidence,
+						graphCandidates: constrainedGraphCandidates.slice(
+							0,
+							GRAPH_LANE_MAX_LOOKUPS,
+						),
+						graphMaxDepth: context.searchOptions?.graphMaxDepth,
 					},
 					limits: {
 						maxResults,
