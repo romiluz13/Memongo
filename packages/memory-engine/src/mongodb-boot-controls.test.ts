@@ -55,7 +55,6 @@ vi.mock("./mongodb-schema.js", async (importOriginal) => {
 	const realSearchBoot = [
 		"enforceBootContract",
 		"ensureSearchIndexes",
-		"waitForSearchIndexesQueryable",
 		"isSearchIndexManagementAvailable",
 		"getExpectedSearchIndexTargets",
 		"resolveSearchIndexReadinessTiming",

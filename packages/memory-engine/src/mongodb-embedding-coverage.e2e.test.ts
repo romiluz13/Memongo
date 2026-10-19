@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { MongoClient, type Db } from "mongodb"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { getMemoryStats } from "./mongodb-analytics.js"
-import { waitForSearchIndexesQueryable } from "./mongodb-schema.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 import {
 	hasAtlasModelKey,
 	resolvePreviewMongoTestUri,

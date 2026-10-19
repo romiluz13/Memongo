@@ -1852,13 +1852,24 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 		process.env = { ...prevEnv }
 	})
 
-	it("serves the degradation marker on /v1/search when the engine throttles (C-019)", async () => {
+	it("answers a throttled /v1/search with a typed 503, not a degraded 200 (C-019, review 1237 ruling 4)", async () => {
 		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
 			results: [],
 			degradation: {
 				kind: "throttled",
 				scope: "denied",
 				retryAfterMs: 4000,
+			},
+			outcomes: {
+				status: "failed",
+				lanes: [
+					{
+						lane: "search",
+						stage: "request",
+						outcome: "budget-denied",
+						reason: "budget-embeds",
+					},
+				],
 			},
 		})
 
@@ -1868,21 +1879,14 @@ describe("WS-12 degradation markers at search boundaries (C-019)", () => {
 			body: JSON.stringify({ query: "anything" }),
 		})
 
-		expect(res.status).toBe(200)
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBe("4")
 		const body = (await res.json()) as {
-			results: unknown[]
-			degradation?: {
-				kind: string
-				scope: string
-				retryAfterMs?: number
-			}
+			error: { code: string }
+			degradation?: unknown
 		}
-		expect(body.results).toEqual([])
-		expect(body.degradation).toEqual({
-			kind: "throttled",
-			scope: "denied",
-			retryAfterMs: 4000,
-		})
+		expect(body.error.code).toBe("SEARCH_BUDGET_EXHAUSTED")
+		expect(body.degradation).toBeUndefined()
 	})
 
 	it("omits the degradation field on /v1/search when nothing degraded", async () => {

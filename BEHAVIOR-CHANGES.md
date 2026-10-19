@@ -510,7 +510,7 @@ Write decisions, LLM extraction, background jobs, transactions and the change st
 
 M2 ticket #119: bridge and API silent empties and swallowed errors. Each entry names what used to happen, what happens now and the inventory row.
 
-- **Bridge search returns an envelope and throws on a failed call (X-01, X-02).** `memongoBridgeSearch()` and `memongoBridgeSearchKB()` returned a bare array, so a failed or throttled search read as `[]`. They now return `{ results, outcomes?, degradation? }`. When every lane failed they throw the engine's typed `SearchLaneError` (or `SearchBudgetDeniedError` for a pure budget denial) with the rows on `error.outcomes`. A partial or throttled call returns its results plus the rows or the throttle marker. Callers that used the array must read `.results`.
+- **Bridge search returns an envelope and throws on a failed call (X-01, X-02).** `memongoBridgeSearch()` and `memongoBridgeSearchKB()` returned a bare array, so a failed or throttled search read as `[]`. They now return `{ results, outcomes?, degradation? }`. When every lane failed they throw the engine's typed `SearchLaneError` (or `SearchBudgetDeniedError` for a pure budget denial) with the rows on `error.outcomes`. A partial call returns its results plus the rows. A throttled call is a failed call: `memongoBridgeSearch()` throws, and the `WithDegradation` envelope carries the failed rows beside the throttle marker. Callers that used the array must read `.results`.
 - **`getState` reports failed sections as typed rows (X-03).** A rejected section used to become `{}` or `null` with a boolean `partial`. The bridge now omits the section and lists `{ section, reason }` in `failures` with `partial: true`; `reason` is the engine's value-free failure enum or `erasure-in-progress`. All three sections failing still rejects. `GET /v1/state`, its OpenAPI schema and `MemongoStateResponse` carry the same fields; `profile` and `blocks` are now absent, not empty, when their read failed.
 - **`/novelty-scan` maps an engine failure to a typed non-2xx (X-10).** A failed scan answered 200 with an `error` field. A typed engine failure now returns 500 `SEARCH_LANES_FAILED` or 503 `SEARCH_LANES_UNAVAILABLE` with its outcome row; the report's `error` field (until T9 makes the engine throw) is served as 503 `SEARCH_LANES_UNAVAILABLE`; an untyped failure stays 500 `NOVELTY_SCAN_FAILED`. `/v1/novelty-scan` documents 500 and 503.
 - **Relevance explain no longer scores a failed lane as health (X-11).** With failed or partial lanes the engine now reports health `insufficient-data` and records no signal. A run whose write failed returns `persistFailure: { reason }` instead of a silent missing `runId`. `POST /v1/admin/relevance/explain` serves an all-lanes-failed explain as the typed search failure (500 or 503, no health verdict) and returns `outcomes` on a partial one.
@@ -543,7 +543,7 @@ Ticket #121 keeps the fallbacks out and finishes what T1 to T10 left. It adds a 
 ### Retry hints and degradation markers
 
 - **A budget 503 carries `Retry-After` when the denial has a hint.** `SearchBudgetDeniedError` has a new `retryAfterMs`, set by an admission-bucket denial in recall and KB search. The route sends `Retry-After: max(1, ceil(retryAfterMs / 1000))` for `SEARCH_BUDGET_EXHAUSTED` when the value is a finite positive number. A per-request ledger denial has no hint and sends no header, and a lane failure never sends one. OpenAPI documents the header on the 503.
-- **`/v1/search` keeps its 200.** A process-level throttle there is still a 200 with the `degradation` marker (R3).
+- **`/v1/search` answers an admission denial with a 503.** The engine reports a denied admission as a failed `budget-denied` outcome row, and the route maps failed outcomes before its 200 branch, so the answer is 503 `SEARCH_BUDGET_EXHAUSTED`, not a 200 with the `degradation` marker. Since the final review (1237 ruling 4) the 503 also carries the admission's `Retry-After`, on `/v1/search-detailed` as well.
 - **`degradation.scope` has one value, `denied`.** `legacy-fallback-skipped` and `vector-lane-skipped` are gone from `MemorySearchDegradation` and from the OpenAPI enum, because nothing emits them. `/v1/search-kb` responses never carry `degradation`; the OpenAPI schema and the bridge envelope drop it.
 - **`searchKB` no longer takes `onDegradation`**, and `recallConversation` no longer takes `onLaneFailure`. A failure or a denial is the thrown error.
 - **Four `SearchStage` values are removed:** `rerun`, `classic-text`, `keyword` and `js-merge`. No code produces them.
@@ -631,3 +631,18 @@ Test gaps in the failure matrix (#121). This work adds tests only; no production
 
 - **Decision needed 10 is removed.** `buildContextBundle` now has tests for its episode-summary health gate: an episodes Search index that is STALE or missing is a typed `index-stale` or `index-unavailable` row on the `episode-summary` section, the index is never queried, and the healthy sections survive. The consolidator's reasoning-chain trace is now tested: it carries the candidate event's own `agentId`, `scope` and `scopeRef`, and a candidate without a full tenant is promoted but not traced (E-37, E-41).
 - **Decision needed 9 loses H-07 and H-08.** `POST /v1/discovery-projection` and `POST /v1/context-bundle` now have tests that map an `index-stale` and an `index-unavailable` failure to 503 `SEARCH_LANES_UNAVAILABLE` with the failure row in the body. Eighteen rows still read `no test:`.
+
+## M2 final review fixes (review 1237)
+
+### Retry hint on a denied `/v1/search`
+
+- `POST /v1/search` and `POST /v1/search-detailed` now send `Retry-After` on the 503 `SEARCH_BUDGET_EXHAUSTED` that a denied admission produces, computed from the admission's `retryAfterMs`. The status and body are unchanged. The tests that pinned a 200 `degradation` marker for a throttled search used an envelope the engine never emits; they now use the engine's real shape, a failed `budget-denied` row beside the marker.
+
+### No-fallback source guard
+
+- `bun run check-no-fallbacks` follows a RegExp through aliases, later assignments and conditional or `??`/`||` picks, in any declaration order, before it judges a filter value. `const alias = pattern; collection.find({ body: alias })` is now rejected as `regexp-in-query`.
+
+### Test-only cleanup
+
+- `waitForSearchIndexesQueryable` moved out of the engine's production source into `packages/memory-engine/src/test-helpers/search-index-wait.ts`. Only e2e tests call it, and the engine no longer exports it.
+- The e2e suite no longer expects the retired `idx_chunks_text` text index or a `$text` search. It now asserts that the chunks collection has no text index.

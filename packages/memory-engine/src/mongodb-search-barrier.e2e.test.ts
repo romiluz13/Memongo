@@ -36,7 +36,6 @@ import {
 	chunksCollection,
 	ensureCollections,
 	eventsCollection,
-	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
 import {
 	awaitSearchBarrier,
@@ -47,6 +46,7 @@ import {
 	searchBarrierTargets,
 } from "./mongodb-search-barrier.js"
 import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 const TEST_URI = resolvePreviewMongoTestUri(
 	"mongodb://127.0.0.1:27019/?directConnection=true",

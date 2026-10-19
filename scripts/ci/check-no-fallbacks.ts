@@ -372,21 +372,40 @@ function collectRegExpBindings(
 ): Set<string> {
 	const names = new Set<string>()
 	const producesRegExp = (expr: ts.Expression): boolean => {
-		if (isRegExpConstruction(expr)) return true
 		const inner = unwrap(expr)
-		return (
-			ts.isCallExpression(inner) &&
-			ts.isIdentifier(inner.expression) &&
-			factories.has(inner.expression.text)
-		)
+		if (isRegExpConstruction(inner)) return true
+		if (ts.isIdentifier(inner)) return names.has(inner.text)
+		if (ts.isCallExpression(inner) && ts.isIdentifier(inner.expression)) {
+			return factories.has(inner.expression.text)
+		}
+		if (ts.isConditionalExpression(inner)) {
+			return producesRegExp(inner.whenTrue) || producesRegExp(inner.whenFalse)
+		}
+		if (ts.isBinaryExpression(inner)) {
+			const op = inner.operatorToken.kind
+			if (
+				op === ts.SyntaxKind.BarBarToken ||
+				op === ts.SyntaxKind.QuestionQuestionToken ||
+				op === ts.SyntaxKind.AmpersandAmpersandToken
+			) {
+				return producesRegExp(inner.left) || producesRegExp(inner.right)
+			}
+		}
+		return false
 	}
-	const visit = (node: ts.Node) => {
+	const bind = (name: string) => {
+		if (names.has(name)) return false
+		names.add(name)
+		return true
+	}
+	const visit = (node: ts.Node): boolean => {
+		let grew = false
 		if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
 			if (
 				typeIsRegExp(node.type) ||
 				(node.initializer && producesRegExp(node.initializer))
 			) {
-				names.add(node.name.text)
+				grew = bind(node.name.text) || grew
 			}
 		}
 		if (
@@ -394,11 +413,24 @@ function collectRegExpBindings(
 			ts.isIdentifier(node.name) &&
 			typeIsRegExp(node.type)
 		) {
-			names.add(node.name.text)
+			grew = bind(node.name.text) || grew
 		}
-		ts.forEachChild(node, visit)
+		if (
+			ts.isBinaryExpression(node) &&
+			node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+			ts.isIdentifier(node.left) &&
+			producesRegExp(node.right)
+		) {
+			grew = bind(node.left.text) || grew
+		}
+		ts.forEachChild(node, (child) => {
+			grew = visit(child) || grew
+		})
+		return grew
 	}
-	visit(sourceFile)
+	// Aliases bind in any order (`const a = re; const b = a`), so repeat the
+	// pass until no new RegExp binding appears.
+	while (visit(sourceFile)) {}
 	return names
 }
 

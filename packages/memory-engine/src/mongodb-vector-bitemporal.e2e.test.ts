@@ -5,11 +5,9 @@ import {
 	buildBitemporalFilter,
 	buildVectorBitemporalFilter,
 } from "./mongodb-bitemporal.js"
-import {
-	isEventsVectorBitemporalPrefilterReady,
-	waitForSearchIndexesQueryable,
-} from "./mongodb-schema.js"
+import { isEventsVectorBitemporalPrefilterReady } from "./mongodb-schema.js"
 import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 const TEST_URI = resolvePreviewMongoTestUri(
 	"mongodb://127.0.0.1:27019/?directConnection=true",

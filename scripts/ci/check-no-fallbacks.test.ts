@@ -96,6 +96,67 @@ describe("each rule fails on a seeded violation", () => {
 		).toContain("regexp-in-query")
 	})
 
+	it("a RegExp reached through an alias (review 1237 R10)", () => {
+		expect(
+			rulesFor({
+				[`${SRC}/a.ts`]: [
+					"const pattern = /needle/i",
+					"const alias = pattern",
+					"export const f = (c: any) => c.find({ body: alias })",
+				].join("\n"),
+			}),
+		).toContain("regexp-in-query")
+	})
+
+	it("a RegExp reached through an alias declared before its source", () => {
+		expect(
+			rulesFor({
+				[`${SRC}/a.ts`]: [
+					"export const f = (c: any) => c.find({ body: second })",
+					"const second = first",
+					"const first = new RegExp('needle')",
+				].join("\n"),
+			}),
+		).toContain("regexp-in-query")
+	})
+
+	it("a RegExp reached through a later assignment", () => {
+		expect(
+			rulesFor({
+				[`${SRC}/a.ts`]: [
+					"let target: unknown = 'x'",
+					"const pattern = /needle/i",
+					"target = pattern",
+					"export const f = (c: any) => c.find({ body: target })",
+				].join("\n"),
+			}),
+		).toContain("regexp-in-query")
+	})
+
+	it("a RegExp alias picked through a conditional", () => {
+		expect(
+			rulesFor({
+				[`${SRC}/a.ts`]: [
+					"const pattern = /needle/i",
+					"const chosen = Math.random() > 0.5 ? pattern : 'x'",
+					"export const f = (c: any) => c.find({ body: chosen })",
+				].join("\n"),
+			}),
+		).toContain("regexp-in-query")
+	})
+
+	it("a plain string alias is not a RegExp", () => {
+		expect(
+			rulesFor({
+				[`${SRC}/a.ts`]: [
+					"const value = 'needle'",
+					"const alias = value",
+					"export const f = (c: any) => c.find({ body: alias })",
+				].join("\n"),
+			}),
+		).toEqual([])
+	})
+
 	it("a RegExp inside an $in array", () => {
 		expect(
 			rulesFor({

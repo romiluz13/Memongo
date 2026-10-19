@@ -18,7 +18,6 @@ export {
 	ensureEntityAutocompleteIndex,
 	ensureEpisodeAutocompleteIndex,
 	getExpectedSearchIndexTargets,
-	waitForSearchIndexesQueryable,
 	resolveSearchIndexReadinessTiming,
 } from "./mongodb-schema-search-definitions.js"
 export {

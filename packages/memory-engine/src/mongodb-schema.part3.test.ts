@@ -13,12 +13,12 @@ import {
 	accessEventsCollection,
 	sessionChunksCollection,
 	memoryEvidenceCollection,
-	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
 import {
 	createFakeSearchDb,
 	embeddingQueries,
 } from "./test-helpers/fake-search-db.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 // ---------------------------------------------------------------------------
 // Mock helpers

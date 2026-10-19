@@ -507,38 +507,68 @@ describe.each(ROUTES)("$path outcome mapping (R3)", (route) => {
 	})
 })
 
-describe("throttling keeps its 200 marker (R3)", () => {
+describe("an admission denial is a typed 503, never a 200 marker (review 1237 ruling 4)", () => {
+	// The shape the engine emits on a denied admission: searchV2 returns a
+	// failed budget-denied row, search() keeps it, and the throttle marker
+	// rides beside it with the admission's retry hint.
+	const DENIED: Summary = {
+		status: "failed",
+		lanes: [
+			{
+				lane: "search",
+				stage: "request",
+				outcome: "budget-denied",
+				reason: "budget-embeds",
+			},
+		],
+	}
+
 	it.each([
 		{
 			path: "/v1/search",
 			arrange: () =>
 				bridge.memongoBridgeSearchWithDegradation.mockResolvedValue({
 					results: [],
-					degradation: { kind: "throttled", scope: "denied", retryAfterMs: 9 },
+					degradation: {
+						kind: "throttled",
+						scope: "denied",
+						retryAfterMs: 4000,
+					},
+					outcomes: DENIED,
 				}),
-			marker: (json: Record<string, unknown>) => json.degradation,
 		},
 		{
 			path: "/v1/search-detailed",
 			arrange: () =>
 				bridge.memongoBridgeSearchDetailed.mockResolvedValue({
 					results: [],
-					metadata: { ...DETAILED_METADATA, throttled: { retryAfterMs: 9 } },
+					metadata: {
+						...DETAILED_METADATA,
+						throttled: { retryAfterMs: 4000 },
+						laneOutcomes: DENIED.lanes,
+						outcomeStatus: DENIED.status,
+					},
 				}),
-			marker: (json: Record<string, unknown>) =>
-				(json.metadata as Record<string, unknown>).throttled,
 		},
-	])("$path serves the throttled marker with 200", async ({
+	])("$path answers 503 SEARCH_BUDGET_EXHAUSTED with the admission's Retry-After", async ({
 		path,
 		arrange,
-		marker,
 	}) => {
 		arrange()
 
 		const res = await post(path)
 
-		expect(res.status).toBe(200)
-		expect(marker((await res.json()) as Record<string, unknown>)).toBeDefined()
+		expect(res.status).toBe(503)
+		expect(res.headers.get("Retry-After")).toBe("4")
+		const json = (await res.json()) as {
+			error: { code: string }
+			degradation?: unknown
+			outcomes: Summary
+		}
+		expect(json.error.code).toBe("SEARCH_BUDGET_EXHAUSTED")
+		expect(json.degradation).toBeUndefined()
+		expect(json.outcomes.status).toBe("failed")
+		expect(json.outcomes.lanes[0]?.outcome).toBe("budget-denied")
 	})
 })
 

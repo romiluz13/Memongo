@@ -58,7 +58,6 @@ export {
 	ensureEpisodeAutocompleteIndex,
 	getExpectedSearchIndexTargets,
 	buildAutoEmbedVectorDefinition,
-	waitForSearchIndexesQueryable,
 	resolveSearchIndexReadinessTiming,
 	ensureSearchIndexes,
 } from "./mongodb-schema-search-indexes.js"

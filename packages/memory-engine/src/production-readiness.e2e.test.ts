@@ -54,7 +54,6 @@ import {
 	ensureCollections,
 	ensureSearchIndexes,
 	ensureStandardIndexes,
-	waitForSearchIndexesQueryable,
 	eventsCollection,
 	entitiesCollection,
 	episodesCollection,
@@ -95,6 +94,7 @@ import type {
 	MemoryProcedureStableHandle,
 	MemoryStructuredStableHandle,
 } from "./types.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 // ---------------------------------------------------------------------------
 // Constants

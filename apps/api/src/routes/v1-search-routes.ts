@@ -73,7 +73,12 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			// #101 R3: a failed call is a non-2xx, never an empty answer.
 			const mapping = mapSearchOutcomes(outcomes)
 			if (outcomes && mapping.status !== 200) {
-				return searchFailureResponse(c, mapping, outcomes)
+				return searchFailureResponse(
+					c,
+					mapping,
+					outcomes,
+					degradation?.retryAfterMs,
+				)
 			}
 			// WS-12 (C-019): throttling is served as throttling — the
 			// degradation marker rides the 200 so a degraded answer never
@@ -389,7 +394,12 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 				: undefined
 			const mapping = mapSearchOutcomes(outcomes)
 			if (outcomes && mapping.status !== 200) {
-				return searchFailureResponse(c, mapping, outcomes)
+				return searchFailureResponse(
+					c,
+					mapping,
+					outcomes,
+					result.metadata.throttled?.retryAfterMs,
+				)
 			}
 			return c.json(
 				laneOutcomes

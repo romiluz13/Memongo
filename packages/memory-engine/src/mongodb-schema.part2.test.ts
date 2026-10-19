@@ -11,7 +11,6 @@ import {
 	isSearchIndexTypeCompatible,
 	isSearchIndexQueryable,
 	resolveSearchIndexReadinessTiming,
-	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
 import {
 	SEARCH_TEXT_ANALYZER_ENV,
@@ -19,6 +18,7 @@ import {
 	resolveSearchTextAnalyzer,
 	searchTextAnalyzerName,
 } from "./mongodb-search-ranking.js"
+import { waitForSearchIndexesQueryable } from "./test-helpers/search-index-wait.js"
 
 // ---------------------------------------------------------------------------
 // Mock helpers
