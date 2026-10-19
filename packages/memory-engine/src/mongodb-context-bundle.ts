@@ -420,6 +420,7 @@ async function loadEpisodeSummary(params: {
 	const [match] = await searchDiscoveryCandidates({
 		collection: episodesCollection(db, prefix),
 		indexName: "episode_autocomplete",
+		healthCollection: "episodes",
 		lane: "episodic",
 		query,
 		textPaths: ["title", "summary", "topics"],

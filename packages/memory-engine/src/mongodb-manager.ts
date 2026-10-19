@@ -1537,13 +1537,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			maxItems?: number
 		} = {},
 	): Promise<MemoryActiveSlate> {
-		return lifecycleOpsOf(this).hydrateActiveSlate(params)
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).hydrateActiveSlate(params),
+		)
 	}
 
 	async buildDiscoveryProjection(
 		request: MemoryDiscoveryProjectionRequest,
 	): Promise<MemoryDiscoveryProjection> {
-		return lifecycleOpsOf(this).buildDiscoveryProjection(request)
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).buildDiscoveryProjection(request),
+		)
 	}
 
 	async buildContextBundle(

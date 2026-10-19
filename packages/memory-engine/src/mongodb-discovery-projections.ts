@@ -458,6 +458,7 @@ function searchStructured(params: {
 	return searchDiscoveryCandidates({
 		collection: structuredMemCollection(params.db, params.prefix),
 		indexName: `${params.prefix}structured_mem_text`,
+		healthCollection: "structured_mem",
 		lane: "structured",
 		query: params.query,
 		textPaths: ["key", "value", "context", "tags"],
@@ -487,6 +488,7 @@ function searchProcedures(params: {
 	return searchDiscoveryCandidates({
 		collection: proceduresCollection(params.db, params.prefix),
 		indexName: `${params.prefix}procedures_text`,
+		healthCollection: "procedures",
 		lane: "procedural",
 		query: params.query,
 		// searchText embeds name, intentTags, triggerQueries and steps.
@@ -525,6 +527,7 @@ async function searchAdjacentEntityIds(params: {
 	const entities = await searchDiscoveryCandidates({
 		collection: entitiesCollection(params.db, params.prefix),
 		indexName: "entity_autocomplete",
+		healthCollection: "entities",
 		lane: "graph",
 		query: params.query,
 		textPaths: ["name", "aliases", "type"],
@@ -587,6 +590,7 @@ async function buildEntityBrief(
 			searchDiscoveryCandidates({
 				collection: entitiesCollection(db, prefix),
 				indexName: "entity_autocomplete",
+				healthCollection: "entities",
 				lane: "graph",
 				query,
 				textPaths: ["name", "aliases"],
@@ -719,6 +723,7 @@ async function buildTopicBrief(
 			searchDiscoveryCandidates({
 				collection: episodesCollection(db, prefix),
 				indexName: "episode_autocomplete",
+				healthCollection: "episodes",
 				lane: "episodic",
 				query,
 				textPaths: ["title", "summary", "tags", "topics"],
@@ -821,6 +826,7 @@ async function buildWhatChanged(params: {
 				? searchDiscoveryCandidates({
 						collection: structuredMemRevisionsCollection(db, prefix),
 						indexName: `${prefix}structured_mem_revisions_text`,
+						healthCollection: "structured_mem_revisions",
 						lane: "structured",
 						query,
 						textPaths: ["key", "value", "context", "tags"],
@@ -952,6 +958,7 @@ async function buildWhatChanged(params: {
 				? searchDiscoveryCandidates({
 						collection: eventsCollection(db, prefix),
 						indexName: `${prefix}events_text`,
+						healthCollection: "events",
 						lane: "raw-window",
 						query,
 						textPaths: ["body"],
