@@ -39,7 +39,6 @@ export type {
 	SearchConfig,
 	SearchFusionMethod,
 	SearchHybridMode,
-	SearchLexicalPrefilterMode,
 	SearchRecipe,
 	MemorySearchRequest,
 	MemorySearchResponse,

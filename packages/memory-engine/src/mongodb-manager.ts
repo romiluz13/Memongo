@@ -69,11 +69,7 @@ import {
 	type Entity,
 	type RelationType,
 } from "./mongodb-graph.js"
-import {
-	normalizeSearchResults,
-	rrfScore,
-	type SearchMethod,
-} from "./mongodb-hybrid.js"
+import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import { updateLaneCoverage, getLaneCoverage } from "./mongodb-lane-coverage.js"
 import {
@@ -210,7 +206,6 @@ import { resolveScopeIdentity, resolveScopeRef } from "./mongodb-scope.js"
 import {
 	buildVectorSearchStage,
 	MONGODB_MAX_NUM_CANDIDATES,
-	mongoSearch,
 	vectorSearch,
 } from "./mongodb-search.js"
 import {
@@ -231,7 +226,6 @@ import {
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
-	SearchTraceEvent,
 } from "./mongodb-search.js"
 import type {
 	StructuredMemoryEntry,
@@ -295,7 +289,6 @@ import type {
 	MemoryActorRole,
 	ClaimedMemoryJob,
 	ResolvedSearchConfig,
-	SearchLaneOutcome,
 } from "./types.js"
 import type { SearchOutcomeSummary } from "./search-outcomes.js"
 
@@ -1090,22 +1083,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return searchOpsOf(this).setLastSearchMode(mode, details)
 	}
 
-	private async legacySearch(
-		query: string,
-		opts?: {
-			maxResults?: number
-			minScore?: number
-			sessionKey?: string
-			scope?: MemoryScope
-			scopeRef?: string
-			kbRestricted?: boolean
-		},
-		admission?: AdmissionToken,
-		onOutcome?: (row: SearchLaneOutcome) => void,
-	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).legacySearch(query, opts, admission, onOutcome)
-	}
-
 	async search(
 		query: string,
 		opts?: {
@@ -1287,35 +1264,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		},
 	): Promise<MemorySearchResult[]> {
 		return searchOpsOf(this).searchKB(query, opts)
-	}
-
-	// ---------------------------------------------------------------------------
-	// Score normalization: detect which search method was used for legacy search
-	// ---------------------------------------------------------------------------
-
-	private detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod {
-		return searchOpsOf(this).detectSearchMethod(mongoCfg)
-	}
-
-	/**
-	 * Resolve which search method actually produced these results, from the
-	 * trace mongoSearch emits, falling back to the configuration guess only
-	 * when nothing succeeded.
-	 *
-	 * This picks the normalizer, so guessing wrong corrupts ranking rather than
-	 * just mislabeling. mongoSearch degrades through hybrid → vector → keyword
-	 * → $text, and the last two return raw BM25/textScore values on an
-	 * unbounded scale. Calling those "hybrid" sends them to the [0,1] clamp,
-	 * which pins every lexical hit above ~1 to exactly 1.0 — sorting degraded
-	 * results above genuine cosine hits from the KB and structured lanes, whose
-	 * scores are normalized honestly. normalizeBM25Score exists precisely for
-	 * this case; it was simply never reached.
-	 */
-	private resolveObservedSearchMethod(
-		traceEvents: SearchTraceEvent[],
-		mongoCfg: ResolvedMongoDBConfig,
-	): SearchMethod {
-		return searchOpsOf(this).resolveObservedSearchMethod(traceEvents, mongoCfg)
 	}
 
 	// ---------------------------------------------------------------------------

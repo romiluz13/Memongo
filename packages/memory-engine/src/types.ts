@@ -367,8 +367,6 @@ export type SearchFusionMethod = "scoreFusion" | "rankFusion" | "js-merge"
 
 export type SearchHybridMode = "hybrid" | "vector-only"
 
-export type SearchLexicalPrefilterMode = "disabled" | "experimental"
-
 export type SearchRecallProfile = "latency" | "balanced" | "proof"
 
 export type SearchConfig = {
@@ -393,7 +391,6 @@ export type SearchConfig = {
 	fusionMethod?: SearchFusionMethod
 	hybridMode?: SearchHybridMode
 	allowHybridBackstop?: boolean
-	lexicalPrefilter?: SearchLexicalPrefilterMode
 }
 
 export type ResolvedSearchConfig = {
@@ -410,7 +407,6 @@ export type ResolvedSearchConfig = {
 	fusionMethod: SearchFusionMethod
 	hybridMode: SearchHybridMode
 	allowHybridBackstop: boolean
-	lexicalPrefilter: SearchLexicalPrefilterMode
 }
 
 export type MemoryConversationScope = {
@@ -546,9 +542,8 @@ export type MemorySearchMetadata = {
  *
  * - "denied": admission control denied the whole query before any lane ran —
  *   the empty results are NOT a retrieval verdict.
- * - "legacy-fallback-skipped": the v2 empty verdict stands (it did search);
- *   only the opt-in legacy re-run was denied, so the answer is authoritative
- *   but the configured double-check did not happen.
+ * - "legacy-fallback-skipped": no longer emitted (the legacy re-run was
+ *   removed); it stays in the wire contract until the surfaces drop it.
  * - "vector-lane-skipped": the KB vector lane was dropped by denial; the
  *   text-lane results stand but ranking quality is degraded.
  */

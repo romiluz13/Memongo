@@ -382,7 +382,7 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 		expect(evidenceAggregate).not.toHaveBeenCalled()
 	})
 
-	it("keeps split hybrid sub-lanes when the filters are structurally incompatible", async () => {
+	it("fuses structurally incompatible chunk filters into ONE aggregate as a sibling input pair", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["hybrid"],
 			confidence: "high",
@@ -393,26 +393,49 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 		})
 		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
 
-		await searchV2(fakeDb, fakePrefix, "split lanes probe", "agent-1", {
-			availablePaths: new Set(["hybrid"]),
-			searchOptions: {
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-				conversationFilter: {
-					source: { $in: ["conversation"] },
-					agentId: "agent-1",
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"split lanes probe",
+			"agent-1",
+			{
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
 					scope: "agent",
 					scopeRef: "agent:agent-1",
-					status: { $ne: "deleted" },
+					conversationFilter: {
+						source: { $in: ["conversation"] },
+						agentId: "agent-1",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						status: { $ne: "deleted" },
+					},
+					// Different identity shape than the conversation filter — must NOT
+					// be merged into one filter that would widen or narrow either read;
+					// it keeps its own filter inside the same aggregate.
+					bridgeFilter: { agentId: "agent-1", source: { $in: ["files"] } },
+					allowHybridBackstop: false,
 				},
-				// Different identity shape than the conversation filter — must NOT
-				// be fused into a lane that would widen or narrow either read.
-				bridgeFilter: { agentId: "agent-1", source: { $in: ["files"] } },
-				allowHybridBackstop: false,
 			},
-		})
+		)
 
-		expect(aggregate).toHaveBeenCalledTimes(2)
+		expect(aggregate).toHaveBeenCalledTimes(1)
+		const pipeline = aggregate.mock.calls[0]?.[0] as Record<string, any>[]
+		const fusion = pipeline[0]?.$scoreFusion ?? pipeline[0]?.$rankFusion
+		expect(Object.keys(fusion.input.pipelines)).toEqual([
+			"vector",
+			"text",
+			"bridgeVector",
+			"bridgeText",
+		])
+		expect(
+			fusion.input.pipelines.bridgeVector[0].$vectorSearch.filter.source,
+		).toEqual({ $in: ["files"] })
+		expect(
+			fusion.input.pipelines.vector[0].$vectorSearch.filter.source,
+		).toEqual({ $in: ["conversation"] })
+		expect(result.metadata.budget?.aggregations).toBe(1)
+		expect(result.metadata.budget?.embeds).toBe(2)
 	})
 
 	it("does not fire the recursive hybrid backstop when lane coverage says no data (P3.2)", async () => {
@@ -701,12 +724,24 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 	})
 })
 
-describe("legacySearch fallback opt-in (P3.2)", () => {
+function managerWithStaleLegacyFlag() {
+	const base = buildMockManager()
+	const baseCfg = (
+		base as unknown as { config: { mongodb: Record<string, unknown> } }
+	).config.mongodb
+	return buildMockManager({
+		config: {
+			mongodb: { ...baseCfg, legacySearchFallback: true },
+		},
+	})
+}
+
+describe("no legacy re-run (a stale legacySearchFallback flag does nothing)", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 	})
 
-	it("returns empty without re-running legacySearch when the fallback is not opted in", async () => {
+	it("search() keeps the v2 empty answer final with and without the flag", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -717,132 +752,56 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 		})
 		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
 
-		const manager = buildMockManager()
-		const legacySearch = vi.spyOn(
-			manager as unknown as {
-				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
-			},
-			"legacySearch",
+		const results = await buildMockManager().search("qzx legacy opt-out marker")
+		const callsWithoutFlag = aggregate.mock.calls.length
+		aggregate.mockClear()
+		const flagged = await managerWithStaleLegacyFlag().search(
+			"qzx legacy opt-in marker",
 		)
-		const results = await manager.search("qzx legacy opt-out marker")
 
-		// Empty ≠ error: the v2 empty answer stands; legacySearch does not
-		// re-run the whole retrieval; the only aggregate is the v2 text query.
+		// Empty is not an error: the v2 empty answer stands and no second
+		// retrieval runs, so the flag adds no aggregate.
 		expect(results).toEqual([])
-		expect(aggregate).toHaveBeenCalledTimes(1)
-		expect(legacySearch).not.toHaveBeenCalled()
+		expect(flagged).toEqual([])
+		expect(callsWithoutFlag).toBe(1)
+		expect(aggregate).toHaveBeenCalledTimes(callsWithoutFlag)
 	})
 
-	it("runs legacySearch when legacySearchFallback is opted in", async () => {
+	it("searchDetailed() with kbRestricted keeps the v2 verdict and adds no legacy row", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
 			reasoning: "empty plan",
 		})
-		const legacyDoc = {
-			path: "memory/legacy.md",
-			startLine: 1,
-			endLine: 5,
-			text: "legacy fallback hit",
-			source: "conversation",
-			score: 0.9,
-		}
 		const aggregate = vi.fn().mockReturnValue({
-			toArray: vi.fn().mockResolvedValue([legacyDoc]),
+			toArray: vi.fn().mockResolvedValue([]),
 		})
-		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
-
-		const base = buildMockManager()
-		const baseCfg = (
-			base as unknown as { config: { mongodb: Record<string, unknown> } }
-		).config.mongodb
-		const manager = buildMockManager({
-			config: {
-				mongodb: { ...baseCfg, legacySearchFallback: true },
-			},
-		})
-		const recordSearchAccess = vi.spyOn(
-			manager as unknown as { recordSearchAccess(...args: unknown[]): void },
-			"recordSearchAccess",
-		)
-		const results = await manager.search("qzx legacy opt-in marker")
-		expect(captureAdmissionToken).toHaveBeenCalledTimes(1)
-		expect(recordSearchAccess).toHaveBeenCalledWith(results, {
-			kind: "admission",
-			agentId: "agent-1",
-			epoch: 0,
-		})
-
-		expect(aggregate).toHaveBeenCalled()
-		expect(results.length).toBeGreaterThan(0)
-		expect(results[0]?.snippet).toContain("legacy fallback hit")
-	})
-
-	it("preserves the KB restriction in the detailed legacy fallback literal", async () => {
-		mocked(planRetrieval).mockReturnValue({
-			paths: [],
-			confidence: "low",
-			reasoning: "empty plan",
-		})
-		vi.mocked(chunksCollection).mockReturnValue({
-			aggregate: vi
-				.fn()
-				.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
-		} as never)
+		vi.mocked(chunksCollection).mockReturnValue({ aggregate } as never)
 		// The exact procedural backstop runs on this query; a healthy empty
-		// keeps the v2 answer `complete`, which M4 requires for the re-run.
+		// keeps the v2 answer `complete`.
 		mocked(proceduresCollection).mockReturnValue({
 			find: vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([]),
 			}),
 		} as never)
-		const base = buildMockManager()
-		const baseCfg = (
-			base as unknown as { config: { mongodb: Record<string, unknown> } }
-		).config.mongodb
-		const manager = buildMockManager({
-			config: {
-				mongodb: { ...baseCfg, legacySearchFallback: true },
-			},
-		})
-		const legacySearch = vi
-			.spyOn(
-				manager as unknown as {
-					legacySearch(
-						query: string,
-						opts?: Record<string, unknown>,
-					): Promise<MemorySearchResult[]>
-				},
-				"legacySearch",
-			)
-			.mockResolvedValue([])
 
-		const response = await manager.searchDetailed({
+		const response = await managerWithStaleLegacyFlag().searchDetailed({
 			query: "authorization probe",
 			kbRestricted: true,
 		})
 
-		expect(legacySearch).toHaveBeenCalledWith(
-			"authorization probe",
-			expect.objectContaining({ kbRestricted: true }),
-			expect.objectContaining({
-				kind: "admission",
-				agentId: "agent-1",
-				epoch: 0,
-			}),
-			expect.any(Function),
-		)
-		expect(response.metadata.laneOutcomes).toContainEqual({
-			lane: "legacy",
-			stage: "rerun",
-			outcome: "ok-empty",
-			reason: "zero-hits",
-			resultCount: 0,
-		})
+		expect(response.results).toEqual([])
 		expect(response.metadata.outcomeStatus).toBe("complete")
+		expect(
+			(response.metadata.laneOutcomes ?? []).some(
+				(row) => (row.lane as string) === "legacy",
+			),
+		).toBe(false)
+		expect(response.metadata.pathsExecuted).not.toContain("legacy")
+		expect(aggregate).toHaveBeenCalledTimes(1)
 	})
 
-	it("M4: never re-runs legacy after a partial empty (a failed backstop is not zero hits)", async () => {
+	it("M4: a partial empty stays partial (a failed backstop is not zero hits)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -858,23 +817,8 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 				toArray: vi.fn().mockRejectedValue(new Error("procedures down")),
 			}),
 		} as never)
-		const base = buildMockManager()
-		const baseCfg = (
-			base as unknown as { config: { mongodb: Record<string, unknown> } }
-		).config.mongodb
-		const manager = buildMockManager({
-			config: {
-				mongodb: { ...baseCfg, legacySearchFallback: true },
-			},
-		})
-		const legacySearch = vi.spyOn(
-			manager as unknown as {
-				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
-			},
-			"legacySearch",
-		)
 
-		const response = await manager.searchDetailed({
+		const response = await managerWithStaleLegacyFlag().searchDetailed({
 			query: "authorization probe",
 		})
 		// Later suites in this file rely on a healthy procedures mock.
@@ -884,7 +828,6 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 			}),
 		} as never)
 
-		expect(legacySearch).not.toHaveBeenCalled()
 		expect(response.results).toEqual([])
 		expect(response.metadata.outcomeStatus).toBe("partial")
 		expect(response.metadata.laneOutcomes).toContainEqual(
@@ -1313,7 +1256,10 @@ describe("scope-safe cache writes", () => {
 
 		expect(chunksAggregate).toHaveBeenCalledOnce()
 		const pipeline = chunksAggregate.mock.calls[0]?.[0] as Record<string, any>[]
-		expect(pipeline[0]?.$search?.compound?.filter).toEqual(
+		const fusion = pipeline[0]?.$scoreFusion ?? pipeline[0]?.$rankFusion
+		expect(
+			fusion?.input?.pipelines?.text?.[0]?.$search?.compound?.filter,
+		).toEqual(
 			expect.arrayContaining([
 				{ equals: { path: "scope", value: "agent" } },
 				{ equals: { path: "scopeRef", value: "agent:agent-1" } },
@@ -1423,9 +1369,12 @@ describe("scope-safe cache writes", () => {
 			expect(sessionAggregate).toHaveBeenCalled()
 			const pipeline = sessionAggregate.mock.calls
 				.map((call) => call[0] as Record<string, any>[])
-				.find((candidate) => candidate[0]?.$search)
+				.find((candidate) => candidate[0]?.$rankFusion)
 			expect(pipeline).toBeDefined()
-			expect(pipeline?.[0]?.$search?.compound?.filter).toEqual(
+			expect(
+				pipeline?.[0]?.$rankFusion?.input?.pipelines?.text?.[0]?.$search
+					?.compound?.filter,
+			).toEqual(
 				expect.arrayContaining([
 					{ equals: { path: "agentId", value: "agent-1" } },
 					{ equals: { path: "scope", value: "agent" } },
@@ -1441,98 +1390,6 @@ describe("scope-safe cache writes", () => {
 		}
 	})
 })
-
-describe("resolveObservedSearchMethod", () => {
-	// C8 regression. The normalizer is picked from this value, so guessing
-	// "hybrid" while mongoSearch actually degraded to keyword/$text sent raw
-	// BM25 scores through the [0,1] clamp. Every lexical hit scoring above 1
-	// pinned to exactly 1.0 and sorted above genuine cosine hits from the KB
-	// and structured lanes.
-	const mongoCfg = {
-		embeddingMode: "automated",
-	} as unknown as Parameters<
-		typeof MongoDBMemoryManager.prototype.resolveObservedSearchMethod
-	>[1]
-
-	function resolve(
-		traceEvents: Array<{ method: string; ok: boolean }>,
-		capabilities: { vectorSearch: boolean; textSearch: boolean },
-	) {
-		const self = {
-			capabilities,
-			detectSearchMethod: MongoDBMemoryManager.prototype.detectSearchMethod,
-		}
-		return MongoDBMemoryManager.prototype.resolveObservedSearchMethod.call(
-			self as never,
-			traceEvents as never,
-			mongoCfg,
-		)
-	}
-
-	const fullCaps = { vectorSearch: true, textSearch: true }
-
-	it("reports text when the search degraded to keyword, despite hybrid capabilities", () => {
-		expect(
-			resolve(
-				[
-					{ method: "rankFusion", ok: false },
-					{ method: "js-merge", ok: false },
-					{ method: "vector", ok: false },
-					{ method: "keyword", ok: true },
-				],
-				fullCaps,
-			),
-		).toBe("text")
-	})
-
-	it("reports text for the last-resort $text path", () => {
-		expect(resolve([{ method: "$text", ok: true }], fullCaps)).toBe("text")
-	})
-
-	it("reports vector when only the vector fallback succeeded", () => {
-		expect(
-			resolve(
-				[
-					{ method: "rankFusion", ok: false },
-					{ method: "vector", ok: true },
-				],
-				fullCaps,
-			),
-		).toBe("vector")
-	})
-
-	it("reports hybrid for each server-side fusion path and the JS merge", () => {
-		for (const method of ["scoreFusion", "rankFusion", "js-merge"]) {
-			expect(resolve([{ method, ok: true }], fullCaps)).toBe("hybrid")
-		}
-	})
-
-	it("uses the latest successful trace when several succeeded", () => {
-		expect(
-			resolve(
-				[
-					{ method: "rankFusion", ok: true },
-					{ method: "keyword", ok: true },
-				],
-				fullCaps,
-			),
-		).toBe("text")
-	})
-
-	it("falls back to the capability guess when nothing succeeded", () => {
-		expect(resolve([{ method: "rankFusion", ok: false }], fullCaps)).toBe(
-			"hybrid",
-		)
-		expect(resolve([], { vectorSearch: true, textSearch: false })).toBe(
-			"vector",
-		)
-		expect(resolve([], { vectorSearch: false, textSearch: true })).toBe("text")
-	})
-})
-
-// ---------------------------------------------------------------------------
-// #66 step 3: per-lane latency instrumentation
-// ---------------------------------------------------------------------------
 
 describe("searchV2 lane latency instrumentation", () => {
 	beforeEach(() => {
@@ -1575,7 +1432,7 @@ describe("searchV2 lane latency instrumentation", () => {
 		).toBeGreaterThanOrEqual(0)
 	})
 
-	it("records a latency sample for each enabled hybrid sub-lane", async () => {
+	it("records a latency sample for each enabled hybrid sub-lane, with the bridge folded into the chunks lane", async () => {
 		const previousSessionMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
 		const previousMirrorMode = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
 		process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"
@@ -1618,7 +1475,7 @@ describe("searchV2 lane latency instrumentation", () => {
 
 			const laneKeys = Object.keys(result.metadata.latencyByPath ?? {})
 			expect(laneKeys).toContain("hybrid:chunks")
-			expect(laneKeys).toContain("hybrid:bridge")
+			expect(laneKeys).not.toContain("hybrid:bridge")
 			expect(laneKeys).toContain("hybrid:session_chunks")
 			expect(laneKeys).toContain("hybrid:memory_evidence")
 		} finally {
@@ -1709,64 +1566,54 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		return aggregate
 	}
 
-	it("search() marks v2:throttled and skips the opted-in legacy re-run on denial", async () => {
+	it("search() marks v2:throttled and reports a typed denial on admission denial", async () => {
 		exhaustBucket()
 		const aggregate = primeEmptySearch()
-		const base = buildMockManager()
-		const baseCfg = (
-			base as unknown as { config: { mongodb: Record<string, unknown> } }
-		).config.mongodb
-		const manager = buildMockManager({
-			config: {
-				mongodb: { ...baseCfg, legacySearchFallback: true },
-			},
+		const manager = buildMockManager()
+		const outcomes: Array<Record<string, unknown>> = []
+
+		const results = await manager.search("qzx throttle envelope", {
+			onOutcomes: (summary) => outcomes.push(summary),
 		})
 
-		const results = await manager.search("qzx throttle envelope")
-
-		// The throttle verdict is final: no v2 lanes ran, and the opted-in
-		// legacy re-run (which would pay a second token) never fires.
+		// The throttle verdict is final: no v2 lanes ran, and the caller gets
+		// a typed budget-denied row, not a bare empty answer.
 		expect(results).toEqual([])
 		expect(aggregate).not.toHaveBeenCalled()
 		expect(lastSearchModeOf(manager)).toBe("v2:throttled")
+		expect(outcomes).toEqual([
+			{
+				status: "failed",
+				lanes: [
+					{
+						lane: "search",
+						stage: "request",
+						outcome: "budget-denied",
+						reason: "budget-embeds",
+					},
+				],
+			},
+		])
 	})
 
-	it("search() makes the opted-in legacy re-run pay its own admission token", async () => {
+	it("search() takes exactly one admission token and leaves a healthy empty answer final", async () => {
 		// Pin the burst at 2 (the burst fallback scales with RPM, so RPM=1
-		// alone would leave exactly 1 token): reset gives 2 tokens, the
-		// drain below removes one, the admitted v2 search takes the last,
-		// and the opted-in legacy re-run hits a dry bucket.
+		// alone would leave exactly 1 token): reset gives 2 tokens, the drain
+		// below removes one, and the admitted v2 search takes the last. A
+		// second retrieval would need a second token and find the bucket dry.
 		const originalBurst = process.env.MEMONGO_SEARCH_ADMISSION_BURST
 		process.env.MEMONGO_SEARCH_ADMISSION_BURST = "2"
 		try {
 			resetSearchAdmissionForTests(Date.now())
 			tryConsumeSearchAdmission(Date.now())
 			const aggregate = primeEmptySearch()
-			const base = buildMockManager()
-			const baseCfg = (
-				base as unknown as { config: { mongodb: Record<string, unknown> } }
-			).config.mongodb
-			const manager = buildMockManager({
-				config: {
-					mongodb: { ...baseCfg, legacySearchFallback: true },
-				},
-			})
+			const manager = managerWithStaleLegacyFlag()
 
-			const legacySearch = vi.spyOn(
-				manager as unknown as {
-					legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
-				},
-				"legacySearch",
-			)
-			const results = await manager.search("qzx legacy token envelope")
+			const results = await manager.search("qzx single token envelope")
 
-			// v2 was admitted and returned its (healthy) empty answer; the
-			// legacy re-run was denied and left that answer standing with
-			// the marker.
 			expect(results).toEqual([])
 			expect(aggregate).toHaveBeenCalledTimes(1)
-			expect(legacySearch).not.toHaveBeenCalled()
-			expect(lastSearchModeOf(manager)).toBe("v2:empty->legacy-throttled")
+			expect(lastSearchModeOf(manager)).toBe("v2:empty")
 		} finally {
 			if (originalBurst === undefined) {
 				delete process.env.MEMONGO_SEARCH_ADMISSION_BURST
@@ -1776,18 +1623,10 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		}
 	})
 
-	it("searchDetailed() short-circuits a throttled response before legacy", async () => {
+	it("searchDetailed() short-circuits a throttled response with typed outcome rows", async () => {
 		exhaustBucket()
 		const aggregate = primeEmptySearch()
-		const base = buildMockManager()
-		const baseCfg = (
-			base as unknown as { config: { mongodb: Record<string, unknown> } }
-		).config.mongodb
-		const manager = buildMockManager({
-			config: {
-				mongodb: { ...baseCfg, legacySearchFallback: true },
-			},
-		})
+		const manager = buildMockManager()
 
 		const response = await manager.searchDetailed({
 			query: "qzx detailed throttle",
@@ -1797,47 +1636,37 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		expect(response.results).toEqual([])
 		expect(response.metadata.throttled).toBeDefined()
 		expect(response.metadata.throttled?.retryAfterMs).toBeGreaterThan(0)
+		expect(response.metadata.outcomeStatus).toBe("failed")
+		expect(response.metadata.laneOutcomes).toEqual([
+			{
+				lane: "search",
+				stage: "request",
+				outcome: "budget-denied",
+				reason: "budget-embeds",
+			},
+		])
 		expect(aggregate).not.toHaveBeenCalled()
 		expect(lastSearchModeOf(manager)).toBe("v2:throttled")
 	})
 
-	it("searchDetailed() makes the opted-in legacy re-run pay its own admission token", async () => {
-		// Pin the burst at 2 (the burst fallback scales with RPM): reset
-		// gives 2 tokens, the drain below removes one, the admitted v2
-		// search takes the last, and the opted-in legacy re-run hits a dry
-		// bucket — mirroring the search() legacy-token test at this seam.
+	it("searchDetailed() takes exactly one admission token and leaves a healthy empty answer final", async () => {
 		const originalBurst = process.env.MEMONGO_SEARCH_ADMISSION_BURST
 		process.env.MEMONGO_SEARCH_ADMISSION_BURST = "2"
 		try {
 			resetSearchAdmissionForTests(Date.now())
 			tryConsumeSearchAdmission(Date.now())
 			const aggregate = primeEmptySearch()
-			const base = buildMockManager()
-			const baseCfg = (
-				base as unknown as { config: { mongodb: Record<string, unknown> } }
-			).config.mongodb
-			const manager = buildMockManager({
-				config: {
-					mongodb: { ...baseCfg, legacySearchFallback: true },
-				},
-			})
+			const manager = managerWithStaleLegacyFlag()
 
-			const legacySearch = vi.spyOn(
-				manager as unknown as {
-					legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
-				},
-				"legacySearch",
-			)
 			const response = await manager.searchDetailed({
-				query: "qzx detailed legacy token",
+				query: "qzx detailed single token",
 				maxResults: 10,
 			})
 
 			expect(response.results).toEqual([])
 			expect(response.metadata.throttled).toBeUndefined()
 			expect(aggregate).toHaveBeenCalledTimes(1)
-			expect(legacySearch).not.toHaveBeenCalled()
-			expect(lastSearchModeOf(manager)).toBe("v2:empty->legacy-throttled")
+			expect(lastSearchModeOf(manager)).toBe("v2:empty")
 		} finally {
 			if (originalBurst === undefined) {
 				delete process.env.MEMONGO_SEARCH_ADMISSION_BURST
@@ -1851,12 +1680,6 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		const aggregate = primeEmptySearch()
 		const manager = buildMockManager()
 
-		const legacySearch = vi.spyOn(
-			manager as unknown as {
-				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
-			},
-			"legacySearch",
-		)
 		const response = await manager.searchDetailed({
 			query: "qzx healthy empty",
 			maxResults: 10,
@@ -1867,7 +1690,6 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		expect(response.results).toEqual([])
 		expect(response.metadata.throttled).toBeUndefined()
 		expect(aggregate).toHaveBeenCalledTimes(1)
-		expect(legacySearch).not.toHaveBeenCalled()
 		expect(lastSearchModeOf(manager)).toBe("v2:empty")
 	})
 
@@ -1995,65 +1817,13 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 		const manager = buildMockManager()
 		const degradations: Array<Record<string, unknown>> = []
 
-		const legacySearch = vi.spyOn(
-			manager as unknown as {
-				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
-			},
-			"legacySearch",
-		)
 		const results = await manager.search("qzx sink healthy empty", {
 			onDegradation: (degradation) => degradations.push(degradation),
 		})
 
 		expect(results).toEqual([])
 		expect(aggregate).toHaveBeenCalledTimes(1)
-		expect(legacySearch).not.toHaveBeenCalled()
 		expect(degradations).toHaveLength(0)
-	})
-
-	it("search() fires the sink with legacy-fallback-skipped when the double-check is denied", async () => {
-		const originalBurst = process.env.MEMONGO_SEARCH_ADMISSION_BURST
-		process.env.MEMONGO_SEARCH_ADMISSION_BURST = "2"
-		try {
-			resetSearchAdmissionForTests(Date.now())
-			tryConsumeSearchAdmission(Date.now())
-			const aggregate = primeEmptySearch()
-			const base = buildMockManager()
-			const baseCfg = (
-				base as unknown as { config: { mongodb: Record<string, unknown> } }
-			).config.mongodb
-			const manager = buildMockManager({
-				config: {
-					mongodb: { ...baseCfg, legacySearchFallback: true },
-				},
-			})
-			const degradations: Array<Record<string, unknown>> = []
-
-			const legacySearch = vi.spyOn(
-				manager as unknown as {
-					legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
-				},
-				"legacySearch",
-			)
-			const results = await manager.search("qzx sink legacy skipped", {
-				onDegradation: (degradation) => degradations.push(degradation),
-			})
-
-			expect(results).toEqual([])
-			expect(aggregate).toHaveBeenCalledTimes(1)
-			expect(legacySearch).not.toHaveBeenCalled()
-			expect(degradations).toHaveLength(1)
-			expect(degradations[0]).toMatchObject({
-				kind: "throttled",
-				scope: "legacy-fallback-skipped",
-			})
-		} finally {
-			if (originalBurst === undefined) {
-				delete process.env.MEMONGO_SEARCH_ADMISSION_BURST
-			} else {
-				process.env.MEMONGO_SEARCH_ADMISSION_BURST = originalBurst
-			}
-		}
 	})
 
 	it("searchKB() fires the sink with vector-lane-skipped on vector-lane denial", async () => {
