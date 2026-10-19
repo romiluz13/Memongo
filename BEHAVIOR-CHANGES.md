@@ -537,7 +537,7 @@ Ticket #121 keeps the fallbacks out and finishes what T1 to T10 left. It adds a 
 
 ### Failure matrix
 
-- `docs/m2/FAILURE-MATRIX.md` reconciles all 108 REBUILD and TYPED rows of the call-path inventory to tests, with error, denial, absent and healthy-zero controls. Rows owned by T13 read `T13 (pending)`. Eight open rulings and limits are listed under Decision needed.
+- `docs/m2/FAILURE-MATRIX.md` reconciles all 108 REBUILD and TYPED rows of the call-path inventory to tests, with error, denial, absent and healthy-zero controls. Of the 34 rows whose read-scope, lifecycle or erasure clause T13 owned, 14 name T13's merged tests and 20 read `no test:` because T13 changed nothing at their layer; each of those points to the engine row that pins the clause. Ten open rulings and limits are listed under Decision needed.
 - New tests close the gaps the reconciliation found: `memongo-bridge-failure-propagation.test.ts`, `tool-failure-matrix.test.ts`, `route-failure-matrix.test.ts`, `search-fusion-validation.test.ts`, `mongodb-manager-sync-ops.test.ts`, `mongodb-manager-extraction-forwarding.test.ts`, and additions to the write-state, factory-unwind and analytics suites.
 
 ### Retry hints and degradation markers
