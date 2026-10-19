@@ -17,6 +17,7 @@ import {
 	fakeDb,
 	fakePrefix,
 	captureManagerPrototype,
+	rawWindowEventsCollection,
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
@@ -85,7 +86,6 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-const { getEventsByTimeRange } = await import("./mongodb-events.js")
 const { planRetrieval, resolveTimeRangePreset, extractTemporalWindow } =
 	await import("./mongodb-retrieval-planner.js")
 const { searchEpisodes } = await import("./mongodb-episodes.js")
@@ -102,6 +102,11 @@ const {
 	kbChunksCollection,
 } = await import("./mongodb-schema.js")
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
+// M2 T6: raw-window candidates come from its $search aggregate.
+const seedRawWindow = (events: object[]) =>
+	mocked(eventsCollection).mockReturnValue(
+		rawWindowEventsCollection(events) as never,
+	)
 
 describe("conversation evidence query detection", () => {
 	it("routes advice and recommendation queries through conversation evidence", () => {
@@ -537,10 +542,14 @@ describe("searchV2", () => {
 
 		let rawWindowStarted = false
 		let rawWindowStartedBeforeEpisodicResolved = false
-		mocked(getEventsByTimeRange).mockImplementation(async () => {
-			rawWindowStarted = true
-			return []
-		})
+		mocked(eventsCollection).mockReturnValue({
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					rawWindowStarted = true
+					return []
+				}),
+			})),
+		} as never)
 		mocked(searchEpisodes).mockImplementation(async () => {
 			for (let i = 0; i < 20 && !rawWindowStarted; i++) {
 				await new Promise((resolve) => setTimeout(resolve, 5))
@@ -568,7 +577,7 @@ describe("searchV2", () => {
 		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
 
 		// Raw-window succeeds
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				eventId: "e-1",
 				body: "recent event",
@@ -874,7 +883,7 @@ describe("searchV2", () => {
 		}
 	})
 
-	it("applies maxTimeMS to the user-driven conversation-evidence $search pipeline (P3.8)", async () => {
+	it("applies maxTimeMS to the user-driven conversation-evidence $rankFusion pipeline (P3.8)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -895,10 +904,10 @@ describe("searchV2", () => {
 				searchOptions: {
 					allowHybridBackstop: false,
 					capabilities: {
-						vectorSearch: false,
+						vectorSearch: true,
 						textSearch: true,
 						scoreFusion: false,
-						rankFusion: false,
+						rankFusion: true,
 						storedSource: false,
 						vectorIndexMethod: false,
 					},
@@ -907,7 +916,7 @@ describe("searchV2", () => {
 		)
 
 		// The conversation-evidence lane matches "did we" and runs a direct
-		// $search aggregate that bypasses runSearchAggregateWithRetry.
+		// $rankFusion aggregate that bypasses runSearchAggregateWithRetry.
 		expect(aggregate.mock.calls.length).toBeGreaterThan(0)
 		for (const call of aggregate.mock.calls) {
 			const options = call[1] as { maxTimeMS?: number } | undefined
@@ -923,7 +932,7 @@ describe("searchV2", () => {
 			reasoning: "conversation scope requested",
 		})
 
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				eventId: "evt-recent",
 				body: "I will keep concise updates and track the Phoenix deploy checklist.",
@@ -1155,7 +1164,7 @@ describe("searchV2", () => {
 		const recentTimestamp = new Date("2024-03-14T00:00:00Z")
 		const oldTimestamp = new Date("2023-01-01T00:00:00Z")
 
-		mocked(getEventsByTimeRange).mockResolvedValue([
+		seedRawWindow([
 			{
 				_id: "evt-old",
 				eventId: "evt-old",
@@ -1211,7 +1220,7 @@ describe("searchV2", () => {
 				confidence: "high",
 				reasoning: "temporal coverage query",
 			})
-			mocked(getEventsByTimeRange).mockResolvedValue([
+			const direct = [
 				{
 					_id: "evt-direct",
 					eventId: "evt-direct",
@@ -1224,30 +1233,39 @@ describe("searchV2", () => {
 					sessionId: "answer_f4ea84fb_1",
 					channel: "default",
 				},
-			])
+			]
 
-			const aggregate = vi.fn().mockReturnValue({
-				toArray: vi.fn().mockResolvedValue([
-					{
-						eventId: "evt-history",
-						body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
-						sessionId: "answer_f4ea84fb_2",
-						timestamp: new Date("2023-01-11T10:24:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.8,
-					},
-					{
-						eventId: "evt-science",
-						body: "I went to the Science Museum with a friend who is a chemistry professor.",
-						sessionId: "answer_f4ea84fb_3",
-						timestamp: new Date("2022-10-22T18:38:00Z"),
-						scope: "agent",
-						scopeRef: "agent:agent-1",
-						score: 0.7,
-					},
-				]),
-			})
+			// Raw-window's $search (a window `range` with gte) answers with the
+			// direct event; the temporal lane and its session expansion with
+			// the museum events.
+			const aggregate = vi.fn((pipeline: Array<Record<string, any>>) => ({
+				toArray: vi.fn(async () =>
+					pipeline[0]?.$search?.compound?.filter?.some(
+						(clause: Record<string, any>) => clause.range?.gte,
+					)
+						? direct
+						: [
+								{
+									eventId: "evt-history",
+									body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
+									sessionId: "answer_f4ea84fb_2",
+									timestamp: new Date("2023-01-11T10:24:00Z"),
+									scope: "agent",
+									scopeRef: "agent:agent-1",
+									score: 0.8,
+								},
+								{
+									eventId: "evt-science",
+									body: "I went to the Science Museum with a friend who is a chemistry professor.",
+									sessionId: "answer_f4ea84fb_3",
+									timestamp: new Date("2022-10-22T18:38:00Z"),
+									scope: "agent",
+									scopeRef: "agent:agent-1",
+									score: 0.7,
+								},
+							],
+				),
+			}))
 			const find = vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([
 					{
@@ -1290,7 +1308,24 @@ describe("searchV2", () => {
 			)
 
 			expect(aggregate).toHaveBeenCalled()
-			expect(find).toHaveBeenCalledOnce()
+			// M2 T6: the session expansion selects through $search too.
+			expect(find).not.toHaveBeenCalled()
+			const expansion = aggregate.mock.calls
+				.map((call) => call[0] as Record<string, any>[])
+				.find((candidate) =>
+					candidate[0]?.$search?.compound?.filter?.some(
+						(clause: Record<string, any>) => clause.in?.path === "sessionId",
+					),
+				)
+			expect(expansion?.[0]?.$search?.compound?.filter).toContainEqual({
+				in: {
+					path: "sessionId",
+					value: expect.arrayContaining([
+						"answer_f4ea84fb_2",
+						"answer_f4ea84fb_3",
+					]),
+				},
+			})
 			const pipeline = aggregate.mock.calls
 				.map((call) => call[0] as Record<string, any>[])
 				.find(

@@ -59,6 +59,7 @@ vi.mock("./mongodb-search.js", async (original) => ({
 vi.mock("./mongodb-search-lanes.js", async (original) => ({
 	...(await original<typeof import("./mongodb-search-lanes.js")>()),
 	searchConversationEvidenceEvents: vi.fn(),
+	searchRawWindowEvents: vi.fn(),
 }))
 
 import { searchKB } from "./mongodb-kb-search.js"
@@ -77,7 +78,10 @@ import {
 	type SearchWorkCost,
 } from "./mongodb-search-budget.js"
 import { executeMongoSearchPlan } from "./mongodb-search-executor.js"
-import { searchConversationEvidenceEvents } from "./mongodb-search-lanes.js"
+import {
+	searchConversationEvidenceEvents,
+	searchRawWindowEvents,
+} from "./mongodb-search-lanes.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import type { MemorySearchResult } from "./types.js"
@@ -167,6 +171,13 @@ beforeEach(() => {
 	)
 	vi.mocked(searchKB).mockImplementation(charging("kb", [VECTOR, TEXT]))
 	vi.mocked(mongoSearch).mockImplementation(charging("hybrid", [VECTOR, TEXT]))
+	// M2 T6: raw-window is one $search aggregate charged to the ledger.
+	vi.mocked(searchRawWindowEvents).mockImplementation(async () => {
+		calls.push("raw-window")
+		await Promise.resolve()
+		consumeSearchWorkOrThrow("atlas-search", TEXT)
+		return []
+	})
 	vi.mocked(searchConversationEvidenceEvents).mockImplementation(
 		async (params) => {
 			calls.push("conversation-evidence")
@@ -262,6 +273,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 			"conversation-evidence",
 			"kb",
 			"procedural",
+			"raw-window",
 			"structured",
 		].sort(),
 	)
@@ -278,7 +290,7 @@ it("1204 E: three passes on one ledger run every required lane and deny the opti
 	expect(mongoSearch).not.toHaveBeenCalled()
 	expect(budget).toMatchObject({
 		accounting: "engine-query-work",
-		aggregations: 8,
+		aggregations: 9,
 		embeds: 5,
 	})
 	expect(budget.equivalentSkips).toBeGreaterThanOrEqual(6)

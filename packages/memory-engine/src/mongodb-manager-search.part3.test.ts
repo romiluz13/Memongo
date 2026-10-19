@@ -10,6 +10,7 @@ import {
 	fakeDb,
 	fakePrefix,
 	captureManagerPrototype,
+	rawWindowEventsCollection,
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
@@ -78,7 +79,6 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-const { getEventsByTimeRange } = await import("./mongodb-events.js")
 const { planRetrieval, resolveTimeRangePreset, extractTemporalWindow } =
 	await import("./mongodb-retrieval-planner.js")
 const { searchEpisodes } = await import("./mongodb-episodes.js")
@@ -396,10 +396,9 @@ describe("raw-window temporal proximity scoring (P4.4.4)", () => {
 			confidence: "high",
 			reasoning: "temporal proximity probe",
 		})
-		mocked(getEventsByTimeRange).mockResolvedValue([
-			laterButFar,
-			nearOrigin,
-		] as never)
+		mocked(eventsCollection).mockReturnValue(
+			rawWindowEventsCollection([laterButFar, nearOrigin]) as never,
+		)
 		mocked(extractTemporalWindow).mockReturnValue(
 			options?.noWindow
 				? null
@@ -476,7 +475,9 @@ describe("raw-window temporal proximity scoring (P4.4.4)", () => {
 				},
 			},
 		} as never)
-		mocked(getEventsByTimeRange).mockResolvedValue([nearOrigin] as never)
+		mocked(eventsCollection).mockReturnValue(
+			rawWindowEventsCollection([nearOrigin]) as never,
+		)
 		mocked(resolveTimeRangePreset).mockReturnValue({
 			start: new Date("2026-07-15T00:00:00Z"),
 			end: questionDate,

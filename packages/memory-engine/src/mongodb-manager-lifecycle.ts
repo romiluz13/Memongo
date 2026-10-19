@@ -716,9 +716,8 @@ export class MongoDBManagerLifecycleOps {
 			textIndexName: `${this.host.prefix}events_text`,
 			queryEmbeddingModel:
 				this.host.config?.mongodb?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL,
-			capabilities: this.host.capabilities,
 			nativeBitemporalVectorPrefilter,
-			// RET-13: recall stage failures (hybrid/semantic) surface through
+			// RET-13: the recall lane's failure surfaces through
 			// the same lane failure sink the search paths use, so index
 			// readiness re-polls instead of staying stale.
 			onLaneFailure: (lane, error) =>

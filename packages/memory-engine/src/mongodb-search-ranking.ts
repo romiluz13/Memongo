@@ -132,7 +132,7 @@ export function buildSearchFilterEquals(
 
 export function mapEventSearchDocToResult(
 	doc: Document,
-	lane: "turn-vector" | "turn-text",
+	lane: "turn-vector" | "turn-text" | "turn-fusion",
 ): MemorySearchResult | null {
 	const eventId = typeof doc.eventId === "string" ? doc.eventId.trim() : ""
 	const body = typeof doc.body === "string" ? doc.body : ""
@@ -222,12 +222,6 @@ export function mergeRankedResultSets(
 			({ originalScore: _originalScore, rrfScore: _rrfScore, ...result }) =>
 				result,
 		)
-}
-
-export function mergeTurnPrecisionResults(
-	resultSets: MemorySearchResult[][],
-): MemorySearchResult[] {
-	return mergeRankedResultSets(resultSets)
 }
 
 export const RECOMMENDATION_MEMORY_QUERY_RE =

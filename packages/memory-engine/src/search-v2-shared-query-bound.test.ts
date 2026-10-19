@@ -8,10 +8,6 @@ vi.mock("./mongodb-lane-coverage.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./mongodb-lane-coverage.js")>()),
 	getLaneCoverage: vi.fn().mockResolvedValue(null),
 }))
-vi.mock("./mongodb-events.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("./mongodb-events.js")>()),
-	getEventsByTimeRange: vi.fn(),
-}))
 vi.mock("./mongodb-schema.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./mongodb-schema.js")>()),
 	chunksCollection: vi.fn(() => ({})),
@@ -36,17 +32,20 @@ vi.mock("./mongodb-search-lanes.js", async (importOriginal) => {
 	return {
 		...actual,
 		extractRawWindowQueryTerms: vi.fn(actual.extractRawWindowQueryTerms),
+		searchRawWindowEvents: vi.fn(),
 	}
 })
 
-import { getEventsByTimeRange } from "./mongodb-events.js"
 import { emptyLaneCoverage } from "./mongodb-lane-coverage.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import { expandSynonyms } from "./mongodb-query-rewriter.js"
 import { planRetrieval } from "./mongodb-retrieval-planner.js"
 import { mongoSearch } from "./mongodb-search.js"
 import { searchStructuredMemory } from "./mongodb-structured-memory.js"
-import { extractRawWindowQueryTerms } from "./mongodb-search-lanes.js"
+import {
+	extractRawWindowQueryTerms,
+	searchRawWindowEvents,
+} from "./mongodb-search-lanes.js"
 import { MAX_SEARCH_QUERY_LENGTH } from "./mongodb-search-ranking.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
@@ -71,7 +70,8 @@ describe("shared-budget search input bounds", () => {
 		vi.mocked(getLaneCoverage).mockResolvedValue(null)
 		vi.stubEnv("MEMONGO_SEARCH_ADMISSION_RPM", "1")
 		resetSearchAdmissionForTests(Date.now())
-		vi.mocked(getEventsByTimeRange).mockImplementation(async () => {
+		// M2 T6: the raw-window $search charges one aggregation.
+		vi.mocked(searchRawWindowEvents).mockImplementation(async () => {
 			expect(tryConsumeSearchAggregation()).toBe(true)
 			return []
 		})
@@ -117,7 +117,7 @@ describe("shared-budget search input bounds", () => {
 			() => searchV2({} as Db, "test_", longQuery, "a1", context),
 		)
 		expect(value.metadata.throttled).toBeUndefined()
-		expect(getEventsByTimeRange).toHaveBeenCalledTimes(1)
+		expect(searchRawWindowEvents).toHaveBeenCalledTimes(1)
 		expect(
 			vi
 				.mocked(emitTelemetry)

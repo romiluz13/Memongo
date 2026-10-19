@@ -82,12 +82,20 @@ export function kbLaneCost(context: {
 	return vectorLeafCost(context)
 }
 
-/** `conversation-evidence`: the inline turn-vector and turn-text branches. */
+/** `conversation-evidence`: one native `$rankFusion` aggregate and the embed of its vector input; nothing when it cannot run. */
 export function conversationEvidenceLaneCost(
 	context: LaneCostContext,
 ): SearchWorkCost {
-	return addSearchCosts(
-		canVector(context) ? VECTOR_TIER : NO_SEARCH_COST,
-		context.capabilities.textSearch ? TEXT_TIER : NO_SEARCH_COST,
-	)
+	return canVector(context) &&
+		context.capabilities.textSearch &&
+		context.capabilities.rankFusion
+		? VECTOR_TIER
+		: NO_SEARCH_COST
+}
+
+/** `raw-window`: one `$search` aggregate over the window; no embed. */
+export function rawWindowLaneCost(
+	context: Pick<LaneCostContext, "capabilities">,
+): SearchWorkCost {
+	return context.capabilities.textSearch ? TEXT_TIER : NO_SEARCH_COST
 }

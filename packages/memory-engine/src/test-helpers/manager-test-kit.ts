@@ -593,3 +593,24 @@ export function telemetryModuleMock() {
 		emitTelemetry: vi.fn().mockResolvedValue(undefined),
 	}
 }
+
+/**
+ * M2 T6: raw-window selects with one `$search` over the window (a `range`
+ * with `gte` in `compound.filter`). This events collection answers that
+ * aggregate with the given candidates and every other events aggregate with
+ * none, so a test can seed raw-window without seeding the fused event lanes.
+ */
+export function rawWindowEventsCollection(events: object[]) {
+	return {
+		aggregate: vi.fn((pipeline: Array<Record<string, unknown>>) => ({
+			toArray: vi.fn(async () => {
+				const search = pipeline[0]?.$search as
+					| { compound?: { filter?: Array<Record<string, { gte?: Date }>> } }
+					| undefined
+				const rawWindow =
+					search?.compound?.filter?.some((clause) => clause.range?.gte) ?? false
+				return rawWindow ? events : []
+			}),
+		})),
+	}
+}

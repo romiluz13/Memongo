@@ -66,7 +66,7 @@ it("L13: an expired reservation is a typed budget denial and dispatches nothing"
 					vectorSearch: true,
 					textSearch: true,
 					scoreFusion: false,
-					rankFusion: false,
+					rankFusion: true,
 					storedSource: false,
 					vectorIndexMethod: false,
 				},
@@ -82,7 +82,7 @@ it("L13: an expired reservation is a typed budget denial and dispatches nothing"
 	})
 	expect(value).toBeInstanceOf(SearchBudgetDeniedError)
 	expect(value).toMatchObject({
-		stage: "turn-vector",
+		stage: "rank-fusion",
 		reason: "budget-reservation",
 	})
 	expect(aggregate).not.toHaveBeenCalled()

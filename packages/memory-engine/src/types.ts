@@ -1913,7 +1913,7 @@ export type ConversationRecallScoreDetails = {
 export type ConversationRecallResult = {
 	citation: ConversationRecallCitation
 	score?: number
-	matchType: "filter" | "semantic" | "hybrid"
+	matchType: "filter" | "hybrid"
 	scoreDetails?: ConversationRecallScoreDetails
 }
 
@@ -1924,15 +1924,9 @@ export type ConversationRecallResponse = {
 		/** Delivered query after trimming and the 2,000 UTF-16 code-unit ceiling. */
 		queryUsed?: string
 		filtersApplied: string[]
-		searchMethod: "standard" | "semantic" | "hybrid"
+		/** M2: "hybrid" for a query (one `$rankFusion` lane), "standard" for a no-query chronological listing. */
+		searchMethod: "standard" | "hybrid"
 		durationMs: number
-		/**
-		 * WS-11 admission control: present when the process-level search
-		 * admission bucket denied this call and the recall degraded to the
-		 * text-only standard lane. Distinguishes "overloaded" from "no
-		 * matching conversation events".
-		 */
-		throttled?: { retryAfterMs: number }
 	}
 }
 

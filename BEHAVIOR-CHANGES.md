@@ -363,3 +363,43 @@ The two graph index names stay unprefixed and `episode_autocomplete` keeps its n
 - The `$regex` tiers of `findEntitiesByName`, `searchEntitiesAutocomplete`, `searchEpisodes`, `findExactProcedureMatches` and `findSupportingEventIds`.
 - The `textSearchAvailable` option of `searchEntitiesAutocomplete` and `searchEpisodes`, and the two `textSearch` reads in `searchV2`.
 - `procedure-exact-search-timeout.test.ts`; the lane test `mongodb-procedures-exact-search.test.ts` covers the same processing limit.
+
+## T6
+
+M2 ticket #115: recall, raw-window and temporal expansion run through Search, and the JS-fused event lanes run as native fusion.
+
+### Recall (`recallConversation`, `POST /v1/recall-conversation`)
+
+- **Recall with a query is one hybrid lane.** It runs one `$rankFusion` aggregate (vector and text inputs) on events. A healthy zero is final.
+- **The semantic tier is removed.** A failed or empty fusion used to retry as a `$vectorSearch`-only "semantic" recall. That retry is gone.
+- **The regex tier is removed.** The last resort was a case-insensitive `$regex` substring scan of `body`. It is gone, and the no-query listing no longer carries any body filter.
+- **Capabilities no longer pick the tier.** Recall used to read `capabilities` and, when they were absent (the default was false), skip straight to the regex scan. The `capabilities` parameter is removed, and the fusion always runs.
+- **The "falling back" catches are removed.** A fusion failure used to log "falling back" and try the next tier. It now throws a typed `SearchLaneError` (lane `recall`, stage `rank-fusion`) and calls `onLaneFailure("recall:hybrid", error)`. The API maps a retryable reason to 503 `SEARCH_LANES_UNAVAILABLE` and a `query-error` or `internal-error` to 500 `SEARCH_LANES_FAILED`, with the outcome row. Before, these returned 500 `RECALL_CONVERSATION_FAILED` only when the regex tier also failed, and otherwise returned 200.
+- **An admission denial is a typed budget error.** When the process-level admission bucket refused a recall, it used to degrade to the regex listing and return `metadata.throttled`. It now throws `SearchBudgetDeniedError` (lane `recall`, stage `request`, reason `budget-embeds`), and the API returns 503 `SEARCH_BUDGET_EXHAUSTED`. A request-ledger denial of the fused aggregate is typed the same way and runs nothing.
+- **An invalid timezone is a 400.** An unknown `timezone` used to log a warning and fall back to UTC. It now rejects with `invalid timezone`, and the API returns 400 `VALIDATION_ERROR`. The value is not echoed.
+- **The response contract narrows.** `metadata.searchMethod` is `"standard"` (no query) or `"hybrid"`. `matchType` is `"filter"` or `"hybrid"`, and `"semantic"` is gone from both. `metadata.throttled` is removed. The engine types, the client types and the OpenAPI schema all match, and the OpenAPI now documents the 400 and the search failure responses.
+- **The fused aggregate is charged.** Recall's aggregate and its embed are counted in the request ledger, as one aggregation and one embed.
+- **The no-query listing is unchanged.** It is still a chronological `find` (`searchMethod: "standard"`).
+
+### Event lanes (turn-precision and conversation-evidence)
+
+- **The lanes use native `$rankFusion`.** Each lane used to run a `$vectorSearch` aggregate and a `$search` aggregate, then merge them in JS with reciprocal-rank fusion. Each is now one `$rankFusion` aggregate with weights `{ vector: 1, text: 1 }`. Those weights and the server's fixed rank constant 60 reproduce the former JS RRF. Both inputs re-check identity and lifecycle after their Search stage.
+- **Survivor-stands is removed.** When one branch failed or was budget-denied, the surviving branch used to stand alone. Now a fusion failure fails the lane typed (stage `rank-fusion`), and a denial is a typed `SearchBudgetDeniedError` that runs nothing.
+- **The lanes need vector, text and `rankFusion`.** Before, either capability alone ran its single branch. Now, without all three (or without automated embedding), the lane reports `not-applicable` (`capability-absent`, stage `rank-fusion`) and runs nothing.
+- **The cost is one aggregation and one embed.** The conversation-evidence reservation was up to two aggregations and one embed. It is now one aggregation and one embed, and nothing when the lane cannot run.
+- **The result provenance lane changes.** Fused results carry provenance lane `turn-fusion` instead of `turn-vector` or `turn-text`.
+
+### Raw-window lane (`searchV2` `raw-window`)
+
+- **Raw-window selects through `$search`.** It used to `find` the 50 earliest events in the window and score them in JS. It now runs one `$search` on `events_text`. Identity and the window are a `range` on `timestamp` in `compound.filter`, and the query terms are a `must` text clause on `body`. The candidates are the top 50 Search hits. The existing term scoring, the temporal-proximity boost and the ordering stay as composition over them.
+- **A window with no term match returns zero.** Before, it returned the window's earliest events scored near zero. A query with no extractable terms is `not-applicable` (`query-shape`, stage `atlas-search`).
+- **Validity is checked at the reference clock.** After the Search stage, each candidate is re-checked for identity, the window, and the lifecycle clause at the reference clock (`questionDate`, else now). Before, only expiry was checked, so a retracted or not-yet-valid event could appear.
+- **The order is deterministic.** Equal score, proximity and timestamp now break ties by `eventId`.
+- **A failure is typed.** A Search failure is a typed failed row (stage `atlas-search`), never an empty success. Without `textSearch` the lane is `not-applicable` (`capability-absent`).
+- **The lane is charged.** Raw-window now reserves and counts one aggregation. The find it replaced was not counted.
+
+### Temporal-coverage session expansion
+
+- **The expansion selects through `$search`.** The lane used to expand its hit sessions with an uncharged `find` sorted by time. It now uses one `$search` with these clauses in `compound.filter`: the session ids, `role: "user"`, identity, and `timestamp <= questionDate`. The lane terms are an optional `should` clause. After the Search stage, each candidate is re-checked for identity, role, time and lifecycle.
+- **The bound now keeps the most relevant turns.** The per-session pick still sorts its candidates by time and takes the earliest. Under the bound (`max(maxEvents × 4, sessions × 6)`), the candidates are now the most relevant turns rather than the earliest ones.
+- **The expansion is charged and typed.** It counts one aggregation, and a failure throws typed (stage `atlas-search`) instead of the driver error.
