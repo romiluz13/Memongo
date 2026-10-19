@@ -87,12 +87,12 @@ done
 kill -0 "${api_pid}" 2>/dev/null || fail "API pid ${api_pid} not alive before the proof-pack"
 echo "API pid ${api_pid} alive and serving /health before the proof-pack"
 
-# Zero fallbacks: the engine silently degrades search to $text when the
-# vector lane is missing, so a green run must come from the vector and
-# hybrid lanes the boot capability table reports.
+# No fallback: a green run must come from the vector and hybrid lanes the boot
+# capability table reports; a table that reports either lane missing means the
+# deployment cannot serve the contract, so the proof-pack is refused here.
 for lane in hybrid vector; do
 	grep -Eq "^  ${lane}: +available$" "${api_log}" ||
-		fail "API capability table does not report the ${lane} lane available; refusing a \$text-fallback run"
+		fail "API capability table does not report the ${lane} lane available; refusing the run"
 done
 echo "API capability table reports the hybrid and vector lanes available"
 

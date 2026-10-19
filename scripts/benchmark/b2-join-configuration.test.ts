@@ -370,13 +370,13 @@ describe("b2-join configuration identity from the real producer", () => {
 			{
 				...DEDICATED,
 				MEMONGO_BENCHMARK_ANSWER_MODEL: "answer-b",
-				MEMONGO_RERANK_MIN_SCORE: "0.5",
+				MEMONGO_SEARCH_MAX_TIME_MS: "5000",
 			},
 			["--treatment", "answerModel"],
 		)
 		expectRefused(
 			result,
-			"undeclared configuration difference: settings.env.MEMONGO_RERANK_MIN_SCORE",
+			"undeclared configuration difference: settings.env.MEMONGO_SEARCH_MAX_TIME_MS",
 		)
 	})
 
