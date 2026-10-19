@@ -47,6 +47,18 @@ const DEFAULT_LIMIT = 10
 const DEFAULT_K_NEIGHBORS = 5
 /** Maximum number of candidate events to run k-NN on. */
 const MAX_CANDIDATES = 30
+
+/**
+ * A scan's own ledger, sized to its worst case: one aggregation and one embed
+ * per candidate probe. The 12/5 request default would refuse any scan of more
+ * than five candidates, as consolidation's own ledger avoids for its probes.
+ */
+export function noveltySearchBudgetLimits(): {
+	maxAggregations: number
+	maxEmbeds: number
+} {
+	return { maxAggregations: MAX_CANDIDATES, maxEmbeds: MAX_CANDIDATES }
+}
 /** Build the vector search index name for the events collection. */
 export function eventsVectorIndex(prefix: string): string {
 	return `${prefix}events_vector`

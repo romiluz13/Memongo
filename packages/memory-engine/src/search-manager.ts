@@ -111,7 +111,9 @@ async function closeManager(manager: MemorySearchManager): Promise<void> {
 	try {
 		await manager.close?.()
 	} catch (err) {
-		log.warn(`failed to close mongodb memory manager: ${String(err)}`)
+		log.warn(
+			`failed to close mongodb memory manager: ${safeBootText(String(err))}`,
+		)
 	}
 }
 
@@ -446,7 +448,9 @@ async function initializeManager(params: {
 		} else if (sharedClientAcquired && sharedClientUri) {
 			releaseSharedMongoClient(sharedClientUri)
 		}
-		const message = err instanceof Error ? err.message : String(err)
+		const message = safeBootText(
+			err instanceof Error ? err.message : String(err),
+		)
 		const error = `mongodb memory unavailable: ${message}`
 		log.warn(error)
 		return { manager: null, error, cause: err }
