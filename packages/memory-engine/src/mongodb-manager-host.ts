@@ -30,7 +30,6 @@ import type { consolidateMemory } from "./mongodb-consolidator.js"
 import { buildContextBundle } from "./mongodb-context-bundle.js"
 import { recallConversation } from "./mongodb-conversation-recall.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
-import type { SearchMethod } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import type { V2Status } from "./mongodb-manager-admin.js"
 import type { ManagerReadResult } from "./mongodb-manager-read.js"
@@ -70,7 +69,6 @@ import type {
 	ActiveSources,
 	RelevanceExplainResult,
 } from "./mongodb-search-ranking.js"
-import type { SearchTraceEvent } from "./mongodb-search.js"
 import { selfEditBlock } from "./mongodb-self-edit.js"
 import { writeStructuredMemory } from "./mongodb-structured-memory.js"
 import type {
@@ -106,7 +104,6 @@ import type {
 	ClaimedMemoryJob,
 	MemoryJobType,
 	MemoryJobStatus,
-	SearchLaneOutcome,
 } from "./types.js"
 import type { SearchOutcomeSummary } from "./search-outcomes.js"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
@@ -185,19 +182,6 @@ export interface MongoDBManagerHost {
 		admission?: AdmissionToken,
 	): void
 	setLastSearchMode(mode: string, details?: Record<string, unknown>): void
-	legacySearch(
-		query: string,
-		opts?: {
-			maxResults?: number
-			minScore?: number
-			sessionKey?: string
-			scope?: MemoryScope
-			scopeRef?: string
-			kbRestricted?: boolean
-		},
-		admission?: AdmissionToken,
-		onOutcome?: (row: SearchLaneOutcome) => void,
-	): Promise<MemorySearchResult[]>
 	search(
 		query: string,
 		opts?: {
@@ -268,11 +252,6 @@ export interface MongoDBManagerHost {
 			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 	): Promise<MemorySearchResult[]>
-	detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod
-	resolveObservedSearchMethod(
-		traceEvents: SearchTraceEvent[],
-		mongoCfg: ResolvedMongoDBConfig,
-	): SearchMethod
 	relevanceExplain(params: {
 		query: string
 		sourceScope?: RelevanceSourceScope

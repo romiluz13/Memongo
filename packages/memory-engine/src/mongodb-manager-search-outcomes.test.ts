@@ -1,15 +1,14 @@
 // #101 section 1g: the manager's per-call outcome sinks (onOutcomes on
-// search and searchKB), the complete-only legacy re-run, and the typed
-// request failure. searchV2 is captured; the manager seams are real.
+// search and searchKB), the visible throttle, and the typed request failure.
+// A stale legacySearchFallback flag re-runs nothing. searchV2 is captured; the
+// manager seams are real.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
-import { chunksCollection } from "./mongodb-schema.js"
 import type { MemorySearchResult } from "./types.js"
 import {
 	SearchLaneError,
 	type SearchLaneOutcome,
 	type SearchOutcomeStatus,
-	type SearchOutcomeSummary,
 } from "./search-outcomes.js"
 import {
 	buildMockManager,
@@ -172,7 +171,7 @@ function v2Response(
 	}
 }
 
-function managerWithLegacy(legacySearch: ReturnType<typeof vi.fn>) {
+function managerWithStaleLegacyFlag(legacySearch: ReturnType<typeof vi.fn>) {
 	return buildMockManager({
 		recordSearchAccess: vi.fn(),
 		config: kitMongoConfig({ legacySearchFallback: true }),
@@ -219,38 +218,54 @@ describe("manager search outcome sink (#101 section 1g)", () => {
 		})
 	})
 
-	it("R3: a throttled answer carries the degradation marker, not an outcome summary", async () => {
+	it("a throttled answer keeps its typed budget-denied row and failed status beside the degradation marker", async () => {
+		const deniedRows: SearchLaneOutcome[] = [
+			{
+				lane: "search",
+				stage: "request",
+				outcome: "budget-denied",
+				reason: "budget-embeds",
+			},
+		]
 		searchV2State.responses.push(
-			v2Response("complete", [], {
-				throttled: { reason: "admission", retryAfterMs: 1000 },
+			v2Response("failed", deniedRows, {
+				throttled: { retryAfterMs: 1000 },
 			}),
 		)
 		const onOutcomes = vi.fn()
+		const onDegradation = vi.fn()
 		const manager = buildMockManager({ recordSearchAccess: vi.fn() })
-		await manager.search("payment notes", { onOutcomes })
-		expect(onOutcomes).not.toHaveBeenCalled()
-	})
-
-	it("M4: the opt-in legacy re-run follows a complete empty and records its rerun row", async () => {
-		searchV2State.responses.push(v2Response("complete"))
-		const legacySearch = vi.fn(async () => [v2Hit])
-		const onOutcomes = vi.fn()
-		const results = await managerWithLegacy(legacySearch).search(
-			"payment notes",
-			{ onOutcomes },
-		)
-		expect(results).toEqual([v2Hit])
-		expect(legacySearch).toHaveBeenCalledOnce()
+		expect(
+			await manager.search("payment notes", { onOutcomes, onDegradation }),
+		).toEqual([])
 		expect(onOutcomes).toHaveBeenCalledExactlyOnceWith({
-			status: "complete",
-			lanes: [
-				...completeEmptyRows,
-				{ lane: "legacy", stage: "rerun", outcome: "ok", resultCount: 1 },
-			],
+			status: "failed",
+			lanes: deniedRows,
+		})
+		expect(onDegradation).toHaveBeenCalledExactlyOnceWith({
+			kind: "throttled",
+			scope: "denied",
+			retryAfterMs: 1000,
 		})
 	})
 
-	it("M4: never re-runs legacy after a partial empty", async () => {
+	it("M4: a stale legacySearchFallback flag re-runs nothing after a complete empty", async () => {
+		searchV2State.responses.push(v2Response("complete"))
+		const legacySearch = vi.fn(async () => [v2Hit])
+		const onOutcomes = vi.fn()
+		const results = await managerWithStaleLegacyFlag(legacySearch).search(
+			"payment notes",
+			{ onOutcomes },
+		)
+		expect(results).toEqual([])
+		expect(legacySearch).not.toHaveBeenCalled()
+		expect(onOutcomes).toHaveBeenCalledExactlyOnceWith({
+			status: "complete",
+			lanes: completeEmptyRows,
+		})
+	})
+
+	it("M4: a partial empty stays partial and re-runs nothing", async () => {
 		const partialRows: SearchLaneOutcome[] = [
 			...completeEmptyRows,
 			{
@@ -263,7 +278,7 @@ describe("manager search outcome sink (#101 section 1g)", () => {
 		searchV2State.responses.push(v2Response("partial", partialRows))
 		const legacySearch = vi.fn(async () => [v2Hit])
 		const onOutcomes = vi.fn()
-		const results = await managerWithLegacy(legacySearch).search(
+		const results = await managerWithStaleLegacyFlag(legacySearch).search(
 			"payment notes",
 			{ onOutcomes },
 		)
@@ -275,33 +290,11 @@ describe("manager search outcome sink (#101 section 1g)", () => {
 		})
 	})
 
-	it("M4: a failed legacy re-run keeps the v2 verdict and makes the call partial", async () => {
-		searchV2State.responses.push(v2Response("complete"))
-		const legacySearch = vi.fn(async () => {
-			throw new Error("legacy PRIVATE down")
-		})
-		const onOutcomes = vi.fn()
-		const results = await managerWithLegacy(legacySearch).search(
-			"payment notes",
-			{ onOutcomes },
-		)
-		expect(results).toEqual([])
-		const summary = onOutcomes.mock.calls[0]?.[0] as SearchOutcomeSummary
-		expect(summary.status).toBe("partial")
-		expect(summary.lanes).toContainEqual({
-			lane: "legacy",
-			stage: "rerun",
-			outcome: "failed",
-			reason: "internal-error",
-		})
-		expect(JSON.stringify(summary)).not.toContain("PRIVATE")
-	})
-
-	it("M5/M6: a searchV2 throw rejects typed, fires a failed summary, and never runs legacy", async () => {
+	it("M5/M6: a searchV2 throw rejects typed, fires a failed summary, and re-runs nothing", async () => {
 		searchV2State.responses.push(new Error("planner PRIVATE exploded"))
 		const legacySearch = vi.fn(async () => [v2Hit])
 		const onOutcomes = vi.fn()
-		const failure = await managerWithLegacy(legacySearch)
+		const failure = await managerWithStaleLegacyFlag(legacySearch)
 			.search("payment notes", { onOutcomes })
 			.catch((err: unknown) => err)
 		expect(failure).toBeInstanceOf(SearchLaneError)
@@ -318,72 +311,6 @@ describe("manager search outcome sink (#101 section 1g)", () => {
 				},
 			],
 		})
-	})
-
-	it("M7: legacy KB and structured failures become value-free rows", async () => {
-		vi.mocked(chunksCollection).mockReturnValue({
-			aggregate: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
-		} as never)
-		vi.mocked(searchKB).mockRejectedValue(new Error("kb PRIVATE down"))
-		const manager = buildMockManager({
-			config: kitMongoConfig({ kb: { enabled: true } }),
-		})
-		const rows: SearchLaneOutcome[] = []
-		const legacy = (
-			manager as unknown as {
-				legacySearch(
-					query: string,
-					opts: Record<string, unknown> | undefined,
-					admission: undefined,
-					onOutcome: (row: SearchLaneOutcome) => void,
-				): Promise<MemorySearchResult[]>
-			}
-		).legacySearch.bind(manager)
-		expect(
-			await legacy("payment notes", undefined, undefined, (row) =>
-				rows.push(row),
-			),
-		).toEqual([])
-		expect(rows).toContainEqual({
-			lane: "kb",
-			stage: "lane",
-			outcome: "failed",
-			reason: "internal-error",
-		})
-		// No search capability: the structured lane is unavailable, not empty.
-		expect(rows).toContainEqual({
-			lane: "structured",
-			stage: "lane",
-			outcome: "failed",
-			reason: "lane-unavailable",
-		})
-		expect(JSON.stringify(rows)).not.toContain("PRIVATE")
-	})
-
-	it("M8: an empty legacy query is a not-applicable row", async () => {
-		const rows: SearchLaneOutcome[] = []
-		const manager = buildMockManager()
-		const legacy = (
-			manager as unknown as {
-				legacySearch(
-					query: string,
-					opts: undefined,
-					admission: undefined,
-					onOutcome: (row: SearchLaneOutcome) => void,
-				): Promise<MemorySearchResult[]>
-			}
-		).legacySearch.bind(manager)
-		expect(
-			await legacy(" ", undefined, undefined, (row) => rows.push(row)),
-		).toEqual([])
-		expect(rows).toEqual([
-			{
-				lane: "legacy",
-				stage: "request",
-				outcome: "not-applicable",
-				reason: "empty-query",
-			},
-		])
 	})
 
 	it("M8: an empty detailed query carries a not-applicable row and complete status", async () => {

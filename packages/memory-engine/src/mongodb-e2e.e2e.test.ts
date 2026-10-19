@@ -666,8 +666,7 @@ describe("E2E: $text Search fallback", () => {
 // Full Search Dispatcher fallback path
 // ===========================================================================
 
-describe("E2E: mongoSearch dispatcher fallback", () => {
-	// Import mongoSearch to test the full dispatcher cascade
+describe("E2E: mongoSearch native fusion", () => {
 	let mongoSearchFn: typeof import("./mongodb-search.js").mongoSearch
 	let workspaceDir: string
 
@@ -718,40 +717,6 @@ describe("E2E: mongoSearch dispatcher fallback", () => {
 		await cleanupWorkspace()
 	})
 
-	it("falls through to $text search when Search is unavailable", async () => {
-		const col = chunksCollection(db, TEST_PREFIX)
-
-		const results = await mongoSearchFn(
-			col,
-			"MongoDB document database",
-			null,
-			{
-				maxResults: 5,
-				minScore: 0,
-				fusionMethod: "scoreFusion",
-				capabilities: {
-					vectorSearch: false,
-					textSearch: false,
-					scoreFusion: false,
-					rankFusion: false,
-					storedSource: false,
-					vectorIndexMethod: false,
-				},
-				vectorIndexName: `${TEST_PREFIX}chunks_vector`,
-				textIndexName: `${TEST_PREFIX}chunks_text`,
-				vectorWeight: 0.7,
-				textWeight: 0.3,
-				embeddingMode: "automated",
-			},
-		)
-
-		expect(results.length).toBeGreaterThan(0)
-		expect(results[0].path).toContain("mongodb-guide.md")
-		expect(results[0].score).toBeGreaterThan(0)
-		expect(results[0].snippet.length).toBeGreaterThan(0)
-		expect(results[0].source).toBe("conversation")
-	})
-
 	it("ranks a nonsense query below a genuine match instead of inventing relevance", async () => {
 		// This used to assert zero results, and only passed because autoEmbed was
 		// dead on the local container: with no Voyage key mongot reports
@@ -768,12 +733,10 @@ describe("E2E: mongoSearch dispatcher fallback", () => {
 		// relevance must beat noise — not a count, and emphatically not a minScore
 		// threshold, which cannot separate the two on this lane.
 		const col = chunksCollection(db, TEST_PREFIX)
-		const caps = await detectCapabilities(db, `${TEST_PREFIX}chunks`)
 		const searchOpts = {
 			maxResults: 5,
 			minScore: 0,
 			fusionMethod: "scoreFusion" as const,
-			capabilities: caps,
 			vectorIndexName: `${TEST_PREFIX}chunks_vector`,
 			textIndexName: `${TEST_PREFIX}chunks_text`,
 			vectorWeight: 0.7,
@@ -787,12 +750,6 @@ describe("E2E: mongoSearch dispatcher fallback", () => {
 			null,
 			searchOpts,
 		)
-
-		if (!caps.vectorSearch) {
-			// Text-only deployment: a token present in no document matches nothing.
-			expect(nonsense.length).toBe(0)
-			return
-		}
 
 		let genuine: Awaited<ReturnType<typeof mongoSearchFn>> = []
 		for (let attempt = 0; attempt < 60 && genuine.length === 0; attempt++) {
@@ -814,13 +771,11 @@ describe("E2E: mongoSearch dispatcher fallback", () => {
 
 	it("respects maxResults limit", async () => {
 		const col = chunksCollection(db, TEST_PREFIX)
-		const caps = await detectCapabilities(db, `${TEST_PREFIX}chunks`)
 
 		const results = await mongoSearchFn(col, "data", null, {
 			maxResults: 1,
 			minScore: 0,
 			fusionMethod: "scoreFusion",
-			capabilities: caps,
 			vectorIndexName: `${TEST_PREFIX}chunks_vector`,
 			textIndexName: `${TEST_PREFIX}chunks_text`,
 			vectorWeight: 0.7,

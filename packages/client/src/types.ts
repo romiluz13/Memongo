@@ -91,7 +91,6 @@ export type SearchConfig = {
 	fusionMethod?: "scoreFusion" | "rankFusion"
 	hybridMode?: "hybrid" | "vector-only"
 	allowHybridBackstop?: boolean
-	lexicalPrefilter?: "disabled" | "experimental"
 }
 
 export type MemongoConversationRecallInput = {

@@ -666,7 +666,6 @@ export function resolveRuntimeSearchConfig(
 		fusionMethod: resolved.fusionMethod ?? mongoCfg.fusionMethod,
 		hybridMode: resolved.hybridMode,
 		allowHybridBackstop: resolved.allowHybridBackstop,
-		lexicalPrefilter: resolved.lexicalPrefilter,
 	}
 }
 

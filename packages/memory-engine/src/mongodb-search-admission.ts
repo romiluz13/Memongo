@@ -21,8 +21,7 @@ const log = createSubsystemLogger("memory:mongodb:search-admission")
 //     admission, so it never double-charges),
 //   - recallConversation's hybrid/semantic stages (one token per querying
 //     call covers both — at most two embeds),
-//   - the direct searchKB vector lane (denial drops to the text lane),
-//   - the opt-in legacySearch re-run (its own token, or it does not run).
+//   - the direct searchKB vector lane (denial drops to the text lane).
 // Exhaustion DENIES the request with a retry hint instead of running it
 // degraded — each surface turns that denial into a distinct throttled
 // outcome (change 2), never an empty-success.

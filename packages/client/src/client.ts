@@ -475,7 +475,6 @@ export type MemongoSearchDetailedMetadata = {
 		fusionMethod: "scoreFusion" | "rankFusion"
 		hybridMode: "hybrid" | "vector-only"
 		allowHybridBackstop: boolean
-		lexicalPrefilter: "disabled" | "experimental"
 	}
 	passes: MemongoSearchPass[]
 	queriesTried: string[]

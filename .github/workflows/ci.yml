@@ -113,7 +113,6 @@ jobs:
           --expect-gated "recovers and executes staged outbox work through the public manager factory"
           --require-suite mongodb-kb-reingest.e2e.test.ts
           --require-suite mongodb-kb-isolation.e2e.test.ts
-          --require-suite mongodb-legacy-search-isolation.e2e.test.ts
           --require-suite mongodb-vector-index-shape.e2e.test.ts
           --require-suite mongodb-rankfusion-score.e2e.test.ts
           --require-suite mongodb-projection-repair.e2e.test.ts

@@ -83,6 +83,7 @@ describe("MCP search constraints reach the API validation", () => {
 		{ searchConfig: { recallProfile: "speed" } },
 		{ searchConfig: { allowHybridBackstop: "false" } },
 		{ searchConfig: { typoConstraint: true } },
+		{ searchConfig: { lexicalPrefilter: "disabled" } },
 	])("reports invalid constraints via HTTP 400 and MCP isError (%#)", async (args) => {
 		const result = await sdkCall(args)
 		expect(requests).toEqual([{ query: "memory", ...args }])
@@ -121,7 +122,6 @@ describe("MCP search constraints reach the API validation", () => {
 			fusionMethod: "rankFusion",
 			hybridMode: "hybrid",
 			allowHybridBackstop: false,
-			lexicalPrefilter: "disabled",
 		}
 		const result = await sdkCall({ searchMode: "auto", searchConfig })
 		expect(requests).toEqual([

@@ -1,8 +1,8 @@
-// #101 decision 18: the manager entry points own ONE request ledger. The
-// opt-in legacy re-run of search() and searchDetailed() draws on the same
-// ledger as the v2 search it double-checks, and the direct KB route
-// (K12) runs inside a ledger with its lane reserved up front. searchV2 and
-// the KB lane are captured; the manager seams and the ledger are real.
+// #101 decision 18: the manager entry points own ONE request ledger. A
+// complete empty v2 answer is final (no second retrieval, even when a stale
+// legacySearchFallback flag is set), and the direct KB route (K12) runs
+// inside a ledger with its lane reserved up front. searchV2 and the KB lane
+// are captured; the manager seams and the ledger are real.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
@@ -131,15 +131,6 @@ const hit: MemorySearchResult = {
 	source: "conversation",
 }
 
-/** A legacy re-run that spends like a fused vector retrieval. */
-function chargingLegacy(observed: Array<number | undefined>) {
-	return vi.fn(async () => {
-		observed.push(getSearchBudgetSnapshot()?.aggregations)
-		consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
-		return [hit]
-	})
-}
-
 function managerWith(
 	searchBudget: { maxAggregations: number; maxEmbeds: number },
 	overrides: Record<string, unknown> = {},
@@ -162,84 +153,39 @@ afterEach(() => {
 	resetSearchAdmissionForTests(Date.now())
 })
 
-describe("search(): one ledger for the v2 search and its legacy re-run", () => {
-	it("the legacy re-run draws on the ledger the v2 search spent from", async () => {
-		const observed: Array<number | undefined> = []
-		const legacySearch = chargingLegacy(observed)
+describe("search(): one ledger, and a complete empty answer is final", () => {
+	it("opens one request ledger for the v2 search and runs no second retrieval", async () => {
+		const legacySearch = vi.fn(async () => [hit])
 		const onOutcomes = vi.fn()
 		const results = await managerWith(
 			{ maxAggregations: 12, maxEmbeds: 5 },
-			{ legacySearch },
-		).search("payment notes", { onOutcomes })
-		expect(results).toEqual([hit])
-		expect(seen.v2).toEqual([{ active: true }])
-		expect(observed).toEqual([1])
-		expect(onOutcomes).toHaveBeenCalledWith(
-			expect.objectContaining({ status: "complete" }),
-		)
-	})
-
-	it("a legacy re-run past the request caps is budget-denied, typed", async () => {
-		const legacySearch = chargingLegacy([])
-		const onOutcomes = vi.fn()
-		const results = await managerWith(
-			{ maxAggregations: 1, maxEmbeds: 5 },
 			{ legacySearch },
 		).search("payment notes", { onOutcomes })
 		expect(results).toEqual([])
-		expect(onOutcomes).toHaveBeenCalledWith({
-			status: "partial",
-			lanes: expect.arrayContaining([
-				{
-					lane: "legacy",
-					stage: "vector",
-					outcome: "budget-denied",
-					reason: "budget-aggregations",
-				},
-			]),
-		})
+		expect(seen.v2).toEqual([{ active: true }])
+		expect(legacySearch).not.toHaveBeenCalled()
+		expect(onOutcomes).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ status: "complete" }),
+		)
 	})
 })
 
-describe("searchDetailed(): the legacy re-run shares the request ledger", () => {
-	it("draws on the request ledger and the response reports the whole request", async () => {
-		const observed: Array<number | undefined> = []
-		const legacySearch = chargingLegacy(observed)
+describe("searchDetailed(): one request ledger, and a complete empty answer is final", () => {
+	it("reports the whole request from the v2 spend alone", async () => {
+		const legacySearch = vi.fn(async () => [hit])
 		const response = await managerWith(
 			{ maxAggregations: 12, maxEmbeds: 5 },
 			{ legacySearch },
-		).searchDetailed({
-			query: "payment service deployment notes",
-			searchMode: "direct",
-			maxPasses: 1,
-		})
-		expect(response.results).toEqual([hit])
-		expect(observed).toEqual([1])
-		expect(response.metadata.budget).toMatchObject({
-			accounting: "engine-query-work",
-			aggregations: 2,
-			embeds: 2,
-		})
-	})
-
-	it("a legacy re-run past the request caps is budget-denied, typed", async () => {
-		const response = await managerWith(
-			{ maxAggregations: 1, maxEmbeds: 5 },
-			{ legacySearch: chargingLegacy([]) },
 		).searchDetailed({
 			query: "payment service deployment notes",
 			searchMode: "direct",
 			maxPasses: 1,
 		})
 		expect(response.results).toEqual([])
-		expect(response.metadata.outcomeStatus).toBe("partial")
-		expect(response.metadata.laneOutcomes).toContainEqual({
-			lane: "legacy",
-			stage: "vector",
-			outcome: "budget-denied",
-			reason: "budget-aggregations",
-		})
+		expect(legacySearch).not.toHaveBeenCalled()
+		expect(response.metadata.outcomeStatus).toBe("complete")
 		expect(response.metadata.budget).toMatchObject({
+			accounting: "engine-query-work",
 			aggregations: 1,
 			embeds: 1,
 		})

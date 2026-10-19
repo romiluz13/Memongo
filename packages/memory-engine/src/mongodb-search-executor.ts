@@ -6,6 +6,7 @@ import {
 } from "./mongodb-retrieval-planner.js"
 import { isExactCapableDerivation } from "./memory-derivation.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
+import { SearchLaneError } from "./search-outcomes.js"
 import { sortObject } from "./search-utils.js"
 import {
 	annotateResultsWithTrust,
@@ -102,7 +103,6 @@ function recipeDefaults(recipe: SearchRecipe): SearchConfig {
 				fusionMethod: "scoreFusion",
 				hybridMode: "vector-only",
 				allowHybridBackstop: false,
-				lexicalPrefilter: "disabled",
 			}
 		case "hybrid":
 			return {
@@ -113,7 +113,6 @@ function recipeDefaults(recipe: SearchRecipe): SearchConfig {
 				fusionMethod: "scoreFusion",
 				hybridMode: "hybrid",
 				allowHybridBackstop: true,
-				lexicalPrefilter: "disabled",
 			}
 		case "deep":
 			return {
@@ -124,7 +123,6 @@ function recipeDefaults(recipe: SearchRecipe): SearchConfig {
 				fusionMethod: "scoreFusion",
 				hybridMode: "hybrid",
 				allowHybridBackstop: true,
-				lexicalPrefilter: "disabled",
 			}
 		case "temporal":
 			return {
@@ -144,7 +142,6 @@ function recipeDefaults(recipe: SearchRecipe): SearchConfig {
 				fusionMethod: "scoreFusion",
 				hybridMode: "hybrid",
 				allowHybridBackstop: true,
-				lexicalPrefilter: "disabled",
 			}
 		case "chain-of-thought":
 			return {
@@ -155,7 +152,6 @@ function recipeDefaults(recipe: SearchRecipe): SearchConfig {
 				fusionMethod: "scoreFusion",
 				hybridMode: "hybrid",
 				allowHybridBackstop: true,
-				lexicalPrefilter: "disabled",
 			}
 	}
 }
@@ -190,6 +186,18 @@ export function resolveSearchConfig(request: MemorySearchRequest): Omit<
 	numCandidates?: number
 	fusionMethod?: ResolvedSearchConfig["fusionMethod"]
 } {
+	if (
+		request.searchConfig &&
+		Object.hasOwn(request.searchConfig, "lexicalPrefilter")
+	) {
+		throw new SearchLaneError({
+			stage: "request",
+			reason: "query-error",
+			cause: new Error(
+				"searchConfig.lexicalPrefilter was removed; remove it from the request",
+			),
+		})
+	}
 	const recipe = request.searchConfig?.recipe
 	const seeded = recipe ? recipeDefaults(recipe) : {}
 	const configured = { ...seeded, ...request.searchConfig }
@@ -245,10 +253,6 @@ export function resolveSearchConfig(request: MemorySearchRequest): Omit<
 			request.searchConfig?.allowHybridBackstop ??
 			configured.allowHybridBackstop ??
 			true,
-		lexicalPrefilter:
-			request.searchConfig?.lexicalPrefilter ??
-			configured.lexicalPrefilter ??
-			"disabled",
 	}
 }
 
@@ -274,7 +278,6 @@ export function applySearchConfig(
 		...(resolved.fusionMethod ? { fusionMethod: resolved.fusionMethod } : {}),
 		hybridMode: resolved.hybridMode,
 		allowHybridBackstop: resolved.allowHybridBackstop,
-		lexicalPrefilter: resolved.lexicalPrefilter,
 	}
 	return {
 		...request,
