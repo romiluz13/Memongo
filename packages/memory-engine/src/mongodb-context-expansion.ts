@@ -4,6 +4,10 @@ import { derivationFromRole } from "./memory-derivation.js"
 import { renderEventChunkText } from "./mongodb-events.js"
 import { eventsCollection } from "./mongodb-schema.js"
 import { buildEventLifecycleClause } from "./mongodb-temporal.js"
+import {
+	SectionFailureCollector,
+	type SectionFailure,
+} from "./section-failures.js"
 import type { MemorySearchResult } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:context-expansion")
@@ -34,6 +38,11 @@ export const CONTEXT_EXPANSION_MAX_CONCURRENCY = 8
  *   - The idx_events_agent_session_ts index supports efficient neighbor lookups
  *   - Neighbor text is rendered via renderEventChunkText() for consistency with chunk text
  *
+ * Expansion is declared optional enrichment of an already-successful search:
+ * a neighbor lookup that fails is skipped and reported as a typed
+ * `context-expansion` failure row (one per distinct stage and reason), never
+ * as a silent empty list.
+ *
  * Performance: Batches all neighbor lookups. For each unique sessionId in results,
  * queries events collection ONCE with sessionId + timestamp range to find neighbors;
  * the per-session queries run in parallel under CONTEXT_EXPANSION_MAX_CONCURRENCY
@@ -53,7 +62,7 @@ export async function expandSearchContext(params: {
 	results: MemorySearchResult[]
 	maxResults?: number
 	windowSize?: number // neighbors per side (default: 1)
-}): Promise<MemorySearchResult[]> {
+}): Promise<{ results: MemorySearchResult[]; failures: SectionFailure[] }> {
 	const {
 		db,
 		prefix,
@@ -64,6 +73,19 @@ export async function expandSearchContext(params: {
 		windowSize = 1,
 	} = params
 	const maxResults = params.maxResults ?? results.length + 10
+	const collector = new SectionFailureCollector({
+		log,
+		operation: "expandSearchContext",
+	})
+	const distinctFailures = (): SectionFailure[] => {
+		const seen = new Set<string>()
+		return collector.failures.filter((row) => {
+			const key = `${row.stage}:${row.outcome}:${row.reason}`
+			if (seen.has(key)) return false
+			seen.add(key)
+			return true
+		})
+	}
 
 	// Identify event-based chunks that can be expanded
 	const expandable: Array<{
@@ -84,7 +106,7 @@ export async function expandSearchContext(params: {
 	}
 
 	if (expandable.length === 0) {
-		return results
+		return { results, failures: [] }
 	}
 
 	// Group by sessionId for batched lookups
@@ -148,10 +170,9 @@ export async function expandSearchContext(params: {
 				.limit(100)
 				.toArray()
 		} catch (err) {
-			log.warn(
-				`context expansion query failed for session=${sessionId}, skipping`,
-				{ error: err },
-			)
+			collector.fail("context-expansion", "lane", err, {
+				lane: "raw-window",
+			})
 			return []
 		}
 
@@ -264,11 +285,14 @@ export async function expandSearchContext(params: {
 	}
 
 	if (neighbors.length === 0) {
-		return results
+		return { results, failures: distinctFailures() }
 	}
 
 	// Combine and cap at maxResults (drop lowest-scored tail)
 	const combined = [...results, ...neighbors]
 	combined.sort((a, b) => b.score - a.score)
-	return combined.slice(0, maxResults)
+	return {
+		results: combined.slice(0, maxResults),
+		failures: distinctFailures(),
+	}
 }

@@ -46,9 +46,9 @@ describe("T8 discovery Search mappings in the required-index manifest", () => {
 	})
 
 	it("keeps the autocomplete and token mappings other lanes depend on", () => {
-		expect(fieldTypes(entry("entity_autocomplete").definition, "name")).toContain(
-			"autocomplete",
-		)
+		expect(
+			fieldTypes(entry("entity_autocomplete").definition, "name"),
+		).toContain("autocomplete")
 		expect(
 			fieldTypes(entry("episode_autocomplete").definition, "title"),
 		).toContain("autocomplete")
@@ -82,9 +82,9 @@ describe("T8 discovery Search mappings in the required-index manifest", () => {
 		expect(fieldTypes(entry("t_procedures_text").definition, "state")).toEqual([
 			"token",
 		])
-		expect(fieldTypes(entry("t_procedures_text").definition, "updatedAt")).toEqual(
-			["date"],
-		)
+		expect(
+			fieldTypes(entry("t_procedures_text").definition, "updatedAt"),
+		).toEqual(["date"])
 		expect(fieldTypes(entry("t_events_text").definition, "timestamp")).toEqual([
 			"date",
 		])
