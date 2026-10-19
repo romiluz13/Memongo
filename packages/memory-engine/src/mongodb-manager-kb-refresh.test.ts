@@ -1,7 +1,10 @@
 // KB auto-refresh markers are isolated by owner.
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { Db } from "mongodb"
-import { MongoDBManagerSyncOps } from "./mongodb-manager-sync.js"
+import {
+	KBRefreshError,
+	MongoDBManagerSyncOps,
+} from "./mongodb-manager-sync.js"
 import { ingestFilesToKB } from "./mongodb-kb.js"
 import type { KBIngestResult } from "./mongodb-kb.js"
 import { ErasureGateConflictError } from "./mongodb-erasure-epoch.js"
@@ -272,18 +275,22 @@ describe("MongoDBManagerSyncOps maybeAutoRefreshKB owner marker", () => {
 		expect(globalRow?.timestamp).toBe(seededAt)
 	})
 
-	it("leaves no owner marker when the import rejects, then a retry runs", async () => {
-		vi.mocked(ingestFilesToKB).mockRejectedValueOnce(
-			new Error("kb ingest rejected"),
-		)
+	it("fails typed and leaves no owner marker when the import rejects, then a retry runs", async () => {
+		const rejection = new Error("kb ingest rejected")
+		vi.mocked(ingestFilesToKB).mockRejectedValueOnce(rejection)
 		const agentA = makeSyncOps("agent-a")
 
-		await agentA.maybeAutoRefreshKB()
+		const failure = await agentA.maybeAutoRefreshKB().then(
+			() => undefined,
+			(error: unknown) => error,
+		)
 
-		// Only the rejection path is pinned here: a REJECTED import reaches
-		// the outer catch and skips the marker write. Resolved-with-errors
-		// and zero-work imports still write the marker; that behavior is
-		// preserved and stays open separately.
+		expect(failure).toBeInstanceOf(KBRefreshError)
+		expect(failure).toMatchObject({
+			code: "KB_REFRESH_FAILED",
+			reason: "import-rejected",
+			cause: rejection,
+		})
 		expect(vi.mocked(ingestFilesToKB)).toHaveBeenCalledTimes(1)
 		expect(metaFake.docs.has(ownerMarkerKey("agent-a"))).toBe(false)
 		expect(metaFake.docs.size).toBe(0)
@@ -421,22 +428,64 @@ describe("MongoDBManagerSyncOps maybeAutoRefreshKB admission fence (S1)", () => 
 		}
 	})
 
-	it("U3: a resolved-with-errors import still attempts the fenced marker write", async () => {
+	it("U3: a resolved-with-errors import fails typed with its commit counts and never reaches the marker fence", async () => {
 		vi.mocked(ingestFilesToKB).mockResolvedValueOnce({
-			...ingestResult(),
+			documentsProcessed: 2,
+			chunksCreated: 5,
+			skipped: 1,
 			errors: ["doc-a.md: simulated ingest error"],
 		})
 		const agentA = makeSyncOps("agent-a")
 
-		await agentA.maybeAutoRefreshKB()
+		const failure = await agentA.maybeAutoRefreshKB().then(
+			() => undefined,
+			(error: unknown) => error,
+		)
 
 		expect(vi.mocked(ingestFilesToKB)).toHaveBeenCalledTimes(1)
-		// Fenced-marker assertion FIRST: on unfixed bytes the marker still
-		// lands for a resolved-with-errors import, but UNFENCED — the
-		// fence count is the meaningful RED discriminator.
-		expect(fenceSeam.state.fenceCalls.length).toBe(1)
-		expect(metaFake.updateOneCalls.length).toBe(1)
-		expect(metaFake.docs.has(ownerMarkerKey("agent-a"))).toBe(true)
+		expect(failure).toBeInstanceOf(KBRefreshError)
+		expect(failure).toMatchObject({
+			code: "KB_REFRESH_FAILED",
+			reason: "import-errors",
+			documentsProcessed: 2,
+			chunksCreated: 5,
+			skipped: 1,
+			errors: ["doc-a.md: simulated ingest error"],
+		})
+		// The success marker never advances: no fence, no meta write, so the
+		// next cycle re-attempts the whole refresh.
+		expect(fenceSeam.state.order).not.toContain("fence")
+		expect(fenceSeam.state.fenceCalls.length).toBe(0)
+		expect(metaFake.updateOneCalls.length).toBe(0)
+		expect(metaFake.docs.has(ownerMarkerKey("agent-a"))).toBe(false)
+	})
+
+	it("U3b: a marker write that fails after a clean import is a typed refresh failure with the import's commit counts", async () => {
+		const markerFailure = new Error("marker write rejected")
+		const originalUpdateOne = metaFake.updateOne
+		metaFake.updateOne = async () => {
+			throw markerFailure
+		}
+		try {
+			const agentA = makeSyncOps("agent-a")
+
+			const failure = await agentA.maybeAutoRefreshKB().then(
+				() => undefined,
+				(error: unknown) => error,
+			)
+
+			expect(failure).toBeInstanceOf(KBRefreshError)
+			expect(failure).toMatchObject({
+				code: "KB_REFRESH_FAILED",
+				reason: "marker-write-failed",
+				documentsProcessed: 1,
+				chunksCreated: 1,
+				cause: markerFailure,
+			})
+			expect(metaFake.docs.has(ownerMarkerKey("agent-a"))).toBe(false)
+		} finally {
+			metaFake.updateOne = originalUpdateOne
+		}
 	})
 
 	it("U4: a marker-fence conflict mutates no meta, defers with a warn, and the next cycle retries", async () => {
