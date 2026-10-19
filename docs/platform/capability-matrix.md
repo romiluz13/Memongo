@@ -53,7 +53,7 @@ This matrix maps the supported Memongo memory engine to the standalone product s
 |---|---|
 | Event sourcing and projection | `packages/memory-engine/src/mongodb-events.ts`, `packages/memory-engine/src/mongodb-manager.ts` |
 | Retrieval planning | `packages/memory-engine/src/mongodb-retrieval-planner.ts` |
-| Hybrid search and fusion | `packages/memory-engine/src/mongodb-hybrid.ts`, `packages/memory-engine/src/mongodb-search.ts` |
+| Native hybrid search and fusion | `packages/memory-engine/src/mongodb-search.ts` (`$scoreFusion`, `$rankFusion`), `packages/memory-engine/src/mongodb-hybrid.ts` (query-side helpers) |
 | Structured memory | `packages/memory-engine/src/mongodb-structured-memory.ts` |
 | Procedures | `packages/memory-engine/src/mongodb-procedures.ts` |
 | Profile synthesis | `packages/memory-engine/src/mongodb-profile.ts` |
@@ -72,6 +72,67 @@ This matrix maps the supported Memongo memory engine to the standalone product s
 Search results are always produced by live retrieval. The legacy
 `query_cache` collection remains only for TTL cleanup, write-side invalidation,
 and tenant erasure while old rows age out.
+
+## Retrieval capabilities
+
+Retrieval needs MongoDB 8.3 or later with Search and Automated Embedding
+(see [Deployment contract](self-host.md#deployment-contract)). Every retrieval
+surface runs one native operation per lane: `$search`, `$vectorSearch`,
+`$scoreFusion` or `$rankFusion`. A collection's text and vector inputs are
+fused by the server. There is no classic `$text` stage, no `$regex` retrieval,
+no merge of one collection's text and vector results in application code and
+no tier ladder that answers with a weaker query when the planned one is
+unavailable. The planner still ranks the results of different lanes against
+each other with rank-based scores after each lane has answered.
+
+| Surface | Lanes | Required Search indexes (default profile) | Native operation |
+|---|---|---|---|
+| Conversation memory | `hybrid:chunks`, `backstop:hybrid` | `chunks_text`, `chunks_vector` | `$scoreFusion` or `$rankFusion` over `$search` and `$vectorSearch`, chosen by `fusionMethod` |
+| Session chunks | `hybrid:session_chunks` | `session_chunks_text`, `session_chunks_vector` | same fusion |
+| Evidence mirror (when enabled) | `hybrid:memory_evidence` | `memory_evidence_text`, `memory_evidence_vector` | same fusion |
+| Events | `raw-window`, `conversation-evidence`, `temporal-coverage`, `turn-precision` | `events_text`, `events_vector` | One `$search`, `$vectorSearch` or `$rankFusion` aggregate per lane |
+| Structured memory | `structured`, `active-critical` | `structured_mem_text`, `structured_mem_vector`, `structured_mem_revisions_text` | `$vectorSearch`, then the planned `$search` follow-up below |
+| Procedures | `procedural`, `backstop:procedural-exact`, `backstop:procedural` | `procedures_text`, `procedures_vector` | `$vectorSearch`, then the planned `$search` follow-up below |
+| Knowledge base | `kb` | `kb_chunks_text`, `kb_chunks_vector` | `$scoreFusion` (minMaxScaler) or `$rankFusion` |
+| Graph entities | `graph` | `entity_autocomplete` | `$search` autocomplete |
+| Episodes | `episodic` | `episode_autocomplete` | `$search` autocomplete |
+
+The LongMemEval search-index profile builds only the chunk, structured,
+procedure and event indexes (plus the evidence mirror when enabled). A lane
+whose collections the profile declares no index for is reported
+`not-applicable` before it runs, never queried against an index that does not
+exist.
+
+### When a lane cannot run
+
+| Condition | Result |
+|---|---|
+| Boot: an index is absent, building past the 180 s deadline, FAILED, STALE, of the wrong type or serving another definition | The process refuses to start with a typed `MemongoBootError` code. The API does not bind. |
+| Request: an index the lane uses is observed absent, building, stale or unreadable | The lane fails typed (`index-missing`, `index-not-ready`, `index-stale` or `index-unavailable`). The route answers 503 `SEARCH_LANES_UNAVAILABLE`. |
+| Request: the query or the driver fails | The lane fails typed (`query-error`, `query-timeout`, `dependency-unavailable` or `internal-error`). The route answers 500 `SEARCH_LANES_FAILED`, or 503 for a dependency outage. |
+| Request: the search ledger denies the lane | The outcome row is `budget-denied`. The route answers 503 `SEARCH_BUDGET_EXHAUSTED` with `Retry-After` when the denial carries a retry hint. `/v1/search` keeps a 200 and carries the `degradation` marker instead. |
+| Reranking is requested | Boot fails with `rerank-unsupported` when `reranking.enabled` or `MEMONGO_RERANKING_ENABLED` is true, and a request with `rerank: true` is rejected with the same code. Reranking is not part of the contract. |
+| A healthy answer with no hits | `ok-empty` with reason `zero-hits`, a 200 and an empty result list. It is final, except for the planned follow-ups below. |
+
+A partial answer keeps every row: a lane that failed stays visible as a failed
+row beside the lanes that answered, and the response `outcomes.status` is
+`partial`. Per-route behavior and its tests are in
+[`docs/m2/FAILURE-MATRIX.md`](../m2/FAILURE-MATRIX.md).
+
+### Planned follow-ups after a healthy zero
+
+These are the only operations that run after a lane answered with zero or few
+hits. Each is a native Search operation listed in the plan, is charged to the
+request's search ledger and appears as its own row in `outcomes`. None runs
+after a failure or a budget denial.
+
+| Follow-up | Runs when | Visible as |
+|---|---|---|
+| Structured `$search` tier | The `$vectorSearch` tier succeeded with zero hits | The vector tier row `ok-empty` with `zero-hits`, then an `atlas-search` tier row |
+| Procedure `$search` tier | The `$vectorSearch` tier succeeded with zero hits | Same pair of rows |
+| `backstop:procedural-exact` | The procedural path was available and no procedure hit was found, with no lane failed | A lane row of that name |
+| `backstop:procedural` | The procedural path was not planned, the answer is short of `max(2, ceil(maxResults / 3))` results, the lane holds data and no lane failed | A lane row of that name |
+| `backstop:hybrid` | The hybrid path did not run, the answer is short of `max(2, ceil(maxResults / 3))` results, the lane holds data, no lane failed, and the request is not itself a backstop | A lane row of that name |
 
 ## AutoEmbed quantization
 

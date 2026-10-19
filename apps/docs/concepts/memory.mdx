@@ -22,9 +22,9 @@ relationships.
 ## Hybrid search
 
 Memongo combines two search strategies using MongoDB hybrid search.
-`$scoreFusion` is the preferred default lane. Capability detection falls back
-to `$rankFusion`, then to client-side merge when the deployment does not support
-the preferred stage:
+`$scoreFusion` is the default stage, and `$rankFusion` is the other supported
+choice. The server fuses the two inputs; Memongo does not merge them in
+application code, and it requires a deployment that supports the stage:
 
 1. **Vector search** -- semantic similarity via automated Voyage AI embeddings
 2. **Full-text search** -- keyword matching via MongoDB Atlas Search / mongot
