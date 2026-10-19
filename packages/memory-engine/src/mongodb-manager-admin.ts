@@ -34,7 +34,13 @@ import {
 	memoryJobsCollection,
 	entityLinksCollection,
 } from "./mongodb-schema.js"
-import { probeSearchLaneReadiness } from "./mongodb-schema-capabilities.js"
+import {
+	type IndexHealthReport,
+	capabilitiesFromHealth,
+	indexesServing,
+	reportIndexHealth,
+	requireIndexHealth,
+} from "./mongodb-index-health.js"
 import {
 	checkChunkEventOrphans,
 	checkEntityLinkOrphans,
@@ -151,16 +157,16 @@ export type V2Status = {
 	 */
 	changeStream?: ChangeStreamLiveness | null
 	/**
-	 * C-016: runtime search-lane health. The booleans come from the most
-	 * recent live index-status probe (boot snapshot only until the first
-	 * probe runs — `probedAt` absent means boot snapshot); `lastFailure`
-	 * records the search-path failure that triggered the latest re-poll.
+	 * C-016 + M2 decision 8: search-lane health read live for this call, never
+	 * from the boot snapshot. The booleans follow the chunk text and vector
+	 * indexes; `indexes` reports every required index with the typed reason
+	 * and cause when it is not healthy, a failed metadata read included.
 	 */
 	searchLanes?: {
 		vectorSearch: boolean
 		textSearch: boolean
-		probedAt?: Date
-		lastFailure: { path: string; error: string; at: Date } | null
+		probedAt: Date
+		indexes: IndexHealthReport[]
 	}
 	/**
 	 * Memory-job queue depth by state. `deadLettered` counts jobs that
@@ -701,21 +707,6 @@ export async function getV2Status(
  * Admin/status collaborator (P4.3). Methods land in a later seam step.
  */
 export class MongoDBManagerAdminOps {
-	/** C-016: most recent live search-lane probe outcome (null = boot snapshot). */
-	private searchLaneHealth: {
-		vectorSearch: boolean
-		textSearch: boolean
-		probedAt: Date
-	} | null = null
-	/** C-016: latest search-path failure that triggered a readiness re-poll. */
-	private lastSearchLaneFailure: {
-		path: string
-		error: string
-		at: Date
-	} | null = null
-	/** C-016: guards against a re-poll storm from rapid search-path failures. */
-	private searchLaneRePollInFlight = false
-
 	constructor(private readonly host: MongoDBManagerHost) {}
 
 	async accessTrends(params?: {
@@ -754,11 +745,6 @@ export class MongoDBManagerAdminOps {
 
 	status(): MemoryProviderStatus {
 		const mongoCfg = this.host.config.mongodb!
-		const vectorEnabled =
-			this.host.capabilities.vectorSearch &&
-			this.host.probeEmbeddingModeSupportsVector()
-		const lexicalEnabled = this.host.capabilities.textSearch
-		const hybridEnabled = vectorEnabled && lexicalEnabled
 		return {
 			backend: "mongodb",
 			provider: "mongodb-automated",
@@ -772,12 +758,10 @@ export class MongoDBManagerAdminOps {
 				deploymentProfile: mongoCfg.deploymentProfile,
 				embeddingMode: mongoCfg.embeddingMode,
 				fusionMethod: mongoCfg.fusionMethod,
-				capabilities: this.host.capabilities,
-				searchModes: {
-					vector: vectorEnabled,
-					lexical: lexicalEnabled,
-					hybrid: hybridEnabled,
-				},
+				// M2 decision 8: deployment facts only. Index health is read per
+				// request (getDetailedStatus().searchLanes), never reported from a
+				// boot snapshot.
+				deploymentFacts: this.host.deploymentFacts,
 				searchMode: this.host.lastSearchMode,
 				searchModeDetails: this.host.lastSearchDetails,
 				retrievalPaths: [
@@ -844,12 +828,11 @@ export class MongoDBManagerAdminOps {
 					error: `embeddingMode "automated" is only supported on atlas-local-preview or atlas-managed in Memongo`,
 				}
 			}
-			// C-016: live index-status round trip instead of the boot-time
-			// capability snapshot — catches a mongot that died after boot or an
-			// index an operator dropped mid-process. A transport failure
-			// propagates to the caller as a probe failure.
-			const readiness = await this.probeSearchLanes()
-			return readiness.vectorSearch
+			// C-016: live index-status round trip, never the boot snapshot —
+			// catches a mongot that died after boot or an index an operator
+			// dropped mid-process. A metadata read failure propagates to the
+			// caller as a typed probe failure.
+			return (await this.probeChunkVectorServing())
 				? { ok: true }
 				: {
 						ok: false,
@@ -864,71 +847,22 @@ export class MongoDBManagerAdminOps {
 		if (!this.probeEmbeddingModeSupportsVector()) {
 			return false
 		}
-		// C-016: live index-status round trip instead of the boot-time
-		// capability snapshot. The embedding-mode/deployment gate above is
-		// configuration (not runtime state), so it stays; the boot snapshot
-		// does not — a live probe that can answer must be the answer.
-		const readiness = await this.probeSearchLanes()
-		return readiness.vectorSearch
+		// C-016: live index-status round trip, never the boot snapshot. The
+		// embedding-mode/deployment gate above is configuration (not runtime
+		// state), so it stays.
+		return this.probeChunkVectorServing()
 	}
 
 	/**
-	 * C-016: live search-lane readiness (listSearchIndexes on the chunks
-	 * collection + queryable/type checks). Records the outcome for
-	 * getDetailedStatus(). Transport errors propagate.
+	 * M2 decision 8: the chunks vector index is READY, queryable and serving
+	 * its manifest definition now, read in this call's own request-local scope.
+	 * A failed metadata read throws the typed `index-unavailable`.
 	 */
-	private async probeSearchLanes(): Promise<{
-		vectorSearch: boolean
-		textSearch: boolean
-	}> {
-		const probeCollectionName = chunksCollection(
-			this.host.db,
-			this.host.prefix,
-		).collectionName
-		const readiness = await probeSearchLaneReadiness(
-			this.host.db,
-			probeCollectionName,
-		)
-		this.searchLaneHealth = { ...readiness, probedAt: new Date() }
-		return readiness
-	}
-
-	/**
-	 * C-016: a v2 search path failed at query time (e.g. mongot died after
-	 * boot). Records the failure and triggers a throttled live re-poll of
-	 * index readiness so status reflects the outage instead of the boot-time
-	 * snapshot. The re-poll result lands in getDetailedStatus() via
-	 * `searchLanes` (and the next /ready probe answers from live state).
-	 */
-	noteSearchLaneFailure(path: string, error: unknown): void {
-		this.lastSearchLaneFailure = {
-			path,
-			error: error instanceof Error ? error.message : String(error),
-			at: new Date(),
-		}
-		if (this.searchLaneRePollInFlight) {
-			return
-		}
-		this.searchLaneRePollInFlight = true
-		this.probeSearchLanes()
-			.then((readiness) => {
-				if (!readiness.vectorSearch || !readiness.textSearch) {
-					log.warn("search lane re-poll after path failure: lanes not ready", {
-						path,
-						vectorSearch: readiness.vectorSearch,
-						textSearch: readiness.textSearch,
-					})
-				}
-			})
-			.catch((err) => {
-				log.warn("search lane re-poll after path failure failed", {
-					path,
-					error: err instanceof Error ? err.message : String(err),
-				})
-			})
-			.finally(() => {
-				this.searchLaneRePollInFlight = false
-			})
+	private probeChunkVectorServing(): Promise<boolean> {
+		return this.host.runIndexHealthRequest(async () => {
+			const health = requireIndexHealth()
+			return indexesServing(health, health.select(["chunks"], ["vectorSearch"]))
+		})
 	}
 
 	probeEmbeddingModeSupportsVector(): boolean {
@@ -946,25 +880,25 @@ export class MongoDBManagerAdminOps {
 			this.host.prefix,
 			this.host.agentId,
 		)
-		// C-016: runtime capability re-verification surfaces — change-stream
-		// liveness (null when the watcher never started) and the live
-		// search-lane probe state (boot snapshot until the first probe).
+		// C-016 + M2 decision 8: runtime capability surfaces — change-stream
+		// liveness (null when the watcher never started) and this call's own
+		// index-health snapshot of the whole required-index manifest. A
+		// failed metadata read is reported per index with its cause.
 		const watcher = this.host.changeStreamWatcher
+		const searchLanes = await this.host.runIndexHealthRequest(async () => {
+			const health = requireIndexHealth()
+			const capabilities = await capabilitiesFromHealth(health)
+			return {
+				vectorSearch: capabilities.vectorSearch,
+				textSearch: capabilities.textSearch,
+				probedAt: new Date(),
+				indexes: await reportIndexHealth(health, health.entries()),
+			}
+		})
 		return {
 			...status,
 			changeStream: watcher ? watcher.liveness : null,
-			searchLanes: {
-				vectorSearch:
-					this.searchLaneHealth?.vectorSearch ??
-					this.host.capabilities.vectorSearch,
-				textSearch:
-					this.searchLaneHealth?.textSearch ??
-					this.host.capabilities.textSearch,
-				...(this.searchLaneHealth
-					? { probedAt: this.searchLaneHealth.probedAt }
-					: {}),
-				lastFailure: this.lastSearchLaneFailure,
-			},
+			searchLanes,
 		}
 	}
 

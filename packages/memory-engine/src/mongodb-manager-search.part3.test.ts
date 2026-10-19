@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { MongoDBMemoryManager, searchV2 } from "./mongodb-manager.js"
+import {
+	MongoDBMemoryManager,
+	searchV2 as searchV2Core,
+} from "./mongodb-manager.js"
+import { withHealthyCapabilities } from "./test-helpers/search-capabilities.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import { rewriteQuery } from "./mongodb-query-rewriter.js"
 import { normalizeSinglePathScores } from "./mongodb-search-v2.js"
@@ -14,6 +18,7 @@ import {
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
+const searchV2 = withHealthyCapabilities(searchV2Core)
 
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),

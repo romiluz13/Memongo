@@ -3,9 +3,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { Document } from "mongodb"
 import {
 	MongoDBMemoryManager,
-	searchV2,
+	searchV2 as searchV2Core,
 	rerankResults,
 } from "./mongodb-manager.js"
+import { withHealthyCapabilities } from "./test-helpers/search-capabilities.js"
 import {
 	DEFAULT_SEARCH_ADMISSION_BURST,
 	resetSearchAdmissionForTests,
@@ -24,6 +25,7 @@ import {
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
+const searchV2 = withHealthyCapabilities(searchV2Core)
 
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
@@ -1300,15 +1302,18 @@ describe("scope-safe cache writes", () => {
 			aggregate: chunksAggregate,
 		} as never)
 
+		// This test is about scope isolation in the keyword-only pipeline, so it
+		// fixes the request's capability view (text on, vector off) directly;
+		// the health derivation itself is covered in mongodb-index-health.test.ts.
 		const manager = buildMockManager({
-			capabilities: {
+			requestCapabilities: async () => ({
 				vectorSearch: false,
 				textSearch: true,
 				rankFusion: false,
 				storedSource: false,
 				vectorIndexMethod: false,
 				scoreFusion: false,
-			},
+			}),
 		})
 		await manager.search("agent scoped answer")
 
@@ -1460,13 +1465,13 @@ describe("resolveObservedSearchMethod", () => {
 		capabilities: { vectorSearch: boolean; textSearch: boolean },
 	) {
 		const self = {
-			capabilities,
 			detectSearchMethod: MongoDBMemoryManager.prototype.detectSearchMethod,
 		}
 		return MongoDBMemoryManager.prototype.resolveObservedSearchMethod.call(
 			self as never,
 			traceEvents as never,
 			mongoCfg,
+			capabilities as never,
 		)
 	}
 

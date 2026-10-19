@@ -31,9 +31,14 @@ import {
 	MAX_SEARCH_QUERY_LENGTH,
 } from "./mongodb-search-ranking.js"
 
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
+
 const head = "alpha ".repeat(333) + "al"
 const full = head + " yesterday TAILMARK"
-const context = { availablePaths: new Set<"raw-window">(["raw-window"]) }
+const context = {
+	availablePaths: new Set<"raw-window">(["raw-window"]),
+	searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
+}
 const fakeDb = {} as Db
 
 function clampEvents() {

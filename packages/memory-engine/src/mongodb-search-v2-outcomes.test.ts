@@ -70,6 +70,7 @@ import {
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import type { SearchLaneOutcome } from "./search-outcomes.js"
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 
 const db = {} as Db
 const noCapabilities = {
@@ -115,7 +116,11 @@ function run(
 	return searchV2(db, "test_", query, "agent-1", {
 		availablePaths: new Set(paths),
 		...extra,
-		searchOptions: { allowHybridBackstop: false, ...searchOptions },
+		searchOptions: {
+			allowHybridBackstop: false,
+			capabilities: HEALTHY_TEST_CAPABILITIES,
+			...searchOptions,
+		},
 	})
 }
 

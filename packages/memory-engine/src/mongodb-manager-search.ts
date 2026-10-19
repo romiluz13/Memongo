@@ -11,6 +11,7 @@ import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { normalizeSearchResults } from "./mongodb-hybrid.js"
 import type { SearchMethod } from "./mongodb-hybrid.js"
+import { assertLaneIndexesHealthy } from "./mongodb-index-health.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import {
 	openSearchBudget,
@@ -33,6 +34,7 @@ import {
 	kbChunksCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { buildUnexpiredClause, mergeQueryClauses } from "./mongodb-temporal.js"
 import { mongoSearch } from "./mongodb-search.js"
@@ -344,6 +346,7 @@ export class MongoDBManagerSearchOps {
 				agentId: this.host.agentId,
 			}))
 
+		const capabilities = await this.host.requestCapabilities()
 		const mongoCfg = this.host.config.mongodb!
 		const maxResults = clampSearchMaxResults(opts?.maxResults ?? 10)
 		const minScore = opts?.minScore ?? 0.1
@@ -399,7 +402,7 @@ export class MongoDBManagerSearchOps {
 							sessionKey: opts?.sessionKey,
 							filter: this.host.buildConversationChunkFilter(identity),
 							fusionMethod: mongoCfg.fusionMethod,
-							capabilities: this.host.capabilities,
+							capabilities,
 							vectorIndexName: `${this.host.prefix}chunks_vector`,
 							textIndexName: `${this.host.prefix}chunks_text`,
 							vectorWeight: 0.7,
@@ -425,7 +428,7 @@ export class MongoDBManagerSearchOps {
 							sessionKey: opts?.sessionKey,
 							filter: bridgeFilter,
 							fusionMethod: mongoCfg.fusionMethod,
-							capabilities: this.host.capabilities,
+							capabilities,
 							vectorIndexName: `${this.host.prefix}chunks_vector`,
 							textIndexName: `${this.host.prefix}chunks_text`,
 							vectorWeight: 0.7,
@@ -479,7 +482,7 @@ export class MongoDBManagerSearchOps {
 								scopeRef: identity.scopeRef,
 							},
 							numCandidates: mongoCfg.numCandidates,
-							capabilities: this.host.capabilities,
+							capabilities,
 							vectorIndexName: `${this.host.prefix}structured_mem_vector`,
 							textIndexName: `${this.host.prefix}structured_mem_text`,
 							embeddingMode: mongoCfg.embeddingMode,
@@ -506,6 +509,7 @@ export class MongoDBManagerSearchOps {
 		const legacyMethod: SearchMethod = this.host.resolveObservedSearchMethod(
 			traceEvents,
 			mongoCfg,
+			capabilities,
 		)
 		const normalizedLegacy = normalizeSearchResults(
 			conversationResults,
@@ -842,6 +846,9 @@ export class MongoDBManagerSearchOps {
 			{ admitted: false },
 		)
 		try {
+			// M2 decision 8: this request's capability view comes from its own
+			// index-health snapshot; a metadata read failure surfaces per lane.
+			const capabilities = await this.host.requestCapabilities()
 			const v2 = await requestLedger.run(() =>
 				searchV2(this.host.db, this.host.prefix, cleaned, this.host.agentId, {
 					admission: readAdmission,
@@ -849,15 +856,11 @@ export class MongoDBManagerSearchOps {
 					hasEpisodes: mongoCfg.episodes.enabled,
 					hasGraphData: mongoCfg.graph.enabled,
 					maxResults,
-					// C-016: re-poll index readiness when a lane fails at query
-					// time so status reflects the outage.
-					onPathFailure: (path, error) =>
-						this.host.noteSearchLaneFailure(path, error),
 					searchOptions: {
 						minScore,
 						sessionKey: opts?.sessionKey,
 						numCandidates: mongoCfg.numCandidates,
-						capabilities: this.host.capabilities,
+						capabilities,
 						fusionMethod: mongoCfg.fusionMethod,
 						embeddingMode: mongoCfg.embeddingMode,
 						queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
@@ -1299,6 +1302,9 @@ export class MongoDBManagerSearchOps {
 		}
 
 		const searchStart = Date.now()
+		// M2 decision 8: one capability view per request, from the request's
+		// own index-health snapshot; every pass shares it.
+		const capabilities = await this.host.requestCapabilities()
 		const executeRequest = async () =>
 			executeMongoSearchPlan({
 				request: normalized,
@@ -1319,15 +1325,11 @@ export class MongoDBManagerSearchOps {
 							hasEpisodes: mongoCfg.episodes.enabled,
 							hasGraphData: mongoCfg.graph.enabled,
 							maxResults: resolvedSearchConfig.maxResults,
-							// C-016: re-poll index readiness when a lane fails at query
-							// time so status reflects the outage.
-							onPathFailure: (path, error) =>
-								this.host.noteSearchLaneFailure(path, error),
 							searchOptions: {
 								minScore: normalized.minScore ?? 0.1,
 								sessionKey: normalized.conversationScope?.sessionKey,
 								numCandidates: resolvedSearchConfig.numCandidates,
-								capabilities: this.host.capabilities,
+								capabilities,
 								fusionMethod: resolvedSearchConfig.fusionMethod,
 								embeddingMode: mongoCfg.embeddingMode,
 								queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
@@ -1735,7 +1737,12 @@ export class MongoDBManagerSearchOps {
 					reason: "budget-embeds",
 				})
 			}
-			const results = await requestLedger.run(runKBLane)
+			// M2 decision 8: the KB lane never runs against an index observed
+			// unhealthy at admission; the typed failure is this call's row.
+			const results = await requestLedger.run(async () => {
+				await assertLaneIndexesHealthy("kb")
+				return runKBLane()
+			})
 			lanes.push({
 				lane: "kb",
 				stage: "lane",
@@ -1754,15 +1761,17 @@ export class MongoDBManagerSearchOps {
 		}
 	}
 
-	detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod {
+	detectSearchMethod(
+		mongoCfg: ResolvedMongoDBConfig,
+		capabilities: DetectedCapabilities,
+	): SearchMethod {
 		// Best guess from configuration alone. Only correct when mongoSearch
 		// actually took the path its capabilities allow — prefer
 		// resolveObservedSearchMethod, which uses the trace of what ran.
 		const canVector =
-			mongoCfg.embeddingMode === "automated" &&
-			this.host.capabilities.vectorSearch
+			mongoCfg.embeddingMode === "automated" && capabilities.vectorSearch
 
-		if (canVector && this.host.capabilities.textSearch) {
+		if (canVector && capabilities.textSearch) {
 			return "hybrid"
 		}
 		if (canVector) {
@@ -1789,6 +1798,7 @@ export class MongoDBManagerSearchOps {
 	resolveObservedSearchMethod(
 		traceEvents: SearchTraceEvent[],
 		mongoCfg: ResolvedMongoDBConfig,
+		capabilities: DetectedCapabilities,
 	): SearchMethod {
 		const succeeded = [...traceEvents].toReversed().find((event) => event.ok)
 		switch (succeeded?.method) {
@@ -1802,7 +1812,7 @@ export class MongoDBManagerSearchOps {
 			case "$text":
 				return "text"
 			default:
-				return this.host.detectSearchMethod(mongoCfg)
+				return this.host.detectSearchMethod(mongoCfg, capabilities)
 		}
 	}
 }

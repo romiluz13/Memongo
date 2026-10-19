@@ -247,7 +247,6 @@ it.each([
 	vi.spyOn(console, "warn").mockImplementation((...args) => {
 		warnings.push(args.join(" "))
 	})
-	const onPathFailure = vi.fn()
 	const result = await searchV2(
 		db,
 		"test_",
@@ -255,7 +254,6 @@ it.each([
 		"agent-1",
 		{
 			availablePaths: new Set(["raw-window"]),
-			onPathFailure,
 			searchOptions: {
 				capabilities,
 				allowHybridBackstop: false,
@@ -270,7 +268,6 @@ it.each([
 		},
 	)
 	expect(result.results.map((x) => x.path)).toContain("events/turn-text")
-	expect(onPathFailure).not.toHaveBeenCalled()
 	expect(result.metadata.laneOutcomes).toContainEqual({
 		lane: phase,
 		stage: "turn-vector",

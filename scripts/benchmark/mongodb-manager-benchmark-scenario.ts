@@ -180,6 +180,11 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		})
 	}
 
+	private contractRequires(indexSuffix: string): boolean {
+		const name = `${this.host.prefix}${indexSuffix}`
+		return this.host.requiredManifest.some((entry) => entry.name === name)
+	}
+
 	snapshotBenchmarkRunConfiguration(params: {
 		executionProfile: "shipped" | "diagnostic"
 		retrievalLane: BenchmarkRetrievalLane
@@ -254,10 +259,13 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			graphEntityExtractionTimeoutMs: mongoCfg.graph.entityExtraction.timeoutMs,
 			episodesEnabled: mongoCfg.episodes.enabled,
 			episodesMinEvents: mongoCfg.episodes.minEventsForEpisode,
-			vectorSearchCapability: this.host.capabilities.vectorSearch,
-			textSearchCapability: this.host.capabilities.textSearch,
-			scoreFusionCapability: this.host.capabilities.scoreFusion,
-			rankFusionCapability: this.host.capabilities.rankFusion,
+			// M2 decision 8: the run identity records what the startup contract
+			// required and verified plus the deployment facts, never a boot
+			// health snapshot.
+			vectorSearchCapability: this.contractRequires("chunks_vector"),
+			textSearchCapability: this.contractRequires("chunks_text"),
+			scoreFusionCapability: this.host.deploymentFacts.scoreFusion,
+			rankFusionCapability: this.host.deploymentFacts.rankFusion,
 			searchBudgetMaxAggregations: DEFAULT_SEARCH_BUDGET.maxAggregations,
 			searchBudgetMaxEmbeds: DEFAULT_SEARCH_BUDGET.maxEmbeds,
 			userSearchMaxTimeMs: resolveUserSearchMaxTimeMs(),
@@ -718,7 +726,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		const mongoCfg = this.host.config.mongodb!
 		if (
 			mongoCfg.embeddingMode !== "automated" ||
-			!this.host.capabilities.vectorSearch
+			!(await this.host.requestCapabilities()).vectorSearch
 		) {
 			if (isBenchmarkStrictMode()) {
 				throw new Error(
@@ -967,7 +975,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		}
 		const scopeFilter = benchmarkConvergenceFilter(namespace)
 		const searchFilters = benchmarkSearchEqualsFilters(namespace)
-		if (!this.host.capabilities.textSearch) {
+		if (!(await this.host.requestCapabilities()).textSearch) {
 			if (isBenchmarkStrictMode()) {
 				throw new Error(
 					"benchmark event search convergence requires MongoDB Search text capability in strict mode",
@@ -1443,7 +1451,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		const mongoCfg = this.host.config.mongodb!
 		if (
 			mongoCfg.embeddingMode !== "automated" ||
-			!this.host.capabilities.vectorSearch
+			!(await this.host.requestCapabilities()).vectorSearch
 		) {
 			throw new Error(
 				"raw-session benchmark lane requires MongoDB Vector Search auto-embed",

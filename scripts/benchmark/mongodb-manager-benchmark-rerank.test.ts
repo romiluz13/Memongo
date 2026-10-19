@@ -57,12 +57,11 @@ function setup(model?: (typeof models)[number], topN?: number) {
 		config: resolved,
 		db,
 		prefix: "unit_",
-		capabilities: {
-			vectorSearch: true,
-			textSearch: true,
-			scoreFusion: false,
-			rankFusion: true,
-		},
+		requiredManifest: [
+			{ name: "unit_chunks_vector" },
+			{ name: "unit_chunks_text" },
+		],
+		deploymentFacts: { scoreFusion: false, rankFusion: true },
 	} as unknown as MongoDBManagerHost
 	const ops = new MongoDBManagerBenchmarkOps(host)
 	return { resolved, reranking: resolved.mongodb.reranking, db, ops }

@@ -1,6 +1,7 @@
 import type { Db } from "mongodb"
 import { redactSensitiveText } from "@memongo/lib"
 import { describe, expect, it, vi } from "vitest"
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 import { planRetrieval } from "./mongodb-retrieval-planner.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import { queryFailureMeta } from "./query-diagnostics.js"
@@ -271,6 +272,7 @@ describe("searchV2 failure diagnostics (C-002 catch seam)", () => {
 			await expect(
 				searchV2({} as unknown as Db, "memongo", query, "agent-1", {
 					availablePaths: new Set(["hybrid", "graph"]),
+					searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
 				}),
 			).rejects.toThrow("lane sweep failed")
 
@@ -305,6 +307,7 @@ describe("searchV2 failure diagnostics (C-002 catch seam)", () => {
 			// warn is the diagnostic under test.
 			await searchV2({} as unknown as Db, "memongo", query, "agent-1", {
 				availablePaths: new Set(["text"]),
+				searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
 			}).catch(() => {})
 			const logged = warnLine.mock.calls
 				.map((args) => args.join(" "))

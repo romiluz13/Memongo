@@ -225,7 +225,10 @@ describe("benchmark scenario manager configuration (B12)", () => {
 			agentId: "benchmark-parent",
 			workspaceDir: "/workspace",
 			extraMemoryPaths: [],
-			capabilities: { textSearch: true, vectorSearch: true },
+			requestCapabilities: async () => ({
+				textSearch: true,
+				vectorSearch: true,
+			}),
 			nativeBitemporalVectorPrefilter: false,
 			config: hostConfig,
 		} as unknown as MongoDBMemoryManager
@@ -854,7 +857,10 @@ describe("benchmark event search convergence", () => {
 					embeddingMode: "automated",
 				},
 			},
-			capabilities: { textSearch: true, vectorSearch: true },
+			requestCapabilities: async () => ({
+				textSearch: true,
+				vectorSearch: true,
+			}),
 		}) as MongoDBMemoryManager
 	const makeSearchableFind = (values = ["alpha", "beta"]) =>
 		vi.fn().mockReturnValue({
@@ -2050,7 +2056,10 @@ describe("benchmark event search convergence", () => {
 						prefix: fakePrefix,
 						agentId: "agent-benchmark",
 						config: { mongodb: { embeddingMode: "automated" } },
-						capabilities: { textSearch: true, vectorSearch: false },
+						requestCapabilities: async () => ({
+							textSearch: true,
+							vectorSearch: false,
+						}),
 					},
 				) as MongoDBMemoryManager
 				const ops = benchmarkOps(manager)

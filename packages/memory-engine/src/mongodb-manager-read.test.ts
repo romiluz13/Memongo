@@ -131,14 +131,13 @@ describe("MongoDBMemoryManager conversation recall", () => {
 				db: {} as import("mongodb").Db,
 				prefix: "test_",
 				agentId: "agent-1",
-				capabilities: {
-					vectorSearch: true,
-					textSearch: true,
+				deploymentFacts: {
 					rankFusion: true,
 					storedSource: false,
 					vectorIndexMethod: false,
 					scoreFusion: false,
 				},
+				requiredManifest: [],
 				nativeBitemporalVectorPrefilter: true,
 			},
 		) as MongoDBMemoryManager
@@ -177,14 +176,13 @@ describe("MongoDBMemoryManager conversation recall", () => {
 				db: {} as import("mongodb").Db,
 				prefix: "test_",
 				agentId: "agent-1",
-				capabilities: {
-					vectorSearch: true,
-					textSearch: true,
+				deploymentFacts: {
 					rankFusion: true,
 					storedSource: false,
 					vectorIndexMethod: false,
 					scoreFusion: false,
 				},
+				requiredManifest: [],
 				nativeBitemporalVectorPrefilter: false,
 				nativeBitemporalPrefilterCheckedAt: 0,
 			},
@@ -218,14 +216,13 @@ describe("MongoDBMemoryManager conversation recall", () => {
 				db: {} as import("mongodb").Db,
 				prefix: "test_",
 				agentId: "agent-1",
-				capabilities: {
-					vectorSearch: true,
-					textSearch: true,
+				deploymentFacts: {
 					rankFusion: true,
 					storedSource: false,
 					vectorIndexMethod: false,
 					scoreFusion: false,
 				},
+				requiredManifest: [],
 				nativeBitemporalVectorPrefilter: true,
 				nativeBitemporalPrefilterCheckedAt: 0,
 			},

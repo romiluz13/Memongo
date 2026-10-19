@@ -7,6 +7,7 @@ import { buildContextBundle as composeContextBundle } from "./mongodb-context-bu
 import { expandSearchContext } from "./mongodb-context-expansion.js"
 import { recallConversation as recallConversationCore } from "./mongodb-conversation-recall.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
+import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import {
 	createMemoryJob,
@@ -580,6 +581,7 @@ export class MongoDBManagerLifecycleOps {
 			  }
 			| undefined
 
+		const capabilities = await this.host.requestCapabilities()
 		const bundle = await composeContextBundle({
 			admission: readAdmission,
 			db: this.host.db,
@@ -603,7 +605,7 @@ export class MongoDBManagerLifecycleOps {
 						searchOptions: {
 							minScore: 0.1,
 							numCandidates: mongoCfg.numCandidates,
-							capabilities: this.host.capabilities,
+							capabilities,
 							fusionMethod: mongoCfg.fusionMethod,
 							embeddingMode: mongoCfg.embeddingMode,
 							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
@@ -703,6 +705,10 @@ export class MongoDBManagerLifecycleOps {
 	async recallConversation(
 		request: Omit<ConversationRecallRequest, "agentId">,
 	): Promise<ConversationRecallResponse> {
+		// M2 decision 8: recall never runs against an events index (or the chunk
+		// indexes its capability flags read) observed unhealthy at admission.
+		await assertCollectionIndexesHealthy(["events", "chunks"], "search")
+		const capabilities = await this.host.requestCapabilities()
 		const nativeBitemporalVectorPrefilter =
 			await this.host.refreshNativeBitemporalVectorPrefilter()
 		return recallConversationCore({
@@ -716,13 +722,8 @@ export class MongoDBManagerLifecycleOps {
 			textIndexName: `${this.host.prefix}events_text`,
 			queryEmbeddingModel:
 				this.host.config?.mongodb?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL,
-			capabilities: this.host.capabilities,
+			capabilities,
 			nativeBitemporalVectorPrefilter,
-			// RET-13: recall stage failures (hybrid/semantic) surface through
-			// the same lane failure sink the search paths use, so index
-			// readiness re-polls instead of staying stale.
-			onLaneFailure: (lane, error) =>
-				this.host.noteSearchLaneFailure(lane, error),
 		})
 	}
 
@@ -736,10 +737,6 @@ export class MongoDBManagerLifecycleOps {
 			return this.host.nativeBitemporalVectorPrefilter
 		}
 		this.host.nativeBitemporalPrefilterCheckedAt = now
-		if (!this.host.capabilities.vectorSearch) {
-			this.host.nativeBitemporalVectorPrefilter = false
-			return false
-		}
 		// G4-77: a readiness probe that cannot answer propagates; it used to be
 		// caught and silently disable the prefilter.
 		const collection = eventsCollection(this.host.db, this.host.prefix)

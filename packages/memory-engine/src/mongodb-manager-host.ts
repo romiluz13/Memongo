@@ -65,6 +65,8 @@ import type {
 	RelevanceSourceScope,
 } from "./mongodb-relevance.js"
 import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
+import type { DeploymentFacts } from "./mongodb-index-health.js"
+import type { RequiredSearchIndex } from "./mongodb-required-index-manifest.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import type {
 	ActiveSources,
@@ -122,7 +124,10 @@ export interface MongoDBManagerHost {
 	readonly agentScopeRef: string
 	readonly workspaceScopeRef: string
 	readonly extraMemoryPaths: string[]
-	readonly capabilities: DetectedCapabilities
+	/** M2 decision 8: what the deployment guarantees for this boot; never index health. */
+	readonly deploymentFacts: DeploymentFacts
+	/** The required-index manifest (intended definitions) the startup contract verified. */
+	readonly requiredManifest: readonly RequiredSearchIndex[]
 	nativeBitemporalVectorPrefilter: boolean
 	nativeBitemporalPrefilterCheckedAt: number
 	readonly config: ResolvedMemoryBackendConfig
@@ -268,10 +273,14 @@ export interface MongoDBManagerHost {
 			onOutcomes?: (outcomes: SearchOutcomeSummary) => void
 		},
 	): Promise<MemorySearchResult[]>
-	detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod
+	detectSearchMethod(
+		mongoCfg: ResolvedMongoDBConfig,
+		capabilities: DetectedCapabilities,
+	): SearchMethod
 	resolveObservedSearchMethod(
 		traceEvents: SearchTraceEvent[],
 		mongoCfg: ResolvedMongoDBConfig,
+		capabilities: DetectedCapabilities,
 	): SearchMethod
 	relevanceExplain(params: {
 		query: string
@@ -436,8 +445,13 @@ export interface MongoDBManagerHost {
 	probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>
 	probeVectorAvailability(): Promise<boolean>
 	probeEmbeddingModeSupportsVector(): boolean
-	/** C-016: record a query-time search-path failure and re-poll readiness. */
-	noteSearchLaneFailure(path: string, error: unknown): void
+	/**
+	 * M2 decision 8: run one top-level request or job inside a request-local
+	 * index-health scope. Nested calls share the open scope.
+	 */
+	runIndexHealthRequest<T>(fn: () => Promise<T>): Promise<T>
+	/** This request's capability view, derived from its index-health snapshot. */
+	requestCapabilities(): Promise<DetectedCapabilities>
 	getDetailedStatus(): Promise<V2Status>
 	stats(): Promise<MemoryStats>
 	readFile(params: {

@@ -61,9 +61,14 @@ import {
 	tryConsumeSearchAggregation,
 } from "./mongodb-search-budget.js"
 
+import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
+
 const prefix = `${"alpha ".repeat(333)}al`
 const longQuery = `${prefix} yesterday TAILMARK`
-const context = { availablePaths: new Set<"raw-window">(["raw-window"]) }
+const context = {
+	availablePaths: new Set<"raw-window">(["raw-window"]),
+	searchOptions: { capabilities: HEALTHY_TEST_CAPABILITIES },
+}
 
 describe("shared-budget search input bounds", () => {
 	beforeEach(() => {
@@ -162,6 +167,7 @@ describe("shared-budget search input bounds", () => {
 			admission: { kind: "admission", agentId: "a1", epoch: 19 },
 			availablePaths: new Set(["structured", "hybrid"]),
 			searchOptions: {
+				capabilities: HEALTHY_TEST_CAPABILITIES,
 				queryRewriteConfig: {
 					enabled: true,
 					method: "synonym-expansion",
@@ -216,6 +222,7 @@ describe("shared-budget search input bounds", () => {
 			admission: { kind: "admission", agentId: "a1", epoch: 19 },
 			availablePaths: new Set(["structured"]),
 			searchOptions: {
+				capabilities: HEALTHY_TEST_CAPABILITIES,
 				rerankConfig: {
 					enabled: true,
 					model: "rerank-2.5",

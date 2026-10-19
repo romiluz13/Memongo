@@ -19,16 +19,15 @@ function fixture() {
 		config: {
 			mongodb: { embeddingMode: "automated", fusionMethod: "scoreFusion" },
 		},
-		// Every capability off: KB search must still run its fusion, where it
+		// Every fusion fact off: KB search must still run its fusion, where it
 		// used to fall to $text.
-		capabilities: {
-			vectorSearch: false,
-			textSearch: false,
+		deploymentFacts: {
 			scoreFusion: false,
 			rankFusion: false,
 			storedSource: false,
 			vectorIndexMethod: false,
 		},
+		requiredManifest: [],
 	}) as MongoDBMemoryManager
 	return { manager, aggregate, collection }
 }
