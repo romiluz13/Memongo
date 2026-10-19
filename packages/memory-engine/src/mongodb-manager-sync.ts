@@ -21,6 +21,7 @@ import {
 } from "./mongodb-schema.js"
 import { bestEffort } from "./best-effort.js"
 import { safeBootText } from "./mongodb-boot-errors.js"
+import { attachCommitReport } from "./mongodb-commit-report.js"
 import { syncToMongoDB } from "./mongodb-sync.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
@@ -90,6 +91,24 @@ export class KBRefreshError extends Error {
 			.slice(0, KB_REFRESH_ERROR_SAMPLE)
 			.map((error) => safeBootText(error).slice(0, KB_REFRESH_ERROR_MAX_LENGTH))
 	}
+}
+
+function kbImportCounts(err: unknown):
+	| {
+			documentsProcessed: number
+			chunksCreated: number
+			skipped: number
+	  }
+	| undefined {
+	if (!(err instanceof KBRefreshError)) {
+		return undefined
+	}
+	const { documentsProcessed, chunksCreated, skipped } = err
+	return documentsProcessed === undefined ||
+		chunksCreated === undefined ||
+		skipped === undefined
+		? undefined
+		: { documentsProcessed, chunksCreated, skipped }
 }
 
 type RepairDiagnostics = {
@@ -597,7 +616,25 @@ export class MongoDBManagerSyncOps {
 			)
 
 			// KB auto-refresh: re-import autoImportPaths if autoRefreshHours has elapsed
-			await this.host.maybeAutoRefreshKB()
+			try {
+				await this.host.maybeAutoRefreshKB()
+			} catch (err) {
+				// M2 review D3: the file-sync phase above already committed, so a
+				// failure here carries that commit boundary on the typed error. The
+				// import's counts are named only when the import produced them.
+				const kbImport = kbImportCounts(err)
+				throw attachCommitReport(err, {
+					commitState: "committed",
+					commit: {
+						operation: "sync",
+						fileSync: {
+							filesFailed: result.filesFailed,
+							enumerationComplete: result.enumerationComplete,
+						},
+						...(kbImport ? { kbImport } : {}),
+					},
+				})
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`sync failed: ${msg}`)
