@@ -13,6 +13,7 @@ import {
 } from "./mongodb-search-admission.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
+import { SearchLaneError } from "./search-outcomes.js"
 import {
 	mocked,
 	buildMockManager,
@@ -2652,5 +2653,32 @@ describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)
 				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previousMirrorMode
 			}
 		}
+	})
+})
+
+describe("removed searchConfig.lexicalPrefilter (#112)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("searchDetailed() rejects a request that carries it with a typed request error and runs no retrieval", async () => {
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		const failure = await buildMockManager()
+			.searchDetailed({
+				query: "qzx lexical prefilter marker",
+				searchConfig: { lexicalPrefilter: "disabled" } as never,
+			})
+			.catch((err: unknown) => err)
+
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect(failure).toMatchObject({ stage: "request", reason: "query-error" })
+		expect(String((failure as SearchLaneError).cause)).toContain(
+			"lexicalPrefilter",
+		)
+		expect(aggregate).not.toHaveBeenCalled()
 	})
 })
