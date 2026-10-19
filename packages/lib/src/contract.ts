@@ -155,6 +155,70 @@ export type ApiErrorBody = {
 	}
 }
 
+/**
+ * M2 review D3: what a failed operation had already committed, on the error
+ * body. `commitState` is `none` (the operation knows none of its writes
+ * committed), `committed` (known committed effects, listed in `commit`) or
+ * `unknown` (an uncertain commit outcome: `commit` lists only what is known to
+ * be committed and the truth may be more). A body without `commitState` makes
+ * no claim, and is not a statement that nothing committed.
+ */
+const COMMIT_STATE_VALUES = ["none", "committed", "unknown"] as const
+
+const COMMIT_COUNT_SCHEMA = { type: "integer", minimum: 0 } as const
+
+const COMMIT_DETAIL_OPENAPI_SCHEMA = {
+	description:
+		"Bounded, value-free detail of the work the failed operation is known to have committed. `sync`: the file-sync phase ran to the end (`fileSync.filesFailed` and `enumerationComplete` say what it left undone) and `kbImport` holds the KB import's acknowledged counts, present only when the import produced them (absent means not known, never zero; a document that failed may have written part of itself). `consolidate`: the run's identity and the work the run acknowledged before it failed; `committed` can hold with every count zero when only other rows (quarantine entries, graph projection, spend records) committed.",
+	oneOf: [
+		{
+			type: "object",
+			required: ["operation", "fileSync"],
+			properties: {
+				operation: { type: "string", enum: ["sync"] },
+				fileSync: {
+					type: "object",
+					required: ["filesFailed", "enumerationComplete"],
+					properties: {
+						filesFailed: COMMIT_COUNT_SCHEMA,
+						enumerationComplete: { type: "boolean" },
+					},
+				},
+				kbImport: {
+					type: "object",
+					required: ["documentsProcessed", "chunksCreated", "skipped"],
+					properties: {
+						documentsProcessed: COMMIT_COUNT_SCHEMA,
+						chunksCreated: COMMIT_COUNT_SCHEMA,
+						skipped: COMMIT_COUNT_SCHEMA,
+					},
+				},
+			},
+		},
+		{
+			type: "object",
+			required: [
+				"operation",
+				"runId",
+				"eventsProcessed",
+				"factsPromoted",
+				"factsInferred",
+				"factsMerged",
+				"factsPruned",
+			],
+			properties: {
+				operation: { type: "string", enum: ["consolidate"] },
+				runId: { type: "string", format: "uuid" },
+				eventsProcessed: COMMIT_COUNT_SCHEMA,
+				factsPromoted: COMMIT_COUNT_SCHEMA,
+				factsInferred: COMMIT_COUNT_SCHEMA,
+				factsMerged: COMMIT_COUNT_SCHEMA,
+				factsPruned: COMMIT_COUNT_SCHEMA,
+			},
+		},
+	],
+} as const
+
 /** OpenAPI schema for the ApiError envelope (components.schemas.ApiError). */
 export const API_ERROR_OPENAPI_SCHEMA = {
 	type: "object",
@@ -166,6 +230,13 @@ export const API_ERROR_OPENAPI_SCHEMA = {
 			properties: {
 				code: { type: "string" },
 				message: { type: "string" },
+				commitState: {
+					type: "string",
+					enum: COMMIT_STATE_VALUES,
+					description:
+						"What the failed operation had already committed: none (known, nothing), committed (known effects, see commit) or unknown (an uncertain commit outcome, neither committed nor rolled back). Absent when the operation makes no claim.",
+				},
+				commit: COMMIT_DETAIL_OPENAPI_SCHEMA,
 			},
 		},
 	},

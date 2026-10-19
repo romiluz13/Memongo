@@ -3,7 +3,13 @@ import type {
 	SearchOutcomeSummary,
 } from "@memongo/memory-bridge"
 import type { Context } from "hono"
-import { apiErrorJson, internalError, jsonError } from "./errors.js"
+import {
+	apiErrorJson,
+	type CommitFields,
+	commitFieldsFromError,
+	internalError,
+	jsonError,
+} from "./errors.js"
 
 /**
  * #101 / decision 16, resolution R3: the one HTTP mapping of a search call's
@@ -162,6 +168,7 @@ export function searchFailureResponse(
 	mapping: Exclude<SearchHttpMapping, { status: 200 }>,
 	outcomes: SearchOutcomeSummary,
 	retryAfterMs?: number,
+	commit?: CommitFields,
 ) {
 	const requestId = c.get("requestId") ?? "no-request-id"
 	console.error(
@@ -184,7 +191,11 @@ export function searchFailureResponse(
 	}
 	return c.json(
 		{
-			...apiErrorJson(mapping.code, `search failed (request id: ${requestId})`),
+			...apiErrorJson(
+				mapping.code,
+				`search failed (request id: ${requestId})`,
+				commit,
+			),
 			outcomes: boundSearchOutcomes({ ...outcomes, status: "failed" }),
 		},
 		mapping.status,
@@ -216,7 +227,9 @@ function isErasureInProgressError(err: unknown): boolean {
  * search routes, with its outcome row and `Retry-After` where the denial
  * carries one. Any other error keeps the generic internal error envelope
  * under the route's own code: an unexpected failure is never labeled as a
- * Search failure and never leaks its message.
+ * Search failure and never leaks its message. M2 review D3: a failure that
+ * arrives after the operation committed work keeps its status and body and
+ * also carries the operation's commit state (see `commitFieldsFromError`).
  */
 export function searchFailureOrInternalError(
 	c: Context,
@@ -237,6 +250,7 @@ export function searchFailureOrInternalError(
 		mapping,
 		outcomes,
 		typeof retryAfterMs === "number" ? retryAfterMs : undefined,
+		commitFieldsFromError(err),
 	)
 }
 

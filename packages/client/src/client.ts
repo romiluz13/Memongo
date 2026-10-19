@@ -46,7 +46,10 @@ import type {
 	MemongoSearchInput,
 	MemongoSearchKBResponse,
 	MemongoSearchLaneOutcome,
+	MemongoCommitDetail,
+	MemongoCommitState,
 	MemongoSearchOutcomes,
+	MemongoSyncCommit,
 	MemongoSearchResponse,
 	MemongoSectionFailure,
 	SearchConfig,
@@ -87,25 +90,123 @@ function parseErrorEnvelope(body: string): {
 	code?: string
 	message?: string
 	outcomes?: MemongoSearchOutcomes
+	commitState?: MemongoCommitState
+	commit?: MemongoCommitDetail
 } {
 	try {
 		const parsed = JSON.parse(body) as {
-			error?: { code?: unknown; message?: unknown }
+			error?: {
+				code?: unknown
+				message?: unknown
+				commitState?: unknown
+				commit?: unknown
+			}
 			outcomes?: unknown
 		}
 		const err = parsed?.error
 		if (err && typeof err === "object") {
 			const outcomes = parseSearchOutcomes(parsed.outcomes)
+			const commitState =
+				typeof err.commitState === "string" &&
+				COMMIT_STATES.has(err.commitState)
+					? (err.commitState as MemongoCommitState)
+					: undefined
+			const commit = commitState ? parseCommitDetail(err.commit) : undefined
 			return {
 				code: typeof err.code === "string" ? err.code : undefined,
 				message: typeof err.message === "string" ? err.message : undefined,
 				...(outcomes ? { outcomes } : {}),
+				...(commitState ? { commitState } : {}),
+				...(commit ? { commit } : {}),
 			}
 		}
 	} catch {
 		// Not a JSON envelope — fall through with empty fields.
 	}
 	return {}
+}
+
+const COMMIT_STATES: ReadonlySet<string> = new Set([
+	"none",
+	"committed",
+	"unknown",
+])
+const RUN_ID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function commitCounts<K extends string>(
+	source: unknown,
+	keys: readonly K[],
+): Record<K, number> | undefined {
+	if (!source || typeof source !== "object") {
+		return undefined
+	}
+	const out = {} as Record<K, number>
+	for (const key of keys) {
+		const value = (source as Record<string, unknown>)[key]
+		if (
+			typeof value !== "number" ||
+			!Number.isSafeInteger(value) ||
+			value < 0
+		) {
+			return undefined
+		}
+		out[key] = value
+	}
+	return out
+}
+
+/**
+ * M2 review D3: accept a failed operation's `commit` detail only in its
+ * documented shape, rebuilt from the documented fields. A malformed detail is
+ * dropped, never partially trusted.
+ */
+function parseCommitDetail(value: unknown): MemongoCommitDetail | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined
+	}
+	const record = value as Record<string, unknown>
+	if (record.operation === "consolidate") {
+		const work = commitCounts(record, [
+			"eventsProcessed",
+			"factsPromoted",
+			"factsInferred",
+			"factsMerged",
+			"factsPruned",
+		] as const)
+		if (
+			typeof record.runId !== "string" ||
+			!RUN_ID_PATTERN.test(record.runId) ||
+			!work
+		) {
+			return undefined
+		}
+		return { operation: "consolidate", runId: record.runId, ...work }
+	}
+	if (record.operation === "sync") {
+		const fileSync = record.fileSync as Record<string, unknown> | undefined
+		const failed = commitCounts(fileSync, ["filesFailed"] as const)
+		if (!failed || typeof fileSync?.enumerationComplete !== "boolean") {
+			return undefined
+		}
+		const detail: MemongoSyncCommit = {
+			operation: "sync",
+			fileSync: {
+				filesFailed: failed.filesFailed,
+				enumerationComplete: fileSync.enumerationComplete,
+			},
+		}
+		if (record.kbImport === undefined) {
+			return detail
+		}
+		const kbImport = commitCounts(record.kbImport, [
+			"documentsProcessed",
+			"chunksCreated",
+			"skipped",
+		] as const)
+		return kbImport ? { ...detail, kbImport } : undefined
+	}
+	return undefined
 }
 
 const SEARCH_OUTCOME_STATUSES = new Set(["complete", "partial", "failed"])
@@ -149,6 +250,13 @@ export class MemongoClientError extends Error {
 	readonly apiMessage?: string
 	/** #101: outcome summary of a failed search (503/500 search failure bodies). */
 	readonly outcomes?: MemongoSearchOutcomes
+	/**
+	 * M2 review D3: what the failed operation had already committed. Absent
+	 * when the API made no claim, which is not the same as `none`.
+	 */
+	readonly commitState?: MemongoCommitState
+	/** M2 review D3: the bounded detail of the work known to be committed. */
+	readonly commit?: MemongoCommitDetail
 
 	constructor(status: number, body: string, message?: string) {
 		const envelope = parseErrorEnvelope(body)
@@ -170,6 +278,8 @@ export class MemongoClientError extends Error {
 		this.code = envelope.code
 		this.apiMessage = envelope.message
 		this.outcomes = envelope.outcomes
+		this.commitState = envelope.commitState
+		this.commit = envelope.commit
 	}
 }
 

@@ -1025,6 +1025,47 @@ export type MemongoSearchOutcomes = {
 	lanes: MemongoSearchLaneOutcome[]
 }
 
+/**
+ * M2 review D3: what a failed operation had already committed.
+ * - `none`: the operation knows none of its writes committed.
+ * - `committed`: known committed effects, listed in the detail; the operation
+ *   as a whole did not complete.
+ * - `unknown`: an uncertain commit outcome. Neither committed nor rolled back
+ *   is claimed, and the detail lists only what is known to be committed.
+ * An error without a state makes no claim; it is not a statement that nothing
+ * committed.
+ */
+export type MemongoCommitState = "none" | "committed" | "unknown"
+
+/** A failed `sync` whose file-sync phase ran to the end before the KB refresh failed. */
+export type MemongoSyncCommit = {
+	operation: "sync"
+	/** What the file-sync phase left undone: failed files, an incomplete enumeration. */
+	fileSync: { filesFailed: number; enumerationComplete: boolean }
+	/**
+	 * The KB import's acknowledged counts. Present only when the import
+	 * produced them; absent means not known, never zero.
+	 */
+	kbImport?: {
+		documentsProcessed: number
+		chunksCreated: number
+		skipped: number
+	}
+}
+
+/** A failed consolidation run: its identity and the work it acknowledged before it failed. */
+export type MemongoConsolidateCommit = {
+	operation: "consolidate"
+	runId: string
+	eventsProcessed: number
+	factsPromoted: number
+	factsInferred: number
+	factsMerged: number
+	factsPruned: number
+}
+
+export type MemongoCommitDetail = MemongoSyncCommit | MemongoConsolidateCommit
+
 export type MemongoSearchKBResponse = {
 	results: Array<{
 		path: string
