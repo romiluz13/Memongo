@@ -10,7 +10,9 @@ import {
 	prepareDerivedMemoryPromotion,
 	resolveStructuredCandidatesForPromotion,
 } from "./mongodb-derived-memory.js"
+import { runWithIndexHealth } from "./mongodb-index-health.js"
 import { SearchLaneError } from "./search-outcomes.js"
+import { createIndexHealthSource } from "./test-helpers/index-health-source.js"
 import {
 	type SearchStageFakeEntry,
 	createSearchStageFake,
@@ -457,5 +459,55 @@ describe("supporting events never skip Search", () => {
 		}).catch((err: unknown) => err)
 		expect(failure).toBeInstanceOf(SearchLaneError)
 		expect(fake.findCalls).toEqual([])
+	})
+})
+
+describe("supporting events check the job's index-health snapshot (#122 R2)", () => {
+	it.each([
+		{ damage: "STALE", patch: { status: "STALE" }, reason: "index-stale" },
+		{ damage: "missing", patch: null, reason: "index-unavailable" },
+	])("a $damage events text index fails the promotion decision typed and never runs the Search aggregate", async ({
+		patch,
+		reason,
+	}) => {
+		const fake = stage([
+			{ indexed: stored({ eventId: "evt-current", body: PREFERENCE }) },
+			hit("evt-a", PREFERENCE),
+		])
+		const health = createIndexHealthSource({
+			prefix: PREFIX,
+			patch: { events_text: patch },
+		})
+
+		const failure = await runWithIndexHealth(health, () =>
+			resolveStructuredCandidatesForPromotion({
+				db: fake.db,
+				prefix: PREFIX,
+				event: currentEvent(PREFERENCE),
+			}),
+		).catch((err: unknown) => err)
+
+		expect(failure).toBeInstanceOf(SearchLaneError)
+		expect(failure).toMatchObject({ stage: "index-health", reason })
+		expect(fake.pipelines).toEqual([])
+	})
+
+	it("a healthy events text index serves the lookup inside the snapshot", async () => {
+		const fake = stage([
+			{ indexed: stored({ eventId: "evt-current", body: PREFERENCE }) },
+			hit("evt-a", PREFERENCE),
+		])
+		const health = createIndexHealthSource({ prefix: PREFIX })
+
+		const promotable = await runWithIndexHealth(health, () =>
+			resolveStructuredCandidatesForPromotion({
+				db: fake.db,
+				prefix: PREFIX,
+				event: currentEvent(PREFERENCE),
+			}),
+		)
+
+		expect(promotable[0]?.provenance?.supportingEventIds).toEqual(["evt-a"])
+		expect(fake.pipelines).toHaveLength(1)
 	})
 })

@@ -37,6 +37,7 @@ function fixture() {
 		workspaceDir: "/owned/test",
 		isDuplicateKeyError: (error: unknown) =>
 			error instanceof Error && "code" in error && error.code === 11000,
+		runIndexHealthRequest: <T>(fn: () => Promise<T>) => fn(),
 	} as unknown as MongoDBManagerHost
 	return { f, host }
 }

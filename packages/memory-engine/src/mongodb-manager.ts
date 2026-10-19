@@ -205,6 +205,7 @@ import {
 import {
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
+	openSearchBudget,
 	resolveSearchBudgetLimits,
 	resolveUserSearchMaxTimeMs,
 	runWithSearchBudget,
@@ -1319,6 +1320,23 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		)
 	}
 
+	/**
+	 * #122 R1: run one top-level retrieval request (discovery, the context
+	 * bundle, novelty) inside its index-health scope and one search ledger
+	 * with the configured limits. Sibling sections and nested searchV2 passes
+	 * share both, and searchV2 still takes its admission token on the ledger.
+	 * A caller that already holds a ledger joins it.
+	 */
+	runRetrievalRequest<T>(fn: () => Promise<T>): Promise<T> {
+		return this.runIndexHealthRequest(() => {
+			if (hasActiveSearchBudget()) return fn()
+			return openSearchBudget(
+				resolveSearchBudgetLimits(this.config.mongodb?.searchBudget),
+				{ admitted: false },
+			).run(fn)
+		})
+	}
+
 	/** This request's capability view, derived from its index-health snapshot. */
 	requestCapabilities(): Promise<DetectedCapabilities> {
 		return this.runIndexHealthRequest(() => capabilitiesFromActiveHealth())
@@ -1516,7 +1534,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async buildDiscoveryProjection(
 		request: MemoryDiscoveryProjectionRequest,
 	): Promise<MemoryDiscoveryProjection> {
-		return this.runIndexHealthRequest(() =>
+		return this.runRetrievalRequest(() =>
 			lifecycleOpsOf(this).buildDiscoveryProjection(request),
 		)
 	}
@@ -1524,7 +1542,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async buildContextBundle(
 		request: MemoryContextBundleRequest = {},
 	): Promise<MemoryContextBundle> {
-		return this.runIndexHealthRequest(() =>
+		return this.runRetrievalRequest(() =>
 			lifecycleOpsOf(this).buildContextBundle(request),
 		)
 	}
@@ -1560,7 +1578,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		scope?: string
 		scopeRef?: string
 	}) {
-		return lifecycleOpsOf(this).scanNovelty(params)
+		return this.runRetrievalRequest(() =>
+			lifecycleOpsOf(this).scanNovelty(params),
+		)
 	}
 
 	async consolidate(params?: {
@@ -1571,7 +1591,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		scope?: MemoryScope
 		scopeRef?: string
 	}) {
-		return lifecycleOpsOf(this).consolidate(params)
+		// #122 R2: the run's Search probes check this request's index-health
+		// snapshot; the run opens its own consolidation ledger.
+		return this.runIndexHealthRequest(() =>
+			lifecycleOpsOf(this).consolidate(params),
+		)
 	}
 
 	async listRecallTraces(params?: { limit?: number }) {

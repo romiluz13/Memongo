@@ -26,6 +26,7 @@ import {
 	mergeQueryClauses,
 } from "./mongodb-temporal.js"
 import { runSearchAggregateWithRetry } from "./mongodb-search.js"
+import { assertCollectionIndexesHealthy } from "./mongodb-index-health.js"
 import { refineCandidatesValidTime } from "./mongodb-temporal-extraction.js"
 import {
 	type StructuredMemoryEntry,
@@ -541,6 +542,9 @@ async function findSupportingEventIds(params: {
 		{ $sort: { timestamp: -1, _id: -1 } },
 		{ $project: { _id: 0, eventId: 1, body: 1 } },
 	]
+	// #122 R2: a promotion decision never reads an events text index observed
+	// unhealthy in this job's snapshot.
+	await assertCollectionIndexesHealthy(["events"], undefined, ["search"])
 	let docs: Document[]
 	try {
 		docs = await runSearchAggregateWithRetry(

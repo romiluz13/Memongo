@@ -18,6 +18,11 @@ import {
 	ErasureGateConflictError,
 	captureAdmissionToken,
 } from "./mongodb-write-fence.js"
+import {
+	assertCollectionIndexesHealthy,
+	runWithIndexHealth,
+} from "./mongodb-index-health.js"
+import { createIndexHealthSource } from "./test-helpers/index-health-source.js"
 import { createStatefulMongoFake } from "./test-helpers/stateful-mongo-fake.js"
 import type { ClaimedMemoryJob } from "./types.js"
 
@@ -116,6 +121,7 @@ function makeHost(fake: Fake, overrides: Record<string, unknown> = {}) {
 		pruneIdempotencyFingerprints: vi.fn(async () => ({ pruned: 0 })),
 		runClaimedBackgroundExtractionJob: vi.fn(async () => undefined),
 		prefetchExtractionSessionFacts: vi.fn(async () => new Map()),
+		runIndexHealthRequest: <T>(fn: () => Promise<T>) => fn(),
 		...overrides,
 	}
 	return host as unknown as MongoDBManagerHost & typeof host
@@ -262,6 +268,156 @@ describe("extraction job failures are durable, with retry state", () => {
 			"memory-job-failure-record": 1,
 		})
 		expect(jobDoc(fake, job.jobId)?.status).toBe("running")
+	})
+})
+
+describe("jobs take one index-health snapshot each (#122 R2)", () => {
+	const healthScope = (
+		patch?: Parameters<typeof createIndexHealthSource>[0]["patch"],
+	) => {
+		const source = createIndexHealthSource({ prefix: "test_", patch })
+		return {
+			source,
+			runIndexHealthRequest: <T>(fn: () => Promise<T>) =>
+				runWithIndexHealth(source, fn),
+		}
+	}
+
+	it("an extraction job fails typed with retry state on a STALE events text index, and its supporting-event Search never runs", async () => {
+		const fake = createStatefulMongoFake()
+		await withAdmission(fake)
+		await fake.collection("events").insertOne({
+			eventId: "evt-1",
+			agentId: AGENT,
+			role: "user",
+			body: "I prefer concise answers with direct tradeoffs.",
+			scope: "agent",
+			scopeRef: SCOPE_REF,
+			timestamp: new Date("2026-08-03T10:00:00.000Z"),
+		})
+		const events = fake.collection("events")
+		const search = vi.spyOn(events, "aggregate")
+		const scope = healthScope({ events_text: { status: "STALE" } })
+		const host = makeHost(fake, {
+			runIndexHealthRequest: scope.runIndexHealthRequest,
+		})
+		const job = await seedJob(fake, jobRow())
+
+		await new MongoDBManagerJobsOps(host).runClaimedBackgroundExtractionJob(job)
+
+		expect(jobDoc(fake, job.jobId)).toMatchObject({
+			status: "failed",
+			error: expect.stringContaining("index-health: index-stale"),
+			retryAt: expect.any(Date),
+		})
+		expect(search).not.toHaveBeenCalled()
+		expect(fake.all("structured_mem")).toHaveLength(0)
+	})
+
+	it("an extraction job's ledger runs inside its snapshot: the job row reports the metadata checks", async () => {
+		const fake = createStatefulMongoFake()
+		await withAdmission(fake)
+		await seedEvent(fake)
+		const scope = healthScope()
+		const host = makeHost(fake, {
+			runIndexHealthRequest: scope.runIndexHealthRequest,
+		})
+		const job = await seedJob(fake, jobRow())
+
+		await new MongoDBManagerJobsOps(host).runClaimedBackgroundExtractionJob(job)
+
+		expect(jobDoc(fake, job.jobId)?.metadata?.searchBudget).toMatchObject({
+			accounting: "engine-query-work",
+			indexHealth: { metadataReads: 0, failedMetadataReads: 0 },
+		})
+	})
+
+	it("a consolidation job's ledger runs inside its snapshot: the job row reports the metadata checks", async () => {
+		const fake = createStatefulMongoFake()
+		await withAdmission(fake)
+		const scope = healthScope()
+		const host = makeHost(fake, {
+			runIndexHealthRequest: scope.runIndexHealthRequest,
+		})
+		const job = await seedJob(
+			fake,
+			jobRow({
+				jobId: "consolidation-auto-agent1-1",
+				jobType: "consolidation",
+				payload: undefined,
+				metadata: { auto: true, maxEvents: 7 },
+			}),
+		)
+		vi.mocked(consolidateMemory).mockImplementation(async () => {
+			await assertCollectionIndexesHealthy(["structured_mem"], undefined, [
+				"vectorSearch",
+			])
+			return {
+				runId: "run-1",
+				eventsProcessed: 0,
+				factsPromoted: 0,
+				factsPruned: 0,
+				conflictsResolved: 0,
+				durationMs: 0,
+			} as never
+		})
+
+		await (
+			new MongoDBManagerJobsOps(host) as unknown as {
+				runClaimedConsolidationJob(
+					job: ClaimedMemoryJob,
+					epoch: number,
+				): Promise<void>
+			}
+		).runClaimedConsolidationJob(job, 0)
+
+		expect(jobDoc(fake, job.jobId)).toMatchObject({
+			status: "completed",
+			metadata: {
+				searchBudget: {
+					indexHealth: { metadataReads: 1, indexesChecked: 1 },
+				},
+			},
+		})
+	})
+
+	it("a consolidation job fails typed with retry state on a STALE structured-memory vector index its run checks", async () => {
+		const fake = createStatefulMongoFake()
+		await withAdmission(fake)
+		const scope = healthScope({ structured_mem_vector: { status: "STALE" } })
+		const host = makeHost(fake, {
+			runIndexHealthRequest: scope.runIndexHealthRequest,
+		})
+		const job = await seedJob(
+			fake,
+			jobRow({
+				jobId: "consolidation-auto-agent1-2",
+				jobType: "consolidation",
+				payload: undefined,
+				metadata: { auto: true, maxEvents: 7 },
+			}),
+		)
+		vi.mocked(consolidateMemory).mockImplementation(async () => {
+			await assertCollectionIndexesHealthy(["structured_mem"], undefined, [
+				"vectorSearch",
+			])
+			throw new Error("the run must not get past its health check")
+		})
+
+		await (
+			new MongoDBManagerJobsOps(host) as unknown as {
+				runClaimedConsolidationJob(
+					job: ClaimedMemoryJob,
+					epoch: number,
+				): Promise<void>
+			}
+		).runClaimedConsolidationJob(job, 0)
+
+		expect(jobDoc(fake, job.jobId)).toMatchObject({
+			status: "failed",
+			error: expect.stringContaining("index-health: index-stale"),
+			retryAt: expect.any(Date),
+		})
 	})
 })
 

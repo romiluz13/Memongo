@@ -13,6 +13,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { Document } from "mongodb"
 import { consolidateMemory } from "./mongodb-consolidator.js"
+import { runWithIndexHealth } from "./mongodb-index-health.js"
+import { createIndexHealthSource } from "./test-helpers/index-health-source.js"
 import { createStatefulMongoFake } from "./test-helpers/stateful-mongo-fake.js"
 
 // ---------------------------------------------------------------------------
@@ -362,6 +364,36 @@ describe("NOOP gate — similarity decision against stored state", () => {
 		} finally {
 			spy.mockRestore()
 		}
+	})
+
+	it("a STALE structured-memory vector index in the run's snapshot fails the run typed: no probe, no ADD, event unacknowledged (#122 R2)", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const structured = fake.collection("structured_mem")
+		const probe = vi.spyOn(structured, "aggregate")
+		await seedEvent(fake, {
+			eventId: "evt-repeat",
+			body: "We decided to use Biome for linting",
+		})
+		const health = createIndexHealthSource({
+			prefix: PREFIX,
+			patch: { structured_mem_vector: { status: "STALE" } },
+		})
+
+		await expect(
+			runWithIndexHealth(health, () =>
+				consolidateMemory({ db: fake.db, prefix: PREFIX, agentId: AGENT }),
+			),
+		).rejects.toMatchObject({
+			name: "SearchLaneError",
+			stage: "index-health",
+			reason: "index-stale",
+		})
+		expect(probe).not.toHaveBeenCalled()
+		expect(fake.all("structured_mem")).toHaveLength(0)
+		expect(
+			fake.findDoc("events", { eventId: "evt-repeat" })?.dreamerProcessedAt,
+		).toBeUndefined()
+		expect(gateDoc(fake)?.status).toBe("failed")
 	})
 
 	it("does not promote a fact when an identical memory already exists", async () => {
