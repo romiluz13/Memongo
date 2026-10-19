@@ -50,6 +50,10 @@ afterEach(() => {
 	vi.restoreAllMocks()
 })
 
+// Each test re-imports server.ts and the whole engine after resetModules; a
+// cold import exceeds Vitest's 5 s default on a loaded machine.
+const COLD_IMPORT_TIMEOUT_MS = 30_000
+
 describe("API boot refuses to serve on a boot failure (X-06)", () => {
 	it("exits 1 with the typed reason and never binds when the startup contract fails", async () => {
 		const { MemongoBootError } = await import("@memongo/memory-bridge")
@@ -72,7 +76,7 @@ describe("API boot refuses to serve on a boot failure (X-06)", () => {
 		expect(console.error).toHaveBeenCalledWith(
 			expect.stringContaining("boot failure index-not-ready"),
 		)
-	})
+	}, COLD_IMPORT_TIMEOUT_MS)
 
 	it("serves once the startup contract passes", async () => {
 		seams.capabilities.mockResolvedValue({
@@ -88,5 +92,5 @@ describe("API boot refuses to serve on a boot failure (X-06)", () => {
 
 		expect(seams.serve).toHaveBeenCalledOnce()
 		expect(process.exit).not.toHaveBeenCalled()
-	})
+	}, COLD_IMPORT_TIMEOUT_MS)
 })
