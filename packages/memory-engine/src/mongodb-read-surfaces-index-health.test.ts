@@ -313,6 +313,7 @@ describe("surfaces that read no Search index are not gated (negative controls)",
 	})
 
 	it("context expansion serves under a missing events Search index and reads no index metadata", async () => {
+		const hitAt = daysAgo(1)
 		await model.seed("events", [
 			{
 				...TENANT,
@@ -320,7 +321,7 @@ describe("surfaces that read no Search index are not gated (negative controls)",
 				sessionId: "s1",
 				role: "user",
 				body: "previous turn",
-				timestamp: daysAgo(1.0001),
+				timestamp: new Date(hitAt.getTime() - 10_000),
 			},
 			{
 				...TENANT,
@@ -328,7 +329,7 @@ describe("surfaces that read no Search index are not gated (negative controls)",
 				sessionId: "s1",
 				role: "user",
 				body: "the hit",
-				timestamp: daysAgo(1),
+				timestamp: hitAt,
 			},
 		])
 		setIndex("events", indexNameOf("events", "search"), null)
@@ -340,7 +341,7 @@ describe("surfaces that read no Search index are not gated (negative controls)",
 			snippet: "the hit",
 			source: "conversation",
 			sessionId: "s1",
-			timestamp: daysAgo(1),
+			timestamp: hitAt,
 		}
 
 		const expanded = await inRequestScope(() =>
