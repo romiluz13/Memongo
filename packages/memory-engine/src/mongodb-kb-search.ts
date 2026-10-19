@@ -232,6 +232,13 @@ export async function searchKB(
 			...freshnessRevalidationStages(chunkFilter),
 			{ $limit: opts.maxResults * 4 },
 		]
+		const pipelines = {
+			vector: [
+				{ $vectorSearch: vsStage },
+				...freshnessRevalidationStages(chunkFilter),
+			],
+			text: textPipeline,
+		}
 		const weights = {
 			vector: KB_FUSION_VECTOR_WEIGHT,
 			text: KB_FUSION_TEXT_WEIGHT,
@@ -243,30 +250,13 @@ export async function searchKB(
 			fusionMethod === "scoreFusion"
 				? {
 						$scoreFusion: {
-							input: {
-								pipelines: {
-									vector: [
-										{ $vectorSearch: vsStage },
-										...freshnessRevalidationStages(chunkFilter),
-									],
-									text: textPipeline,
-								},
-								normalization: "minMaxScaler",
-							},
+							input: { pipelines, normalization: "minMaxScaler" },
 							combination: { weights, method: "avg" },
 						},
 					}
 				: {
 						$rankFusion: {
-							input: {
-								pipelines: {
-									vector: [
-										{ $vectorSearch: vsStage },
-										...freshnessRevalidationStages(chunkFilter),
-									],
-									text: textPipeline,
-								},
-							},
+							input: { pipelines },
 							combination: { weights },
 						},
 					}
