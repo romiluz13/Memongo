@@ -16,6 +16,10 @@ import {
 	memoryEvidenceCollection,
 	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
+import {
+	createFakeSearchDb,
+	embeddingQueries,
+} from "./test-helpers/fake-search-db.js"
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -38,7 +42,7 @@ function mockDb(
 	existingCollections: Array<
 		string | { name: string; type: "collection" | "timeseries" }
 	> = [],
-	versionArray?: unknown,
+	versionArray: unknown = [8, 3, 0, 0],
 	indexesByCollection: Record<string, Document[]> = {},
 ): Db {
 	const collections = new Map<string, Collection>()
@@ -185,441 +189,208 @@ describe("EPISODES_SCHEMA enum completeness", () => {
 })
 
 describe("detectCapabilities", () => {
-	it("does not claim scoreFusion support on MongoDB 8.2", async () => {
-		const db = {
-			admin: vi.fn(() => ({
-				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
-			})),
-			collection: vi.fn(() => ({
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => [
-						{
-							name: "test_chunks_text",
-							type: "search",
-							status: "READY",
-							queryable: true,
-						},
-						{
-							name: "test_chunks_vector",
-							type: "vectorSearch",
-							status: "READY",
-							queryable: true,
-						},
-					]),
-				})),
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db, "test_chunks")
-		expect(caps.rankFusion).toBe(true)
-		expect(caps.scoreFusion).toBe(false)
-		expect(caps.vectorSearch).toBe(true)
-		expect(caps.textSearch).toBe(true)
+	const readyPair = (vectorDefinition: Document = { fields: [] }) => ({
+		test_chunks: [
+			{
+				name: "test_chunks_text",
+				type: "search",
+				status: "READY",
+				queryable: true,
+			},
+			{
+				name: "test_chunks_vector",
+				type: "vectorSearch",
+				status: "READY",
+				queryable: true,
+				latestDefinition: vectorDefinition,
+			},
+		],
 	})
 
-	it("detects scoreFusion support from MongoDB 8.3", async () => {
-		const db = {
-			admin: vi.fn(() => ({
-				command: vi.fn(async () => ({ versionArray: [8, 3, 0, 0] })),
-			})),
-			collection: vi.fn(() => ({
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => [
-						{
-							name: "test_chunks_text",
-							type: "search",
-							status: "READY",
-							queryable: true,
-						},
-						{
-							name: "test_chunks_vector",
-							type: "vectorSearch",
-							status: "READY",
-							queryable: true,
-						},
-					]),
-				})),
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db, "test_chunks")
+	it("reads rankFusion and scoreFusion from the 8.3 server version, with no fusion-stage probe", async () => {
+		const fake = createFakeSearchDb({
+			versionArray: [8, 3, 0, 0],
+			indexes: readyPair(),
+		})
+		const caps = await detectCapabilities(fake.db, "test_chunks")
 		expect(caps.rankFusion).toBe(true)
 		expect(caps.scoreFusion).toBe(true)
 		expect(caps.vectorSearch).toBe(true)
 		expect(caps.textSearch).toBe(true)
+		expect(
+			fake.calls.filter(
+				(call) =>
+					call.op === "aggregate" &&
+					call.pipeline.some(
+						(stage) => "$rankFusion" in stage || "$scoreFusion" in stage,
+					),
+			),
+		).toEqual([])
 	})
 
-	it("detects no capabilities when everything fails", async () => {
-		const db = {
-			collection: vi.fn(() => ({
-				aggregate: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						throw new Error("unrecognized pipeline stage")
-					}),
-				})),
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						throw new Error("not supported")
-					}),
-				})),
-			})),
-			listCollections: vi.fn(() => ({
-				toArray: async () => [],
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db)
-		expect(caps.vectorSearch).toBe(false)
-		expect(caps.textSearch).toBe(false)
-		expect(caps.scoreFusion).toBe(false)
-		expect(caps.rankFusion).toBe(false)
+	it("refuses a server below 8.3 instead of probing fusion stages", async () => {
+		const fake = createFakeSearchDb({ versionArray: [8, 2, 0, 0] })
+		await expect(
+			detectCapabilities(fake.db, "test_chunks"),
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "server-version-unsupported",
+		})
 	})
 
-	it("detects rankFusion when stage is recognized but fails on empty data", async () => {
-		const db = {
-			collection: vi.fn(() => ({
-				aggregate: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						// Recognized but fails with a runtime error (not "unrecognized")
-						throw new Error("Cannot run $rankFusion on empty pipelines")
-					}),
-				})),
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						throw new Error("not supported")
-					}),
-				})),
-			})),
-			listCollections: vi.fn(() => ({
-				toArray: async () => [],
-			})),
-		} as unknown as Db
+	it("refuses an unreadable server version", async () => {
+		const fake = createFakeSearchDb({
+			buildInfoError: new Error("buildInfo unavailable"),
+		})
+		await expect(detectCapabilities(fake.db)).rejects.toMatchObject({
+			code: "server-version-unreadable",
+		})
+	})
 
-		const caps = await detectCapabilities(db)
-		// Stage recognized (error isn't "unrecognized") → capability = true
-		expect(caps.rankFusion).toBe(true)
-		expect(caps.scoreFusion).toBe(true)
+	it("fails typed when $listSearchIndexes fails, instead of reporting no Search", async () => {
+		const fake = createFakeSearchDb({
+			listError: () =>
+				new Error("Error connecting to Search Index Management service."),
+		})
+		await expect(
+			detectCapabilities(fake.db, "test_chunks"),
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "search-management-unavailable",
+			collection: "test_chunks",
+		})
 	})
 
 	it("does not claim search readiness when index listing succeeds but is empty", async () => {
-		const db = {
-			collection: vi.fn(() => ({
-				aggregate: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						throw new Error("unrecognized pipeline stage")
-					}),
-				})),
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => []),
-				})),
-			})),
-			listCollections: vi.fn(() => ({
-				toArray: async () => [{ name: "test_chunks" }],
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db)
+		const fake = createFakeSearchDb({ indexes: {} })
+		const caps = await detectCapabilities(fake.db, "test_chunks")
 		expect(caps.vectorSearch).toBe(false)
 		expect(caps.textSearch).toBe(false)
-		// automatedEmbedding removed (F2: dead code)
 	})
 
 	it("reports only named queryable search indexes as ready", async () => {
-		const db = {
-			admin: vi.fn(() => ({
-				command: vi.fn(async () => ({ versionArray: [8, 3, 0, 0] })),
-			})),
-			collection: vi.fn(() => ({
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => [
-						{
-							name: "test_chunks_text",
-							type: "search",
-							status: "READY",
-							queryable: true,
-						},
-						{
-							name: "test_chunks_vector",
-							type: "vectorSearch",
-							status: "PENDING",
-							queryable: false,
-						},
-					]),
-				})),
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db, "test_chunks")
-		expect(caps.textSearch).toBe(true)
+		const fake = createFakeSearchDb({
+			indexes: {
+				test_chunks: [
+					{
+						name: "other_text",
+						type: "search",
+						status: "READY",
+						queryable: true,
+					},
+					{
+						name: "test_chunks_vector",
+						type: "vectorSearch",
+						status: "BUILDING",
+						queryable: false,
+					},
+				],
+			},
+		})
+		const caps = await detectCapabilities(fake.db, "test_chunks")
+		expect(caps.textSearch).toBe(false)
 		expect(caps.vectorSearch).toBe(false)
 	})
 
-	it("detects search capabilities through $listSearchIndexes aggregation", async () => {
-		const db = {
-			admin: vi.fn(() => ({
-				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
-			})),
-			collection: vi.fn(() => ({
-				aggregate: vi.fn(() => ({
-					toArray: vi.fn(async () => [
-						{
-							name: "test_chunks_text",
-							type: "search",
-							status: "READY",
-							queryable: true,
-						},
-						{
-							name: "test_chunks_vector",
-							type: "vectorSearch",
-							status: "READY",
-							queryable: true,
-						},
-					]),
-				})),
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						throw new Error("driver helper should not be required")
-					}),
-				})),
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db, "test_chunks")
-		expect(caps.vectorSearch).toBe(true)
-		expect(caps.textSearch).toBe(true)
+	it("reports storedSource from the serving vector definition and issues no $vectorSearch probe", async () => {
+		const storedDefinition = {
+			fields: [{ type: "autoEmbed", path: "text", model: "voyage-4-large" }],
+			storedSource: { include: ["text"] },
+		}
+		for (const [definition, expected] of [
+			[storedDefinition, true],
+			[{ fields: [] }, false],
+			[{ fields: [], storedSource: false }, false],
+		] as const) {
+			const fake = createFakeSearchDb({
+				versionArray: [8, 3, 7, 0],
+				indexes: readyPair(definition),
+			})
+			const caps = await detectCapabilities(fake.db, "test_chunks")
+			expect(caps.storedSource).toBe(expected)
+			expect(embeddingQueries(fake.calls)).toEqual([])
+		}
 	})
 
-	it("reports storedSource capability from the probe vector index definition", async () => {
-		// The scar at detectCapabilities is explicit: storedSource must be set
-		// from what the serving index was BUILT with, never from buildInfo —
-		// returnStoredSource: true against an index that stores nothing errors.
-		// Since P3.3 the probe result is additionally gated by the registry
-		// (MongoDB 8.3.7+ or MEMONGO_VECTOR_STORED_SOURCE=1).
-		const dbWith = (
-			definition: Document | undefined,
-			storedSourceProbeError?: Error,
-		) =>
-			({
-				admin: vi.fn(() => ({
-					command: vi.fn(async () => ({ versionArray: [8, 3, 7, 0] })),
-				})),
-				collection: vi.fn(() => ({
-					listSearchIndexes: vi.fn(() => ({
-						toArray: vi.fn(async () => [
-							{
-								name: "test_chunks_vector",
-								type: "vectorSearch",
-								status: "READY",
-								queryable: true,
-								latestDefinition: definition,
-							},
-						]),
-					})),
-					aggregate: vi.fn((pipeline: Document[]) => ({
-						toArray: vi.fn(async () => {
-							if (pipeline[0]?.$listSearchIndexes) {
-								return [
-									{
-										name: "test_chunks_vector",
-										type: "vectorSearch",
-										status: "READY",
-										queryable: true,
-										latestDefinition: definition,
-									},
-								]
-							}
-							if (storedSourceProbeError) {
-								throw storedSourceProbeError
-							}
-							return []
-						}),
-					})),
-				})),
-			}) as unknown as Db
-
-		const withStored = await detectCapabilities(
-			dbWith({
-				fields: [
-					{
-						type: "autoEmbed",
-						path: "text",
-						model: "voyage-4-large",
-					},
-				],
-				storedSource: { include: ["text"] },
-			}),
+	it("keeps storedSource off when the registry gate is closed, whatever the index carries (P3.3)", async () => {
+		const definition = { fields: [], storedSource: { include: ["text"] } }
+		const tooOld = await detectCapabilities(
+			createFakeSearchDb({
+				versionArray: [8, 3, 0, 0],
+				indexes: readyPair(definition),
+			}).db,
 			"test_chunks",
 		)
-		expect(withStored.storedSource).toBe(true)
-
-		const withoutStored = await detectCapabilities(
-			dbWith({ fields: [] }),
-			"test_chunks",
-		)
-		expect(withoutStored.storedSource).toBe(false)
-
-		// Server default `storedSource: false` in latestDefinition must not
-		// count as stored-source-enabled.
-		const withFalse = await detectCapabilities(
-			dbWith({ fields: [], storedSource: false }),
-			"test_chunks",
-		)
-		expect(withFalse.storedSource).toBe(false)
-
-		const rejectedAtQueryTime = await detectCapabilities(
-			dbWith(
-				{
-					fields: [
-						{
-							type: "autoEmbed",
-							path: "text",
-							model: "voyage-4-large",
-						},
-					],
-					storedSource: { include: ["text"] },
-				},
-				new Error("storedSource is not configured for this index"),
-			),
-			"test_chunks",
-		)
-		expect(rejectedAtQueryTime.storedSource).toBe(false)
-	})
-
-	it("keeps storedSource off when the registry gate is closed, whatever the probe index carries (P3.3)", async () => {
-		const dbWith = (versionArray: number[]) =>
-			({
-				admin: vi.fn(() => ({
-					command: vi.fn(async () => ({ versionArray })),
-				})),
-				collection: vi.fn(() => ({
-					listSearchIndexes: vi.fn(() => ({
-						toArray: vi.fn(async () => [
-							{
-								name: "test_chunks_vector",
-								type: "vectorSearch",
-								status: "READY",
-								queryable: true,
-								latestDefinition: {
-									fields: [],
-									storedSource: { include: ["text"] },
-								},
-							},
-						]),
-					})),
-				})),
-			}) as unknown as Db
-
-		// Server below 8.3.7, env unset → gate closed.
-		const tooOld = await detectCapabilities(dbWith([8, 3, 0, 0]), "test_chunks")
 		expect(tooOld.storedSource).toBe(false)
+		expect(tooOld.capabilityGates?.["vector-stored-source"]).toBe(false)
 
-		// Kill-switch: env=0 forces off even on 8.3.7 with a stored-source index.
-		const previous = process.env.MEMONGO_VECTOR_STORED_SOURCE
-		process.env.MEMONGO_VECTOR_STORED_SOURCE = "0"
+		vi.stubEnv("MEMONGO_VECTOR_STORED_SOURCE", "0")
 		try {
 			const killed = await detectCapabilities(
-				dbWith([8, 3, 7, 0]),
+				createFakeSearchDb({
+					versionArray: [8, 3, 7, 0],
+					indexes: readyPair(definition),
+				}).db,
 				"test_chunks",
 			)
 			expect(killed.storedSource).toBe(false)
 		} finally {
-			if (previous === undefined) {
-				delete process.env.MEMONGO_VECTOR_STORED_SOURCE
-			} else {
-				process.env.MEMONGO_VECTOR_STORED_SOURCE = previous
-			}
+			vi.unstubAllEnvs()
 		}
 	})
 
 	it("evaluates the capability re-enable registry against buildInfo", async () => {
-		// P3.6: every gated feature self-evaluates inside detectCapabilities so
-		// a server upgrade flips it on without a code change.
-		const db = {
-			admin: vi.fn(() => ({
-				command: vi.fn(async () => ({ versionArray: [8, 3, 7, 0] })),
-			})),
-			collection: vi.fn(() => ({
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => []),
-				})),
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db, "test_chunks")
-		expect(caps.capabilityGates).toBeDefined()
+		const caps = await detectCapabilities(
+			createFakeSearchDb({ versionArray: [8, 3, 7, 0], indexes: {} }).db,
+			"test_chunks",
+		)
 		expect(caps.capabilityGates?.["vector-stored-source"]).toBe(true)
 		expect(caps.capabilityGates?.["autoembed-quantization"]).toBe(true)
 		expect(caps.capabilityGates?.["rerank-stage"]).toBe(false)
 		expect(caps.capabilityGates?.["lexical-prefilters"]).toBe(false)
 	})
 
-	it("keeps the storedSource gate closed below MongoDB 8.3.7", async () => {
-		const db = {
-			admin: vi.fn(() => ({
-				command: vi.fn(async () => ({ versionArray: [8, 0, 13, 0] })),
-			})),
-			collection: vi.fn(() => ({
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => []),
-				})),
-			})),
-		} as unknown as Db
-
-		const caps = await detectCapabilities(db, "test_chunks")
-		expect(caps.capabilityGates?.["vector-stored-source"]).toBe(false)
-	})
-
 	it("waits for search capabilities to become available", async () => {
-		let attempts = 0
-		const db = {
-			admin: vi.fn(() => ({
-				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
-			})),
-			collection: vi.fn(() => ({
-				aggregate: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						attempts += 1
-						if (attempts < 2) {
-							throw new Error("mongot warming up")
-						}
-						return [
-							{
-								name: "test_chunks_text",
-								type: "search",
-								status: "READY",
-								queryable: true,
-							},
-							{
-								name: "test_chunks_vector",
-								type: "vectorSearch",
-								status: "READY",
-								queryable: true,
-							},
-						]
-					}),
-				})),
-				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => {
-						if (attempts < 2) {
-							throw new Error("mongot still warming up")
-						}
-						return []
-					}),
-				})),
-			})),
-		} as unknown as Db
-
-		// timeoutMs is the give-up budget, not the expected runtime: the mock
-		// succeeds on attempt 2, so this returns in ~1ms. It was 30ms, which the
-		// suite blew whenever the machine was loaded — a flaky failure that says
-		// nothing about the retry behavior under test.
-		const caps = await waitForSearchCapabilities(db, "test_chunks", {
+		const fake = createFakeSearchDb({ indexes: {} })
+		setTimeout(() => {
+			fake.indexes.test_chunks = readyPair().test_chunks
+		}, 10)
+		const caps = await waitForSearchCapabilities(fake.db, "test_chunks", {
 			timeoutMs: 10_000,
 			pollMs: 1,
 		})
 		expect(caps.vectorSearch).toBe(true)
 		expect(caps.textSearch).toBe(true)
-		expect(attempts).toBe(2)
+	})
+
+	it("throws a typed index-not-ready failure on timeout instead of returning the last result", async () => {
+		const fake = createFakeSearchDb({ indexes: {} })
+		await expect(
+			waitForSearchCapabilities(fake.db, "test_chunks", {
+				timeoutMs: 20,
+				pollMs: 5,
+			}),
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "index-not-ready",
+			collection: "test_chunks",
+		})
+	})
+
+	it("propagates a listing failure while waiting instead of retrying it away", async () => {
+		const fake = createFakeSearchDb({
+			listError: () =>
+				Object.assign(new Error("not authorized"), {
+					code: 13,
+					codeName: "Unauthorized",
+				}),
+		})
+		await expect(
+			waitForSearchCapabilities(fake.db, "test_chunks", {
+				timeoutMs: 10_000,
+				pollMs: 1,
+			}),
+		).rejects.toMatchObject({ code: "search-privileges-denied" })
 	})
 })
 
@@ -1352,7 +1123,8 @@ describe("ensureStandardIndexes total count with legacy query_cache TTL", () => 
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
 		// #101 R7: −2 structured/procedure $text indexes
-		// = 99
-		expect(count).toBe(99)
+		// M2 T1: −4 $text creations (chunks, kb_chunks, entities, episodes)
+		// = 95
+		expect(count).toBe(95)
 	})
 })

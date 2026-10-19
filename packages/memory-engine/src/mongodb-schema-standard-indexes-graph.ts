@@ -27,7 +27,6 @@ export async function ensureGraphStandardIndexes(
 	ttlOpts?: StandardIndexOptions,
 ): Promise<number> {
 	let applied = 0
-	const textFallbackIndexes = ttlOpts?.textFallbackIndexes ?? true
 
 	// Events indexes
 	const events = eventsCollection(db, prefix)
@@ -146,13 +145,6 @@ export async function ensureGraphStandardIndexes(
 		{ name: "idx_entities_agent_scope_scoperef_type_name" },
 	)
 	applied++
-	if (textFallbackIndexes) {
-		await entities.createIndex(
-			{ name: "text", aliases: "text" },
-			{ name: "idx_entities_text" },
-		)
-		applied++
-	}
 	// P3.8 ESR compound: entity lookups (findEntitiesByName, getEntitiesByType)
 	// filter agentId and sort updatedAt desc with no supporting index before.
 	await entities.createIndex(
@@ -316,13 +308,6 @@ export async function ensureGraphStandardIndexes(
 		applied++
 	} catch (err) {
 		handleUniqueIndexCreationError(err, "uq_episodes_source_events")
-		applied++
-	}
-	if (textFallbackIndexes) {
-		await episodes.createIndex(
-			{ summary: "text", title: "text" },
-			{ name: "idx_episodes_text" },
-		)
 		applied++
 	}
 	// P3.8 ESR compound: getEpisodesByType filters (agentId, type) equality and

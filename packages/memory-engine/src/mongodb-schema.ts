@@ -49,17 +49,13 @@ export {
 	ensureCollections,
 	ensureSchemaValidation,
 } from "./mongodb-schema-validators.js"
-export {
-	ensureStandardIndexes,
-	shouldEnsureTextFallbackIndexes,
-} from "./mongodb-schema-standard-indexes.js"
+export { ensureStandardIndexes } from "./mongodb-schema-standard-indexes.js"
 export {
 	INDEX_AUTOEMBED_MODEL,
 	isSearchIndexQueryable,
 	isSearchIndexReadyWithFilterFields,
 	isEventsVectorBitemporalPrefilterReady,
 	listSearchIndexes,
-	isSearchIndexManagementAvailable,
 	isSearchIndexTypeCompatible,
 	ensureEntityAutocompleteIndex,
 	ensureEpisodeAutocompleteIndex,
@@ -87,3 +83,4 @@ export {
 	detectCapabilities,
 	waitForSearchCapabilities,
 } from "./mongodb-schema-capabilities.js"
+export { enforceBootContract } from "./mongodb-boot-contract.js"

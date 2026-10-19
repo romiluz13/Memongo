@@ -26,7 +26,7 @@ function mockCollection(name: string): Collection {
 
 function mockDb(
 	existingCollections: string[] = [],
-	versionArray?: unknown,
+	versionArray: unknown = [8, 3, 0, 0],
 ): Db {
 	const collections = new Map<string, Collection>()
 
@@ -131,24 +131,21 @@ describe("events search indexes", () => {
 		const db = mockDb()
 		const events = db.collection("test_events") as unknown as {
 			updateSearchIndex: ReturnType<typeof vi.fn>
-			listSearchIndexes: ReturnType<typeof vi.fn>
+			aggregate: ReturnType<typeof vi.fn>
 		}
-		events.listSearchIndexes.mockImplementation((name?: string) => ({
-			toArray: async () =>
-				name === "test_events_vector"
-					? [
-							{
-								name,
-								type: "vectorSearch",
-								definition: {
-									fields: [
-										{ type: "autoEmbed", path: "body" },
-										{ type: "filter", path: "agentId" },
-									],
-								},
-							},
-						]
-					: [],
+		events.aggregate.mockImplementation(() => ({
+			toArray: async () => [
+				{
+					name: "test_events_vector",
+					type: "vectorSearch",
+					definition: {
+						fields: [
+							{ type: "autoEmbed", path: "body" },
+							{ type: "filter", path: "agentId" },
+						],
+					},
+				},
+			],
 		}))
 
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -282,35 +279,40 @@ describe("procedures_vector filter fields", () => {
 // ---------------------------------------------------------------------------
 
 describe("ensureNamedSearchIndex used for all collections", () => {
-	it("uses ensureNamedSearchIndex for kb_chunks (checks listSearchIndexes is called)", async () => {
+	it("uses ensureNamedSearchIndex for kb_chunks (lists through $listSearchIndexes)", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
 
 		const kbChunks = db.collection("test_kb_chunks") as unknown as {
-			listSearchIndexes: ReturnType<typeof vi.fn>
+			aggregate: ReturnType<typeof vi.fn>
 		}
-		// ensureNamedSearchIndex calls listSearchIndexes to check for existing indexes
-		expect(kbChunks.listSearchIndexes).toHaveBeenCalled()
+		expect(kbChunks.aggregate).toHaveBeenCalledWith([
+			{ $listSearchIndexes: {} },
+		])
 	})
 
-	it("uses ensureNamedSearchIndex for structured_mem (checks listSearchIndexes is called)", async () => {
+	it("uses ensureNamedSearchIndex for structured_mem (lists through $listSearchIndexes)", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
 
 		const structured = db.collection("test_structured_mem") as unknown as {
-			listSearchIndexes: ReturnType<typeof vi.fn>
+			aggregate: ReturnType<typeof vi.fn>
 		}
-		expect(structured.listSearchIndexes).toHaveBeenCalled()
+		expect(structured.aggregate).toHaveBeenCalledWith([
+			{ $listSearchIndexes: {} },
+		])
 	})
 
-	it("uses ensureNamedSearchIndex for procedures (checks listSearchIndexes is called)", async () => {
+	it("uses ensureNamedSearchIndex for procedures (lists through $listSearchIndexes)", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
 
 		const procedures = db.collection("test_procedures") as unknown as {
-			listSearchIndexes: ReturnType<typeof vi.fn>
+			aggregate: ReturnType<typeof vi.fn>
 		}
-		expect(procedures.listSearchIndexes).toHaveBeenCalled()
+		expect(procedures.aggregate).toHaveBeenCalledWith([
+			{ $listSearchIndexes: {} },
+		])
 	})
 })
 

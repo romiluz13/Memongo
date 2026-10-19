@@ -168,28 +168,23 @@ describe("resolveMemoryBackendConfig", () => {
 			}
 		})
 
-		it("normalizes community-mongot into the contract instead of failing it", () => {
-			const resolved = resolveMemoryBackendConfig({
-				cfg: {
-					agents: { defaults: { workspace: "/tmp/memory-test" } },
-					memory: {
-						backend: "mongodb",
-						mongodb: {
-							uri: "mongodb://localhost:27017",
-							deploymentProfile: "community-mongot",
-							embeddingMode: "automated",
-						},
-					},
-				} as unknown as MemongoConfig,
-				agentId: "main",
-			})
-			expect(resolved.mongodb?.deploymentProfile).toBe("atlas-local-preview")
+		it("rejects the community-mongot alias at boot instead of rewriting it (M2)", () => {
 			expect(() =>
-				assertEmbeddingPipelineSupport({
-					deploymentProfile: resolved.mongodb?.deploymentProfile ?? "",
-					embeddingMode: resolved.mongodb?.embeddingMode ?? "",
-				} as Parameters<typeof assertEmbeddingPipelineSupport>[0]),
-			).not.toThrow()
+				resolveMemoryBackendConfig({
+					cfg: {
+						agents: { defaults: { workspace: "/tmp/memory-test" } },
+						memory: {
+							backend: "mongodb",
+							mongodb: {
+								uri: "mongodb://localhost:27017",
+								deploymentProfile: "community-mongot",
+								embeddingMode: "automated",
+							},
+						},
+					} as unknown as MemongoConfig,
+					agentId: "main",
+				}),
+			).toThrow(/memory\.mongodb\.deploymentProfile "community-mongot"/)
 		})
 
 		it("throws when the resolved pair drifts outside the declared contract", () => {
@@ -234,7 +229,7 @@ describe("resolveMemoryBackendConfig", () => {
 					uri: "mongodb://localhost:27017",
 					database: "mydb",
 					collectionPrefix: "custom_",
-					deploymentProfile: "community-mongot",
+					deploymentProfile: "atlas-local-preview",
 					embeddingMode: "automated",
 					fusionMethod: "rankFusion",
 					recallProfile: "proof",
@@ -476,7 +471,21 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.numDimensions).toBe(1024)
 	})
 
-	it("resolves custom numDimensions", () => {
+	it("accepts numDimensions equal to the autoEmbed model dimension", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017", numDimensions: 1024 },
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb?.numDimensions).toBe(1024)
+	})
+
+	// M2: a numDimensions that disagrees with the autoEmbed model fails boot
+	// (it used to resolve and log that it was ignored).
+	it("rejects a numDimensions mismatch at boot, naming the setting", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -484,32 +493,9 @@ describe("resolveMemoryBackendConfig", () => {
 				mongodb: { uri: "mongodb://localhost:27017", numDimensions: 768 },
 			},
 		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.numDimensions).toBe(768)
-	})
-
-	// P3.1 dead knob: numDimensions is accepted for config-schema compat but
-	// ignored — autoEmbed indexes are server-managed, the embedding model
-	// determines dimensions. The knob logs at error level when set.
-	it("logs at error level that an explicitly configured numDimensions is ignored (P3.1)", () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-		try {
-			const cfg = {
-				agents: { defaults: { workspace: "/tmp/memory-test" } },
-				memory: {
-					backend: "mongodb",
-					mongodb: { uri: "mongodb://localhost:27017", numDimensions: 768 },
-				},
-			} as unknown as MemongoConfig
-			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			// Schema compat: the value still resolves, it is just inert.
-			expect(resolved.mongodb?.numDimensions).toBe(768)
-			const logged = errorSpy.mock.calls.flat().join(" ")
-			expect(logged).toContain("numDimensions")
-			expect(logged).toContain("ignored")
-		} finally {
-			errorSpy.mockRestore()
-		}
+		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
+			/memory\.mongodb\.numDimensions 768 does not match/,
+		)
 	})
 
 	it("does not log the numDimensions dead-knob error when it is not configured", () => {
@@ -876,8 +862,8 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.fusionMethod).toBe("scoreFusion")
 	})
 
-	it("allows fusionMethod override via MEMONGO_MONGODB_FUSION_METHOD env var", () => {
-		vi.stubEnv("MEMONGO_MONGODB_FUSION_METHOD", "js-merge")
+	it("lets MEMONGO_MONGODB_FUSION_METHOD override the configured fusionMethod", () => {
+		vi.stubEnv("MEMONGO_MONGODB_FUSION_METHOD", "scoreFusion")
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -889,7 +875,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.fusionMethod).toBe("js-merge")
+		expect(resolved.mongodb?.fusionMethod).toBe("scoreFusion")
 	})
 
 	it("throws when mongodb backend has no URI", () => {
@@ -1407,7 +1393,7 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.graph.entityExtraction.timeoutMs).toBe(5000)
 	})
 
-	it("resolves graph.entityExtraction with llm method", () => {
+	it("rejects graph.entityExtraction method llm with no provider, naming the setting (M2)", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -1424,12 +1410,9 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			},
 		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
-		expect(resolved.mongodb?.graph.entityExtraction.model).toBe(
-			"claude-3-haiku",
+		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
+			/memory\.mongodb\.graph\.entityExtraction\.method "llm"/,
 		)
-		expect(resolved.mongodb?.graph.entityExtraction.timeoutMs).toBe(10000)
 	})
 
 	it("preserves existing graph.enabled and maxGraphDepth behavior", () => {
@@ -1442,7 +1425,7 @@ describe("resolveMemoryBackendConfig", () => {
 					graph: {
 						enabled: false,
 						maxGraphDepth: 5, // above the ≤4 clamp — must not pass through
-						entityExtraction: { method: "llm" },
+						entityExtraction: { method: "regex" },
 					},
 				},
 			},
@@ -1453,27 +1436,7 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.graph.enabled).toBe(false)
 		expect(resolved.mongodb?.graph.maxGraphDepth).toBe(4)
 		// New entityExtraction field works alongside
-		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
-	})
-
-	// H2 audit fix: warn when entity extraction method is 'llm' but no LLM function injected
-	it("logs warning when entityExtraction.method is 'llm'", () => {
-		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://localhost:27017/test")
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				mongodb: {
-					graph: { entityExtraction: { method: "llm" } },
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
-		// The warning is logged via createSubsystemLogger, which we cannot easily spy on
-		// in this test setup. Instead, verify the config is preserved correctly.
-		warnSpy.mockRestore()
-		vi.unstubAllEnvs()
+		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("regex")
 	})
 
 	// ---------------------------------------------------------------------------

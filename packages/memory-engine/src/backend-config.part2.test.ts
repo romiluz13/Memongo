@@ -151,12 +151,11 @@ describe("memory.mongodb.ttl resolution (P4.4.1)", () => {
 		})
 	})
 
-	it("falls back to the default on invalid sessionDays values", () => {
+	it("rejects invalid sessionDays values at boot, naming the setting (M2)", () => {
 		for (const bad of [0, -5, Number.NaN, "abc", null]) {
-			expect(resolveWithTtl({ enabled: true, sessionDays: bad })).toEqual({
-				enabled: true,
-				sessionDays: 30,
-			})
+			expect(() => resolveWithTtl({ enabled: true, sessionDays: bad })).toThrow(
+				/memory\.mongodb\.ttl\.sessionDays/,
+			)
 		}
 	})
 

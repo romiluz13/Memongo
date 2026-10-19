@@ -180,7 +180,6 @@ import {
 	chunksCollection,
 	detectCapabilities,
 	ensureCollections,
-	ensureSearchIndexes,
 	ensureStandardIndexes,
 	eventsCollection,
 	entitiesCollection,
@@ -188,18 +187,15 @@ import {
 	episodesCollection,
 	memoryEvidenceCollection,
 	filesCollection,
-	getExpectedSearchIndexTargets,
+	enforceBootContract,
 	INDEX_AUTOEMBED_MODEL,
 	isEventsVectorBitemporalPrefilterReady,
-	isSearchIndexManagementAvailable,
-	shouldEnsureTextFallbackIndexes,
 	kbChunksCollection,
 	metaCollection,
 	proceduresCollection,
 	relevanceRunsCollection,
 	resolveSearchIndexReadinessTiming,
 	structuredMemCollection,
-	waitForSearchIndexesQueryable,
 	sessionChunksCollection,
 } from "./mongodb-schema.js"
 import {
@@ -228,6 +224,10 @@ import {
 	applyCapabilityProbeResult,
 	mongodbDeploymentIdentity,
 } from "./mongodb-capability-registry.js"
+import {
+	type BootPreflightReport,
+	runBootPreflight,
+} from "./mongodb-boot-preflight.js"
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
@@ -399,13 +399,6 @@ export type {
 } from "./mongodb-quarantine-review.js"
 
 const log = createSubsystemLogger("memory:mongodb")
-
-function isStrictSearchReadinessMode(): boolean {
-	return (
-		process.env.MEMONGO_BENCHMARK_STRICT === "1" ||
-		process.env.MEMONGO_STRICT_SEARCH_INDEX_READY === "1"
-	)
-}
 
 function redactMongoURI(uri: string): string {
 	try {
@@ -643,187 +636,75 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		// failure anywhere unwinds everything acquired so far (see catch).
 		let managerRef: MongoDBMemoryManager | null = null
 		try {
-			// Ensure collections + schema validation + standard indexes
+			// Ensure collections (knowledge_base/kbDocs included) + schema
+			// validation, then the M2 startup contract.
 			await ensureCollections(db, prefix)
 
-			const chunksCollectionName = chunksCollection(db, prefix).collectionName
-			const searchIndexManagementAvailable =
-				await isSearchIndexManagementAvailable(db, chunksCollectionName)
+			// Guardrail 1: verify query embedding model dimensions match the
+			// autoEmbed index model dimensions.
+			assertQueryModelDimensionsMatch(mongoCfg.queryEmbeddingModel)
 
-			// Detect concrete serving readiness. Fusion capability is server-version
-			// based, while Search capabilities require named queryable indexes.
+			// M2 startup contract: MongoDB 8.3+, Search index management
+			// privileges, and every required-index manifest entry READY and
+			// serving its definition within one total deadline. Boot creates or
+			// updates manifest indexes and never drops one. Every failure is a
+			// MemongoBootError; nothing is served on a failed contract.
+			const readinessTiming = resolveSearchIndexReadinessTiming()
+			await enforceBootContract(db, {
+				prefix,
+				quantization: mongoCfg.quantization,
+				deployment: capabilityDeployment,
+				mode: "repair",
+				deadlineMs: readinessTiming.timeoutMs,
+				pollMs: readinessTiming.pollMs,
+				// Guardrail 2: refuse to proceed when the autoEmbed index model
+				// changed and existing documents would be re-embedded
+				// server-side. Runs before any repair write.
+				beforeRepair: () =>
+					refuseToStrandExistingDocuments(
+						db,
+						prefix,
+						mongoCfg.deploymentProfile,
+						INDEX_AUTOEMBED_MODEL,
+					),
+			})
+
+			const chunksCollectionName = chunksCollection(db, prefix).collectionName
 			// #101 R2: the structured and procedure $search tiers run only when
 			// their own text index is queryable, not merely when chunks_text is.
-			const textTierCollections = searchIndexManagementAvailable
-				? [`${prefix}structured_mem`, `${prefix}procedures`]
-				: []
 			let capabilities = await detectCapabilities(
 				db,
 				chunksCollectionName,
 				capabilityDeployment,
-				textTierCollections,
+				[`${prefix}structured_mem`, `${prefix}procedures`],
 			)
-			log.info(`capabilities: ${JSON.stringify(capabilities)}`)
-			let nativeBitemporalVectorPrefilter = false
-
-			// Guardrail 1: verify query embedding model dimensions match the
-			// autoEmbed index model dimensions. Prevents silent $vectorSearch
-			// recall failure when query and index models produce different-
-			// dimension vectors.
-			assertQueryModelDimensionsMatch(mongoCfg.queryEmbeddingModel)
-
-			// Guardrail 2: refuse to proceed when the autoEmbed index model
-			// changed and existing documents would be re-embedded server-side.
-			// Prevents expensive, surprising full re-embed on accidental model
-			// changes.
-			if (searchIndexManagementAvailable) {
-				await refuseToStrandExistingDocuments(
-					db,
-					prefix,
-					mongoCfg.deploymentProfile,
-					INDEX_AUTOEMBED_MODEL,
-				)
-			}
-
-			// Only bootstrap Search indexes when the deployment can talk to Search
-			// Index Management at all. This keeps runtime startup responsive on
-			// clusters that support fusion stages but do not expose mongot.
-			if (searchIndexManagementAvailable) {
-				const ensuredSearchIndexes = await ensureSearchIndexes(
-					db,
-					prefix,
-					mongoCfg.deploymentProfile,
-					mongoCfg.embeddingMode,
-					mongoCfg.quantization,
-					mongoCfg.numDimensions,
+			capabilities = {
+				...capabilities,
+				capabilityGates: applyCapabilityProbeResult(
+					capabilities.capabilityGates ?? {},
+					"autoembed-quantization",
 					capabilityDeployment,
+				),
+			}
+			log.info(`capabilities: ${JSON.stringify(capabilities)}`)
+			// The events vector index serves validAt/invalidAt filters once the
+			// contract passes; native prefiltering also needs null-compatible
+			// event data. A metadata read error fails boot (no swallow).
+			const nativeBitemporalVectorPrefilter =
+				await isEventsVectorBitemporalPrefilterReady(
+					eventsCollection(db, prefix),
+					`${prefix}events_vector`,
 				)
-				// Apply recorded capability overrides to the detected state.
-				capabilities = {
-					...capabilities,
-					capabilityGates: applyCapabilityProbeResult(
-						capabilities.capabilityGates ?? {},
-						"autoembed-quantization",
-						capabilityDeployment,
-					),
-				}
-				if (
-					ensuredSearchIndexes.text ||
-					ensuredSearchIndexes.vector ||
-					!capabilities.textSearch ||
-					!capabilities.vectorSearch
-				) {
-					const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
-						resolveSearchIndexReadinessTiming()
-					const readinessResults = await Promise.all(
-						getExpectedSearchIndexTargets(
-							prefix,
-							mongoCfg.deploymentProfile,
-						).map(async (target) => {
-							try {
-								const readiness = await waitForSearchIndexesQueryable(
-									db.collection(target.collectionName),
-									{
-										indexNames: target.indexNames,
-										timeoutMs: readinessTimeoutMs,
-										pollMs: readinessPollMs,
-									},
-								)
-								return {
-									collectionName: target.collectionName,
-									...readiness,
-								}
-							} catch (err) {
-								const message = err instanceof Error ? err.message : String(err)
-								return {
-									collectionName: target.collectionName,
-									ready: false,
-									indexes: [],
-									pending: target.indexNames,
-									failed: [],
-									lastError: message,
-								}
-							}
-						}),
-					)
-					const stalled = readinessResults.filter((result) => !result.ready)
-					const eventsVectorIndexes =
-						readinessResults.find(
-							(result) => result.collectionName === `${prefix}events`,
-						)?.indexes ?? []
-					try {
-						nativeBitemporalVectorPrefilter =
-							await isEventsVectorBitemporalPrefilterReady(
-								eventsCollection(db, prefix),
-								`${prefix}events_vector`,
-								eventsVectorIndexes,
-							)
-						if (!nativeBitemporalVectorPrefilter) {
-							log.warn(
-								"native event bitemporal prefiltering remains disabled until the exact index definition and event representation are ready",
-							)
-						}
-					} catch (err) {
-						log.warn(
-							`could not verify native event bitemporal prefilter readiness: ${String(err)}`,
-						)
-					}
-					if (stalled.length > 0) {
-						const summary = stalled
-							.map((result) => {
-								const pending = result.pending.join(",") || "none"
-								const failed = result.failed.join(",") || "none"
-								const lastError = result.lastError
-									? ` lastError=${result.lastError}`
-									: ""
-								return `${result.collectionName} pending=[${pending}] failed=[${failed}]${lastError}`
-							})
-							.join("; ")
-						const readinessMessage = `search indexes not fully queryable after bootstrap wait: ${summary}`
-						if (isStrictSearchReadinessMode()) {
-							throw new Error(readinessMessage)
-						}
-						log.warn(readinessMessage)
-					}
-					capabilities = await detectCapabilities(
-						db,
-						chunksCollectionName,
-						capabilityDeployment,
-						textTierCollections,
-					)
-				}
-			} else {
+			if (!nativeBitemporalVectorPrefilter) {
 				log.info(
-					"search index management unavailable; skipping search index bootstrap",
+					"native event bitemporal prefiltering is off: the events vector index or the event representation does not support it",
 				)
 			}
 			await ensureStandardIndexes(db, prefix, {
 				memoryTtlDays: mongoCfg.memoryTtlDays,
 				episodesRetentionDays: mongoCfg.episodesRetentionDays,
 				relevanceRetentionDays: mongoCfg.relevance.retention.days,
-				// BSON $text indexes are retained whenever named serving text indexes
-				// are not queryable. Management API availability alone does not prove
-				// that $search can serve traffic.
-				textFallbackIndexes: shouldEnsureTextFallbackIndexes(capabilities),
 			})
-			if (
-				isStrictSearchReadinessMode() &&
-				(!capabilities.textSearch || !capabilities.vectorSearch)
-			) {
-				throw new Error(
-					`MongoDB Search/vector capabilities are required in strict mode but named serving indexes are not queryable: ${JSON.stringify(capabilities)}`,
-				)
-			}
-			if (
-				isStrictSearchReadinessMode() &&
-				capabilities.vectorSearch &&
-				!nativeBitemporalVectorPrefilter
-			) {
-				throw new Error(
-					"events vector index is not ready with validAt/invalidAt filters and null-compatible data",
-				)
-			}
-
 			let relevance: MongoDBRelevanceRuntime | null = null
 			try {
 				if (mongoCfg.relevance.enabled) {
@@ -1457,6 +1338,27 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	async probeVectorAvailability(): Promise<boolean> {
 		return adminOpsOf(this).probeVectorAvailability()
+	}
+
+	/**
+	 * M2 /ready: one read-only pass of the startup contract against the live
+	 * deployment (version, privileges, every manifest index READY and serving
+	 * its definition). Never writes and never waits.
+	 */
+	async checkRequiredIndexManifest(): Promise<BootPreflightReport> {
+		const mongoCfg = this.config.mongodb
+		return runBootPreflight(this.db, {
+			prefix: this.prefix,
+			quantization: mongoCfg?.quantization,
+			...(mongoCfg
+				? {
+						deployment: mongodbDeploymentIdentity(
+							mongoCfg.uri,
+							mongoCfg.database,
+						),
+					}
+				: {}),
+		})
 	}
 
 	// ---------------------------------------------------------------------------

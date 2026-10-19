@@ -440,16 +440,16 @@ export function schemaModuleMock() {
 		ensureSearchIndexes: vi.fn(),
 		ensureStandardIndexes: vi.fn(),
 		waitForSearchCapabilities: vi.fn(),
-		waitForSearchIndexesQueryable: vi.fn(),
 		listSearchIndexes: vi.fn(),
 		isSearchIndexReadyWithFilterFields: vi.fn(),
-		isSearchIndexManagementAvailable: vi.fn(),
 		isEventsVectorBitemporalPrefilterReady: vi.fn(),
-		// W17 factory-unwind tests exercise create() end to end; the manager
-		// imports this from mongodb-schema.js for the standard-index phase.
-		shouldEnsureTextFallbackIndexes: vi.fn(() => false),
+		enforceBootContract: vi.fn(async () => ({
+			serverVersion: [8, 3, 0],
+			manifest: [],
+			indexes: new Map(),
+		})),
 		resolveSearchIndexReadinessTiming: vi.fn(() => ({
-			timeoutMs: 60_000,
+			timeoutMs: 180_000,
 			pollMs: 1_000,
 		})),
 		getExpectedSearchIndexTargets: vi.fn(() => []),

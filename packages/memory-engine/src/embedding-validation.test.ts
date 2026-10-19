@@ -403,6 +403,7 @@ describe("Guardrail 2 startup composition: refusal vs recovering ensure (Stage 1
 			documentCount?: number
 		} = {},
 	) {
+		// M2: index ensure lists through $listSearchIndexes (aggregate).
 		const driverList = vi.fn().mockImplementation(() => ({
 			toArray: vi.fn().mockResolvedValue(opts.indexes ?? []),
 		}))
@@ -411,7 +412,7 @@ describe("Guardrail 2 startup composition: refusal vs recovering ensure (Stage 1
 		const collection = {
 			collectionName,
 			countDocuments: vi.fn().mockResolvedValue(opts.documentCount ?? 50),
-			listSearchIndexes: driverList,
+			aggregate: driverList,
 			updateSearchIndex,
 			createSearchIndex,
 		} as unknown as Collection
@@ -506,7 +507,7 @@ describe("Guardrail 2 startup composition: refusal vs recovering ensure (Stage 1
 			"voyage-4-large",
 		)
 		await runRealEnsure(fake.collection)
-		expect(fake.driverList).toHaveBeenCalledWith(INDEX_NAME)
+		expect(fake.driverList).toHaveBeenCalledWith([{ $listSearchIndexes: {} }])
 		expect(fake.updateSearchIndex).toHaveBeenCalledTimes(1)
 		expect(fake.updateSearchIndex).toHaveBeenCalledWith(
 			INDEX_NAME,

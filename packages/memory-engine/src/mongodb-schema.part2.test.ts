@@ -39,7 +39,7 @@ function mockCollection(name: string): Collection {
 
 function mockDb(
 	existingCollections: string[] = [],
-	versionArray?: unknown,
+	versionArray: unknown = [8, 3, 0, 0],
 ): Db {
 	const collections = new Map<string, Collection>()
 
@@ -705,7 +705,11 @@ describe("ensureSearchIndexes", () => {
 					"automated",
 					"scalar",
 				),
-			).rejects.toBe(rejection)
+			).rejects.toMatchObject({
+				name: "MemongoBootError",
+				index: "test_chunks_vector",
+				message: expect.stringContaining("Omit quantization"),
+			})
 			expect(isCapabilityEnabled("autoembed-quantization", {})).toBe(true)
 
 			const vectorSpecs = chunks.createSearchIndex.mock.calls
@@ -761,46 +765,48 @@ describe("ensureSearchIndexes", () => {
 		const chunks = db.collection("test_chunks") as unknown as {
 			createSearchIndex: ReturnType<typeof vi.fn>
 			updateSearchIndex: ReturnType<typeof vi.fn>
-			listSearchIndexes: ReturnType<typeof vi.fn>
+			aggregate: ReturnType<typeof vi.fn>
 		}
-		chunks.listSearchIndexes.mockImplementation((name?: string) => ({
+		chunks.aggregate.mockImplementation(() => ({
 			toArray: async () =>
-				name === "test_chunks_vector"
-					? [
-							{
-								name,
-								type: "vectorSearch",
-								definition: {
-									fields: [{ type: "filter", path: "agentId" }],
-								},
-							},
-						]
-					: name === "test_chunks_text"
+				["test_chunks_vector", "test_chunks_text"].flatMap((name) =>
+					name === "test_chunks_vector"
 						? [
 								{
 									name,
-									type: "search",
+									type: "vectorSearch",
 									definition: {
-										mappings: {
-											dynamic: false,
-											fields: {
-												text: {
-													type: "string",
-													analyzer: "lucene.standard",
-												},
-												source: { type: "token" },
-												path: { type: "token" },
-												agentId: { type: "token" },
-												scope: { type: "token" },
-												scopeRef: { type: "token" },
-												status: { type: "token" },
-												updatedAt: { type: "date" },
-											},
-										},
+										fields: [{ type: "filter", path: "agentId" }],
 									},
 								},
 							]
-						: [],
+						: name === "test_chunks_text"
+							? [
+									{
+										name,
+										type: "search",
+										definition: {
+											mappings: {
+												dynamic: false,
+												fields: {
+													text: {
+														type: "string",
+														analyzer: "lucene.standard",
+													},
+													source: { type: "token" },
+													path: { type: "token" },
+													agentId: { type: "token" },
+													scope: { type: "token" },
+													scopeRef: { type: "token" },
+													status: { type: "token" },
+													updatedAt: { type: "date" },
+												},
+											},
+										},
+									},
+								]
+							: [],
+				),
 		}))
 
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -860,14 +866,13 @@ describe("ensureSearchIndexes", () => {
 			new Error("Error connecting to Search Index Management service."),
 		)
 
-		const result = await ensureSearchIndexes(
-			db,
-			"test_",
-			"atlas-local-preview",
-			"automated",
-		)
-
-		expect(result).toEqual({ text: false, vector: false })
+		await expect(
+			ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated"),
+		).rejects.toMatchObject({
+			name: "MemongoBootError",
+			code: "search-management-unavailable",
+			index: "test_chunks_text",
+		})
 		expect(chunks.createSearchIndex).toHaveBeenCalledTimes(1)
 		expect(kbChunks.createSearchIndex).not.toHaveBeenCalled()
 		expect(structured.createSearchIndex).not.toHaveBeenCalled()
@@ -1170,28 +1175,27 @@ describe("search index readiness helpers", () => {
 		}
 	})
 
-	it("resolves search index readiness timing from env with safe defaults", () => {
+	it("resolves one 180 s boot deadline by default and rejects invalid timing env (M2)", () => {
 		expect(resolveSearchIndexReadinessTiming({})).toEqual({
-			timeoutMs: 60_000,
+			timeoutMs: 180_000,
 			pollMs: 1_000,
 		})
 		expect(
 			resolveSearchIndexReadinessTiming({
-				MEMONGO_BENCHMARK_STRICT: "1",
-			}),
-		).toEqual({ timeoutMs: 180_000, pollMs: 1_000 })
-		expect(
-			resolveSearchIndexReadinessTiming({
-				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "180000",
+				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "90000",
 				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "250",
 			}),
-		).toEqual({ timeoutMs: 180_000, pollMs: 250 })
-		expect(
+		).toEqual({ timeoutMs: 90_000, pollMs: 250 })
+		expect(() =>
 			resolveSearchIndexReadinessTiming({
 				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "0",
+			}),
+		).toThrow(/MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS/)
+		expect(() =>
+			resolveSearchIndexReadinessTiming({
 				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "nope",
 			}),
-		).toEqual({ timeoutMs: 60_000, pollMs: 1_000 })
+		).toThrow(/MEMONGO_SEARCH_INDEX_READINESS_POLL_MS/)
 	})
 })
 

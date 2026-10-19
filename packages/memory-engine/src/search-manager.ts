@@ -69,6 +69,8 @@ let idleSweepTimer: NodeJS.Timeout | null = null
 export type MemorySearchManagerResult = {
 	manager: MemorySearchManager | null
 	error?: string
+	/** The original failure, so callers keep its type (MemongoBootError). */
+	cause?: unknown
 }
 
 function resolvePositiveIntEnv(name: string, fallback: number): number {
@@ -303,7 +305,7 @@ export async function getMemorySearchManager(params: {
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err)
 		log.warn(`memory backend resolution failed: ${message}`)
-		return { manager: null, error: message }
+		return { manager: null, error: message, cause: err }
 	}
 
 	if (!resolved.mongodb) {
@@ -441,7 +443,7 @@ async function initializeManager(params: {
 		const message = err instanceof Error ? err.message : String(err)
 		const error = `mongodb memory unavailable: ${message}`
 		log.warn(error)
-		return { manager: null, error }
+		return { manager: null, error, cause: err }
 	}
 }
 

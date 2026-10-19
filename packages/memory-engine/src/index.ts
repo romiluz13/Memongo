@@ -81,6 +81,16 @@ export {
 	type SearchStage,
 } from "./search-outcomes.js"
 export {
+	isMemongoBootError,
+	MemongoBootError,
+	type MemongoBootFailureCode,
+	type MemongoBootFailureDetail,
+} from "./mongodb-boot-errors.js"
+export type {
+	BootPreflightReport,
+	BootPreflightUnmet,
+} from "./mongodb-boot-preflight.js"
+export {
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
 	type MemorySearchManagerResult,

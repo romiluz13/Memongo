@@ -22,6 +22,7 @@ import {
 	resolveConversationEvidenceMode,
 } from "./mongodb-conversation-evidence-mode.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
+import { bootConfigError } from "./mongodb-boot-errors.js"
 import type { DiagnosticQueryPrivacyMode } from "./mongodb-diagnostic-privacy.js"
 
 const log = createSubsystemLogger("memory:backend-config")
@@ -263,6 +264,7 @@ export function resolveMemoryBackendConfig(params: {
 
 	if (backend === "mongodb") {
 		const mongoCfg = params.cfg.memory?.mongodb
+		rejectRemovedEnvSettings()
 		// P2.6: one URI precedence rule, shared with the bridge via
 		// applyMongoDbForceUriOverride (@memongo/lib): MEMONGO_FORCE_MONGODB_URI
 		// wins over every other URI source, in every layer. Among the
@@ -289,9 +291,7 @@ export function resolveMemoryBackendConfig(params: {
 			mongoCfg?.deploymentProfile ??
 			(uri.includes(".mongodb.net") ? "atlas-managed" : DEFAULT_MONGODB_PROFILE)
 		const deploymentProfile: MemoryMongoDBDeploymentProfile =
-			rawDeploymentProfile === "community-mongot"
-				? "atlas-local-preview"
-				: rawDeploymentProfile
+			rawDeploymentProfile
 		// P3.1: honor the configured embeddingMode (validated below against the
 		// supported set) instead of hardcoding the default — "automated" stays
 		// the default when unset.
@@ -301,15 +301,17 @@ export function resolveMemoryBackendConfig(params: {
 		const envCollectionPrefix =
 			process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
 
+		// M2: the community-mongot alias and unknown profiles fail boot; the
+		// alias used to be rewritten to atlas-local-preview silently.
 		if (
 			rawDeploymentProfile !== "atlas-local-preview" &&
-			rawDeploymentProfile !== "atlas-managed" &&
-			rawDeploymentProfile !== "community-mongot"
+			rawDeploymentProfile !== "atlas-managed"
 		) {
 			const unsupportedDeploymentProfile = String(mongoCfg?.deploymentProfile)
-			throw new Error(
+			throw bootConfigError(
+				"memory.mongodb.deploymentProfile",
 				[
-					`deploymentProfile "${unsupportedDeploymentProfile}" is not supported in Memongo.`,
+					`memory.mongodb.deploymentProfile "${unsupportedDeploymentProfile}" is not supported in Memongo.`,
 					'Use deploymentProfile "atlas-local-preview" or "atlas-managed".',
 				].join(" "),
 			)
@@ -340,12 +342,25 @@ export function resolveMemoryBackendConfig(params: {
 			)
 		}
 
-		// P3.1: numDimensions is a dead knob under autoEmbed — the embedding
-		// model fixes the dimensions server-side. The value still resolves for
-		// config-schema compat, but it is inert; say so loudly at error level.
-		if (mongoCfg?.numDimensions !== undefined) {
-			log.error(
-				`memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value ${String(mongoCfg.numDimensions)} resolves for compatibility but has no effect)`,
+		// P3.1 / M2: under autoEmbed the index model fixes vector dimensions
+		// server-side. numDimensions is accepted only unset or equal to the
+		// autoEmbed model's dimension; a mismatch fails boot (it was a warning).
+		const autoEmbedDimensions = KNOWN_MODEL_DIMENSIONS[INDEX_AUTOEMBED_MODEL]
+		if (
+			mongoCfg?.numDimensions !== undefined &&
+			mongoCfg.numDimensions !== autoEmbedDimensions
+		) {
+			throw bootConfigError(
+				"memory.mongodb.numDimensions",
+				`memory.mongodb.numDimensions ${String(mongoCfg.numDimensions)} does not match the autoEmbed model ${INDEX_AUTOEMBED_MODEL} (${autoEmbedDimensions} dimensions); unset it or set ${autoEmbedDimensions}`,
+			)
+		}
+		// M2: LLM entity extraction has no provider wiring, so "llm" used to run
+		// the regex extractor silently. It fails boot until a provider exists.
+		if (mongoCfg?.graph?.entityExtraction?.method === "llm") {
+			throw bootConfigError(
+				"memory.mongodb.graph.entityExtraction.method",
+				'memory.mongodb.graph.entityExtraction.method "llm" is configured but no LLM entity-extraction provider is configured; use "regex"',
 			)
 		}
 
@@ -379,10 +394,7 @@ export function resolveMemoryBackendConfig(params: {
 				conversationEvidenceMode: resolveConversationEvidenceMode(
 					process.env.MEMONGO_CONVERSATION_EVIDENCE_MODE,
 				),
-				fusionMethod: resolveEnvFusionMethod(
-					"MEMONGO_MONGODB_FUSION_METHOD",
-					mongoCfg?.fusionMethod ?? "scoreFusion",
-				),
+				fusionMethod: resolveFusionMethod(mongoCfg?.fusionMethod),
 				recallProfile: resolveEnvRecallProfile(
 					"MEMONGO_MONGODB_RECALL_PROFILE",
 					mongoCfg?.recallProfile ?? "balanced",
@@ -457,12 +469,7 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg?.waitQueueTimeoutMs,
 					"MEMONGO_MONGODB_WAIT_QUEUE_TIMEOUT_MS",
 				),
-				memoryTtlDays:
-					typeof mongoCfg?.memoryTtlDays === "number" &&
-					Number.isFinite(mongoCfg.memoryTtlDays) &&
-					mongoCfg.memoryTtlDays >= 0
-						? Math.floor(mongoCfg.memoryTtlDays)
-						: 0,
+				memoryTtlDays: resolveMemoryTtlDays(mongoCfg?.memoryTtlDays),
 				episodesRetentionDays: resolveEpisodesRetentionDays(
 					mongoCfg?.episodesRetentionDays,
 				),
@@ -710,30 +717,6 @@ export function resolveMemoryBackendConfig(params: {
 				mongodb.relevance.telemetry.baseSampleRate
 		}
 
-		// F22: numDimensions validation warning — check if configured dimensions
-		// match known model dimensions for the default embedding model
-		const resolvedNumDims = mongodb?.numDimensions
-		const defaultModel = DEFAULT_QUERY_EMBEDDING_MODEL
-		const expectedDims = KNOWN_MODEL_DIMENSIONS[defaultModel]
-		if (
-			mongoCfg?.numDimensions &&
-			expectedDims &&
-			resolvedNumDims !== expectedDims
-		) {
-			log.warn(
-				`numDimensions=${resolvedNumDims} may not match expected dimensions for ${defaultModel} (${expectedDims}). ` +
-					"Mismatched dimensions will cause vector search errors.",
-			)
-		}
-
-		// H2 audit fix: warn when entity extraction method is 'llm' but no LLM function injected
-		if (mongodb?.graph.entityExtraction.method === "llm") {
-			log.warn(
-				"entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. " +
-					"Set graph.entityExtraction.method to 'regex' to suppress this warning.",
-			)
-		}
-
 		return result
 	}
 
@@ -886,45 +869,93 @@ const DEFAULT_TTL_SESSION_DAYS = 30
 
 /**
  * P4.4.1: memory.mongodb.ttl — optional per-document TTL, off by default.
- * `sessionDays` must be a positive finite number; anything else falls back
- * to the 30-day default (with a warning when the caller DID supply a value)
- * so a misconfigured retention window can never silently become "expire
- * immediately" or "never expire".
+ * `sessionDays` must be a positive finite number. M2: anything else fails
+ * boot (it used to fall back to the 30-day default with a warning).
  */
 function resolveTtlSettings(ttlCfg?: {
 	enabled?: boolean
 	sessionDays?: number
 }): { enabled: boolean; sessionDays: number } {
 	const raw = ttlCfg?.sessionDays
-	const valid = typeof raw === "number" && Number.isFinite(raw) && raw > 0
-	if (raw !== undefined && !valid) {
-		log.warn(
-			`memory.mongodb.ttl.sessionDays "${String(raw)}" is not a positive number; falling back to ${DEFAULT_TTL_SESSION_DAYS} days`,
+	if (raw === undefined) {
+		return {
+			enabled: ttlCfg?.enabled === true,
+			sessionDays: DEFAULT_TTL_SESSION_DAYS,
+		}
+	}
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+		throw bootConfigError(
+			"memory.mongodb.ttl.sessionDays",
+			`memory.mongodb.ttl.sessionDays "${String(raw)}" is not a positive number of days`,
 		)
 	}
-	return {
-		enabled: ttlCfg?.enabled === true,
-		sessionDays: valid ? (raw as number) : DEFAULT_TTL_SESSION_DAYS,
-	}
+	return { enabled: ttlCfg?.enabled === true, sessionDays: raw }
 }
 
+/** M2: memoryTtlDays must be a non-negative number; anything else fails boot. */
+function resolveMemoryTtlDays(raw: unknown): number {
+	if (raw === undefined) return 0
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+		throw bootConfigError(
+			"memory.mongodb.memoryTtlDays",
+			`memory.mongodb.memoryTtlDays "${String(raw)}" is not a non-negative number of days`,
+		)
+	}
+	return Math.floor(raw)
+}
+
+/** M2: an unrecognized boolean env value fails boot instead of defaulting. */
 function resolveEnvBoolean(envKey: string, fallback: boolean): boolean {
 	const raw = process.env[envKey]?.trim().toLowerCase()
 	if (!raw) return fallback
 	if (["1", "true", "yes", "on", "enabled"].includes(raw)) return true
 	if (["0", "false", "no", "off", "disabled"].includes(raw)) return false
-	return fallback
+	throw bootConfigError(
+		envKey,
+		`${envKey} "${process.env[envKey]}" is not a boolean; use true/false, 1/0, yes/no, on/off or enabled/disabled`,
+	)
 }
 
-function resolveEnvFusionMethod(
-	envKey: string,
-	fallback: MemoryMongoDBFusionMethod,
-): MemoryMongoDBFusionMethod {
-	const raw = process.env[envKey]?.trim()
-	if (raw === "rankFusion" || raw === "scoreFusion" || raw === "js-merge") {
-		return raw
+const ACCEPTED_FUSION_METHODS = ["scoreFusion", "rankFusion"] as const
+
+/**
+ * M2 (G4-86): fusionMethod accepts only the server-side stages. The env
+ * value wins over the config value; `js-merge` and unknown values from either
+ * source fail boot (the env used to replace them with the config value).
+ */
+function resolveFusionMethod(configValue: unknown): MemoryMongoDBFusionMethod {
+	const envRaw = process.env.MEMONGO_MONGODB_FUSION_METHOD?.trim()
+	const [setting, value] = envRaw
+		? ["MEMONGO_MONGODB_FUSION_METHOD", envRaw]
+		: ["memory.mongodb.fusionMethod", configValue ?? "scoreFusion"]
+	if ((ACCEPTED_FUSION_METHODS as readonly unknown[]).includes(value)) {
+		return value as MemoryMongoDBFusionMethod
 	}
-	return fallback
+	throw bootConfigError(
+		setting,
+		`${setting} "${String(value)}" is not supported; use "scoreFusion" or "rankFusion" (js-merge was removed)`,
+	)
+}
+
+const REMOVED_ENV_SETTINGS = [
+	"MEMONGO_STRICT_SEARCH_INDEX_READY",
+	"MEMONGO_REQUIRE_VECTOR",
+] as const
+
+/**
+ * M2: strict readiness is the only mode, so the opt-in strict flags are
+ * removed. Setting either fails boot with a message naming it.
+ */
+function rejectRemovedEnvSettings(): void {
+	for (const key of REMOVED_ENV_SETTINGS) {
+		if (process.env[key]?.trim()) {
+			throw bootConfigError(
+				key,
+				`${key} was removed: strict Search readiness is the only mode, so boot always refuses to serve without READY required indexes. Unset ${key}.`,
+				"config-removed",
+			)
+		}
+	}
 }
 
 function resolveQueryEmbeddingModel(

@@ -740,21 +740,15 @@ export class MongoDBManagerLifecycleOps {
 			this.host.nativeBitemporalVectorPrefilter = false
 			return false
 		}
-		try {
-			const collection = eventsCollection(this.host.db, this.host.prefix)
-			this.host.nativeBitemporalVectorPrefilter =
-				await isEventsVectorBitemporalPrefilterReady(
-					collection,
-					`${this.host.prefix}events_vector`,
-				)
-			return this.host.nativeBitemporalVectorPrefilter
-		} catch (err) {
-			this.host.nativeBitemporalVectorPrefilter = false
-			log.warn(
-				`could not refresh native bitemporal prefilter readiness: ${String(err)}`,
+		// G4-77: a readiness probe that cannot answer propagates; it used to be
+		// caught and silently disable the prefilter.
+		const collection = eventsCollection(this.host.db, this.host.prefix)
+		this.host.nativeBitemporalVectorPrefilter =
+			await isEventsVectorBitemporalPrefilterReady(
+				collection,
+				`${this.host.prefix}events_vector`,
 			)
-			return false
-		}
+		return this.host.nativeBitemporalVectorPrefilter
 	}
 
 	async traceChain(params: {

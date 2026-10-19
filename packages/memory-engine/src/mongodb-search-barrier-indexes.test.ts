@@ -10,6 +10,7 @@ function recordingDb(existing: Record<string, CreatedIndex[]> = {}) {
 	const updated: Array<{ name: string; definition: Document }> = []
 	const collections = new Map<string, Collection>()
 	const db = {
+		admin: () => ({ command: async () => ({ versionArray: [8, 3, 0, 0] }) }),
 		collection: vi.fn((name: string) => {
 			let collection = collections.get(name)
 			if (!collection) {
@@ -24,14 +25,12 @@ function recordingDb(existing: Record<string, CreatedIndex[]> = {}) {
 							updated.push({ name: index, definition })
 						},
 					),
-					listSearchIndexes: vi.fn((indexName?: string) => ({
+					aggregate: vi.fn(() => ({
 						toArray: async () =>
-							(existing[name] ?? [])
-								.filter((index) => !indexName || index.name === indexName)
-								.map((index) => ({
-									...index,
-									latestDefinition: index.definition,
-								})),
+							(existing[name] ?? []).map((index) => ({
+								...index,
+								latestDefinition: index.definition,
+							})),
 					})),
 				} as unknown as Collection
 				collections.set(name, collection)
