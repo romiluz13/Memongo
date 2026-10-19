@@ -84,10 +84,27 @@ describe("traceReasoningChain tenant confinement", () => {
 		expect(finds.get(`${PREFIX}events`)?.mock.calls[0]?.[0]).toMatchObject({
 			eventId: { $in: ["evt-1"] },
 			...TENANT,
-			$or: [
-				{ expiresAt: { $exists: false } },
-				{ expiresAt: { $gt: expect.any(Date) } },
-			],
+			$and: expect.arrayContaining([
+				{
+					$or: [
+						{ validAt: { $exists: false } },
+						{ validAt: { $lte: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ invalidAt: { $exists: false } },
+						{ invalidAt: null },
+						{ invalidAt: { $gt: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ expiresAt: { $exists: false } },
+						{ expiresAt: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
 		})
 	})
 

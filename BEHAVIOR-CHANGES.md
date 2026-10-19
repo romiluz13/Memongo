@@ -623,6 +623,14 @@ A tenant is `(agentId, scope, scopeRef)`. The reads below used to filter by `age
 - **Discovery.** Each discovery content read checks the section's `*_text` Search index through the request-local snapshot and fails typed `index-stale` or `index-unavailable` (a section failure row per T8; a total failure throws). `hydrateActiveSlate` and `buildDiscoveryProjection` open a request scope. The check names the Search index type, so a text-only read is not refused for an unrelated vector index.
 - **Slate and context expansion are not gated.** They read plain `find`s and no Search index, so there is no index to be stale; this is pinned by tests. The brief expected them to read through Search.
 
+## Review fixes R3, R4, R6-R9 (1237)
+
+Fixes for the blocking findings of the final M2 review (ticket #122). R1, R2 and R5 are a separate section.
+
+### R9: reasoning chain leaves follow the event lifecycle
+
+- **Leaf events.** `POST /v1/chain-trace`, `traceChain`, `memongo_chain_trace` and the AI SDK tool hydrate each leaf event under the store's full event lifecycle at one clock taken when the trace starts: retained (`expiresAt`), already valid (`validAt`) and not retracted (`invalidAt`). The read used to apply expiry only, so a leaf whose `invalidAt` had passed, or whose `validAt` was still in the future, came back with its body. Such a leaf is now a `gap` node (reason `deleted`, the same row an expired leaf already produced) and `chainComplete` is `false`. The starting fact and its premises are unchanged and now use the same clock.
+
 ## T11 follow-up: failure-matrix test gaps (#121)
 
 Test gaps in the failure matrix (#121). This work adds tests only; no production behavior changed.
