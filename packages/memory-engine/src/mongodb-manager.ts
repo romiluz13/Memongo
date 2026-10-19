@@ -1156,8 +1156,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
 			/**
-			 * WS-12 (C-019): receives the degradation marker when admission
-			 * control dropped the KB vector lane. Sink-not-state.
+			 * Never called for KB search since M2: admission denial is a typed
+			 * budget-denied failure, not a degraded answer. Kept so existing
+			 * callers still compile.
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
 			/**

@@ -11,7 +11,6 @@ import {
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
 } from "./mongodb-search-budget.js"
-import { SearchBudgetDeniedError } from "./search-outcomes.js"
 import {
 	buildMockManager,
 	captureManagerPrototype,
@@ -271,25 +270,30 @@ describe("searchKB() (K12): the direct KB route runs on a request ledger", () =>
 		expect(active).toEqual([true])
 	})
 
-	it("an unschedulable KB lane is a typed reservation denial, never run", async () => {
+	it("reserves one aggregation and one embed for the fused lane, so a one-and-one budget runs it", async () => {
+		// The old cascade reserved up to 3 aggregations and 2 embeds, which a
+		// 2-aggregation budget refused as a typed reservation denial.
 		const onOutcomes = vi.fn()
-		const failure = await managerWith(
-			// rankFusion, vector and keyword tiers: 3 aggregations, 2 embeds.
-			{ maxAggregations: 2, maxEmbeds: 5 },
+		const charged: Array<number | undefined> = []
+		vi.mocked(searchKB).mockImplementation(async () => {
+			consumeSearchWorkOrThrow("vector", { aggregations: 1, embeds: 1 })
+			charged.push(getSearchBudgetSnapshot()?.aggregations)
+			return [hit]
+		})
+		const results = await managerWith(
+			{ maxAggregations: 1, maxEmbeds: 1 },
 			{ capabilities: fusedCapabilities },
-		)
-			.searchKB("deploy guide", { onOutcomes })
-			.catch((err: unknown) => err)
-		expect(failure).toBeInstanceOf(SearchBudgetDeniedError)
-		expect(searchKB).not.toHaveBeenCalled()
+		).searchKB("deploy guide", { onOutcomes })
+		expect(results).toEqual([hit])
+		expect(charged).toEqual([1])
 		expect(onOutcomes).toHaveBeenCalledExactlyOnceWith({
-			status: "failed",
+			status: "complete",
 			lanes: [
 				{
 					lane: "kb",
-					stage: "reservation",
-					outcome: "budget-denied",
-					reason: "budget-reservation",
+					stage: "lane",
+					outcome: "ok",
+					resultCount: 1,
 				},
 			],
 		})

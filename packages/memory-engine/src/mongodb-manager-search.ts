@@ -451,7 +451,6 @@ export class MongoDBManagerSearchOps {
 							numCandidates: mongoCfg.numCandidates,
 							vectorIndexName: `${this.host.prefix}kb_chunks_vector`,
 							textIndexName: `${this.host.prefix}kb_chunks_text`,
-							capabilities: this.host.capabilities,
 							embeddingMode: mongoCfg.embeddingMode,
 							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 							kbDocs: kbCollection(this.host.db, this.host.prefix),
@@ -1606,10 +1605,9 @@ export class MongoDBManagerSearchOps {
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
 			/**
-			 * WS-12 (C-019): receives the degradation marker when admission
-			 * control dropped the KB vector lane. Sink-not-state (see the
-			 * search() onLaneLatency/onDegradation pattern); absence means the
-			 * ranking is authoritative.
+			 * Never called for KB search since M2: admission denial is a typed
+			 * budget-denied failure, not a degraded answer. Kept so existing
+			 * callers still compile.
 			 */
 			onDegradation?: (degradation: MemorySearchDegradation) => void
 			/**
@@ -1660,48 +1658,9 @@ export class MongoDBManagerSearchOps {
 		// Direct KB search uses MongoDB query-time automatic embeddings.
 		const queryVector: number[] | null = null
 
-		// WS-11 (09-report R5/U1): the KB vector lane burns a server-side
-		// autoEmbed query input on the same Atlas tier searchV2 draws from,
-		// so direct KB search draws from the same process-level admission
-		// bucket. Denial drops the vector lane — the text lane still answers,
-		// so a throttle degrades ranking quality instead of emptying the
-		// result set, and the marker records why.
-		const kbVectorLane =
-			mongoCfg.embeddingMode === "automated" &&
-			this.host.capabilities.vectorSearch
-		const kbAdmission = kbVectorLane ? tryConsumeSearchAdmission() : null
-		if (kbAdmission && !kbAdmission.ok) {
-			void emitTelemetry(
-				this.host.db,
-				this.host.prefix,
-				{
-					meta: { agentId: this.host.agentId, operation: "search" },
-					durationMs: 0,
-					ok: false,
-					throttled: true,
-					resultCount: 0,
-				},
-				{ admission: readAdmission },
-			).catch(() => {
-				log.warn("search telemetry emit failed")
-			})
-			this.host.setLastSearchMode("kb:throttled", {
-				retryAfterMs: kbAdmission.retryAfterMs,
-			})
-			// WS-12 (C-019): the text lane still answers, so this is degraded
-			// ranking, not an empty verdict — the sink carries that
-			// distinction out with the results.
-			opts?.onDegradation?.({
-				kind: "throttled",
-				scope: "vector-lane-skipped",
-				retryAfterMs: kbAdmission.retryAfterMs,
-			})
-		}
-
 		// K12: the direct KB route collects its own tier rows; a failure is
 		// a typed throw with its row, never a log-only empty.
 		const lanes: SearchLaneOutcome[] = []
-		const skipVectorLane = kbAdmission !== null && !kbAdmission.ok
 		const fusionMethod = opts?.fusionMethod ?? mongoCfg.fusionMethod
 		// #101 decision 18: the direct KB route is a request of its own — it
 		// runs on a ledger with the configured caps, its lane reserved first.
@@ -1710,13 +1669,7 @@ export class MongoDBManagerSearchOps {
 		)
 		const runKBLane = () => {
 			const reservation = tryReserveSearchBudget(
-				kbLaneCost({
-					capabilities: skipVectorLane
-						? { ...this.host.capabilities, vectorSearch: false }
-						: this.host.capabilities,
-					embeddingMode: mongoCfg.embeddingMode,
-					fusionMethod,
-				}),
+				kbLaneCost({ embeddingMode: mongoCfg.embeddingMode }),
 			)
 			if (!reservation) {
 				throw new SearchBudgetDeniedError({
@@ -1738,14 +1691,12 @@ export class MongoDBManagerSearchOps {
 						numCandidates: mongoCfg.numCandidates,
 						vectorIndexName: `${this.host.prefix}kb_chunks_vector`,
 						textIndexName: `${this.host.prefix}kb_chunks_text`,
-						capabilities: this.host.capabilities,
 						embeddingMode: mongoCfg.embeddingMode,
 						queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 						// P0.10: KB fusion is a first-class option — per-call override,
 						// else the resolved config value (env/config, default rankFusion).
 						fusionMethod,
 						kbDocs: kbCollection(this.host.db, this.host.prefix),
-						...(skipVectorLane ? { skipVectorLane: true } : {}),
 						onTierOutcome: (row) => {
 							lanes.push({ lane: "kb", ...row })
 						},
@@ -1754,6 +1705,36 @@ export class MongoDBManagerSearchOps {
 			)
 		}
 		try {
+			// WS-11 (09-report R5/U1): the KB fusion burns a server-side
+			// autoEmbed query input on the same Atlas tier searchV2 draws from,
+			// so direct KB search draws from the same process-level admission
+			// bucket. M2 decision 5: a denial is a typed budget-denied row and
+			// the search never runs; no text-only replacement answers instead.
+			const kbAdmission = tryConsumeSearchAdmission()
+			if (!kbAdmission.ok) {
+				void emitTelemetry(
+					this.host.db,
+					this.host.prefix,
+					{
+						meta: { agentId: this.host.agentId, operation: "search" },
+						durationMs: 0,
+						ok: false,
+						throttled: true,
+						resultCount: 0,
+					},
+					{ admission: readAdmission },
+				).catch(() => {
+					log.warn("search telemetry emit failed")
+				})
+				this.host.setLastSearchMode("kb:throttled", {
+					retryAfterMs: kbAdmission.retryAfterMs,
+				})
+				throw new SearchBudgetDeniedError({
+					lane: "kb",
+					stage: "request",
+					reason: "budget-embeds",
+				})
+			}
 			const results = await requestLedger.run(runKBLane)
 			lanes.push({
 				lane: "kb",

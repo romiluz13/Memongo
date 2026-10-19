@@ -77,9 +77,10 @@ const capabilities = {
 const VECTOR = { aggregations: 1, embeds: 1 }
 const TEXT = { aggregations: 1, embeds: 0 }
 // The cost table for these capabilities (search-lane-cost.test.ts proves
-// each real lane charges exactly this on zero hits).
+// each real lane charges exactly this on zero hits; mongodb-kb-search.test.ts
+// proves it for the one-aggregate KB lane).
 const STRUCTURED_TIERS = [VECTOR, TEXT]
-const KB_TIERS = [VECTOR, VECTOR, VECTOR, TEXT]
+const KB_TIERS = [VECTOR]
 const EVIDENCE_TIERS = [VECTOR, TEXT]
 
 const order: string[] = []
@@ -184,10 +185,17 @@ describe("searchV2 request ledger (#101 decision 18)", () => {
 
 	it("reserves concurrent required paths first; optional evidence never pre-empts them", async () => {
 		plan(["kb", "structured", "procedural"])
-		const result = await run(
-			"what did I say about the deploy runbook",
-			["kb", "structured", "procedural", "hybrid"],
-			{ conversationEvidenceMode: "parallel" },
+		// The KB lane is one fused aggregate (1 aggregation, 1 embed), so the
+		// three required paths reserve 5 aggregations and 3 embeds. A budget
+		// of exactly that leaves optional evidence nothing.
+		const { value: result, budget } = await runWithSearchBudget(
+			{ maxAggregations: 12, maxEmbeds: 3 },
+			() =>
+				run(
+					"what did I say about the deploy runbook",
+					["kb", "structured", "procedural", "hybrid"],
+					{ conversationEvidenceMode: "parallel" },
+				),
 		)
 		const rows = result.metadata.laneOutcomes ?? []
 		for (const lane of ["kb", "structured", "procedural"]) {
@@ -207,10 +215,7 @@ describe("searchV2 request ledger (#101 decision 18)", () => {
 		])
 		expect(searchConversationEvidenceEvents).not.toHaveBeenCalled()
 		expect(result.metadata.outcomeStatus).toBe("partial")
-		expect(result.metadata.budget).toMatchObject({
-			aggregations: 8,
-			embeds: 5,
-		})
+		expect(budget).toMatchObject({ aggregations: 5, embeds: 3 })
 	})
 
 	it("required exact evidence is reserved with the paths and runs", async () => {
