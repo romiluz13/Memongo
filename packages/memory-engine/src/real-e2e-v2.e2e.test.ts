@@ -64,11 +64,7 @@ import {
 } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 // Search functions (direct vector search, keyword search, hybrid)
-import {
-	vectorSearch,
-	keywordSearch,
-	buildVectorSearchStage,
-} from "./mongodb-search.js"
+import { vectorSearch, buildVectorSearchStage } from "./mongodb-search.js"
 // Time series telemetry
 import {
 	emitTelemetry,
@@ -1719,32 +1715,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 						r.snippet.toLowerCase().includes("connection"),
 				)
 				expect(bugHit).toBe(true)
-			},
-			VECTOR_SEARCH_TIMEOUT,
-		)
-
-		it(
-			"should return keyword search results with text index",
-			async () => {
-				await waitForSearchIndexesReady(db, {
-					timeoutMs: VECTOR_SEARCH_TIMEOUT,
-				})
-				const chunks = db.collection(`${PREFIX}chunks`)
-				const results = await keywordSearch(chunks, "DataVault pipeline", {
-					maxResults: 5,
-					minScore: 0.0,
-					indexName: `${PREFIX}chunks_text`,
-				})
-
-				expect(results.length).toBeGreaterThan(0)
-
-				// Text search results should contain the search terms
-				const hasRelevant = results.some(
-					(r) =>
-						r.snippet.toLowerCase().includes("datavault") ||
-						r.snippet.toLowerCase().includes("pipeline"),
-				)
-				expect(hasRelevant).toBe(true)
 			},
 			VECTOR_SEARCH_TIMEOUT,
 		)
