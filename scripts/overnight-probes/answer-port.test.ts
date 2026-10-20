@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { EnvRefusal } from "./env.ts"
 import { buildAnswerPort } from "./harness-live.ts"
+
+beforeEach(() => {
+	vi.stubEnv("MEMONGO_LOG_LEVEL", "silent")
+})
+
+afterEach(() => {
+	vi.unstubAllEnvs()
+})
 
 const ANSWER_ENV = {
 	MEMONGO_BENCHMARK_ANSWER_API_KEY: "answer-key-SENTINEL-0001",

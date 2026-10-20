@@ -11,6 +11,7 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import { evaluateRouteHealth } from "./health.ts"
+import { SETTLE_MAX_MS, SETTLE_STEP_MS } from "./kit.ts"
 import { containsMarker } from "./markers.ts"
 import {
 	evaluateProbeG,
@@ -24,8 +25,6 @@ import {
 import type { ProbeApi } from "./probe-api.ts"
 import type { Observation, ProbeRunResult } from "./types.ts"
 
-export const SETTLE_MAX_MS = 30_000
-export const SETTLE_STEP_MS = 1_000
 const BARRIER = { timeoutMs: 10_000 }
 const ROUTES = Object.keys(G_ROUTES) as GRouteId[]
 

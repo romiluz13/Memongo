@@ -8,7 +8,8 @@ import {
 } from "./fake-api.ts"
 import { type GItem, routeBody } from "./probe-g-fixtures.ts"
 import type { GRouteId } from "./probe-g-model.ts"
-import { planProbeG, runProbeG, SETTLE_MAX_MS } from "./probe-g.ts"
+import { SETTLE_MAX_MS } from "./kit.ts"
+import { planProbeG, runProbeG } from "./probe-g.ts"
 
 type Options = {
 	staleRoute?: GRouteId
