@@ -174,7 +174,7 @@ async function execute(
 	try {
 		harness = await io.startHarness({
 			mongoUri: resolved.mongoUri,
-			voyageKey: env.VOYAGE_API_KEY?.trim() ?? "",
+			voyageKey: resolved.voyageKey,
 			baseEnv: env,
 			sanitizer,
 			note: (line) => writer.note(line),

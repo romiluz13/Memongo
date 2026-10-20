@@ -76,6 +76,16 @@ describe("a complete invocation", () => {
 		expect(everything(state)).toContain("[REDACTED")
 	})
 
+	it("hands the resolved, trimmed Voyage key to the spawned API", async () => {
+		const state = setup(passes)
+		await main(
+			["--probes", "A"],
+			{ ...ENV, VOYAGE_API_KEY: `  ${VOYAGE}\n` },
+			state.io,
+		)
+		expect(state.f.calls.spawned[0]?.VOYAGE_API_KEY).toBe(VOYAGE)
+	})
+
 	it("redacts the API key it generated for the spawned process wherever evidence repeats it", async () => {
 		const generatedKey = () =>
 			state.f.calls.spawned.at(-1)?.MEMONGO_API_KEY ?? "missing"

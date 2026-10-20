@@ -1,11 +1,11 @@
 import {
 	MemongoClient,
 	MemongoClientError,
-	type MemongoLifecycleHistoryEntry,
-	type MemongoLifecycleItem,
 	type MemongoScope,
 	type MemongoStableHandle,
 } from "@memongo/client"
+
+const REQUEST_TIMEOUT_MS = 30_000
 
 export type LifecycleAsInput = {
 	handle: MemongoStableHandle
@@ -38,34 +38,28 @@ type ClientMethods =
 	| "deleteLifecycleItem"
 
 export type ProbeApi = Pick<MemongoClient, ClientMethods> & {
-	lifecycleGetAs(input: LifecycleAsInput): Promise<MemongoLifecycleItem>
-	lifecycleHistoryAs(
-		input: LifecycleAsInput,
-	): Promise<MemongoLifecycleHistoryEntry[]>
+	lifecycleGetAs(input: LifecycleAsInput): Promise<unknown>
+	lifecycleHistoryAs(input: LifecycleAsInput): Promise<unknown>
 }
 
 export type ProbeApiOptions = {
 	baseUrl: string
 	apiKey: string
-	timeoutMs?: number
-	fetchImpl?: typeof fetch
 }
 
 export function createProbeApi(options: ProbeApiOptions): ProbeApi {
-	const timeoutMs = options.timeoutMs ?? 30_000
-	const doFetch = options.fetchImpl ?? fetch
 	const client = new MemongoClient({
 		baseUrl: options.baseUrl,
 		apiKey: options.apiKey,
 		maxRetries: 0,
-		timeoutMs,
+		timeoutMs: REQUEST_TIMEOUT_MS,
 	})
 
 	async function postAs(
 		path: string,
 		input: LifecycleAsInput,
 	): Promise<unknown> {
-		const response = await doFetch(`${options.baseUrl}${path}`, {
+		const response = await fetch(`${options.baseUrl}${path}`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -77,7 +71,7 @@ export function createProbeApi(options: ProbeApiOptions): ProbeApi {
 				scope: input.scope,
 				scopeRef: input.scopeRef,
 			}),
-			signal: AbortSignal.timeout(timeoutMs),
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 		})
 		const text = await response.text()
 		if (!response.ok) throw new MemongoClientError(response.status, text)
@@ -106,12 +100,7 @@ export function createProbeApi(options: ProbeApiOptions): ProbeApi {
 		getLifecycleHistory: client.getLifecycleHistory.bind(client),
 		updateLifecycleItem: client.updateLifecycleItem.bind(client),
 		deleteLifecycleItem: client.deleteLifecycleItem.bind(client),
-		lifecycleGetAs: async (input) =>
-			(await postAs("/v1/lifecycle/get", input)) as MemongoLifecycleItem,
-		lifecycleHistoryAs: async (input) =>
-			(await postAs(
-				"/v1/lifecycle/history",
-				input,
-			)) as MemongoLifecycleHistoryEntry[],
+		lifecycleGetAs: (input) => postAs("/v1/lifecycle/get", input),
+		lifecycleHistoryAs: (input) => postAs("/v1/lifecycle/history", input),
 	}
 }

@@ -33,6 +33,7 @@ const PRICE_OUTPUT = "MEMONGO_PROBE_ANSWER_PRICE_OUTPUT_USD_PER_MTOK"
 
 export type ResolvedEnvironment = {
 	mongoUri: string
+	voyageKey: string
 	answer?: { model: string; price: UnitPrice }
 }
 
@@ -61,7 +62,8 @@ export function resolveEnvironment(
 		present(env, "MEMONGO_FORCE_MONGODB_URI") ??
 		present(env, "MEMONGO_MONGODB_URI")
 	if (!mongoUri) missing.push(URI_ALTERNATIVES)
-	if (!present(env, "VOYAGE_API_KEY")) missing.push("VOYAGE_API_KEY")
+	const voyageKey = present(env, "VOYAGE_API_KEY")
+	if (!voyageKey) missing.push("VOYAGE_API_KEY")
 
 	let answer: ResolvedEnvironment["answer"]
 	if (probes.includes("B")) {
@@ -92,5 +94,9 @@ export function resolveEnvironment(
 	if (missing.length > 0 || invalid.length > 0 || overrides.length > 0) {
 		throw new EnvRefusal(missing, invalid, overrides)
 	}
-	return { mongoUri: mongoUri as string, ...(answer ? { answer } : {}) }
+	return {
+		mongoUri: mongoUri as string,
+		voyageKey: voyageKey as string,
+		...(answer ? { answer } : {}),
+	}
 }
