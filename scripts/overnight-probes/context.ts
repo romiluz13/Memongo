@@ -52,8 +52,28 @@ export async function countedObserve(
 	call: () => Promise<unknown>,
 ): Promise<Observation> {
 	const reservation = ctx.budget.reserveCount(path)
+	const startedAt = ctx.clock.mono()
+	let errorName: string | undefined
 	try {
-		return await observeCall(route, call)
+		const observation = await observeCall(route, async () => {
+			try {
+				return await call()
+			} catch (error) {
+				errorName = error instanceof Error ? error.name : typeof error
+				throw error
+			}
+		})
+		// Probe outcomes keep only the kind; this record keeps the cause.
+		if (observation.kind === "transport-error") {
+			ctx.evidence.record("transport-error", {
+				run: ctx.run,
+				route,
+				errorName,
+				message: observation.message,
+				elapsedMs: ctx.clock.mono() - startedAt,
+			})
+		}
+		return observation
 	} finally {
 		ctx.budget.settle(reservation)
 	}
