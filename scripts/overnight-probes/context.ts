@@ -1,3 +1,4 @@
+import type { EnrichmentProvider } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import { BudgetRefusal, type Budget } from "./budget.ts"
 import { observeCall } from "./observe.ts"
 import type { EvidenceWriter } from "./output.ts"
@@ -13,8 +14,13 @@ export type Clock = {
 	sleep(ms: number): Promise<void>
 }
 
+export const ANSWER_LLM = "answer-llm"
+
+export type AnswerPort = { provider: EnrichmentProvider; model: string }
+
 export type ProbeContext = {
 	api: ProbeApi
+	answer?: AnswerPort
 	run: number
 	budget: Budget
 	evidence: EvidenceWriter

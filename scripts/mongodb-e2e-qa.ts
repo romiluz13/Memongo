@@ -246,7 +246,7 @@ function caseDiagnostics(testCase: E2eQaCase): BenchmarkCaseContextDiagnostics {
 
 // Common phrasings for "I have no answer" — the correct response to an
 // abstention case, graded by refusal rather than fact-match.
-function isAbstaining(answer: string): boolean {
+export function isAbstaining(answer: string): boolean {
 	const a = answer.trim().toLowerCase()
 	if (a === "") return true
 	return /\b(i don'?t know|no information|not (mentioned|available|specified|stated|in the context)|cannot answer|unknown|unsure|no relevant)\b/.test(
