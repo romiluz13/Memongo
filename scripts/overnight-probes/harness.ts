@@ -201,6 +201,7 @@ export async function startHarness(
 	const runId = deps.randomUuid()
 	const database = generateDatabaseName(deps.randomHex)
 	const apiKey = `probe-${deps.randomUuid()}${deps.randomUuid()}`
+	deps.sanitizer.register(apiKey)
 	const appName = `${APP_NAME_PREFIX}${database.slice(DATABASE_PREFIX.length)}`
 	const apiEntry = input.apiEntry ?? "apps/api/dist/server.js"
 

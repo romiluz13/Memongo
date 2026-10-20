@@ -43,6 +43,26 @@ describe("evidence writer", () => {
 		expect(parsed.redactions).toBeGreaterThan(0)
 	})
 
+	it("keeps every line parseable when a value looks like a header line", () => {
+		const s = sinks()
+		const writer = createEvidenceWriter({
+			stdout: s.stdout,
+			stderr: s.stderr,
+			sanitizer: createSanitizer({ secretValues: [SECRET] }),
+		})
+		writer.record("probe-result", {
+			note: "authorization: x",
+			other: `cookie=${SECRET}; more`,
+			after: "kept",
+		})
+		expect(s.out).toHaveLength(1)
+		const parsed = JSON.parse(s.out[0] ?? "")
+		expect(parsed.payload.note).toBe("authorization: [REDACTED:header]")
+		expect(parsed.payload.after).toBe("kept")
+		expect(parsed.redactions).toBeGreaterThan(0)
+		expect(s.out.join("")).not.toContain(SECRET)
+	})
+
 	it("does not throw on unserializable payloads and still redacts", () => {
 		const s = sinks()
 		const writer = createEvidenceWriter({

@@ -22,11 +22,11 @@ export function createEvidenceWriter(options: {
 		record(kind, payload) {
 			const body = sanitizer.value(payload)
 			const line = JSON.stringify({
-				kind,
+				kind: sanitizer.text(kind),
 				payload: body,
 				redactions: sanitizer.redactionCount(),
 			})
-			options.stdout.write(`${sanitizer.text(line)}\n`)
+			options.stdout.write(`${line}\n`)
 		},
 		note(message) {
 			options.stderr.write(`${sanitizer.text(message)}\n`)

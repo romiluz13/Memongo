@@ -123,6 +123,32 @@ describe("sanitizer text", () => {
 	})
 })
 
+describe("sanitizer register", () => {
+	it("redacts a secret registered after construction in every variant", () => {
+		const s = sanitizer()
+		const late = "late-SENTINEL-generated-key-0099"
+		expect(s.text(`key ${late}`)).toContain(late)
+		s.register(late)
+		const out = s.text(
+			[
+				`raw ${late}`,
+				`base64 ${Buffer.from(late).toString("base64url")}`,
+				`json ${JSON.stringify({ k: late })}`,
+			].join("\n"),
+		)
+		expect(out).not.toContain(late)
+		expect(out).not.toContain(Buffer.from(late).toString("base64url"))
+		expect(s.text(`still ${S.api}`)).not.toContain(S.api)
+	})
+
+	it("ignores a blank or very short registration so ordinary text survives", () => {
+		const s = sanitizer()
+		s.register("")
+		s.register("ab")
+		expect(s.text("ab cd")).toBe("ab cd")
+	})
+})
+
 describe("sanitizer value", () => {
 	it("redacts nested values, credential-named fields and error chains", () => {
 		const s = sanitizer()

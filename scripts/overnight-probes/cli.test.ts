@@ -75,6 +75,26 @@ describe("a complete invocation", () => {
 		}
 		expect(everything(state)).toContain("[REDACTED")
 	})
+
+	it("redacts the API key it generated for the spawned process wherever evidence repeats it", async () => {
+		const generatedKey = () =>
+			state.f.calls.spawned.at(-1)?.MEMONGO_API_KEY ?? "missing"
+		const state: ReturnType<typeof setup> = setup(async (letter, ctx) =>
+			resultOf(letter, ctx, "fail", [
+				{
+					...caseOf("leaky", "fail", "leak"),
+					evidence: {
+						request: { route: "search" },
+						response: { echoed: `server said ${generatedKey()}` },
+					},
+				},
+			]),
+		)
+		await main(["--probes", "A"], ENV, state.io)
+		expect(generatedKey()).toMatch(/^probe-/)
+		expect(everything(state)).not.toContain(generatedKey())
+		expect(everything(state)).toContain("[REDACTED:secret]")
+	})
 })
 
 describe("exit codes", () => {

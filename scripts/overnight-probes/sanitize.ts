@@ -45,6 +45,7 @@ const CREDENTIAL_FIELDS = new Set([
 export type Sanitizer = {
 	text(input: string): string
 	value(input: unknown): unknown
+	register(secret: string): void
 	redactionCount(): number
 }
 
@@ -122,12 +123,17 @@ export function collectSecretValues(
 	return [...found]
 }
 
+function needlesFor(secrets: readonly string[]): string[] {
+	return [...new Set(secrets.flatMap((secret) => variantsOf(secret)))].sort(
+		(a, b) => b.length - a.length,
+	)
+}
+
 export function createSanitizer(options: {
 	secretValues: readonly string[]
 }): Sanitizer {
-	const needles = [
-		...new Set(options.secretValues.flatMap((secret) => variantsOf(secret))),
-	].sort((a, b) => b.length - a.length)
+	const secrets = [...options.secretValues]
+	let needles = needlesFor(secrets)
 	let redactions = 0
 
 	function replaceKnown(input: string): string {
@@ -265,6 +271,10 @@ export function createSanitizer(options: {
 	return {
 		text,
 		value: (input) => walk(input, 0, new WeakSet()),
+		register: (secret) => {
+			secrets.push(secret)
+			needles = needlesFor(secrets)
+		},
 		redactionCount: () => redactions,
 	}
 }

@@ -57,6 +57,18 @@ describe("generated identities", () => {
 	})
 })
 
+describe("generated API key", () => {
+	it("is registered with the sanitizer so no later output can carry it", async () => {
+		const { deps } = fixture()
+		const harness = await startHarness(deps, START)
+		const leaked = `request failed for ${harness.apiKey} twice ${harness.apiKey}`
+		expect(deps.sanitizer.text(leaked)).not.toContain(harness.apiKey)
+		expect(
+			JSON.stringify(deps.sanitizer.value({ note: leaked })),
+		).not.toContain(harness.apiKey)
+	})
+})
+
 describe("child environment", () => {
 	const inherited = {
 		PATH: "/usr/bin",
