@@ -1,5 +1,14 @@
 import { type RouteHealth, tallyHealth } from "./health.ts"
 import { containsMarker } from "./markers.ts"
+import {
+	historical,
+	isRecord,
+	labelled,
+	passed,
+	rowsContaining,
+	textField,
+	viewOf,
+} from "./rows.ts"
 import type { CaseResult, Observation, Outcome } from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
 
@@ -121,7 +130,6 @@ export type ProbeGEvaluation = {
 type Status = "confirmed" | "not-applied" | "ack-not-visible" | "unverified"
 
 const SEQUENCES = ["update", "delete"] as const
-const IGNORED_KEYS: ReadonlySet<string> = new Set(["rendered"])
 const ROUTE_IDS = Object.keys(G_ROUTES) as GRouteId[]
 
 export function requiredCaseIdsG(): string[] {
@@ -130,84 +138,11 @@ export function requiredCaseIdsG(): string[] {
 	)
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
 function bodyOf(observation: Observation): unknown {
 	return observation.kind === "response" ? observation.body : undefined
 }
 
-function hasToken(value: unknown, token: string): boolean {
-	if (typeof value === "string") return value.includes(token)
-	return (
-		Array.isArray(value) &&
-		value.some((item) => typeof item === "string" && item.includes(token))
-	)
-}
-
-function rowsContaining(
-	value: unknown,
-	token: string,
-	depth = 0,
-): Record<string, unknown>[] {
-	if (depth > 24) return []
-	if (Array.isArray(value)) {
-		return value.flatMap((item) => rowsContaining(item, token, depth + 1))
-	}
-	if (!isRecord(value)) return []
-	const entries = Object.entries(value).filter(
-		([key]) => !IGNORED_KEYS.has(key),
-	)
-	if (entries.some(([, item]) => hasToken(item, token))) return [value]
-	return entries.flatMap(([, item]) => rowsContaining(item, token, depth + 1))
-}
-
-function passed(timestamp: unknown, at: number): boolean {
-	if (typeof timestamp !== "string") return false
-	const parsed = Date.parse(timestamp)
-	return Number.isFinite(parsed) && parsed <= at
-}
-
-function labelsOf(row: Record<string, unknown>) {
-	const trust = isRecord(row.trust) ? row.trust : undefined
-	return {
-		state: typeof row.state === "string" ? row.state : undefined,
-		validTo: row.validTo,
-		contradiction:
-			typeof trust?.contradiction === "string"
-				? trust.contradiction
-				: undefined,
-	}
-}
-
-function historical(row: Record<string, unknown>, at: number): boolean {
-	const labels = labelsOf(row)
-	return (
-		labels.state === "invalidated" ||
-		labels.contradiction === "invalidated" ||
-		passed(labels.validTo, at)
-	)
-}
-
-function labelled(row: Record<string, unknown>): boolean {
-	const labels = labelsOf(row)
-	return (
-		labels.state !== undefined ||
-		labels.validTo !== undefined ||
-		labels.contradiction !== undefined
-	)
-}
-
 type OldStatus = { present: boolean; current: boolean; unassessable?: string }
-
-function textField(text: string, name: string): string | undefined {
-	const prefix = `${name}: `
-	const line = text
-		.split("\n")
-		.find((candidate) => candidate.startsWith(prefix))
-	return line?.slice(prefix.length).trim()
-}
 
 function classifyReadFile(text: string, token: string, at: number): OldStatus {
 	if (!text.includes(token)) return { present: false, current: false }
@@ -249,28 +184,6 @@ function classifyOld(read: GRead, token: string): OldStatus {
 		}
 	}
 	return { present: true, current: true }
-}
-
-type LifecycleView = {
-	revision?: number
-	state?: string
-	value: string
-	validTo?: unknown
-}
-
-function viewOf(entry: unknown): LifecycleView | undefined {
-	if (!isRecord(entry)) return undefined
-	const handle = isRecord(entry.handle) ? entry.handle : undefined
-	const data = isRecord(entry.data) ? entry.data : undefined
-	if (!handle || !data) return undefined
-	return {
-		...(typeof handle.revision === "number"
-			? { revision: handle.revision }
-			: {}),
-		...(typeof handle.state === "string" ? { state: handle.state } : {}),
-		validTo: handle.validTo,
-		value: typeof data.value === "string" ? data.value : "",
-	}
 }
 
 function findRead(
