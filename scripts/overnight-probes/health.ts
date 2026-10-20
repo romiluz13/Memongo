@@ -74,10 +74,13 @@ function degradationIssue(body: Json): string[] {
 }
 
 function outcomesIssues(outcomes: unknown): string[] {
-	if (!isRecord(outcomes)) return []
+	if (!isRecord(outcomes)) return ["malformed:outcomes"]
 	const issues: string[] = []
 	if (outcomes.status !== "complete") {
 		issues.push(`outcomes:${String(outcomes.status)}`)
+	}
+	if (outcomes.lanes !== undefined && !Array.isArray(outcomes.lanes)) {
+		issues.push("malformed:outcome-lanes")
 	}
 	issues.push(...laneIssues(asRows(outcomes.lanes), "lane-"))
 	return issues
@@ -163,6 +166,17 @@ function bundleChecks(
 		}
 	}
 	return { issues, truncated }
+}
+
+function traceChainIssues(body: Json): string[] {
+	if (!Array.isArray(body.nodes)) return ["missing:nodes"]
+	const issues: string[] = []
+	if (body.chainComplete !== true) issues.push("partial:chain-incomplete")
+	if (body.maxDepthReached === true) issues.push("partial:max-depth")
+	if (asRows(body.nodes).some((node) => node.type === "gap")) {
+		issues.push("partial:gap-node")
+	}
+	return issues
 }
 
 function profileChecks(body: Json): string[] {
@@ -313,7 +327,7 @@ export function evaluateRouteHealth(
 			if (!Array.isArray(body.events)) issues.push("missing:events")
 			break
 		case "traceChain":
-			if (!Array.isArray(body.nodes)) issues.push("missing:nodes")
+			issues.push(...traceChainIssues(body))
 			break
 		case "lifecycleGet":
 			break

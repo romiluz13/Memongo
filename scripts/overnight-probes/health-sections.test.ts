@@ -232,3 +232,86 @@ describe("evaluateRouteHealth: sectioned routes", () => {
 		expect(bad.issues).toContain("missing-section:preferences")
 	})
 })
+
+describe("evaluateRouteHealth: malformed outcomes", () => {
+	it.each([
+		["a string", "complete"],
+		["a number", 5],
+		["an array", []],
+		["null", null],
+	])("search and searchKB: outcomes that is %s is an issue, not healthy", (_label, outcomes) => {
+		for (const route of ["search", "searchKB"] as const) {
+			const h = evaluateRouteHealth(route, ok(route, { results: [], outcomes }))
+			expect(h).toMatchObject({ healthy: false, evaluable: false })
+			expect(h.issues).toContain("malformed:outcomes")
+		}
+	})
+
+	it("search: lanes that is not an array is an issue", () => {
+		const h = evaluateRouteHealth(
+			"search",
+			ok("search", {
+				results: [],
+				outcomes: { status: "complete", lanes: "none" },
+			}),
+		)
+		expect(h).toMatchObject({ healthy: false, evaluable: false })
+		expect(h.issues).toContain("malformed:outcome-lanes")
+	})
+})
+
+describe("evaluateRouteHealth: traceChain completeness", () => {
+	const chain = (overrides: Record<string, unknown> = {}) =>
+		ok("traceChain", {
+			nodes: [{ type: "fact", id: "f1", collection: "c", depth: 0 }],
+			chainComplete: true,
+			maxDepthReached: false,
+			...overrides,
+		})
+
+	it("is healthy and evaluable when the chain is complete", () => {
+		expect(evaluateRouteHealth("traceChain", chain())).toMatchObject({
+			healthy: true,
+			evaluable: true,
+			issues: [],
+		})
+	})
+
+	it.each([
+		[
+			"an incomplete chain",
+			{ chainComplete: false },
+			"partial:chain-incomplete",
+		],
+		[
+			"a chain that does not say it is complete",
+			{ chainComplete: undefined },
+			"partial:chain-incomplete",
+		],
+		[
+			"a chain cut at the depth limit",
+			{ maxDepthReached: true },
+			"partial:max-depth",
+		],
+		[
+			"a gap node",
+			{
+				nodes: [
+					{ type: "fact", id: "f1", collection: "c", depth: 0 },
+					{
+						type: "gap",
+						id: "g1",
+						collection: "c",
+						depth: 1,
+						reason: "missing",
+					},
+				],
+			},
+			"partial:gap-node",
+		],
+	])("%s is partial, so not healthy", (_label, overrides, issue) => {
+		const h = evaluateRouteHealth("traceChain", chain(overrides))
+		expect(h).toMatchObject({ healthy: false, evaluable: false })
+		expect(h.issues).toContain(issue)
+	})
+})

@@ -348,6 +348,24 @@ describe("evaluateProbeC lifecycle evidence", () => {
 	})
 })
 
+describe("evaluateProbeC baseline revision", () => {
+	it("does not call the update lifecycle advanced when the pre-read carried no revision", () => {
+		const body = routeBody("lifecycleGet", [oldItem]) as {
+			handle: Record<string, unknown>
+		}
+		const facts = withRead(
+			updateFacts(),
+			read("lifecycleGet", "pre", {
+				...body,
+				handle: { ...body.handle, revision: undefined },
+			}),
+		)
+		const found = caseOf(evaluateProbeC([facts]), "C/update/lifecycle")
+		expect(found.outcome).toBe("inconclusive")
+		expect(found.reason).toBe("unverified:baseline-revision-missing")
+	})
+})
+
 describe("evaluateProbeC echoed query fields are not returned content", () => {
 	const echoed = (marker: string) => ({
 		results: [],

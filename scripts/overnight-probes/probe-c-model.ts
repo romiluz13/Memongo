@@ -170,8 +170,11 @@ function updateLifecycle(facts: CSequenceFacts, caseId: string): CaseResult {
 	if (view.value.includes(facts.oldMarker)) {
 		return failCase(caseId, "update-not-visible", get)
 	}
-	const advanced =
-		view.revision !== undefined && view.revision > (preView?.revision ?? 0)
+	const baseline = preView?.revision
+	if (baseline === undefined) {
+		return inconclusive(caseId, "unverified:baseline-revision-missing")
+	}
+	const advanced = view.revision !== undefined && view.revision > baseline
 	if (!view.value.includes(facts.newMarker) || !advanced) {
 		return inconclusive(caseId, "unverified:new-revision-not-shown")
 	}

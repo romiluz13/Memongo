@@ -4,6 +4,8 @@ import {
 	NEW_MARKER,
 	newItem,
 	OLD_MARKER,
+	oldItem,
+	routeBody,
 	updateSequence,
 	withPost,
 	withPre,
@@ -32,6 +34,35 @@ describe("G sequence facts", () => {
 			reads: [],
 		}
 		expect(extra.sequence).toBe("delete")
+	})
+})
+
+describe("G baseline revision", () => {
+	const withoutRevision = () => {
+		const body = routeBody("lifecycleGet", [oldItem]) as {
+			handle: Record<string, unknown>
+		}
+		return { ...body, handle: { ...body.handle, revision: undefined } }
+	}
+
+	it("does not call an update confirmed when the pre-read carried no revision", () => {
+		const facts = withPre(updateSequence(), "lifecycleGet", withoutRevision())
+		const result = evaluateProbeG([facts])
+		for (const route of ["lifecycleGet", "search", "profile"]) {
+			const found = caseOf(result, "update", route)
+			expect(found.outcome).toBe("inconclusive")
+			expect(found.reason).toBe("mutation-unverified")
+		}
+	})
+
+	it("still fails an update whose post-read shows the old value without a baseline", () => {
+		const stale = withPost(
+			withPre(updateSequence(), "lifecycleGet", withoutRevision()),
+			"lifecycleGet",
+			routeBody("lifecycleGet", [oldItem]),
+		)
+		const found = caseOf(evaluateProbeG([stale]), "update", "lifecycleGet")
+		expect(found.outcome).toBe("fail")
 	})
 })
 

@@ -238,8 +238,11 @@ function mutationStatus(facts: GSequenceFacts): {
 		}
 		return { status: "unverified", detail: "state not conclusive" }
 	}
+	const baseline = preView?.revision
 	const advanced =
-		view.revision !== undefined && view.revision > (preView?.revision ?? 0)
+		baseline !== undefined &&
+		view.revision !== undefined &&
+		view.revision > baseline
 	if (
 		view.value.includes(facts.newMarker) &&
 		advanced &&
