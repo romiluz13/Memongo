@@ -35,6 +35,12 @@ import {
 } from "./benchmark-run-configuration-schema.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import {
+	JOB_DRAIN_POLL_MS,
+	awaitBenchmarkJobsDrained,
+	countBenchmarkExtractionJobs,
+	resolveJobDrainStallMs,
+} from "./benchmark-job-drain.js"
+import {
 	cleanupRegistry,
 	sanitizedCleanupError,
 } from "./benchmark-scenario-cleanup.js"
@@ -62,6 +68,7 @@ import {
 	chunksCollection,
 	eventsCollection,
 	memoryEvidenceCollection,
+	memoryJobsCollection,
 	sessionChunksCollection,
 } from "../../packages/memory-engine/src/mongodb-schema.js"
 import { resolveScopeRef } from "../../packages/memory-engine/src/mongodb-scope.js"
@@ -345,6 +352,27 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				memoryJobWorkerPromise ===
 					(manager.memoryJobWorkerPromise ?? memoryJobWorkerPromise)
 			) {
+				await awaitBenchmarkJobsDrained(
+					{
+						countJobs: () =>
+							runBenchmarkRead(`extraction jobs for ${manager.agentId}`, () =>
+								countBenchmarkExtractionJobs(
+									memoryJobsCollection(manager.db, manager.prefix),
+									manager.agentId,
+								),
+							),
+						wake: () => manager.startMemoryJobWorker(),
+						workerPromise: () =>
+							manager.memoryJobWorkerPromise ?? Promise.resolve(),
+						sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+						now: () => Date.now(),
+					},
+					{
+						agentId: manager.agentId,
+						pollMs: JOB_DRAIN_POLL_MS,
+						stallMs: resolveJobDrainStallMs(),
+					},
+				)
 				return
 			}
 		}

@@ -510,6 +510,7 @@ export function memoryJobsModuleMock() {
 		}
 	}
 	return {
+		MEMORY_JOB_MAX_ATTEMPTS: 3,
 		claimMemoryJob: vi.fn(),
 		captureClaimedMemoryJobAdmissionEpoch: vi.fn(async () => true),
 		completeClaimedMemoryJob: vi.fn(),

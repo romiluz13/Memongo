@@ -207,8 +207,12 @@ vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
 	).telemetryModuleMock(),
 )
 
-const { eventsCollection, chunksCollection, sessionChunksCollection } =
-	await import("../../packages/memory-engine/src/mongodb-schema.js")
+const {
+	eventsCollection,
+	chunksCollection,
+	sessionChunksCollection,
+	memoryJobsCollection,
+} = await import("../../packages/memory-engine/src/mongodb-schema.js")
 
 describe("benchmark scenario queue settling", () => {
 	beforeEach(() => {
@@ -239,6 +243,29 @@ describe("benchmark scenario queue settling", () => {
 			} else {
 				process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = previousTimeout
 			}
+		}
+	})
+
+	it("wakes the job worker until the job collection has no outstanding extraction", async () => {
+		const outstanding = [374, 0]
+		const countDocuments = vi.fn(async (filter: Record<string, unknown>) =>
+			"$or" in filter && !("status" in filter) ? (outstanding.shift() ?? 0) : 0,
+		)
+		const jobs = vi.mocked(memoryJobsCollection)
+		const original = jobs.getMockImplementation()
+		jobs.mockImplementation(() => ({ countDocuments }) as never)
+		try {
+			const manager = {
+				agentId: "benchmark-agent-drain",
+				writeQueue: Promise.resolve(),
+				derivationQueue: Promise.resolve(),
+				startMemoryJobWorker: vi.fn(),
+			} as unknown as MongoDBManagerHost
+
+			await expect(callSettle(manager)).resolves.toBeUndefined()
+			expect(manager.startMemoryJobWorker).toHaveBeenCalledTimes(1)
+		} finally {
+			if (original) jobs.mockImplementation(original)
 		}
 	})
 
