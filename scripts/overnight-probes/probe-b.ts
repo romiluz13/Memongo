@@ -12,7 +12,7 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import { evaluateRouteHealth } from "./health.ts"
-import type { Scope } from "./kit.ts"
+import { observeSent, type Scope } from "./kit.ts"
 import {
 	B_MAX_ATTEMPTS_PER_CASE,
 	B_MAX_CALLS,
@@ -76,8 +76,11 @@ async function retrieve(
 	marker: string | undefined,
 ): Promise<Retrieval> {
 	for (;;) {
-		const observation = await countedObserve(ctx, API_READ, "search", () =>
-			ctx.api.search({ query: question, limit: PASSAGE_LIMIT, ...scope }),
+		const { observation, request } = await observeSent(
+			ctx,
+			API_READ,
+			"search",
+			(api) => api.search({ query: question, limit: PASSAGE_LIMIT, ...scope }),
 		)
 		const health = evaluateRouteHealth("search", observation)
 		const passages =
@@ -91,7 +94,7 @@ async function retrieve(
 			return {
 				passages,
 				facts: { health, markerSeen },
-				request: { route: "search", question },
+				request,
 			}
 		}
 		state.extraPolls += 1

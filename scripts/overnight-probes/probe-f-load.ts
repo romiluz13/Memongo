@@ -160,17 +160,12 @@ async function seedControl(
 	const settle = await pollUntil(
 		ctx,
 		() =>
-			stamped(
-				ctx,
-				"search",
-				"pre",
-				() =>
-					ctx.api.search({
-						query: `${CONTROL_PREFIX} ${controlMarker}`,
-						limit: SEARCH_LIMIT,
-						...scope,
-					}),
-				{ route: "search", purpose: "control" },
+			stamped(ctx, "search", "pre", (api) =>
+				api.search({
+					query: `${CONTROL_PREFIX} ${controlMarker}`,
+					limit: SEARCH_LIMIT,
+					...scope,
+				}),
 			),
 		(read) =>
 			read.health.evaluable && containsMarker(read.observation, controlMarker),

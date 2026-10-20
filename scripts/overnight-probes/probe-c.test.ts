@@ -4,6 +4,8 @@ import {
 	createFakeContext,
 	httpError,
 	type Json,
+	recordInputs,
+	sentTo,
 } from "./fake-api.ts"
 import { MAX_POLLS } from "./kit.ts"
 import { planProbeC, runProbeC } from "./probe-c.ts"
@@ -202,6 +204,22 @@ describe("runProbeC", () => {
 			failed.some((item) => item.predicate === "old-ranked-at-or-above-new"),
 		).toBe(true)
 		expect(result.outcome).toBe("fail")
+	})
+
+	it("keeps the exact request body that was sent as the evidence of a stale read", async () => {
+		const { ctx } = context({ staleOldFirst: true })
+		const sent = recordInputs(ctx)
+		const result = await runProbeC(ctx)
+		const failed = result.cases.find(
+			(item) => item.predicate === "old-ranked-at-or-above-new",
+		)
+		const request = failed?.evidence?.request
+		const searches = [
+			...sentTo(sent, "search"),
+			...sentTo(sent, "searchDetailed"),
+		]
+		expect(searches).toContainEqual(request)
+		expect(request).toMatchObject({ limit: 20, query: expect.any(String) })
 	})
 
 	it("is inconclusive when the update is rejected", async () => {

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { createFakeContext, httpError, type Json } from "./fake-api.ts"
+import {
+	createFakeContext,
+	httpError,
+	type Json,
+	recordInputs,
+	sentTo,
+} from "./fake-api.ts"
 import { healthyBody } from "./probe-a-fixtures.ts"
 import { planProbeA, runProbeA } from "./probe-a.ts"
 import { createBudget } from "./budget.ts"
@@ -278,6 +284,33 @@ describe("runProbeA against faulty fakes", () => {
 		)
 		expect(leaks.some((item) => item.caseId.startsWith("A/search/"))).toBe(true)
 		expect(leaks.every((item) => item.evidence !== undefined)).toBe(true)
+	})
+
+	it("keeps the exact request body that was sent as the evidence of a leak", async () => {
+		const fake = createFakeMemongo({ leakSearchAcrossAgents: true })
+		const ctx = createFakeContext(fake.api)
+		const sent = recordInputs(ctx)
+		const result = await runProbeA(ctx)
+		const leak = result.cases.find(
+			(item) => item.outcome === "fail" && item.caseId.startsWith("A/search/"),
+		)
+		const request = leak?.evidence?.request
+		expect(sentTo(sent, "search")).toContainEqual(request)
+		expect(request).toMatchObject({ query: expect.any(String) })
+	})
+
+	it("keeps the exact lifecycle request body that was sent, handle included", async () => {
+		const fake = createFakeMemongo({ leakLifecycleAcrossIdentity: true })
+		const ctx = createFakeContext(fake.api)
+		const sent = recordInputs(ctx)
+		const result = await runProbeA(ctx)
+		const leak = result.cases.find(
+			(item) =>
+				item.outcome === "fail" && item.caseId.startsWith("A/lifecycle:get/"),
+		)
+		const request = leak?.evidence?.request
+		expect(sentTo(sent, "lifecycleGetAs")).toContainEqual(request)
+		expect(request).toHaveProperty("handle")
 	})
 
 	it("fails when lifecycle get serves a foreign handle", async () => {

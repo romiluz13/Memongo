@@ -19,6 +19,7 @@ import {
 	type EraseVerdict,
 	type ReadRecord,
 } from "./probe-a-model.ts"
+import { observeSent } from "./kit.ts"
 import type { ProbeApi } from "./probe-api.ts"
 import {
 	ERASED_ROLES,
@@ -30,7 +31,7 @@ import {
 	TENANT_ROLES,
 	type TenantRole,
 } from "./route-matrix.ts"
-import type { Observation, ProbeRunResult } from "./types.ts"
+import type { ProbeRunResult } from "./types.ts"
 
 const QUERY = "What is the project Alpha codeword?"
 const BARRIER = { timeoutMs: 10_000 }
@@ -239,11 +240,11 @@ async function read(
 ): Promise<ReadRecord> {
 	const call = CALLS[row.id]
 	if (!call) throw new Error(`no read call for row ${row.id}`)
-	const observation: Observation = await countedObserve(
+	const { observation, request } = await observeSent(
 		ctx,
 		API_READ,
 		row.route,
-		() => call(ctx.api, reader, subject),
+		(api) => call(api, reader, subject),
 	)
 	return {
 		rowId: row.id,
@@ -258,16 +259,7 @@ async function read(
 				? { sections: ["query-evidence"] }
 				: {},
 		),
-		request: {
-			rowId: row.id,
-			phase,
-			reader: coords(reader),
-			subject: {
-				role: subject.role,
-				key: subject.key,
-				id: subject.structuredId,
-			},
-		},
+		request,
 	}
 }
 

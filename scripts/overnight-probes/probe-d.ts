@@ -117,17 +117,8 @@ export async function runProbeD(ctx: ProbeContext): Promise<ProbeRunResult> {
 		const settle = await pollUntil(
 			ctx,
 			() =>
-				stamped(
-					ctx,
-					"searchDetailed",
-					"pre",
-					() =>
-						ctx.api.searchDetailed({
-							query: DETAILED_QUERY,
-							limit: 20,
-							...scope,
-						}),
-					{ route: "searchDetailed", query: DETAILED_QUERY, range: "none" },
+				stamped(ctx, "searchDetailed", "pre", (api) =>
+					api.searchDetailed({ query: DETAILED_QUERY, limit: 20, ...scope }),
 				),
 			(read) => {
 				if (!read.health.evaluable) return false
@@ -135,22 +126,13 @@ export async function runProbeD(ctx: ProbeContext): Promise<ProbeRunResult> {
 				return SETTLED_LABELS.every((label) => found.includes(label))
 			},
 		)
-		const ranged = await stamped(
-			ctx,
-			"searchDetailed",
-			"post",
-			() =>
-				ctx.api.searchDetailed({
-					query: DETAILED_QUERY,
-					limit: 20,
-					timeRange: { ...D_DETAILED_RANGE },
-					...scope,
-				}),
-			{
-				route: "searchDetailed",
+		const ranged = await stamped(ctx, "searchDetailed", "post", (api) =>
+			api.searchDetailed({
 				query: DETAILED_QUERY,
-				range: D_DETAILED_RANGE,
-			},
+				limit: 20,
+				timeRange: { ...D_DETAILED_RANGE },
+				...scope,
+			}),
 		)
 		detailed = {
 			read: asQueryRead(ranged, "timeRange"),

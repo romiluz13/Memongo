@@ -11,7 +11,12 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import { evaluateRouteHealth } from "./health.ts"
-import { resolveLiveHandle, SETTLE_MAX_MS, SETTLE_STEP_MS } from "./kit.ts"
+import {
+	observeSent,
+	resolveLiveHandle,
+	SETTLE_MAX_MS,
+	SETTLE_STEP_MS,
+} from "./kit.ts"
 import { containsMarker } from "./markers.ts"
 import {
 	evaluateProbeG,
@@ -117,8 +122,11 @@ async function readRoute(
 	handle: MemongoStructuredStableHandle,
 ): Promise<GRead> {
 	const at = ctx.clock.now()
-	const observation = await countedObserve(ctx, API_READ, route, () =>
-		CALLS[route](ctx.api, target, handle),
+	const { observation, request } = await observeSent(
+		ctx,
+		API_READ,
+		route,
+		(api) => CALLS[route](api, target, handle),
 	)
 	return {
 		route,
@@ -126,12 +134,7 @@ async function readRoute(
 		at,
 		observation,
 		health: evaluateRouteHealth(route, observation, expectationFor(route)),
-		request: {
-			route,
-			phase,
-			key: target.key,
-			handle: { revision: handle.revision },
-		},
+		request,
 	}
 }
 

@@ -4,8 +4,10 @@ import type {
 } from "@memongo/client"
 import { API_READ, countedObserve, type ProbeContext } from "./context.ts"
 import { evaluateRouteHealth, type HealthExpectation } from "./health.ts"
+import type { ProbeApi } from "./probe-api.ts"
 import type { GRead, GRouteId } from "./probe-g-model.ts"
 import { isRecord } from "./rows.ts"
+import type { Observation } from "./types.ts"
 
 export const SETTLE_MAX_MS = 30_000
 export const SETTLE_STEP_MS = 1_000
@@ -16,16 +18,43 @@ export type Scope = {
 	scopeRef: string
 }
 
+type ApiMethods = Record<string, (...args: unknown[]) => unknown>
+
+function capturing(api: ProbeApi, sink: { request?: unknown }): ProbeApi {
+	const methods = api as unknown as ApiMethods
+	const wrapped = Object.fromEntries(
+		Object.entries(methods).map(([name, method]) => [
+			name,
+			(...args: unknown[]) => {
+				sink.request = args[0]
+				return method(...args)
+			},
+		]),
+	)
+	return wrapped as unknown as ProbeApi
+}
+
+export async function observeSent(
+	ctx: ProbeContext,
+	path: Parameters<typeof countedObserve>[1],
+	route: string,
+	call: (api: ProbeApi) => Promise<unknown>,
+): Promise<{ observation: Observation; request: unknown }> {
+	const sink: { request?: unknown } = {}
+	const api = capturing(ctx.api, sink)
+	const observation = await countedObserve(ctx, path, route, () => call(api))
+	return { observation, request: sink.request }
+}
+
 export async function stamped(
 	ctx: ProbeContext,
 	route: GRouteId,
 	phase: GRead["phase"],
-	call: () => Promise<unknown>,
-	request: unknown,
+	call: (api: ProbeApi) => Promise<unknown>,
 	expectation: HealthExpectation = {},
 ): Promise<GRead> {
 	const at = ctx.clock.now()
-	const observation = await countedObserve(ctx, API_READ, route, call)
+	const { observation, request } = await observeSent(ctx, API_READ, route, call)
 	return {
 		route,
 		phase,

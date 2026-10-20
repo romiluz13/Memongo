@@ -4,6 +4,8 @@ import {
 	createFakeContext,
 	httpError,
 	type Json,
+	recordInputs,
+	sentTo,
 } from "./fake-api.ts"
 import { planProbeD, runProbeD } from "./probe-d.ts"
 
@@ -440,6 +442,16 @@ describe("runProbeD", () => {
 		const detailed = caseOf(result, "D/searchDetailed/timeRange")
 		expect(detailed.outcome).toBe("fail")
 		expect(detailed.predicate).toBe("out-of-window-returned")
+	})
+
+	it("keeps the exact ranged request that was sent as the evidence of an unsound range", async () => {
+		const { ctx } = context({ leakRange: true })
+		const sent = recordInputs(ctx)
+		const result = await runProbeD(ctx)
+		const detailed = caseOf(result, "D/searchDetailed/timeRange")
+		const request = detailed.evidence?.request
+		expect(sentTo(sent, "searchDetailed")).toContainEqual(request)
+		expect(request).toHaveProperty("timeRange")
 	})
 
 	it("is inconclusive when the events never become searchable", async () => {

@@ -62,15 +62,10 @@ function searchRead(
 	phase: GRead["phase"],
 	route: "search" | "searchDetailed" = "search",
 ): Promise<GRead> {
-	return stamped(
-		ctx,
-		route,
-		phase,
-		() =>
-			route === "search"
-				? ctx.api.search({ query, limit: 20, ...scope })
-				: ctx.api.searchDetailed({ query, limit: 20, ...scope }),
-		{ route, phase, query },
+	return stamped(ctx, route, phase, (api) =>
+		route === "search"
+			? api.search({ query, limit: 20, ...scope })
+			: api.searchDetailed({ query, limit: 20, ...scope }),
 	)
 }
 
@@ -98,19 +93,11 @@ async function lifecycleEvidence(
 	ctx: ProbeContext,
 	handle: MemongoStructuredStableHandle,
 ): Promise<GRead[]> {
-	const current = await stamped(
-		ctx,
-		"lifecycleGet",
-		"post",
-		() => ctx.api.getLifecycleItem({ handle }),
-		{ route: "lifecycleGet", phase: "post" },
+	const current = await stamped(ctx, "lifecycleGet", "post", (api) =>
+		api.getLifecycleItem({ handle }),
 	)
-	const history = await stamped(
-		ctx,
-		"lifecycleHistory",
-		"post",
-		() => ctx.api.getLifecycleHistory({ handle, limit: 20 }),
-		{ route: "lifecycleHistory", phase: "post" },
+	const history = await stamped(ctx, "lifecycleHistory", "post", (api) =>
+		api.getLifecycleHistory({ handle, limit: 20 }),
 	)
 	return [current, history]
 }
@@ -179,12 +166,8 @@ async function runUpdate(
 		return undefined
 	}
 	const seedHandle = handleFor(scope, key, id)
-	const firstGet = await stamped(
-		ctx,
-		"lifecycleGet",
-		"pre",
-		() => ctx.api.getLifecycleItem({ handle: seedHandle }),
-		{ route: "lifecycleGet", phase: "pre" },
+	const firstGet = await stamped(ctx, "lifecycleGet", "pre", (api) =>
+		api.getLifecycleItem({ handle: seedHandle }),
 	)
 	const reads: GRead[] = [firstGet]
 	const live = resolveLiveHandle(seedHandle, firstGet)
@@ -253,12 +236,8 @@ async function runSupersede(
 		return undefined
 	}
 	const seedHandle = handleFor(scope, oldKey, oldId)
-	const firstGet = await stamped(
-		ctx,
-		"lifecycleGet",
-		"pre",
-		() => ctx.api.getLifecycleItem({ handle: seedHandle }),
-		{ route: "lifecycleGet", phase: "pre" },
+	const firstGet = await stamped(ctx, "lifecycleGet", "pre", (api) =>
+		api.getLifecycleItem({ handle: seedHandle }),
 	)
 	const reads: GRead[] = [firstGet]
 	const live = resolveLiveHandle(seedHandle, firstGet)
@@ -283,16 +262,11 @@ async function runSupersede(
 	let settled = false
 	if (ack.ok) {
 		reads.push(
-			await stamped(
-				ctx,
-				"readFile",
-				"post",
-				() =>
-					ctx.api.readFile({
-						relPath: `structured:fact:${oldKey}?scope=${scope.scope}&scopeRef=${scope.scopeRef}`,
-						agentId: scope.agentId,
-					}),
-				{ route: "readFile", phase: "post", key: oldKey },
+			await stamped(ctx, "readFile", "post", (api) =>
+				api.readFile({
+					relPath: `structured:fact:${oldKey}?scope=${scope.scope}&scopeRef=${scope.scopeRef}`,
+					agentId: scope.agentId,
+				}),
 			),
 			...(await lifecycleEvidence(ctx, handle)),
 		)

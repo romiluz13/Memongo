@@ -6,6 +6,8 @@ import {
 	createFakeContext,
 	generousBudget,
 	type Json,
+	recordInputs,
+	sentTo,
 } from "./fake-api.ts"
 import { planProbeB, runProbeB } from "./probe-b.ts"
 
@@ -206,6 +208,16 @@ describe("runProbeB", () => {
 			failed.every((item) => item.predicate === "answered-never-written"),
 		).toBe(true)
 		expect(result.outcome).toBe("fail")
+	})
+
+	it("keeps the exact search request that was sent as the evidence of a failed case", async () => {
+		const { ctx } = setup({}, { confabulate: true })
+		const sent = recordInputs(ctx)
+		const result = await runProbeB(ctx)
+		const failed = result.cases.find((item) => item.outcome === "fail")
+		const request = failed?.evidence?.request
+		expect(sentTo(sent, "search")).toContainEqual(request)
+		expect(request).toMatchObject({ query: expect.any(String) })
 	})
 
 	it("fails the controls and credits no abstention when the answerer abstains on everything", async () => {

@@ -147,17 +147,12 @@ async function runControls(
 	const settle = await pollUntil(
 		ctx,
 		() =>
-			stamped(
-				ctx,
-				"search",
-				"post",
-				() =>
-					ctx.api.search({
-						query: `${ENTRY_PREFIX} ${marker}`,
-						limit: 20,
-						...scope,
-					}),
-				{ route: "search", purpose: "recovery-control" },
+			stamped(ctx, "search", "post", (api) =>
+				api.search({
+					query: `${ENTRY_PREFIX} ${marker}`,
+					limit: 20,
+					...scope,
+				}),
 			),
 		(read) => read.health.evaluable && containsMarker(read.observation, marker),
 	)

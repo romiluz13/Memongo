@@ -8,6 +8,7 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import { evaluateRouteHealth } from "./health.ts"
+import { observeSent } from "./kit.ts"
 import {
 	classifyRead,
 	E_BARRIER_N,
@@ -47,18 +48,22 @@ async function pollItem(
 	label: string,
 ): Promise<EPoll> {
 	const atMs = ctx.clock.mono()
-	const observation = await countedObserve(ctx, API_READ, "search", () =>
-		ctx.api.search({
-			query: `Which code does archive ${label} hold?`,
-			limit: 20,
-			...target,
-		}),
+	const { observation, request } = await observeSent(
+		ctx,
+		API_READ,
+		"search",
+		(api) =>
+			api.search({
+				query: `Which code does archive ${label} hold?`,
+				limit: 20,
+				...target,
+			}),
 	)
 	return {
 		atMs,
 		observation,
 		health: evaluateRouteHealth("search", observation),
-		request: { route: "search", label },
+		request,
 	}
 }
 

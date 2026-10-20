@@ -5,6 +5,8 @@ import {
 	createFakeContext,
 	httpError,
 	type Json,
+	recordInputs,
+	sentTo,
 } from "./fake-api.ts"
 import { type GItem, routeBody } from "./probe-g-fixtures.ts"
 import type { GRouteId } from "./probe-g-model.ts"
@@ -234,6 +236,30 @@ describe("runProbeG against faulty fakes", () => {
 		expect(failed.map((item) => item.caseId)).toEqual(["G/update/profile"])
 		expect(failed[0]?.predicate).toBe("old-as-current:profile")
 		expect(result.outcome).toBe("fail")
+	})
+
+	it("keeps the exact request body that was sent as the evidence of a stale route", async () => {
+		const { ctx } = fakeContext({ staleRoute: "lifecycleHistory" })
+		const sent = recordInputs(ctx)
+		const result = await runProbeG(ctx)
+		const failed = result.cases.find((item) => item.outcome === "fail")
+		const request = failed?.evidence?.request
+		expect(failed?.caseId).toBe("G/update/lifecycleHistory")
+		expect(sentTo(sent, "getLifecycleHistory")).toContainEqual(request)
+		expect(request).toMatchObject({
+			limit: 20,
+			handle: { family: "structured" },
+		})
+	})
+
+	it("keeps the exact request body of a stale explained search", async () => {
+		const { ctx } = fakeContext({ staleRoute: "relevanceExplain" })
+		const sent = recordInputs(ctx)
+		const result = await runProbeG(ctx)
+		const failed = result.cases.find((item) => item.outcome === "fail")
+		expect(sentTo(sent, "relevanceExplain")).toContainEqual(
+			failed?.evidence?.request,
+		)
 	})
 
 	it("fails the explained search when it still serves the old value", async () => {

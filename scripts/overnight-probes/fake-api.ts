@@ -85,6 +85,31 @@ export function createTimerClock(start = 1_700_000_000_000): TimerClock {
 	}
 }
 
+export type SentInput = { method: string; input: unknown }
+
+export function recordInputs(ctx: { api: ProbeApi }): SentInput[] {
+	const sent: SentInput[] = []
+	const methods = ctx.api as unknown as Record<
+		string,
+		(...args: unknown[]) => unknown
+	>
+	const wrapped = Object.fromEntries(
+		Object.entries(methods).map(([method, call]) => [
+			method,
+			(...args: unknown[]) => {
+				sent.push({ method, input: structuredClone(args[0]) })
+				return call(...args)
+			},
+		]),
+	)
+	Object.assign(ctx, { api: wrapped })
+	return sent
+}
+
+export function sentTo(sent: readonly SentInput[], method: string): unknown[] {
+	return sent.filter((item) => item.method === method).map((item) => item.input)
+}
+
 export function silentWriter(): EvidenceWriter & { records: unknown[] } {
 	const records: unknown[] = []
 	return {

@@ -5,6 +5,8 @@ import {
 	createFakeContext,
 	httpError,
 	type Json,
+	recordInputs,
+	sentTo,
 } from "./fake-api.ts"
 import {
 	E_BARRIER_N,
@@ -221,6 +223,16 @@ describe("runProbeE", () => {
 		expect(result.counts.primaryCensored).toBe(1)
 		expect(result.counts.primaryObserved).toBe(E_PRIMARY_N - 1)
 		expect(result.outcome).toBe("fail")
+	})
+
+	it("keeps the exact search request that was sent as the evidence of a never-visible item", async () => {
+		const { ctx } = context({ neverVisibleIndex: 4 })
+		const sent = recordInputs(ctx)
+		const result = await runProbeE(ctx)
+		const failed = result.cases.find((item) => item.outcome === "fail")
+		const request = failed?.evidence?.request
+		expect(sentTo(sent, "search")).toContainEqual(request)
+		expect(request).toMatchObject({ limit: 20 })
 	})
 
 	it("fails the barrier variant when the barrier reports searchable but the item is invisible", async () => {
