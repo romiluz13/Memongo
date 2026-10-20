@@ -43,8 +43,11 @@ function handleFor(
 }
 
 export function planProbeC(): { "api-read": number; "api-write": number } {
-	const updateReads = 1 + MAX_POLLS + 1 + 1 + MAX_POLLS + 2
-	const supersedeReads = MAX_POLLS + 1 + MAX_POLLS + 2
+	const handleRead = 1
+	const preControls = 2 * MAX_POLLS
+	const settleAndDetailed = MAX_POLLS + 1
+	const updateReads = handleRead + preControls + 2 + settleAndDetailed
+	const supersedeReads = handleRead + preControls + 3 + settleAndDetailed
 	const automaticReads = MAX_POLLS + 2
 	return {
 		"api-read": updateReads + supersedeReads + automaticReads,
@@ -69,6 +72,47 @@ function searchRead(
 				: ctx.api.searchDetailed({ query, limit: 20, ...scope }),
 		{ route, phase, query },
 	)
+}
+
+async function preControls(
+	ctx: ProbeContext,
+	scope: Scope,
+	query: string,
+	markers: readonly string[],
+): Promise<GRead[]> {
+	const reads: GRead[] = []
+	for (const route of ["search", "searchDetailed"] as const) {
+		const polled = await pollUntil(
+			ctx,
+			() => searchRead(ctx, scope, query, "pre", route),
+			(read) =>
+				read.health.evaluable &&
+				markers.every((marker) => containsMarker(read.observation, marker)),
+		)
+		reads.push(polled.last)
+	}
+	return reads
+}
+
+async function lifecycleEvidence(
+	ctx: ProbeContext,
+	handle: MemongoStructuredStableHandle,
+): Promise<GRead[]> {
+	const current = await stamped(
+		ctx,
+		"lifecycleGet",
+		"post",
+		() => ctx.api.getLifecycleItem({ handle }),
+		{ route: "lifecycleGet", phase: "post" },
+	)
+	const history = await stamped(
+		ctx,
+		"lifecycleHistory",
+		"post",
+		() => ctx.api.getLifecycleHistory({ handle, limit: 20 }),
+		{ route: "lifecycleHistory", phase: "post" },
+	)
+	return [current, history]
 }
 
 async function seedFact(
@@ -149,13 +193,7 @@ async function runUpdate(
 		return undefined
 	}
 	const handle = live.handle
-	const pre = await pollUntil(
-		ctx,
-		() => searchRead(ctx, scope, query, "pre"),
-		(read) =>
-			read.health.evaluable && containsMarker(read.observation, oldMarker),
-	)
-	reads.push(pre.last)
+	reads.push(...(await preControls(ctx, scope, query, [oldMarker])))
 	const mutation = await countedObserve(ctx, API_WRITE, "updateLifecycle", () =>
 		ctx.api.updateLifecycleItem({
 			handle,
@@ -165,22 +203,7 @@ async function runUpdate(
 	const ack = ackOf(mutation)
 	let settled = false
 	if (ack.ok) {
-		reads.push(
-			await stamped(
-				ctx,
-				"lifecycleGet",
-				"post",
-				() => ctx.api.getLifecycleItem({ handle }),
-				{ route: "lifecycleGet", phase: "post" },
-			),
-			await stamped(
-				ctx,
-				"lifecycleHistory",
-				"post",
-				() => ctx.api.getLifecycleHistory({ handle, limit: 20 }),
-				{ route: "lifecycleHistory", phase: "post" },
-			),
-		)
+		reads.push(...(await lifecycleEvidence(ctx, handle)))
 		const settle = await pollUntil(
 			ctx,
 			() => searchRead(ctx, scope, query, "post"),
@@ -229,16 +252,22 @@ async function runSupersede(
 		notes.push("seed-failed:supersede")
 		return undefined
 	}
-	const handle = handleFor(scope, oldKey, oldId)
-	const pre = await pollUntil(
+	const seedHandle = handleFor(scope, oldKey, oldId)
+	const firstGet = await stamped(
 		ctx,
-		() => searchRead(ctx, scope, query, "pre"),
-		(read) =>
-			read.health.evaluable &&
-			containsMarker(read.observation, oldMarker) &&
-			containsMarker(read.observation, newMarker),
+		"lifecycleGet",
+		"pre",
+		() => ctx.api.getLifecycleItem({ handle: seedHandle }),
+		{ route: "lifecycleGet", phase: "pre" },
 	)
-	const reads: GRead[] = [pre.last]
+	const reads: GRead[] = [firstGet]
+	const live = resolveLiveHandle(seedHandle, firstGet)
+	if (!live.ok) {
+		notes.push(`handle-invalid:supersede:${live.reason}`)
+		return undefined
+	}
+	const handle = live.handle
+	reads.push(...(await preControls(ctx, scope, query, [oldMarker, newMarker])))
 	const mutation = await countedObserve(ctx, API_WRITE, "deleteLifecycle", () =>
 		ctx.api.deleteLifecycleItem({
 			handle,
@@ -265,6 +294,7 @@ async function runSupersede(
 					}),
 				{ route: "readFile", phase: "post", key: oldKey },
 			),
+			...(await lifecycleEvidence(ctx, handle)),
 		)
 		const settle = await pollUntil(
 			ctx,

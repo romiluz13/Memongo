@@ -17,6 +17,7 @@ type Options = {
 	dropInvalidatedByLink?: boolean
 	degradeUpdateSearch?: boolean
 	handleWithoutRevision?: boolean
+	detailedBlindUntilUpdate?: boolean
 }
 
 type Stored = GItem & {
@@ -32,7 +33,7 @@ function createFakeC(options: Options = {}) {
 	const events: { body: string; timestamp: string }[] = []
 	let counter = 0
 	let updated = false
-	const tally = { degradedSearches: 0, updates: 0 }
+	const tally = { degradedSearches: 0, updates: 0, deletes: 0 }
 	const plain = (item: Stored): GItem => ({
 		key: item.key,
 		value: item.value,
@@ -119,6 +120,7 @@ function createFakeC(options: Options = {}) {
 			return routeBody("lifecycleGet", [plain(item)])
 		},
 		deleteLifecycleItem: async (input: Json) => {
+			tally.deletes += 1
 			const item = byKey(keyOf(input.handle as Json))
 			item.revisions.push(plain(item))
 			item.state = "invalidated"
@@ -157,7 +159,11 @@ function createFakeC(options: Options = {}) {
 				...(degraded ? { outcomes: { status: "partial", lanes: [] } } : {}),
 			}
 		},
-		searchDetailed: async () => routeBody("searchDetailed", rows()),
+		searchDetailed: async () =>
+			routeBody(
+				"searchDetailed",
+				options.detailedBlindUntilUpdate && !updated ? [] : rows(),
+			),
 	}
 	return { api, clock, items, events, tally }
 }
@@ -231,11 +237,34 @@ describe("runProbeC", () => {
 		const { ctx, fake } = context({ handleWithoutRevision: true })
 		const result = await runProbeC(ctx)
 		expect(fake.tally.updates).toBe(0)
+		expect(fake.tally.deletes).toBe(0)
 		expect(result.reasons.join(" ")).toContain("handle-invalid:update:revision")
+		expect(result.reasons.join(" ")).toContain(
+			"handle-invalid:supersede:revision",
+		)
 		expect(result.outcome).toBe("inconclusive")
-		expect(
-			result.cases.some((item) => item.caseId.startsWith("C/update/")),
-		).toBe(false)
+		expect(result.cases).toEqual([])
+	})
+
+	it("gives searchDetailed its own pre-read control before the update", async () => {
+		const { ctx } = context({ detailedBlindUntilUpdate: true })
+		const result = await runProbeC(ctx)
+		const byId = (id: string) => result.cases.find((item) => item.caseId === id)
+		expect(byId("C/update/search")?.outcome).toBe("pass")
+		expect(byId("C/update/searchDetailed")?.reason).toBe(
+			"precondition:old-not-retrievable",
+		)
+		expect(byId("C/supersede/searchDetailed")?.outcome).toBe("pass")
+	})
+
+	it("records revision and history evidence for the supersession", async () => {
+		const { ctx } = context()
+		const result = await runProbeC(ctx)
+		const lifecycle = result.cases.find(
+			(item) => item.caseId === "C/supersede/lifecycle",
+		)
+		expect(lifecycle?.outcome).toBe("pass")
+		expect(lifecycle?.detail).toMatchObject({ revision: 2, linked: true })
 	})
 
 	it("fails when history keeps no revision of the old value", async () => {

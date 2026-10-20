@@ -1,117 +1,23 @@
 import { describe, expect, it } from "vitest"
 import {
-	type CSequenceFacts,
+	caseOf,
+	invalidatedOld,
+	newItem,
+	OLD,
+	oldItem,
+	PAST,
+	read,
+	supersedeFacts,
+	updateFacts,
+	withRead,
+} from "./probe-c-fixtures.ts"
+import {
 	evaluateProbeC,
 	PROBE_C_RULE,
 	PROBE_C_VERSION,
 	requiredCaseIdsC,
 } from "./probe-c-model.ts"
-import { type GItem, makeRead, routeBody } from "./probe-g-fixtures.ts"
-import type { GRead } from "./probe-g-model.ts"
-
-const OLD = "zqcold9"
-const NEW = "zqcnew9"
-const NEW_KEY = "capital-codename-new"
-const PAST = new Date(2_000).toISOString()
-const AT = 5_000
-
-const oldItem: GItem = {
-	value: `The capital codename is ${OLD}`,
-	revision: 1,
-	state: "active",
-}
-const newItem: GItem = {
-	value: `The capital codename is ${NEW}`,
-	revision: 2,
-	state: "active",
-}
-const freshNew: GItem = { ...newItem, revision: 1 }
-const invalidatedOld: GItem = {
-	...oldItem,
-	revision: 2,
-	state: "invalidated",
-	validTo: PAST,
-}
-
-function read(
-	route: GRead["route"],
-	phase: GRead["phase"],
-	body: unknown,
-): GRead {
-	return makeRead(route, phase, body, phase === "pre" ? 1_000 : AT)
-}
-
-function updateFacts(overrides: Partial<CSequenceFacts> = {}): CSequenceFacts {
-	return {
-		sequence: "update",
-		oldMarker: OLD,
-		newMarker: NEW,
-		ack: { ok: true },
-		settled: true,
-		reads: [
-			read("search", "pre", routeBody("search", [oldItem])),
-			read("lifecycleGet", "pre", routeBody("lifecycleGet", [oldItem])),
-			read("search", "post", routeBody("search", [newItem])),
-			read("searchDetailed", "post", routeBody("searchDetailed", [newItem])),
-			read("lifecycleGet", "post", routeBody("lifecycleGet", [newItem])),
-			read(
-				"lifecycleHistory",
-				"post",
-				routeBody("lifecycleHistory", [], {
-					current: newItem,
-					revisions: [oldItem],
-				}),
-			),
-		],
-		...overrides,
-	}
-}
-
-function supersedeFacts(
-	overrides: Partial<CSequenceFacts> = {},
-): CSequenceFacts {
-	const text = [
-		"type: fact",
-		"key: capital-codename-old",
-		`value: ${oldItem.value}`,
-		"revision: 2",
-		"state: invalidated",
-		`validTo: ${PAST}`,
-		`invalidatedBy: ${JSON.stringify({ type: "fact", key: NEW_KEY, reason: "superseded" })}`,
-	].join("\n")
-	return {
-		sequence: "supersede",
-		oldMarker: OLD,
-		newMarker: NEW,
-		newKey: NEW_KEY,
-		ack: { ok: true },
-		settled: true,
-		reads: [
-			read("search", "pre", routeBody("search", [oldItem, freshNew])),
-			read("search", "post", routeBody("search", [freshNew])),
-			read("searchDetailed", "post", routeBody("searchDetailed", [freshNew])),
-			read("readFile", "post", { text }),
-		],
-		...overrides,
-	}
-}
-
-function withRead(facts: CSequenceFacts, replacement: GRead): CSequenceFacts {
-	return {
-		...facts,
-		reads: facts.reads.map((item) =>
-			item.route === replacement.route && item.phase === replacement.phase
-				? replacement
-				: item,
-		),
-	}
-}
-
-function caseOf(result: ReturnType<typeof evaluateProbeC>, id: string) {
-	const found = result.cases.find((item) => item.caseId === id)
-	if (!found) throw new Error(`missing ${id}`)
-	return found
-}
+import { routeBody } from "./probe-g-fixtures.ts"
 
 describe("evaluateProbeC clean sequences", () => {
 	it("passes both explicit sequences and derives six required ids", () => {
@@ -123,7 +29,8 @@ describe("evaluateProbeC clean sequences", () => {
 
 	it("prints a rule and a version", () => {
 		expect(PROBE_C_RULE).toMatch(/strictly above/)
-		expect(PROBE_C_VERSION).toBe("C-1")
+		expect(PROBE_C_RULE).toMatch(/whatever the health/)
+		expect(PROBE_C_VERSION).toBe("C-2")
 	})
 })
 

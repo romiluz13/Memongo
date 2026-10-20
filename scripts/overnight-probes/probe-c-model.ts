@@ -5,10 +5,10 @@ import { historical, isRecord, labelled, textField, viewOf } from "./rows.ts"
 import type { CaseResult, Observation, Outcome } from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
 
-export const PROBE_C_VERSION = "C-1"
+export const PROBE_C_VERSION = "C-2"
 
 export const PROBE_C_RULE =
-	"Before judging, the old value must have been retrievable and, for a supersession, the replacement must have been searchable. After a confirmed mutation, a search route passes when the new value is eligible and either the old value is absent or labelled historical, or both are eligible and the new one ranks strictly above the old one. It fails when the old value is eligible and ranks at or above the new one, or when the old value is served and the new one is missing after the update settled. Both absent, a missing new value, an unsettled asynchronous update, a quarantined or rejected mutation and an unhealthy or unassessable response are inconclusive. The lifecycle case passes when the record shows the new revision with the old value kept in history for an update, or the old record invalidated with a link to the replacement for a supersession. Automatic correction by a later event is reported as a capability observation and never gates the verdict."
+	"A search route passes only when a pre-read of the same route retrieved the old value and, for a supersession, the replacement, and, after a confirmed mutation, the response was healthy and the new value is eligible with the old value absent or labelled historical, or both eligible with the new one ranking strictly above the old one. It fails, whatever the health of the response, when the old value is eligible and ranks at or above the new one, or when the old value is served and the new one is missing after the update settled. Both absent, a missing new value, an unsettled asynchronous update, a quarantined or rejected mutation, a missing control and an unhealthy or unassessable response are inconclusive. The lifecycle case passes when the record shows a revision advanced past its pre-read revision with the old value kept in history for an update, or the old record invalidated with a link to the replacement, an advanced revision and the old value kept in history for a supersession. A missing baseline revision is inconclusive. Automatic correction by a later event is reported as a capability observation and never gates the verdict."
 
 export type CSequenceFacts = {
 	sequence: "update" | "supersede"
@@ -59,13 +59,14 @@ function failCase(
 	predicate: string,
 	read: GRead,
 	detail?: Record<string, unknown>,
+	controlEligible = true,
 ): CaseResult {
 	return {
 		caseId,
 		outcome: "fail",
 		predicate,
 		reason: predicate,
-		controlEligible: true,
+		controlEligible,
 		...(detail ? { detail } : {}),
 		evidence: { request: read.request, response: read.observation },
 	}
@@ -83,8 +84,11 @@ function passCase(
 	}
 }
 
-function preconditionFailure(facts: CSequenceFacts): string | undefined {
-	const pre = find(facts, "search", "pre")
+function preconditionFailure(
+	facts: CSequenceFacts,
+	route: "search" | "searchDetailed",
+): string | undefined {
+	const pre = find(facts, route, "pre")
 	if (!pre) return "precondition:not-run"
 	if (
 		!pre.health.evaluable ||
@@ -121,8 +125,6 @@ function searchCase(
 	const post = find(facts, route, "post")
 	if (!post) return undefined
 	if (!facts.ack.ok) return inconclusive(caseId, "mutation-not-applied")
-	const failure = preconditionFailure(facts)
-	if (failure) return inconclusive(caseId, failure)
 	const oldHit = rowFor(post, facts.oldMarker)
 	const newHit = rowFor(post, facts.newMarker)
 	const eligible = (hit: typeof oldHit) =>
@@ -132,30 +134,42 @@ function searchCase(
 	const unlabelled = [oldHit, newHit].some(
 		(hit) => hit.row !== undefined && !labelled(hit.row),
 	)
+	if (route === "searchDetailed" && unlabelled) {
+		return inconclusive(caseId, "unassessable:row without currentness fields")
+	}
+	const failure = preconditionFailure(facts, route)
+	const controlled = failure === undefined
+	if (oldEligible && newEligible && newHit.index >= oldHit.index) {
+		return failCase(
+			caseId,
+			"old-ranked-at-or-above-new",
+			post,
+			{ newRank: newHit.index, oldRank: oldHit.index },
+			controlled,
+		)
+	}
+	if (oldEligible && !newEligible && facts.settled) {
+		return failCase(
+			caseId,
+			"old-served-new-missing",
+			post,
+			undefined,
+			controlled,
+		)
+	}
+	if (failure) return inconclusive(caseId, failure)
 	if (!post.health.evaluable) {
 		return inconclusive(
 			caseId,
 			`unevaluable:${post.health.issues.join(",") || "no-response"}`,
 		)
 	}
-	if (route === "searchDetailed" && unlabelled) {
-		return inconclusive(caseId, "unassessable:row without currentness fields")
-	}
 	if (oldEligible && newEligible) {
-		return newHit.index < oldHit.index
-			? passCase(caseId, { newRank: newHit.index, oldRank: oldHit.index })
-			: failCase(caseId, "old-ranked-at-or-above-new", post, {
-					newRank: newHit.index,
-					oldRank: oldHit.index,
-				})
+		return passCase(caseId, { newRank: newHit.index, oldRank: oldHit.index })
 	}
 	if (newEligible)
 		return passCase(caseId, { oldPresent: oldHit.row !== undefined })
-	if (oldEligible) {
-		return facts.settled
-			? failCase(caseId, "old-served-new-missing", post)
-			: inconclusive(caseId, "async-update-unobserved")
-	}
+	if (oldEligible) return inconclusive(caseId, "async-update-unobserved")
 	return inconclusive(caseId, "both-absent")
 }
 
@@ -181,26 +195,34 @@ function updateLifecycle(facts: CSequenceFacts, caseId: string): CaseResult {
 	const history = find(facts, "lifecycleHistory", "post")
 	if (!history?.health.evaluable)
 		return inconclusive(caseId, "unverified:history")
-	const entries = Array.isArray(bodyOf(history.observation))
-		? (bodyOf(history.observation) as unknown[])
-		: []
-	const revisionWithOld = entries.some(
-		(entry) =>
-			isRecord(entry) &&
-			entry.historyKind === "revision" &&
-			viewOf(entry)?.value.includes(facts.oldMarker),
-	)
+	const entries = historyEntries(history)
 	const currentWithNew = entries.some(
 		(entry) =>
-			isRecord(entry) &&
-			entry.historyKind === "current" &&
+			isHistoryKind(entry, "current") &&
 			viewOf(entry)?.value.includes(facts.newMarker),
 	)
 	if (!currentWithNew) return inconclusive(caseId, "unverified:history-current")
-	if (!revisionWithOld) {
+	if (!keepsOldRevision(entries, facts.oldMarker)) {
 		return failCase(caseId, "history-missing-old-revision", history)
 	}
 	return passCase(caseId, { revision: view.revision })
+}
+
+function historyEntries(history: GRead): unknown[] {
+	const body = bodyOf(history.observation)
+	return Array.isArray(body) ? body : []
+}
+
+function isHistoryKind(entry: unknown, kind: "current" | "revision"): boolean {
+	return isRecord(entry) && entry.historyKind === kind
+}
+
+function keepsOldRevision(entries: readonly unknown[], oldMarker: string) {
+	return entries.some(
+		(entry) =>
+			isHistoryKind(entry, "revision") &&
+			viewOf(entry)?.value.includes(oldMarker),
+	)
 }
 
 function supersedeLifecycle(facts: CSequenceFacts, caseId: string): CaseResult {
@@ -219,7 +241,36 @@ function supersedeLifecycle(facts: CSequenceFacts, caseId: string): CaseResult {
 	if (!facts.newKey || !link.includes(facts.newKey)) {
 		return failCase(caseId, "supersession-link-missing", file)
 	}
-	return passCase(caseId, { linked: true })
+	const get = find(facts, "lifecycleGet", "post")
+	if (!get?.health.evaluable)
+		return inconclusive(caseId, "unverified:lifecycle-get")
+	const view = viewOf(bodyOf(get.observation))
+	if (!view) return inconclusive(caseId, "unverified:lifecycle-get-body")
+	if (view.state !== "invalidated")
+		return failCase(caseId, "old-still-active", get)
+	const pre = find(facts, "lifecycleGet", "pre")
+	const baseline = pre ? viewOf(bodyOf(pre.observation))?.revision : undefined
+	if (baseline === undefined) {
+		return inconclusive(caseId, "unverified:baseline-revision-missing")
+	}
+	if (view.revision === undefined || view.revision <= baseline) {
+		return inconclusive(caseId, "unverified:revision-not-advanced")
+	}
+	const history = find(facts, "lifecycleHistory", "post")
+	if (!history?.health.evaluable)
+		return inconclusive(caseId, "unverified:history")
+	const entries = historyEntries(history)
+	const currentInvalidated = entries.some(
+		(entry) =>
+			isHistoryKind(entry, "current") && viewOf(entry)?.state === "invalidated",
+	)
+	if (!currentInvalidated) {
+		return inconclusive(caseId, "unverified:history-current")
+	}
+	if (!keepsOldRevision(entries, facts.oldMarker)) {
+		return failCase(caseId, "history-missing-old-revision", history)
+	}
+	return passCase(caseId, { revision: view.revision, linked: true })
 }
 
 function lifecycleCase(facts: CSequenceFacts): CaseResult | undefined {
