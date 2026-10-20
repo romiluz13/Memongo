@@ -4,6 +4,7 @@ import {
 	aggregateInvocation,
 	aggregateRun,
 	combineRuns,
+	countFailsByBasis,
 	exitCodeFor,
 } from "./verdict.ts"
 import type { CaseResult, Outcome, ProbeRunResult } from "./types.ts"
@@ -125,6 +126,41 @@ describe("combineRuns and aggregateInvocation", () => {
 		expect(aggregateInvocation(["pass", "not-run"])).toBe("not-run")
 		expect(aggregateInvocation(["pass", "pass"])).toBe("pass")
 		expect(aggregateInvocation([])).toBe("not-run")
+	})
+})
+
+describe("countFailsByBasis", () => {
+	it("counts each failing case id once per probe and keeps documented and code-derived apart", () => {
+		const failing = (id: string, extra: Partial<CaseResult> = {}) =>
+			c(id, "fail", { predicate: "p", ...extra })
+		const counts = countFailsByBasis([
+			run(1, [
+				failing("a", { contractBasis: "code-derived" }),
+				failing("b", { contractBasis: "documented" }),
+				failing("u"),
+				c("fine", "pass", { contractBasis: "code-derived" }),
+			]),
+			run(2, [
+				failing("a", { contractBasis: "code-derived" }),
+				failing("d", { contractBasis: "code-derived" }),
+			]),
+		])
+		expect(counts).toEqual({
+			"code-derived": 2,
+			documented: 1,
+			unclassified: 1,
+		})
+	})
+
+	it("does not count inconclusive or passing cases", () => {
+		expect(
+			countFailsByBasis([
+				run(1, [
+					c("a", "inconclusive", { contractBasis: "code-derived" }),
+					c("b", "pass", { contractBasis: "documented" }),
+				]),
+			]),
+		).toEqual({ "code-derived": 0, documented: 0, unclassified: 0 })
 	})
 })
 

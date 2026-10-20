@@ -1,6 +1,7 @@
 import {
 	type CaseResult,
 	EXIT_CODES,
+	type FailsByBasis,
 	type Outcome,
 	type ProbeRunResult,
 } from "./types.ts"
@@ -75,6 +76,24 @@ export function combineRuns(runs: readonly ProbeRunResult[]): {
 		}
 	}
 	return { outcome: "pass", reasons }
+}
+
+export function countFailsByBasis(
+	runs: readonly ProbeRunResult[],
+): FailsByBasis {
+	const basisOf = new Map<string, keyof FailsByBasis>()
+	for (const item of runs.flatMap((entry) => entry.cases)) {
+		if (item.outcome === "fail" && !basisOf.has(item.caseId)) {
+			basisOf.set(item.caseId, item.contractBasis ?? "unclassified")
+		}
+	}
+	const counts: FailsByBasis = {
+		"code-derived": 0,
+		documented: 0,
+		unclassified: 0,
+	}
+	for (const basis of basisOf.values()) counts[basis] += 1
+	return counts
 }
 
 export function aggregateInvocation(outcomes: readonly Outcome[]): Outcome {

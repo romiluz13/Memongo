@@ -34,6 +34,21 @@ describe("evaluateProbeC clean sequences", () => {
 	})
 })
 
+describe("evaluateProbeC contract basis", () => {
+	it("tags passing, failing and inconclusive cases as judged on a documented contract", () => {
+		const failing = withRead(
+			updateFacts(),
+			read("search", "post", routeBody("search", [oldItem, newItem])),
+		)
+		const result = evaluateProbeC([failing, supersedeFacts({ settled: false })])
+		const outcomes = new Set(result.cases.map((item) => item.outcome))
+		expect(outcomes.has("fail")).toBe(true)
+		for (const found of result.cases) {
+			expect(found.contractBasis, found.caseId).toBe("documented")
+		}
+	})
+})
+
 describe("evaluateProbeC ranking", () => {
 	it("passes when both values are eligible and the new one ranks strictly higher", () => {
 		const facts = withRead(

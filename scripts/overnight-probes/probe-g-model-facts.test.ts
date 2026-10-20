@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
 	caseOf,
+	deleteSequence,
 	NEW_MARKER,
 	newItem,
 	OLD_MARKER,
@@ -34,6 +35,46 @@ describe("G sequence facts", () => {
 			reads: [],
 		}
 		expect(extra.sequence).toBe("delete")
+	})
+})
+
+describe("G contract basis", () => {
+	const CODE_DERIVED = [
+		"search",
+		"profile",
+		"hydrateActiveSlate",
+		"state",
+		"buildDiscoveryProjection",
+		"buildContextBundle",
+	]
+
+	it("tags every route judged on a code-derived contract and the rest as documented", () => {
+		const result = evaluateProbeG([updateSequence(), deleteSequence()])
+		expect(result.cases.length).toBeGreaterThan(0)
+		for (const found of result.cases) {
+			const route = found.caseId.split("/")[2] as string
+			expect(found.contractBasis, found.caseId).toBe(
+				CODE_DERIVED.includes(route) ? "code-derived" : "documented",
+			)
+		}
+	})
+
+	it("keeps the tag on a failing and on an inconclusive case", () => {
+		const stale = withPost(
+			updateSequence(),
+			"profile",
+			routeBody("profile", [oldItem]),
+		)
+		const failed = caseOf(evaluateProbeG([stale]), "update", "profile")
+		expect(failed.outcome).toBe("fail")
+		expect(failed.contractBasis).toBe("code-derived")
+		const pending = caseOf(
+			evaluateProbeG([{ ...updateSequence(), ack: { ok: false } }]),
+			"update",
+			"state",
+		)
+		expect(pending.outcome).toBe("inconclusive")
+		expect(pending.contractBasis).toBe("code-derived")
 	})
 })
 

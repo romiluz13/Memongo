@@ -17,8 +17,17 @@ import { planProbeE, runProbeE } from "./probe-e.ts"
 import { planProbeF, runProbeF } from "./probe-f.ts"
 import { planProbeG, runProbeG } from "./probe-g.ts"
 import { compareRuns, type Reproduction } from "./reproduction.ts"
-import type { Outcome, ProbeLetter, ProbeRunResult } from "./types.ts"
-import { aggregateInvocation, combineRuns } from "./verdict.ts"
+import type {
+	FailsByBasis,
+	Outcome,
+	ProbeLetter,
+	ProbeRunResult,
+} from "./types.ts"
+import {
+	aggregateInvocation,
+	combineRuns,
+	countFailsByBasis,
+} from "./verdict.ts"
 
 export type ProbeEntry = {
 	plan(): Record<string, number>
@@ -79,6 +88,7 @@ export type ProbeSummary = {
 	reasons: string[]
 	runs: number
 	reproduction: Reproduction
+	failsByBasis: FailsByBasis
 }
 
 export type InvocationReport = {
@@ -157,6 +167,7 @@ export async function runInvocation(
 			reasons: combined.reasons,
 			runs: results.length,
 			reproduction,
+			failsByBasis: countFailsByBasis(results),
 		}
 		probes.push(summary)
 		input.evidence.record("probe-summary", summary)

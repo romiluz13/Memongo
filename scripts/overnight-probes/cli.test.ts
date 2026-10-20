@@ -38,6 +38,31 @@ describe("a complete invocation", () => {
 		expect(state.err.join("")).toContain("probe A: pass (2 runs)")
 	})
 
+	it("prints fails by contract basis for every probe", async () => {
+		const state = setup(async (letter, ctx) =>
+			resultOf(letter, ctx, "fail", [
+				{ ...caseOf("derived", "fail", "p"), contractBasis: "code-derived" },
+				{ ...caseOf("documented", "fail", "p"), contractBasis: "documented" },
+				caseOf("untagged", "fail", "p"),
+			]),
+		)
+		await main(["--probes", "A", "--runs", "1"], ENV, state.io)
+		expect(state.err.join("")).toContain(
+			"fails: code-derived 1, documented 1, unclassified 1",
+		)
+		const summary = records(state.out).find(
+			(item) => item.kind === "invocation",
+		)
+		const probes = summary?.payload.probes as {
+			failsByBasis: Record<string, number>
+		}[]
+		expect(probes[0]?.failsByBasis).toEqual({
+			"code-derived": 1,
+			documented: 1,
+			unclassified: 1,
+		})
+	})
+
 	it("hands out fresh agent ids and tokens per run", async () => {
 		const agents = new Set<string>()
 		const tokens = new Set<string>()

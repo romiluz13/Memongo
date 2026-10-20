@@ -288,12 +288,14 @@ export function evaluateProbeC(
 ): ProbeCEvaluation {
 	const cases: CaseResult[] = []
 	for (const facts of sequences) {
-		for (const route of ["search", "searchDetailed"] as const) {
-			const result = searchCase(facts, route)
-			if (result) cases.push(result)
+		const found = [
+			searchCase(facts, "search"),
+			searchCase(facts, "searchDetailed"),
+			lifecycleCase(facts),
+		]
+		for (const result of found) {
+			if (result) cases.push({ ...result, contractBasis: "documented" })
 		}
-		const lifecycle = lifecycleCase(facts)
-		if (lifecycle) cases.push(lifecycle)
 	}
 	const verdict = aggregateRun(cases, requiredCaseIdsC())
 	return {

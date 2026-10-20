@@ -29,12 +29,17 @@ export type FailureEvidence = {
 	response: unknown
 }
 
+export type ContractBasis = "code-derived" | "documented"
+
+export type FailsByBasis = Record<ContractBasis | "unclassified", number>
+
 export type CaseResult = {
 	caseId: string
 	outcome: Outcome
 	predicate?: string
 	reason?: string
 	controlEligible: boolean
+	contractBasis?: ContractBasis
 	detail?: Record<string, unknown>
 	evidence?: FailureEvidence
 }

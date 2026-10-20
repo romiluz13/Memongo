@@ -186,6 +186,29 @@ describe("runInvocation", () => {
 		expect(withPorts?.admin?.appName).toBe("a")
 	})
 
+	it("counts failures by contract basis in the probe summary and in the recorded summary", async () => {
+		const registry = stubRegistry(async (letter, ctx) =>
+			result(
+				letter,
+				ctx.run,
+				[
+					{ ...failing("derived", "p"), contractBasis: "code-derived" },
+					{ ...failing("documented", "p"), contractBasis: "documented" },
+					failing("untagged", "p"),
+				],
+				"fail",
+			),
+		)
+		const input = baseInput({ registry, runs: 2 })
+		const report = await runInvocation(input)
+		const expected = { "code-derived": 1, documented: 1, unclassified: 1 }
+		expect(report.probes[0]?.failsByBasis).toEqual(expected)
+		const summary = input.evidence.records.find(
+			(item) => (item as { kind: string }).kind === "probe-summary",
+		) as { payload: { failsByBasis: unknown } }
+		expect(summary.payload.failsByBasis).toEqual(expected)
+	})
+
 	it("labels a failure reproduced only when the same case fails with the same predicate in both runs", async () => {
 		const registry = stubRegistry(async (letter, ctx) =>
 			result(

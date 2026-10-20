@@ -70,7 +70,11 @@ function summaryLines(report: InvocationReport, exit: number): string[] {
 				(entry) => `single-run ${entry.caseId} [${entry.predicate}]`,
 			),
 		]
-		const suffix = labels.length > 0 ? `; ${labels.join("; ")}` : ""
+		const basis = item.failsByBasis
+		labels.push(
+			`fails: code-derived ${basis["code-derived"]}, documented ${basis.documented}, unclassified ${basis.unclassified}`,
+		)
+		const suffix = `; ${labels.join("; ")}`
 		const why = item.reasons
 			.slice(0, REASONS_SHOWN)
 			.map((reason) => reason.slice(0, REASON_CHARS))

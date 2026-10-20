@@ -9,7 +9,12 @@ import {
 	textField,
 	viewOf,
 } from "./rows.ts"
-import type { CaseResult, Observation, Outcome } from "./types.ts"
+import type {
+	CaseResult,
+	ContractBasis,
+	Observation,
+	Outcome,
+} from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
 
 export const PROBE_G_VERSION = "G-1"
@@ -380,14 +385,22 @@ function evaluateSequence(facts: GSequenceFacts): CaseResult[] {
 		const post = findRead(facts, route, "post")
 		if (!post) continue
 		const caseId = `G/${facts.sequence}/${route}`
+		const contractBasis: ContractBasis =
+			G_ROUTES[route].basis === "contract" ? "code-derived" : "documented"
 		if (route === "lifecycleGet") {
-			cases.push(lifecycleGetCase(caseId, facts, status, detail, post))
+			cases.push({
+				...lifecycleGetCase(caseId, facts, status, detail, post),
+				contractBasis,
+			})
 		} else if (status !== "confirmed") {
-			cases.push(inconclusive(caseId, `mutation-${status}`))
+			cases.push({
+				...inconclusive(caseId, `mutation-${status}`),
+				contractBasis,
+			})
 		} else if (route === "lifecycleHistory") {
-			cases.push(historyCase(caseId, facts, post))
+			cases.push({ ...historyCase(caseId, facts, post), contractBasis })
 		} else {
-			cases.push(routeCase(caseId, route, facts, post))
+			cases.push({ ...routeCase(caseId, route, facts, post), contractBasis })
 		}
 	}
 	return cases
