@@ -1,5 +1,11 @@
 import { evaluateRouteHealth } from "./health.ts"
-import type { GRead, GRouteId } from "./probe-g-model.ts"
+import {
+	type evaluateProbeG,
+	G_ROUTES,
+	type GRead,
+	type GRouteId,
+	type GSequenceFacts,
+} from "./probe-g-model.ts"
 
 export type GItem = {
 	value: string
@@ -157,4 +163,120 @@ export function makeRead(
 		}),
 		request: { route },
 	}
+}
+
+export const OLD_MARKER = "zqold7f3a"
+export const NEW_MARKER = "zqnew7f3a"
+export const ROUTES = Object.keys(G_ROUTES) as GRouteId[]
+export const PRE_AT = 1_000
+export const POST_AT = 5_000
+export const PAST = new Date(2_000).toISOString()
+
+export const oldItem: GItem = {
+	value: `The launch codename is ${OLD_MARKER}`,
+	revision: 1,
+	state: "active",
+}
+export const newItem: GItem = {
+	value: `The launch codename is ${NEW_MARKER}`,
+	revision: 2,
+	state: "active",
+}
+export const invalidated: GItem = {
+	...oldItem,
+	revision: 2,
+	state: "invalidated",
+	validTo: PAST,
+}
+
+function preReads(): GRead[] {
+	return ROUTES.map((route) =>
+		makeRead(
+			route,
+			"pre",
+			routeBody(route, [oldItem], { current: oldItem, revisions: [] }),
+			PRE_AT,
+		),
+	)
+}
+
+export function updateSequence(): GSequenceFacts {
+	const reads = [
+		...preReads(),
+		...ROUTES.map((route) =>
+			makeRead(
+				route,
+				"post",
+				routeBody(route, [newItem], { current: newItem, revisions: [oldItem] }),
+				POST_AT,
+			),
+		),
+	]
+	return {
+		sequence: "update",
+		oldMarker: OLD_MARKER,
+		newMarker: NEW_MARKER,
+		ack: { ok: true },
+		reads,
+	}
+}
+
+export function deleteSequence(): GSequenceFacts {
+	const gone = ROUTES.map((route) => {
+		const body =
+			route === "lifecycleGet" || route === "readFile"
+				? routeBody(route, [invalidated])
+				: route === "lifecycleHistory"
+					? routeBody(route, [], { current: invalidated, revisions: [oldItem] })
+					: routeBody(route, [])
+		return makeRead(route, "post", body, POST_AT)
+	})
+	return {
+		sequence: "delete",
+		oldMarker: OLD_MARKER,
+		ack: { ok: true },
+		reads: [...preReads(), ...gone],
+	}
+}
+
+export function withPost(
+	facts: GSequenceFacts,
+	route: GRouteId,
+	body: unknown,
+): GSequenceFacts {
+	return {
+		...facts,
+		reads: facts.reads.map((read) =>
+			read.route === route && read.phase === "post"
+				? makeRead(route, "post", body, POST_AT)
+				: read,
+		),
+	}
+}
+
+export function withPre(
+	facts: GSequenceFacts,
+	route: GRouteId,
+	body: unknown,
+): GSequenceFacts {
+	return {
+		...facts,
+		reads: facts.reads.map((read) =>
+			read.route === route && read.phase === "pre"
+				? makeRead(route, "pre", body, PRE_AT)
+				: read,
+		),
+	}
+}
+
+export function caseOf(
+	result: ReturnType<typeof evaluateProbeG>,
+	sequence: string,
+	route: string,
+) {
+	const found = result.cases.find(
+		(item) => item.caseId === `G/${sequence}/${route}`,
+	)
+	if (!found) throw new Error(`missing G/${sequence}/${route}`)
+	return found
 }

@@ -111,13 +111,15 @@ export type GRead = {
 	request: unknown
 }
 
-export type GSequenceFacts = {
-	sequence: "update" | "delete"
+type GSequenceBase = {
 	oldMarker: string
-	newMarker?: string
 	ack: { ok: boolean; reason?: string }
 	reads: GRead[]
 }
+
+export type GSequenceFacts =
+	| (GSequenceBase & { sequence: "update"; newMarker: string })
+	| (GSequenceBase & { sequence: "delete"; newMarker?: never })
 
 export type ProbeGEvaluation = {
 	outcome: Outcome
@@ -161,8 +163,7 @@ function classifyReadFile(text: string, token: string, at: number): OldStatus {
 
 function classifyOld(read: GRead, token: string): OldStatus {
 	if (read.observation.kind !== "response") {
-		const present = containsMarker(read.observation, token)
-		return { present, current: present }
+		return { present: false, current: false }
 	}
 	const body = read.observation.body
 	if (read.route === "readFile") {
@@ -240,7 +241,6 @@ function mutationStatus(facts: GSequenceFacts): {
 	const advanced =
 		view.revision !== undefined && view.revision > (preView?.revision ?? 0)
 	if (
-		facts.newMarker &&
 		view.value.includes(facts.newMarker) &&
 		advanced &&
 		view.state !== "invalidated"
@@ -328,7 +328,7 @@ function historyCase(
 	if (facts.sequence === "update") {
 		if (oldCurrent) return failCase(caseId, "lifecycleHistory", post, control)
 		if (!control) return inconclusive(caseId, "control-not-established")
-		return facts.newMarker && view.value.includes(facts.newMarker)
+		return view.value.includes(facts.newMarker)
 			? passCase(caseId)
 			: inconclusive(caseId, "new-value-absent")
 	}
@@ -361,11 +361,11 @@ function routeCase(
 	if (!control) return inconclusive(caseId, "control-not-established")
 	if (old.unassessable)
 		return inconclusive(caseId, `unassessable:${old.unassessable}`)
-	if (facts.sequence === "update") {
-		const hasNew = facts.newMarker
-			? containsMarker(post.observation, facts.newMarker)
-			: false
-		if (!hasNew) return inconclusive(caseId, "new-value-absent")
+	if (
+		facts.sequence === "update" &&
+		!containsMarker(post.observation, facts.newMarker)
+	) {
+		return inconclusive(caseId, "new-value-absent")
 	}
 	return passCase(caseId, { oldPresentAsHistory: old.present })
 }

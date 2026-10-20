@@ -1,6 +1,8 @@
+import { ECHO_KEYS } from "./markers.ts"
+
 export type Row = Record<string, unknown>
 
-const IGNORED_KEYS: ReadonlySet<string> = new Set(["rendered"])
+const IGNORED_KEYS: ReadonlySet<string> = new Set(["rendered", ...ECHO_KEYS])
 
 export function isRecord(value: unknown): value is Row {
 	return typeof value === "object" && value !== null && !Array.isArray(value)

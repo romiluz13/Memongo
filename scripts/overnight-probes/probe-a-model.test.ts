@@ -51,7 +51,8 @@ describe("evaluateProbeA clean runs", () => {
 	})
 
 	it("exports a stable printed rule and version", () => {
-		expect(PROBE_A_RULE).toMatch(/anywhere in the response/)
+		expect(PROBE_A_RULE).toMatch(/anywhere in the returned content/)
+		expect(PROBE_A_RULE).toMatch(/only echo the request/)
 		expect(PROBE_A_RULE).toMatch(/inconclusive/)
 		expect(PROBE_A_VERSION).toBe("A-1")
 	})

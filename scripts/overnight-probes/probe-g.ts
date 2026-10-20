@@ -164,15 +164,16 @@ async function settle(
 	}
 }
 
-type Spec = {
-	sequence: "update" | "delete"
+type SpecBase = {
 	oldMarker: string
-	newMarker?: string
 	oldValue: string
-	newValue?: string
 	query: string
 	keyPrefix: string
 }
+
+type Spec =
+	| (SpecBase & { sequence: "update"; newMarker: string; newValue: string })
+	| (SpecBase & { sequence: "delete" })
 
 function specs(ctx: ProbeContext): Spec[] {
 	const oldA = ctx.token("zqold")
@@ -253,7 +254,7 @@ async function runSequence(
 			spec.sequence === "update"
 				? ctx.api.updateLifecycleItem({
 						handle,
-						patch: { value: spec.newValue ?? "" },
+						patch: { value: spec.newValue },
 					})
 				: ctx.api.deleteLifecycleItem({
 						handle,
@@ -275,25 +276,29 @@ async function runSequence(
 				}
 	if (ack.ok) {
 		reads.push(await readRoute(ctx, "lifecycleGet", "post", target, handle))
-		const update = spec.sequence === "update"
-		settleLog[spec.sequence] = await settle(ctx, target, (observation) =>
-			update
-				? containsMarker(observation, spec.newMarker ?? "")
-				: evaluateRouteHealth("search", observation).evaluable &&
-					!containsMarker(observation, spec.oldMarker),
+		settleLog[spec.sequence] = await settle(
+			ctx,
+			target,
+			(observation) =>
+				evaluateRouteHealth("search", observation).evaluable &&
+				(spec.sequence === "update"
+					? containsMarker(observation, spec.newMarker)
+					: !containsMarker(observation, spec.oldMarker)),
 		)
 		for (const route of ROUTES) {
 			if (route === "lifecycleGet") continue
 			reads.push(await readRoute(ctx, route, "post", target, handle))
 		}
 	}
-	return {
-		sequence: spec.sequence,
-		oldMarker: spec.oldMarker,
-		...(spec.newMarker ? { newMarker: spec.newMarker } : {}),
-		ack,
-		reads,
-	}
+	return spec.sequence === "update"
+		? {
+				sequence: "update",
+				oldMarker: spec.oldMarker,
+				newMarker: spec.newMarker,
+				ack,
+				reads,
+			}
+		: { sequence: "delete", oldMarker: spec.oldMarker, ack, reads }
 }
 
 export async function runProbeG(ctx: ProbeContext): Promise<ProbeRunResult> {

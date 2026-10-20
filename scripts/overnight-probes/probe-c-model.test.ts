@@ -347,3 +347,32 @@ describe("evaluateProbeC lifecycle evidence", () => {
 		expect(result.reasons.join(" ")).toContain("C/supersede/search")
 	})
 })
+
+describe("evaluateProbeC echoed query fields are not returned content", () => {
+	const echoed = (marker: string) => ({
+		results: [],
+		outcomes: { status: "complete", lanes: [] },
+		query: `what is ${marker}`,
+		metadata: { passes: [{ pass: 1, query: `what is ${marker}` }] },
+	})
+
+	it("does not call the old value served when only the echoed query carries it", () => {
+		const facts = withRead(
+			updateFacts(),
+			read("search", "post", {
+				...(routeBody("search", [newItem]) as object),
+				...echoed(OLD),
+				results: [{ snippet: newItem.value }],
+			}),
+		)
+		const found = caseOf(evaluateProbeC([facts]), "C/update/search")
+		expect(found.outcome).toBe("pass")
+	})
+
+	it("does not take the old value in an echoed query for a satisfied precondition", () => {
+		const facts = withRead(updateFacts(), read("search", "pre", echoed(OLD)))
+		const found = caseOf(evaluateProbeC([facts]), "C/update/search")
+		expect(found.outcome).toBe("inconclusive")
+		expect(found.reason).toBe("precondition:old-not-retrievable")
+	})
+})

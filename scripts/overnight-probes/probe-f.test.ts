@@ -33,6 +33,7 @@ type Options = {
 	vanish?: boolean
 	denyList?: boolean
 	denyKill?: boolean
+	echoQueries?: boolean
 }
 
 type Stored = {
@@ -122,7 +123,16 @@ function createFake(
 				: events
 						.filter((item) => tokens.some((token) => item.body.includes(token)))
 						.map((item) => ({ snippet: item.body }))
-			return { results, outcomes: { status: "complete", lanes: [] } }
+			return {
+				results,
+				outcomes: { status: "complete", lanes: [] },
+				...(options.echoQueries
+					? {
+							query: input.query,
+							metadata: { queriesTried: [input.query] },
+						}
+					: {}),
+			}
 		},
 		getDetailedStatus: async (agentId: string) =>
 			options.statusDegraded
@@ -237,6 +247,13 @@ describe("runLoadPhase", () => {
 	it("fails when acknowledged writes are not stored", async () => {
 		const { ctx, clock } = setup({ dropAcked: true })
 		const facts = await clock.drive(runLoadPhase(ctx, w20))
+		expect(evaluateLoadPhase(facts).predicate).toBe("lost-acked-writes")
+	})
+
+	it("does not count a query the API echoes back as a stored record when sampling", async () => {
+		const { ctx, clock } = setup({ dropAcked: true, echoQueries: true })
+		const facts = await clock.drive(runLoadPhase(ctx, w20))
+		expect(facts.verification).toMatchObject({ sampled: 10, sampledFound: 0 })
 		expect(evaluateLoadPhase(facts).predicate).toBe("lost-acked-writes")
 	})
 

@@ -1,5 +1,5 @@
 import { type RouteHealth, tallyHealth } from "./health.ts"
-import { findMarkers } from "./markers.ts"
+import { bodyMarkers } from "./markers.ts"
 import { isRecord } from "./rows.ts"
 import type { CaseResult, Observation, Outcome } from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
@@ -385,10 +385,10 @@ function detailedCase(input: NonNullable<ProbeDInput["detailed"]>): CaseResult {
 		candidate.observation.kind === "response"
 			? candidate.observation.body
 			: undefined
-	const found = findMarkers(bodyOf(read), markers)
+	const found = bodyMarkers(bodyOf(read), markers)
 	const outside = found.filter((label) => !inside.includes(label))
 	const controlOutside = control.health.evaluable
-		? findMarkers(bodyOf(control), markers).filter(
+		? bodyMarkers(bodyOf(control), markers).filter(
 				(label) => !inside.includes(label),
 			)
 		: []

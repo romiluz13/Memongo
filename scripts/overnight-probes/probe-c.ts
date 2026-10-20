@@ -7,7 +7,7 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import { liveHandle, MAX_POLLS, pollUntil, type Scope, stamped } from "./kit.ts"
-import { containsMarker } from "./markers.ts"
+import { bodyContains, containsMarker } from "./markers.ts"
 import {
 	type CSequenceFacts,
 	evaluateProbeC,
@@ -173,7 +173,8 @@ async function runUpdate(
 		const settle = await pollUntil(
 			ctx,
 			() => searchRead(ctx, scope, query, "post"),
-			(read) => containsMarker(read.observation, newMarker),
+			(read) =>
+				read.health.evaluable && containsMarker(read.observation, newMarker),
 		)
 		settled = settle.satisfied
 		reads.push(
@@ -309,7 +310,8 @@ async function observeAutomaticCorrection(
 	const settle = await pollUntil(
 		ctx,
 		() => searchRead(ctx, scope, query, "post"),
-		(read) => containsMarker(read.observation, newMarker),
+		(read) =>
+			read.health.evaluable && containsMarker(read.observation, newMarker),
 	)
 	const detailed = await searchRead(ctx, scope, query, "post", "searchDetailed")
 	const rank = (read: GRead, marker: string) => {
@@ -317,7 +319,7 @@ async function observeAutomaticCorrection(
 			read.observation.kind === "response" ? read.observation.body : undefined,
 		)
 		const list = Array.isArray(body?.results) ? body.results : []
-		return list.findIndex((row) => containsMarker(row, marker))
+		return list.findIndex((row) => bodyContains(row, marker))
 	}
 	return {
 		observed: true,

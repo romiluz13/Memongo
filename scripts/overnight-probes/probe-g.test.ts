@@ -16,6 +16,7 @@ type Options = {
 	deletedStillServed?: GRouteId
 	updateFails?: boolean
 	searchNeverShowsNew?: boolean
+	degradeSearchAfterUpdate?: boolean
 	clock?: ReturnType<typeof createFakeClock>
 }
 
@@ -28,6 +29,7 @@ type Stored = GItem & {
 function createFakeG(options: Options = {}) {
 	const items = new Map<string, Stored>()
 	let counter = 0
+	let updated = false
 	const clock = options.clock ?? createFakeClock()
 	const byHandle = (handle: Json) => {
 		const key = (handle.structured as Json).key as string
@@ -101,6 +103,7 @@ function createFakeG(options: Options = {}) {
 				if (options.updateFails)
 					throw httpError(409, "MEMORY_LIFECYCLE_CONFLICT")
 				const item = byHandle(input.handle as Json)
+				updated = true
 				item.revisions.push(plain(item))
 				item.value = (input.patch as Json).value as string
 				item.revision += 1
@@ -114,7 +117,12 @@ function createFakeG(options: Options = {}) {
 				item.validTo = new Date(clock.now()).toISOString()
 				return routeBody("lifecycleGet", [plain(item)])
 			},
-			search: broad("search"),
+			search: async () => {
+				const body = routeBody("search", shownFor("search")) as Json
+				return options.degradeSearchAfterUpdate && updated
+					? { ...body, outcomes: { status: "partial", lanes: [] } }
+					: body
+			},
 			searchDetailed: broad("searchDetailed"),
 			profile: broad("profile"),
 			hydrateActiveSlate: broad("hydrateActiveSlate"),
@@ -223,6 +231,19 @@ describe("runProbeG against faulty fakes", () => {
 		expect(
 			result.cases.find((item) => item.caseId === "G/update/search")?.outcome,
 		).toBe("inconclusive")
+	})
+
+	it("does not treat a degraded response that contains the new value as the update having settled", async () => {
+		const { ctx } = fakeContext({ degradeSearchAfterUpdate: true })
+		const result = await runProbeG(ctx)
+		const settle = (
+			result.extra?.settle as Record<
+				string,
+				{ satisfied: boolean; polls: number }
+			>
+		).update
+		expect(settle?.satisfied).toBe(false)
+		expect(settle?.polls).toBe(SETTLE_MAX_MS / 1_000 + 1)
 	})
 
 	it("stops cleanly when the budget refuses mid-sequence", async () => {

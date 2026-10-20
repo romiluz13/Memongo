@@ -1,5 +1,5 @@
 import { tallyHealth } from "./health.ts"
-import { containsMarker } from "./markers.ts"
+import { bodyContains, containsMarker } from "./markers.ts"
 import type { GRead } from "./probe-g-model.ts"
 import { historical, isRecord, labelled, textField, viewOf } from "./rows.ts"
 import type { CaseResult, Observation, Outcome } from "./types.ts"
@@ -108,7 +108,7 @@ function results(read: GRead): unknown[] {
 
 function rowFor(read: GRead, marker: string) {
 	const list = results(read)
-	const index = list.findIndex((row) => containsMarker(row, marker))
+	const index = list.findIndex((row) => bodyContains(row, marker))
 	const row = index === -1 ? undefined : list[index]
 	return { index, row: isRecord(row) ? row : undefined }
 }

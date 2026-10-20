@@ -5,6 +5,7 @@ import {
 	httpError,
 	type Json,
 } from "./fake-api.ts"
+import { MAX_POLLS } from "./kit.ts"
 import { planProbeC, runProbeC } from "./probe-c.ts"
 import { type GItem, routeBody } from "./probe-g-fixtures.ts"
 
@@ -14,6 +15,7 @@ type Options = {
 	updateNeverIndexed?: boolean
 	historyDropsRevisions?: boolean
 	dropInvalidatedByLink?: boolean
+	degradeUpdateSearch?: boolean
 }
 
 type Stored = GItem & {
@@ -28,6 +30,8 @@ function createFakeC(options: Options = {}) {
 	const items = new Map<string, Stored>()
 	const events: { body: string; timestamp: string }[] = []
 	let counter = 0
+	let updated = false
+	const tally = { degradedSearches: 0 }
 	const plain = (item: Stored): GItem => ({
 		key: item.key,
 		value: item.value,
@@ -93,6 +97,7 @@ function createFakeC(options: Options = {}) {
 		updateLifecycleItem: async (input: Json) => {
 			if (options.updateFails) throw httpError(409, "MEMORY_LIFECYCLE_CONFLICT")
 			const item = byKey(keyOf(input.handle as Json))
+			updated = true
 			item.revisions.push(plain(item))
 			item.value = (input.patch as Json).value as string
 			item.revision += 1
@@ -122,16 +127,24 @@ function createFakeC(options: Options = {}) {
 					: base.text,
 			}
 		},
-		search: async () => ({
-			...(routeBody("search", rows()) as Json),
-			results: [
-				...rows().map((row) => ({ snippet: row.value })),
-				...eventRows(),
-			],
-		}),
+		search: async (input: Json) => {
+			const degraded =
+				options.degradeUpdateSearch === true &&
+				updated &&
+				String(input.query).includes("launch pad")
+			if (degraded) tally.degradedSearches += 1
+			return {
+				...(routeBody("search", rows()) as Json),
+				results: [
+					...rows().map((row) => ({ snippet: row.value })),
+					...eventRows(),
+				],
+				...(degraded ? { outcomes: { status: "partial", lanes: [] } } : {}),
+			}
+		},
 		searchDetailed: async () => routeBody("searchDetailed", rows()),
 	}
-	return { api, clock, items, events }
+	return { api, clock, items, events, tally }
 }
 
 function context(options: Options = {}) {
@@ -187,6 +200,16 @@ describe("runProbeC", () => {
 		)
 		expect(search?.outcome).toBe("inconclusive")
 		expect(search?.reason).toMatch(/async-update-unobserved/)
+	})
+
+	it("does not treat a degraded response that contains the new value as the update having settled", async () => {
+		const { ctx, fake } = context({ degradeUpdateSearch: true })
+		const result = await runProbeC(ctx)
+		expect(fake.tally.degradedSearches).toBe(MAX_POLLS)
+		const search = result.cases.find(
+			(item) => item.caseId === "C/update/search",
+		)
+		expect(search?.outcome).toBe("inconclusive")
 	})
 
 	it("fails when history keeps no revision of the old value", async () => {

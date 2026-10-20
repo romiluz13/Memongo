@@ -64,7 +64,7 @@ export function classifyRead(poll: EPoll, marker: string): ReadClass {
 			? "explicit-not-ready"
 			: "error"
 	}
-	if (containsMarker(observation.body, marker)) {
+	if (containsMarker(observation, marker)) {
 		return health.evaluable ? "visible" : "degraded-visible"
 	}
 	if (health.healthy && health.evaluable) return "empty-silent"

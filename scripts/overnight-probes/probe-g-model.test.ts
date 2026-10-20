@@ -1,132 +1,25 @@
 import { describe, expect, it } from "vitest"
-import { type GItem, makeRead, routeBody } from "./probe-g-fixtures.ts"
+import {
+	caseOf,
+	deleteSequence,
+	type GItem,
+	invalidated,
+	newItem,
+	oldItem,
+	ROUTES,
+	routeBody,
+	updateSequence,
+	withPost,
+	withPre,
+} from "./probe-g-fixtures.ts"
 import {
 	evaluateProbeG,
 	G_GAPS,
-	G_ROUTES,
-	type GRead,
-	type GRouteId,
 	type GSequenceFacts,
 	PROBE_G_RULE,
 	PROBE_G_VERSION,
 	requiredCaseIdsG,
 } from "./probe-g-model.ts"
-
-const OLD_MARKER = "zqold7f3a"
-const NEW_MARKER = "zqnew7f3a"
-const ROUTES = Object.keys(G_ROUTES) as GRouteId[]
-const PRE_AT = 1_000
-const POST_AT = 5_000
-const PAST = new Date(2_000).toISOString()
-
-const oldItem: GItem = {
-	value: `The launch codename is ${OLD_MARKER}`,
-	revision: 1,
-	state: "active",
-}
-const newItem: GItem = {
-	value: `The launch codename is ${NEW_MARKER}`,
-	revision: 2,
-	state: "active",
-}
-const invalidated: GItem = {
-	...oldItem,
-	revision: 2,
-	state: "invalidated",
-	validTo: PAST,
-}
-
-function preReads(): GRead[] {
-	return ROUTES.map((route) =>
-		makeRead(
-			route,
-			"pre",
-			routeBody(route, [oldItem], { current: oldItem, revisions: [] }),
-			PRE_AT,
-		),
-	)
-}
-
-function updateSequence(): GSequenceFacts {
-	const reads = [
-		...preReads(),
-		...ROUTES.map((route) =>
-			makeRead(
-				route,
-				"post",
-				routeBody(route, [newItem], { current: newItem, revisions: [oldItem] }),
-				POST_AT,
-			),
-		),
-	]
-	return {
-		sequence: "update",
-		oldMarker: OLD_MARKER,
-		newMarker: NEW_MARKER,
-		ack: { ok: true },
-		reads,
-	}
-}
-
-function deleteSequence(): GSequenceFacts {
-	const gone = ROUTES.map((route) => {
-		const body =
-			route === "lifecycleGet" || route === "readFile"
-				? routeBody(route, [invalidated])
-				: route === "lifecycleHistory"
-					? routeBody(route, [], { current: invalidated, revisions: [oldItem] })
-					: routeBody(route, [])
-		return makeRead(route, "post", body, POST_AT)
-	})
-	return {
-		sequence: "delete",
-		oldMarker: OLD_MARKER,
-		ack: { ok: true },
-		reads: [...preReads(), ...gone],
-	}
-}
-
-function withPost(
-	facts: GSequenceFacts,
-	route: GRouteId,
-	body: unknown,
-): GSequenceFacts {
-	return {
-		...facts,
-		reads: facts.reads.map((read) =>
-			read.route === route && read.phase === "post"
-				? makeRead(route, "post", body, POST_AT)
-				: read,
-		),
-	}
-}
-
-function withPre(
-	facts: GSequenceFacts,
-	route: GRouteId,
-	body: unknown,
-): GSequenceFacts {
-	return {
-		...facts,
-		reads: facts.reads.map((read) =>
-			read.route === route && read.phase === "pre"
-				? makeRead(route, "pre", body, PRE_AT)
-				: read,
-		),
-	}
-}
-
-function caseOf(
-	result: ReturnType<typeof evaluateProbeG>,
-	sequence: string,
-	route: string,
-) {
-	const found = result.cases.find(
-		(item) => item.caseId === `G/${sequence}/${route}`,
-	)
-	if (!found) throw new Error(`missing G/${sequence}/${route}`)
-	return found
-}
 
 describe("evaluateProbeG clean sequences", () => {
 	it("passes when both sequences behave on every assessable route", () => {
