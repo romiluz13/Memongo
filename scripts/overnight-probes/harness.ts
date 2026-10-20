@@ -5,6 +5,7 @@ export const OWNER_COLLECTION = "__probe_owner"
 export const BOOT_DEADLINE_MS = 300_000
 const POLL_MS = 1000
 const STOP_GRACE_MS = 15_000
+const API_ENTRY = "apps/api/dist/server.js"
 const TAIL_LINES = 40
 const TAIL_LINE_CHARS = 300
 const HEX8 = /^[0-9a-f]{8}$/
@@ -187,7 +188,6 @@ export async function startHarness(
 		mongoUri: string
 		voyageKey: string
 		baseEnv?: Readonly<Record<string, string | undefined>>
-		apiEntry?: string
 	},
 ): Promise<Harness> {
 	const safe = (text: string) => deps.sanitizer.text(text)
@@ -203,7 +203,6 @@ export async function startHarness(
 	const apiKey = `probe-${deps.randomUuid()}${deps.randomUuid()}`
 	deps.sanitizer.register(apiKey)
 	const appName = `${APP_NAME_PREFIX}${database.slice(DATABASE_PREFIX.length)}`
-	const apiEntry = input.apiEntry ?? "apps/api/dist/server.js"
 
 	async function stopAll(): Promise<CleanupReport> {
 		if (stopReport) return stopReport
@@ -284,7 +283,7 @@ export async function startHarness(
 		if (await deps.mongo.databaseExists(database)) {
 			return refuse("collision", "generated database name already exists")
 		}
-		if (!deps.fileExists(apiEntry)) {
+		if (!deps.fileExists(API_ENTRY)) {
 			return refuse(
 				"api-not-built",
 				"API build output is missing; run bun run build",
@@ -319,7 +318,7 @@ export async function startHarness(
 			configPath: configFile.path,
 		})
 		try {
-			child = deps.spawnApi(env, apiEntry)
+			child = deps.spawnApi(env, API_ENTRY)
 		} catch (error) {
 			return refuse(
 				"spawn-failed",

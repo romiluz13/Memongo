@@ -27,9 +27,3 @@ export async function observeCall(
 		}
 	}
 }
-
-export function isResponse(
-	observation: Observation,
-): observation is Extract<Observation, { kind: "response" }> {
-	return observation.kind === "response"
-}

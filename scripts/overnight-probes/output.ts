@@ -52,13 +52,3 @@ export function reportFatal(
 		sinks.stderr.write(FATAL_CONSTANT)
 	}
 }
-
-export function createWriterForEnv(
-	env: Record<string, string | undefined>,
-	sinks: OutputSinks,
-): EvidenceWriter {
-	return createEvidenceWriter({
-		...sinks,
-		sanitizer: createSanitizer({ secretValues: collectSecretValues(env) }),
-	})
-}

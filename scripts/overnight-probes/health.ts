@@ -340,8 +340,6 @@ export function evaluateRouteHealth(
 		case "traceChain":
 			issues.push(...traceChainIssues(body))
 			break
-		case "lifecycleGet":
-			break
 		default:
 			break
 	}
