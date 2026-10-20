@@ -34,6 +34,7 @@ type Options = {
 	denyList?: boolean
 	denyKill?: boolean
 	echoQueries?: boolean
+	badOpid?: boolean
 }
 
 type Stored = {
@@ -168,7 +169,7 @@ function createFake(
 			if (options.vanish && listings % 2 === 0) return []
 			const foreign = options.foreignOps === true
 			return [...inflight.values()].map((op) => ({
-				opid: op.opid,
+				opid: options.badOpid ? undefined : op.opid,
 				active: true,
 				op: "update",
 				ns: foreign ? "other_db.events" : `${DATABASE}.events`,
@@ -361,6 +362,13 @@ describe("runKill", () => {
 
 	it("never kills an operation of another database or client", async () => {
 		const { ctx, clock, killCalls } = killSetup({ foreignOps: true })
+		const facts = await clock.drive(runKill(ctx))
+		expect(killCalls).toHaveLength(0)
+		expect(evaluateKill(facts).reason).toBe("no-owned-target")
+	})
+
+	it("never calls killOp for an operation whose id is not a number or a string", async () => {
+		const { ctx, clock, killCalls } = killSetup({ badOpid: true })
 		const facts = await clock.drive(runKill(ctx))
 		expect(killCalls).toHaveLength(0)
 		expect(evaluateKill(facts).reason).toBe("no-owned-target")

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest"
 import {
+	eligibleOp,
 	evaluateKill,
 	type FKillFacts,
-	isEligibleOp,
+	type OpOwnership,
 	pickEligibleOp,
 } from "./probe-f-model.ts"
+
+const isEligibleOp = (op: unknown, ownership: OpOwnership) =>
+	eligibleOp(op, ownership) !== undefined
 
 describe("eligible operations", () => {
 	const ownership = {
@@ -77,6 +81,28 @@ describe("eligible operations", () => {
 				ownership,
 			),
 		).toBe(true)
+	})
+
+	it("accepts an integer or a non-empty string operation id", () => {
+		expect(pickEligibleOp([op({ opid: 7 })], ownership)?.opid).toBe(7)
+		expect(pickEligibleOp([op({ opid: "shardA:123" })], ownership)?.opid).toBe(
+			"shardA:123",
+		)
+	})
+
+	it.each([
+		["missing", undefined],
+		["null", null],
+		["an object", { $numberLong: "5" }],
+		["a boolean", true],
+		["not a number", Number.NaN],
+		["infinite", Number.POSITIVE_INFINITY],
+		["fractional", 1.5],
+		["an empty string", ""],
+		["a blank string", "  "],
+	])("rejects an otherwise eligible operation whose opid is %s", (_label, opid) => {
+		expect(isEligibleOp(op({ opid }), ownership)).toBe(false)
+		expect(pickEligibleOp([op({ opid })], ownership)).toBeUndefined()
 	})
 
 	it("picks the first eligible operation and ignores everything else", () => {

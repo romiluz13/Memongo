@@ -13,8 +13,8 @@ import { containsMarker } from "./markers.ts"
 import { verifyCount } from "./probe-f-load.ts"
 import {
 	classifyWrite,
+	eligibleOp,
 	type FKillFacts,
-	isEligibleOp,
 	type OpOwnership,
 	pickEligibleOp,
 } from "./probe-f-model.ts"
@@ -208,21 +208,18 @@ async function watch(
 			if (pick) {
 				state.eligibleSeen += 1
 				const again = await admin.currentOps()
-				const still = again.find(
-					(op) =>
-						isRecord(op) &&
-						op.opid === pick.opid &&
-						isEligibleOp(op, ownership()),
+				const still = again.some(
+					(op) => eligibleOp(op, ownership())?.opid === pick.opid,
 				)
 				if (still) {
 					const reservation = ctx.budget.reserveCount(KILL_OP)
 					try {
-						await admin.killOp(pick.opid as number | string)
+						await admin.killOp(pick.opid)
 					} finally {
 						ctx.budget.settle(reservation)
 					}
 					state.killed = {
-						opid: pick.opid as number | string,
+						opid: pick.opid,
 						at: ctx.clock.mono(),
 						command: JSON.stringify(pick.command ?? {}),
 					}

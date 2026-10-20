@@ -261,30 +261,45 @@ export function evaluateLoadPhase(facts: FPhaseFacts): CaseResult {
 	}
 }
 
-export function isEligibleOp(op: unknown, ownership: OpOwnership): boolean {
-	if (!isRecord(op) || op.active !== true) return false
-	if (typeof op.op !== "string" || !ELIGIBLE_OPS.has(op.op)) return false
+export type EligibleOp = { opid: number | string; command: unknown }
+
+function usableOpid(opid: unknown): opid is number | string {
+	if (typeof opid === "number") return Number.isInteger(opid)
+	return typeof opid === "string" && opid.trim().length > 0
+}
+
+export function eligibleOp(
+	op: unknown,
+	ownership: OpOwnership,
+): EligibleOp | undefined {
+	if (!isRecord(op) || op.active !== true) return undefined
+	if (!usableOpid(op.opid)) return undefined
+	if (typeof op.op !== "string" || !ELIGIBLE_OPS.has(op.op)) return undefined
 	const prefix = `${ownership.database}.`
 	if (
 		typeof op.ns !== "string" ||
 		!op.ns.startsWith(prefix) ||
 		op.ns.length === prefix.length
 	) {
-		return false
+		return undefined
 	}
-	if (op.appName !== ownership.appName) return false
-	if (isRecord(op.command) && "$currentOp" in op.command) return false
+	if (op.appName !== ownership.appName) return undefined
+	if (isRecord(op.command) && "$currentOp" in op.command) return undefined
 	const text = JSON.stringify(op.command ?? {})
 	return ownership.identities.some((identity) => text.includes(identity))
+		? { opid: op.opid, command: op.command }
+		: undefined
 }
 
 export function pickEligibleOp(
 	ops: readonly unknown[],
 	ownership: OpOwnership,
-): Record<string, unknown> | undefined {
-	return ops.find((op) => isEligibleOp(op, ownership)) as
-		| Record<string, unknown>
-		| undefined
+): EligibleOp | undefined {
+	for (const op of ops) {
+		const found = eligibleOp(op, ownership)
+		if (found) return found
+	}
+	return undefined
 }
 
 export function evaluateKill(facts: FKillFacts): CaseResult {
