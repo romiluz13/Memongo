@@ -1,6 +1,7 @@
 import { evaluateRouteHealth } from "./health.ts"
 import {
 	type evaluateProbeG,
+	expectationFor,
 	G_ROUTES,
 	type GRead,
 	type GRouteId,
@@ -65,6 +66,12 @@ export function routeBody(
 			}
 		case "search":
 			return {
+				results: shown.map((item) => ({ snippet: item.value })),
+				outcomes: COMPLETE,
+			}
+		case "relevanceExplain":
+			return {
+				health: shown.length > 0 ? "ok" : "degraded",
 				results: shown.map((item) => ({ snippet: item.value })),
 				outcomes: COMPLETE,
 			}
@@ -159,9 +166,7 @@ export function makeRead(
 		phase,
 		at,
 		observation,
-		health: evaluateRouteHealth(route, observation, {
-			sections: route === "buildContextBundle" ? ["query-evidence"] : undefined,
-		}),
+		health: evaluateRouteHealth(route, observation, expectationFor(route)),
 		request: { route },
 	}
 }

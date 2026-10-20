@@ -15,6 +15,7 @@ import { resolveLiveHandle, SETTLE_MAX_MS, SETTLE_STEP_MS } from "./kit.ts"
 import { containsMarker } from "./markers.ts"
 import {
 	evaluateProbeG,
+	expectationFor,
 	G_ROUTES,
 	type GRead,
 	type GRouteId,
@@ -74,6 +75,13 @@ const CALLS: Record<GRouteId, Call> = {
 		}),
 	buildContextBundle: (api, target) =>
 		api.buildContextBundle({ query: target.query, ...coords(target) }),
+	relevanceExplain: (api, target) =>
+		api.relevanceExplain({
+			query: target.query,
+			agentId: target.agentId,
+			sourceScope: "structured",
+			maxResults: 20,
+		}),
 }
 
 export function planProbeG(): { "api-read": number; "api-write": number } {
@@ -117,11 +125,7 @@ async function readRoute(
 		phase,
 		at,
 		observation,
-		health: evaluateRouteHealth(
-			route,
-			observation,
-			route === "buildContextBundle" ? { sections: ["query-evidence"] } : {},
-		),
+		health: evaluateRouteHealth(route, observation, expectationFor(route)),
 		request: {
 			route,
 			phase,
@@ -296,10 +300,11 @@ async function runSequence(
 }
 
 export async function runProbeG(ctx: ProbeContext): Promise<ProbeRunResult> {
+	const agentId = ctx.agentId()
 	const base = {
-		agentId: ctx.agentId(),
-		scope: "workspace" as MemongoScope,
-		scopeRef: ctx.token("probe-g-"),
+		agentId,
+		scope: "agent" as MemongoScope,
+		scopeRef: `agent:${agentId}`,
 	}
 	const facts: GSequenceFacts[] = []
 	const notes: string[] = []

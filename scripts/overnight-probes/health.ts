@@ -26,7 +26,10 @@ export type RouteHealth = {
 	issues: string[]
 }
 
-export type HealthExpectation = { sections?: string[] }
+export type HealthExpectation = {
+	sections?: string[]
+	acceptDegradedVerdict?: boolean
+}
 
 type Json = Record<string, unknown>
 
@@ -319,10 +322,18 @@ export function evaluateRouteHealth(
 			}
 			break
 		}
-		case "relevanceExplain":
-			if (body.health !== "ok") issues.push(`health:${String(body.health)}`)
+		case "relevanceExplain": {
+			const usable =
+				body.health === "ok" ||
+				(expectation.acceptDegradedVerdict === true &&
+					body.health === "degraded")
+			if (!usable) issues.push(`health:${String(body.health)}`)
 			if (!Array.isArray(body.results)) issues.push("missing:results")
+			if (body.outcomes !== undefined) {
+				issues.push(...outcomesIssues(body.outcomes))
+			}
 			break
+		}
 		case "scanNovelty":
 			if (!Array.isArray(body.events)) issues.push("missing:events")
 			break

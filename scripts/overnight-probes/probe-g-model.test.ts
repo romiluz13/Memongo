@@ -34,7 +34,7 @@ describe("evaluateProbeG clean sequences", () => {
 		const names = result.gaps.map((gap) => gap.route)
 		expect(names).toEqual(G_GAPS.map((gap) => gap.route))
 		expect(names).toContain("traceChain")
-		expect(names).toContain("relevanceExplain")
+		expect(names).not.toContain("relevanceExplain")
 		expect(result.gaps.every((gap) => gap.reason.length > 15)).toBe(true)
 	})
 
@@ -43,9 +43,25 @@ describe("evaluateProbeG clean sequences", () => {
 		expect(requiredCaseIdsG()).toContain("G/update/search")
 	})
 
+	it("requires relevanceExplain on both sequences", () => {
+		expect(requiredCaseIdsG()).toContain("G/update/relevanceExplain")
+		expect(requiredCaseIdsG()).toContain("G/delete/relevanceExplain")
+		const missing = evaluateProbeG([
+			{
+				...updateSequence(),
+				reads: updateSequence().reads.filter(
+					(read) => read.route !== "relevanceExplain",
+				),
+			},
+			deleteSequence(),
+		])
+		expect(missing.outcome).not.toBe("pass")
+		expect(missing.reasons.join(" ")).toContain("G/update/relevanceExplain")
+	})
+
 	it("prints a rule and a version", () => {
 		expect(PROBE_G_RULE).toMatch(/superseded/)
-		expect(PROBE_G_VERSION).toBe("G-1")
+		expect(PROBE_G_VERSION).toBe("G-2")
 	})
 })
 

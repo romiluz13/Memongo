@@ -46,6 +46,7 @@ describe("G contract basis", () => {
 		"state",
 		"buildDiscoveryProjection",
 		"buildContextBundle",
+		"relevanceExplain",
 	]
 
 	it("tags every route judged on a code-derived contract and the rest as documented", () => {
@@ -75,6 +76,59 @@ describe("G contract basis", () => {
 		)
 		expect(pending.outcome).toBe("inconclusive")
 		expect(pending.contractBasis).toBe("code-derived")
+	})
+})
+
+describe("G relevanceExplain", () => {
+	it("fails when the explained search still returns the old value as current", () => {
+		const stale = withPost(
+			updateSequence(),
+			"relevanceExplain",
+			routeBody("relevanceExplain", [oldItem]),
+		)
+		const found = caseOf(evaluateProbeG([stale]), "update", "relevanceExplain")
+		expect(found.outcome).toBe("fail")
+		expect(found.predicate).toBe("old-as-current:relevanceExplain")
+		expect(found.controlEligible).toBe(true)
+	})
+
+	it("passes a deletion whose explained search found nothing, despite the engine's degraded verdict", () => {
+		const emptied = withPost(
+			deleteSequence(),
+			"relevanceExplain",
+			routeBody("relevanceExplain", []),
+		)
+		const body = routeBody("relevanceExplain", []) as { health: string }
+		expect(body.health).toBe("degraded")
+		expect(
+			caseOf(evaluateProbeG([emptied]), "delete", "relevanceExplain").outcome,
+		).toBe("pass")
+	})
+
+	it("is inconclusive when the explain run measured nothing", () => {
+		const unmeasured = withPost(deleteSequence(), "relevanceExplain", {
+			health: "insufficient-data",
+			results: [],
+			outcomes: { status: "partial", lanes: [] },
+		})
+		const found = caseOf(
+			evaluateProbeG([unmeasured]),
+			"delete",
+			"relevanceExplain",
+		)
+		expect(found.outcome).toBe("inconclusive")
+		expect(found.reason).toMatch(/unevaluable:.*health:insufficient-data/)
+	})
+
+	it("is inconclusive without a pre-read control that surfaced the item", () => {
+		const blind = withPre(
+			updateSequence(),
+			"relevanceExplain",
+			routeBody("relevanceExplain", []),
+		)
+		const found = caseOf(evaluateProbeG([blind]), "update", "relevanceExplain")
+		expect(found.outcome).toBe("inconclusive")
+		expect(found.reason).toBe("control-not-established")
 	})
 })
 

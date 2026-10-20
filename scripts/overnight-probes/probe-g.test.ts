@@ -32,6 +32,8 @@ function createFakeG(options: Options = {}) {
 	let counter = 0
 	let updated = false
 	const tally = { mutations: 0 }
+	const explained: Json[] = []
+	const written: Json[] = []
 	const clock = options.clock ?? createFakeClock()
 	const byHandle = (handle: Json) => {
 		const key = (handle.structured as Json).key as string
@@ -76,9 +78,12 @@ function createFakeG(options: Options = {}) {
 		clock,
 		items,
 		tally,
+		explained,
+		written,
 		api: {
 			writeStructured: async (input: Json) => {
 				counter += 1
+				written.push(input)
 				const entry = input.entry as Json
 				items.set(entry.key as string, {
 					key: entry.key as string,
@@ -147,6 +152,10 @@ function createFakeG(options: Options = {}) {
 			state: broad("state"),
 			buildDiscoveryProjection: broad("buildDiscoveryProjection"),
 			buildContextBundle: broad("buildContextBundle"),
+			relevanceExplain: async (input: Json) => {
+				explained.push(input)
+				return routeBody("relevanceExplain", shownFor("relevanceExplain"))
+			},
 			readFile: async (input: Json) => {
 				const key = (input.relPath as string)
 					.split(":")[2]
@@ -170,7 +179,7 @@ describe("runProbeG against a correct fake", () => {
 		const result = await runProbeG(ctx)
 		expect(result.cases.filter((item) => item.outcome !== "pass")).toEqual([])
 		expect(result.outcome).toBe("pass")
-		expect(result.cases).toHaveLength(20)
+		expect(result.cases).toHaveLength(22)
 		expect(result.extra?.gaps).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ route: "traceChain" }),
@@ -186,6 +195,27 @@ describe("runProbeG against a correct fake", () => {
 		expect(counted["api-write"]).toBe(plan["api-write"])
 		expect(counted["api-read"]).toBeLessThanOrEqual(plan["api-read"])
 		expect(counted["api-read"]).toBeGreaterThanOrEqual(40)
+	})
+
+	it("reads relevanceExplain for the same agent over the structured lane at the agent identity it defaults to", async () => {
+		const { ctx, fake } = fakeContext()
+		const result = await runProbeG(ctx)
+		const agentId = result.extra?.agentId as string
+		expect(fake.explained.length).toBe(4)
+		for (const call of fake.explained) {
+			expect(call.agentId).toBe(agentId)
+			expect(call.sourceScope).toBe("structured")
+			expect(typeof call.query).toBe("string")
+		}
+		for (const input of fake.written) {
+			const entry = input.entry as Json
+			expect(entry.scope).toBe("agent")
+			expect(entry.scopeRef).toBe(`agent:${agentId}`)
+		}
+		expect(
+			result.cases.find((item) => item.caseId === "G/update/relevanceExplain")
+				?.outcome,
+		).toBe("pass")
 	})
 
 	it("sends lifecycle reads with a live handle and the fresh revision", async () => {
@@ -204,6 +234,16 @@ describe("runProbeG against faulty fakes", () => {
 		expect(failed.map((item) => item.caseId)).toEqual(["G/update/profile"])
 		expect(failed[0]?.predicate).toBe("old-as-current:profile")
 		expect(result.outcome).toBe("fail")
+	})
+
+	it("fails the explained search when it still serves the old value", async () => {
+		const { ctx } = fakeContext({ staleRoute: "relevanceExplain" })
+		const result = await runProbeG(ctx)
+		const failed = result.cases.filter((item) => item.outcome === "fail")
+		expect(failed.map((item) => item.caseId)).toEqual([
+			"G/update/relevanceExplain",
+		])
+		expect(failed[0]?.predicate).toBe("old-as-current:relevanceExplain")
 	})
 
 	it("fails a deleted value that a route still serves as current", async () => {

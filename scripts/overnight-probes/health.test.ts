@@ -373,6 +373,50 @@ describe("evaluateRouteHealth: admin routes", () => {
 		expect(h.issues).toContain("health:degraded")
 	})
 
+	it("relevanceExplain: an opted-in caller accepts a degraded verdict but never an unmeasured run", () => {
+		const accept = { acceptDegradedVerdict: true }
+		expect(
+			evaluateRouteHealth(
+				"relevanceExplain",
+				ok("relevanceExplain", { health: "degraded", results: [] }),
+				accept,
+			).evaluable,
+		).toBe(true)
+		const unmeasured = evaluateRouteHealth(
+			"relevanceExplain",
+			ok("relevanceExplain", { health: "insufficient-data", results: [] }),
+			accept,
+		)
+		expect(unmeasured.evaluable).toBe(false)
+		expect(unmeasured.issues).toContain("health:insufficient-data")
+	})
+
+	it("relevanceExplain: failed lanes make the run unhealthy even when the verdict is ok", () => {
+		const lanes = [
+			{
+				lane: "vector",
+				stage: "x",
+				outcome: "failed",
+				reason: "query-timeout",
+			},
+		]
+		const h = evaluateRouteHealth(
+			"relevanceExplain",
+			ok("relevanceExplain", {
+				health: "ok",
+				results: [],
+				outcomes: { status: "partial", lanes },
+			}),
+		)
+		expect(h.healthy).toBe(false)
+		expect(h.issues).toEqual(
+			expect.arrayContaining([
+				"outcomes:partial",
+				expect.stringMatching(/lane-failed/),
+			]),
+		)
+	})
+
 	it("traceChain needs a nodes array", () => {
 		expect(
 			evaluateRouteHealth(

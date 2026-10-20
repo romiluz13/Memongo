@@ -1,4 +1,8 @@
-import { type RouteHealth, tallyHealth } from "./health.ts"
+import {
+	type HealthExpectation,
+	type RouteHealth,
+	tallyHealth,
+} from "./health.ts"
 import { containsMarker } from "./markers.ts"
 import {
 	historical,
@@ -17,10 +21,10 @@ import type {
 } from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
 
-export const PROBE_G_VERSION = "G-1"
+export const PROBE_G_VERSION = "G-2"
 
 export const PROBE_G_RULE =
-	"After a mutation is confirmed by the lifecycle record, a superseded value fails a route when it is returned as current: on a row without a historical label, anywhere on a current-only route, or as the current history entry. A row is historical only when its state or trust says invalidated or its validTo has passed. A case passes only when the response was healthy, complete and evaluable, a pre-mutation read of the same route surfaced the item, the old value is absent or historical, and for an update the new value is present. A route whose rows carry no currentness field is unassessable, which is inconclusive. Rank and wording are never evidence."
+	"After a mutation is confirmed by the lifecycle record, a superseded value fails a route when it is returned as current: on a row without a historical label, anywhere on a current-only route, or as the current history entry. A row is historical only when its state or trust says invalidated or its validTo has passed. A case passes only when the response was healthy, complete and evaluable, a pre-mutation read of the same route surfaced the item, the old value is absent or historical, and for an update the new value is present. A route whose rows carry no currentness field is unassessable, which is inconclusive. The relevanceExplain route runs the same search pipeline for the agent's default identity and is judged like search; its own verdict of degraded, which means no or weak results, does not make a completed search unevaluable, but a run that measured nothing does. Rank and wording are never evidence."
 
 export type GRouteId =
 	| "lifecycleGet"
@@ -33,6 +37,7 @@ export type GRouteId =
 	| "state"
 	| "buildDiscoveryProjection"
 	| "buildContextBundle"
+	| "relevanceExplain"
 
 export type GBasis = "revision" | "history" | "row-state" | "contract"
 
@@ -77,6 +82,10 @@ export const G_ROUTES: Record<GRouteId, { basis: GBasis; note: string }> = {
 		basis: "contract",
 		note: "query evidence uses the current-only structured lane (code-derived)",
 	},
+	relevanceExplain: {
+		basis: "contract",
+		note: "the explain run executes the search pipeline over the agent's default identity (code-derived)",
+	},
 }
 
 export const G_GAPS: { route: string; reason: string }[] = [
@@ -84,11 +93,6 @@ export const G_GAPS: { route: string; reason: string }[] = [
 		route: "traceChain",
 		reason:
 			"the chain is looked up by fact id, so a historical node is legitimate and the route carries no per-node currentness field",
-	},
-	{
-		route: "relevanceExplain",
-		reason:
-			"explain rows carry no state or validity, and no current-only contract is established for them",
 	},
 	{
 		route: "recallConversation",
@@ -106,6 +110,12 @@ export const G_GAPS: { route: string; reason: string }[] = [
 			"no knowledge-base write exists in the API, so no value can be superseded there",
 	},
 ]
+
+export function expectationFor(route: GRouteId): HealthExpectation {
+	if (route === "buildContextBundle") return { sections: ["query-evidence"] }
+	if (route === "relevanceExplain") return { acceptDegradedVerdict: true }
+	return {}
+}
 
 export type GRead = {
 	route: GRouteId
