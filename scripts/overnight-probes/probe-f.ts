@@ -16,6 +16,7 @@ export function planProbeF(): {
 	"api-read": number
 	"api-write": number
 	"kill-op": number
+	"current-op": number
 } {
 	const phases = F_PHASES.map((spec) => planLoadPhase(spec))
 	const kill = planKill()
@@ -27,6 +28,7 @@ export function planProbeF(): {
 			phases.reduce((total, item) => total + item["api-write"], 0) +
 			kill["api-write"],
 		"kill-op": kill["kill-op"],
+		"current-op": kill["current-op"],
 	}
 }
 

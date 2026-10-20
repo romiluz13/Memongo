@@ -132,6 +132,7 @@ export function generousBudget(
 			"api-read": 100_000,
 			"api-write": 100_000,
 			"kill-op": 10,
+			"current-op": 100_000,
 			...caps,
 		},
 	})

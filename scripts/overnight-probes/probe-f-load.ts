@@ -7,7 +7,7 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import { evaluateRouteHealth } from "./health.ts"
-import { pollUntil, type Scope, stamped } from "./kit.ts"
+import { MAX_POLLS, pollUntil, type Scope, stamped } from "./kit.ts"
 import { containsMarker } from "./markers.ts"
 import {
 	classifySearch,
@@ -37,11 +37,10 @@ export function planLoadPhase(spec: PhaseSpec): {
 	"api-read": number
 	"api-write": number
 } {
-	const settlePolls = 31
 	return {
 		"api-write": 1 + spec.writers * F_TICKS,
 		"api-read":
-			settlePolls +
+			MAX_POLLS +
 			F_SEARCHERS * F_TICKS +
 			F_STATUS_POLLS +
 			F_SAMPLE * F_SAMPLE_ROUNDS,

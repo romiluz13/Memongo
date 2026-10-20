@@ -5,12 +5,13 @@ import {
 	API_WRITE,
 	type AdminPort,
 	countedObserve,
+	CURRENT_OP,
 	KILL_OP,
 	type ProbeContext,
 } from "./context.ts"
-import { pollUntil, type Scope, stamped } from "./kit.ts"
+import { MAX_POLLS, pollUntil, type Scope, stamped } from "./kit.ts"
 import { containsMarker } from "./markers.ts"
-import { verifyCount } from "./probe-f-load.ts"
+import { F_STATUS_POLLS, verifyCount } from "./probe-f-load.ts"
 import {
 	classifyWrite,
 	eligibleOp,
@@ -27,6 +28,9 @@ export const F2_MAX_WRITES = 600
 export const F2_MAX_REISSUE_ATTEMPTS = 60
 export const F2_ATTEMPTS_PER_ENTRY = 3
 export const F2_REISSUE_STEP_MS = 2_000
+export const F2_MAX_WATCH_POLLS = Math.ceil(F2_WINDOW_MS / F2_POLL_MS)
+const F2_LISTINGS_PER_POLL = 2
+const F2_DEDUPE_WRITES = 1
 
 const BARRIER = { timeoutMs: 10_000 }
 const ENTRY_PREFIX = "Recovery log entry"
@@ -47,11 +51,17 @@ export function planKill(): {
 	"api-read": number
 	"api-write": number
 	"kill-op": number
+	"current-op": number
 } {
 	return {
-		"api-write": F2_MAX_WRITES + F2_MAX_REISSUE_ATTEMPTS + 2 + 1,
-		"api-read": 16 + 31,
+		"api-write":
+			F2_MAX_WRITES +
+			F2_MAX_REISSUE_ATTEMPTS +
+			F2_DEDUPE_WRITES +
+			F2_ATTEMPTS_PER_ENTRY,
+		"api-read": F_STATUS_POLLS + MAX_POLLS,
 		"kill-op": 1,
+		"current-op": F2_LISTINGS_PER_POLL * F2_MAX_WATCH_POLLS,
 	}
 }
 
@@ -90,6 +100,18 @@ function newEntry(ctx: ProbeContext, scope: Scope): Entry {
 			customId,
 			...scope,
 		},
+	}
+}
+
+async function listOperations(
+	ctx: ProbeContext,
+	admin: AdminPort,
+): Promise<unknown[]> {
+	const reservation = ctx.budget.reserveCount(CURRENT_OP)
+	try {
+		return await admin.currentOps()
+	} finally {
+		ctx.budget.settle(reservation)
 	}
 }
 
@@ -196,13 +218,19 @@ async function watch(
 			.filter((entry) => entry.state === "pending")
 			.map((entry) => entry.marker),
 	})
-	while (!state.stop && ctx.clock.mono() - start < F2_WINDOW_MS) {
+	let polls = 0
+	while (
+		!state.stop &&
+		polls < F2_MAX_WATCH_POLLS &&
+		ctx.clock.mono() - start < F2_WINDOW_MS
+	) {
+		polls += 1
 		try {
-			const ops = await admin.currentOps()
+			const ops = await listOperations(ctx, admin)
 			const pick = pickEligibleOp(ops, ownership())
 			if (pick) {
 				state.eligibleSeen += 1
-				const again = await admin.currentOps()
+				const again = await listOperations(ctx, admin)
 				const still = again.some(
 					(op) => eligibleOp(op, ownership())?.opid === pick.opid,
 				)

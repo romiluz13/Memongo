@@ -106,6 +106,13 @@ describe("planInvocation", () => {
 		)
 	})
 
+	it("plans operation listings only when probe F is selected", () => {
+		expect(planInvocation(["A", "G"], 1).caps["current-op"]).toBeUndefined()
+		expect(planInvocation(["F"], 2).caps["current-op"]).toBe(
+			2 * planProbeF()["current-op"],
+		)
+	})
+
 	it("plans no answer calls unless probe B is selected", () => {
 		expect(
 			planInvocation(["A", "C", "D", "E", "G"], 2).caps,

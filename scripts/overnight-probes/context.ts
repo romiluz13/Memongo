@@ -19,6 +19,7 @@ export const ANSWER_LLM = "answer-llm"
 export type AnswerPort = { provider: EnrichmentProvider; model: string }
 
 export const KILL_OP = "kill-op"
+export const CURRENT_OP = "current-op"
 
 export class AdminDenied extends Error {
 	override name = "AdminDenied"

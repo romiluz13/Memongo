@@ -86,7 +86,7 @@ export function registryOf(behavior: Behavior): Registry {
 		C: entry("C"),
 		D: entry("D"),
 		E: entry("E"),
-		F: entry("F", { "kill-op": 1 }),
+		F: entry("F", { "kill-op": 1, "current-op": 2 }),
 		G: entry("G"),
 	}
 }
