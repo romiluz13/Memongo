@@ -36,6 +36,55 @@ export function createFakeClock(start = 1_700_000_000_000): FakeClock {
 	}
 }
 
+export type TimerClock = Clock & {
+	drive<T>(work: Promise<T>): Promise<T>
+}
+
+export function createTimerClock(start = 1_700_000_000_000): TimerClock {
+	let current = start
+	const timers: { at: number; resolve: () => void }[] = []
+	return {
+		now: () => current,
+		mono: () => current - start,
+		sleep: (ms) =>
+			new Promise<void>((resolve) => {
+				timers.push({ at: current + ms, resolve })
+			}),
+		async drive<T>(work: Promise<T>): Promise<T> {
+			let state: { value: T } | { error: unknown } | undefined
+			work.then(
+				(value) => {
+					state = { value }
+				},
+				(error) => {
+					state = { error }
+				},
+			)
+			let idle = 0
+			while (!state) {
+				await new Promise<void>((resolve) => setImmediate(resolve))
+				if (state) break
+				const next = timers.reduce(
+					(min, timer) => Math.min(min, timer.at),
+					Number.POSITIVE_INFINITY,
+				)
+				if (next === Number.POSITIVE_INFINITY) {
+					idle += 1
+					if (idle > 1_000) throw new Error("fake timer clock deadlocked")
+					continue
+				}
+				idle = 0
+				current = Math.max(current, next)
+				const due = timers.filter((timer) => timer.at <= current)
+				for (const timer of due) timers.splice(timers.indexOf(timer), 1)
+				for (const timer of due) timer.resolve()
+			}
+			if ("error" in state) throw state.error
+			return state.value
+		},
+	}
+}
+
 export function silentWriter(): EvidenceWriter & { records: unknown[] } {
 	const records: unknown[] = []
 	return {

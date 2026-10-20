@@ -18,9 +18,23 @@ export const ANSWER_LLM = "answer-llm"
 
 export type AnswerPort = { provider: EnrichmentProvider; model: string }
 
+export const KILL_OP = "kill-op"
+
+export class AdminDenied extends Error {
+	override name = "AdminDenied"
+}
+
+export type AdminPort = {
+	database: string
+	appName: string
+	currentOps(): Promise<unknown[]>
+	killOp(opid: number | string): Promise<void>
+}
+
 export type ProbeContext = {
 	api: ProbeApi
 	answer?: AnswerPort
+	admin?: AdminPort
 	run: number
 	budget: Budget
 	evidence: EvidenceWriter
