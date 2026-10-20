@@ -15,6 +15,7 @@ export type RouteId =
 	| "buildContextBundle"
 	| "relevanceExplain"
 	| "traceChain"
+	| "scanNovelty"
 
 export type RouteHealth = {
 	route: RouteId
@@ -307,6 +308,9 @@ export function evaluateRouteHealth(
 		case "relevanceExplain":
 			if (body.health !== "ok") issues.push(`health:${String(body.health)}`)
 			if (!Array.isArray(body.results)) issues.push("missing:results")
+			break
+		case "scanNovelty":
+			if (!Array.isArray(body.events)) issues.push("missing:events")
 			break
 		case "traceChain":
 			if (!Array.isArray(body.nodes)) issues.push("missing:nodes")

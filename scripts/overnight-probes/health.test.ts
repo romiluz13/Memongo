@@ -611,6 +611,18 @@ describe("evaluateRouteHealth: admin routes", () => {
 	})
 })
 
+describe("evaluateRouteHealth: scanNovelty", () => {
+	it("needs an events array", () => {
+		expect(
+			evaluateRouteHealth("scanNovelty", ok("scanNovelty", { events: [] }))
+				.healthy,
+		).toBe(true)
+		expect(
+			evaluateRouteHealth("scanNovelty", ok("scanNovelty", {})).issues,
+		).toContain("missing:events")
+	})
+})
+
 describe("tallyHealth", () => {
 	it("counts attempted, completed, healthy and evaluable", () => {
 		const list = [
