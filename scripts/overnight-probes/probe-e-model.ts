@@ -3,14 +3,14 @@ import { containsMarker } from "./markers.ts"
 import type { CaseResult, Observation, Outcome } from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
 
-export const PROBE_E_VERSION = "E-1"
+export const PROBE_E_VERSION = "E-2"
 export const E_DEADLINE_MS = 60_000
 export const E_POLL_STEP_MS = 1_000
 export const E_PRIMARY_N = 10
 export const E_BARRIER_N = 5
 
 export const PROBE_E_RULE =
-	"Items are written without a search barrier and polled once immediately and then every 1 s until a healthy read contains the item or 60 s have passed since dispatch. An item fails only when it is never visible within 60 s, its final read was healthy and empty, and the already-visible control read healthy at the start and the end. Degraded, not-ready and failed reads never count as visible or as healthy empties and make a missing item inconclusive. A barrier item fails when the barrier reports searchable and the first healthy read after the acknowledgment does not contain it. Latency is reported as a sampled interval, never as a point, and unseen items are right-censored."
+	"Items are written without a search barrier and polled once immediately after their own write acknowledgment, before the next item is written, and then every 1 s until a healthy read contains the item or 60 s have passed since dispatch. An item fails only when it is never visible within 60 s, its final read was healthy and empty, and the already-visible control read healthy at the start and the end. Degraded, not-ready and failed reads never count as visible or as healthy empties and make a missing item inconclusive. A barrier item fails when the barrier reports searchable and the first healthy read after the acknowledgment does not contain it. Latency is reported as a sampled interval, never as a point, and unseen items are right-censored."
 
 export type EPoll = {
 	atMs: number

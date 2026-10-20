@@ -375,7 +375,7 @@ describe("evaluateProbeE", () => {
 
 	it("prints the rule and version", () => {
 		expect(PROBE_E_RULE).toMatch(/60 s/)
-		expect(PROBE_E_VERSION).toBe("E-1")
+		expect(PROBE_E_VERSION).toBe("E-2")
 	})
 })
 

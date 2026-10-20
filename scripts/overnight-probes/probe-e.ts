@@ -147,25 +147,51 @@ async function runControl(
 	return control
 }
 
-async function pollPrimary(
+function stillPending(item: EItem): boolean {
+	const last = item.polls.at(-1)
+	if (!last) return true
+	if (classifyRead(last, item.marker) === "visible") return false
+	return last.atMs - item.dispatchAt < E_DEADLINE_MS
+}
+
+async function runPrimary(
 	ctx: ProbeContext,
 	target: Target,
 	items: EItem[],
 ): Promise<void> {
-	let pending = items.filter((item) => item.ack.ok)
-	while (pending.length > 0) {
+	const nextPollAt = new Map<EItem, number>()
+	let pending: EItem[] = []
+	const pollDue = async () => {
+		const now = ctx.clock.mono()
 		await Promise.all(
-			pending.map(async (item) => {
-				item.polls.push(await pollItem(ctx, target, `shelf ${item.index}`))
-			}),
+			pending
+				.filter((item) => (nextPollAt.get(item) ?? now) <= now)
+				.map(async (item) => {
+					const polled = await pollItem(ctx, target, `shelf ${item.index}`)
+					item.polls.push(polled)
+					nextPollAt.set(item, polled.atMs + E_POLL_STEP_MS)
+				}),
 		)
-		pending = pending.filter((item) => {
-			const last = item.polls.at(-1)
-			if (!last) return true
-			if (classifyRead(last, item.marker) === "visible") return false
-			return last.atMs - item.dispatchAt < E_DEADLINE_MS
+		pending = pending.filter(stillPending)
+	}
+	for (let index = 1; index <= E_PRIMARY_N; index += 1) {
+		const item = await writeItem(ctx, target, {
+			variant: "primary",
+			index,
+			label: `shelf ${index}`,
+			marker: ctx.token("zqe"),
+			barrier: false,
 		})
-		if (pending.length > 0) await ctx.clock.sleep(E_POLL_STEP_MS)
+		items.push(item)
+		if (item.ack.ok) pending.push(item)
+		await pollDue()
+	}
+	while (pending.length > 0) {
+		const earliest = Math.min(
+			...pending.map((item) => nextPollAt.get(item) ?? 0),
+		)
+		await ctx.clock.sleep(Math.max(0, earliest - ctx.clock.mono()))
+		await pollDue()
 	}
 }
 
@@ -226,18 +252,7 @@ export async function runProbeE(ctx: ProbeContext): Promise<ProbeRunResult> {
 	try {
 		reported = await snapshotSettings(ctx, target.agentId)
 		control = await runControl(ctx, target, controlMarker)
-		for (let index = 1; index <= E_PRIMARY_N; index += 1) {
-			items.push(
-				await writeItem(ctx, target, {
-					variant: "primary",
-					index,
-					label: `shelf ${index}`,
-					marker: ctx.token("zqe"),
-					barrier: false,
-				}),
-			)
-		}
-		await pollPrimary(ctx, target, items)
+		await runPrimary(ctx, target, items)
 		for (let index = 1; index <= E_BARRIER_N; index += 1) {
 			const item = await writeItem(ctx, target, {
 				variant: "barrier",

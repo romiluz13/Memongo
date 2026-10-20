@@ -6,7 +6,12 @@ import {
 	httpError,
 	type Json,
 } from "./fake-api.ts"
-import { E_BARRIER_N, E_PRIMARY_N } from "./probe-e-model.ts"
+import {
+	E_BARRIER_N,
+	E_DEADLINE_MS,
+	E_POLL_STEP_MS,
+	E_PRIMARY_N,
+} from "./probe-e-model.ts"
 import { planProbeE, runProbeE } from "./probe-e.ts"
 
 type Options = {
@@ -16,13 +21,16 @@ type Options = {
 	controlInvisible?: boolean
 	searchErrorsAfterMs?: number
 	statusFails?: boolean
+	writeMs?: number
 }
 
 type Event = { body: string; visibleAt: number }
+type Call = { kind: "write" | "search"; label: string; at: number }
 
 function createFakeE(options: Options = {}) {
 	const clock = createFakeClock()
 	const events: Event[] = []
+	const calls: Call[] = []
 	let unbarriered = 0
 	const api = {
 		status: async () => {
@@ -40,6 +48,14 @@ function createFakeE(options: Options = {}) {
 			laneCoverage: {},
 		}),
 		writeEvent: async (input: Json) => {
+			calls.push({
+				kind: "write",
+				label: (input.body as string)
+					.replace("Archive ", "")
+					.split(" holds code ")[0] as string,
+				at: clock.mono(),
+			})
+			clock.advance(options.writeMs ?? 0)
 			const barrier = input.searchBarrier !== undefined
 			let visibleAt: number
 			if (barrier) {
@@ -72,7 +88,14 @@ function createFakeE(options: Options = {}) {
 					: {}),
 			}
 		},
-		search: async () => {
+		search: async (input: Json) => {
+			calls.push({
+				kind: "search",
+				label: (input.query as string)
+					.replace("Which code does archive ", "")
+					.replace(" hold?", ""),
+				at: clock.mono(),
+			})
 			if (
 				options.searchErrorsAfterMs !== undefined &&
 				clock.mono() > options.searchErrorsAfterMs
@@ -87,7 +110,7 @@ function createFakeE(options: Options = {}) {
 			}
 		},
 	}
-	return { api, clock, events }
+	return { api, clock, events, calls }
 }
 
 function context(options: Options = {}, overrides = {}) {
@@ -119,6 +142,66 @@ describe("runProbeE", () => {
 		await runProbeE(ctx)
 		const unique = [...new Set(fake.clock.sleeps)]
 		expect(unique).toEqual([1_000])
+	})
+
+	it("polls each primary item right after its own acknowledgment, before the next item is written", async () => {
+		const { ctx, fake } = context({ delayMs: 3_500, writeMs: 400 })
+		await runProbeE(ctx)
+		for (let index = 1; index < E_PRIMARY_N; index += 1) {
+			const firstPoll = fake.calls.findIndex(
+				(call) => call.kind === "search" && call.label === `shelf ${index}`,
+			)
+			const nextWrite = fake.calls.findIndex(
+				(call) => call.kind === "write" && call.label === `shelf ${index + 1}`,
+			)
+			expect(firstPoll).toBeGreaterThan(-1)
+			expect(firstPoll).toBeLessThan(nextWrite)
+		}
+	})
+
+	it("dispatches the first poll at the item's own acknowledgment time", async () => {
+		const { ctx, fake } = context({ delayMs: 3_500, writeMs: 400 })
+		await runProbeE(ctx)
+		for (let index = 1; index <= E_PRIMARY_N; index += 1) {
+			const write = fake.calls.find(
+				(call) => call.kind === "write" && call.label === `shelf ${index}`,
+			)
+			const poll = fake.calls.find(
+				(call) => call.kind === "search" && call.label === `shelf ${index}`,
+			)
+			expect(poll?.at).toBe((write?.at ?? Number.NaN) + 400)
+		}
+	})
+
+	it("keeps each item's own polls at least 1 s apart and not more than a write apart beyond that", async () => {
+		const { ctx, fake } = context({ delayMs: 3_500, writeMs: 400 })
+		await runProbeE(ctx)
+		for (let index = 1; index <= E_PRIMARY_N; index += 1) {
+			const times = fake.calls
+				.filter(
+					(call) => call.kind === "search" && call.label === `shelf ${index}`,
+				)
+				.map((call) => call.at)
+			expect(times.length).toBeGreaterThan(2)
+			for (let at = 1; at < times.length; at += 1) {
+				const gap = (times[at] ?? 0) - (times[at - 1] ?? 0)
+				expect(gap).toBeGreaterThanOrEqual(1_000)
+				expect(gap).toBeLessThanOrEqual(1_400)
+			}
+		}
+	})
+
+	it("stops polling a never-visible item exactly 60 s after its dispatch", async () => {
+		const { ctx, fake } = context({ neverVisibleIndex: 4 })
+		await runProbeE(ctx)
+		const times = fake.calls
+			.filter((call) => call.kind === "search" && call.label === "shelf 4")
+			.map((call) => call.at)
+		const dispatch = fake.calls.find(
+			(call) => call.kind === "write" && call.label === "shelf 4",
+		)?.at
+		expect(times).toHaveLength(E_DEADLINE_MS / E_POLL_STEP_MS + 1)
+		expect((times.at(-1) ?? 0) - (dispatch ?? 0)).toBe(E_DEADLINE_MS)
 	})
 
 	it("stays within the announced call plan", async () => {
