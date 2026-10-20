@@ -167,9 +167,25 @@ describe("evaluateProbeD", () => {
 		const result = evaluate(cleanReads())
 		const nonPass = result.cases.filter(
 			(item) =>
-				item.outcome !== "pass" && !item.caseId.includes("searchDetailed"),
+				item.outcome !== "pass" &&
+				!item.caseId.includes("searchDetailed") &&
+				!item.caseId.startsWith("D/relative/"),
 		)
 		expect(nonPass).toEqual([])
+	})
+
+	it("tags every case as judged on a code-derived contract", () => {
+		const result = evaluate(cleanReads())
+		expect(result.cases.length).toBeGreaterThan(10)
+		for (const item of result.cases) {
+			expect(item.contractBasis, item.caseId).toBe("code-derived")
+		}
+	})
+
+	it("never passes while a relative-phrase family is a declared gap", () => {
+		const result = evaluate(cleanReads())
+		expect(result.outcome).toBe("inconclusive")
+		expect(result.reasons.join(" ")).toContain("D/relative/day-offset")
 	})
 
 	it("fails on an out-of-window event and names the extra label", () => {
@@ -345,11 +361,16 @@ describe("evaluateProbeD", () => {
 		const required = requiredCaseIdsD()
 		expect(required).toContain("D/recall/full-window")
 		expect(required).toContain("D/searchDetailed/timeRange")
-		expect(D_GAPS.map((gap) => gap.route)).toEqual(
-			expect.arrayContaining(["recall-with-query", "relative-phrases"]),
-		)
+		expect(required).toContain("D/relative/yesterday")
+		expect(required).toContain("D/relative/day-offset")
+		expect(D_GAPS.map((gap) => gap.route)).toEqual([
+			"recall-with-query",
+			"searchDetailed-ordering",
+		])
 		expect(PROBE_D_RULE).toMatch(/exact sequence/)
-		expect(PROBE_D_VERSION).toBe("D-1")
+		expect(PROBE_D_RULE).toMatch(/text-lane ranks/)
+		expect(PROBE_D_RULE).toMatch(/declared gaps that stay inconclusive/)
+		expect(PROBE_D_VERSION).toBe("D-2")
 	})
 })
 

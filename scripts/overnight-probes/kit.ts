@@ -36,15 +36,15 @@ export async function stamped(
 	}
 }
 
-export async function pollUntil(
+export async function pollUntil<T>(
 	ctx: ProbeContext,
-	read: () => Promise<GRead>,
-	done: (read: GRead) => boolean,
+	read: () => Promise<T>,
+	done: (read: T) => boolean,
 ): Promise<{
 	polls: number
 	elapsedMs: number
 	satisfied: boolean
-	last: GRead
+	last: T
 }> {
 	const start = ctx.clock.mono()
 	let polls = 0

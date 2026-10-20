@@ -1,54 +1,32 @@
-import { type RouteHealth, tallyHealth } from "./health.ts"
+import { tallyHealth } from "./health.ts"
 import { bodyMarkers } from "./markers.ts"
+import {
+	D_AS_OF,
+	D_EVENTS,
+	type DQueryRead,
+	validAt,
+} from "./probe-d-fixture.ts"
+import {
+	type DRelativeInput,
+	relativeCaseIds,
+	relativeCases,
+} from "./probe-d-relative.ts"
 import { isRecord } from "./rows.ts"
-import type { CaseResult, Observation, Outcome } from "./types.ts"
+import type { CaseResult, Outcome } from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
 
-export const PROBE_D_VERSION = "D-1"
-export const D_AS_OF = "2026-03-20T12:00:00.000Z"
+export {
+	D_AS_OF,
+	D_EVENTS,
+	type DEvent,
+	type DQueryRead,
+} from "./probe-d-fixture.ts"
+
+export const PROBE_D_VERSION = "D-2"
 export const D_DEFAULT_LIMIT = 50
 
 export const PROBE_D_RULE =
-	"A fixed set of timestamped events with explicit validity is written once. Each query-less recallConversation request is then compared with an expected exact sequence that was derived by hand from the fixture clock: events inside the requested window, recorded no later than the fixed asOf, valid at it, newest first with later writes first on equal timestamps, cut at the limit. A request passes only when it returns that exact sequence with the stored timestamps. It fails on any missing or extra event, a duplicate, a wrong order or a changed timestamp. The window edges, the asOf edges, date-only boundaries in UTC and in three zones including the daylight-saving day, an earlier asOf, a limit and an inverted window are each their own request. An unhealthy or unassessable response and an unacknowledged fixture event make the request inconclusive. Chronology is never judged by a model. The searchDetailed time range is checked for soundness only: no event outside the range may be returned, and the same query without a range must first have returned events outside it and at least one event inside it must be returned with the range. Recall with a query, relative phrases and ordering under a query are declared coverage gaps."
-
-export type DEvent = {
-	label: string
-	timestamp: string
-	validAt: string
-	invalidAt?: string
-}
-
-function event(label: string, timestamp: string, extra: Partial<DEvent> = {}) {
-	return { label, timestamp, validAt: timestamp, ...extra }
-}
-
-export const D_EVENTS: readonly DEvent[] = [
-	event("S1", "2026-03-08T07:59:59.999Z"),
-	event("S2", "2026-03-08T08:00:00.000Z"),
-	event("S3", "2026-03-09T06:59:59.999Z"),
-	event("S4", "2026-03-09T07:00:00.000Z"),
-	event("E1", "2026-03-14T23:59:59.999Z"),
-	event("E2", "2026-03-15T00:00:00.000Z"),
-	event("E3", "2026-03-15T12:00:00.000Z"),
-	event("E4", "2026-03-15T23:59:59.999Z"),
-	event("E5", "2026-03-16T00:00:00.000Z"),
-	event("E6", "2026-03-17T09:30:00.000Z"),
-	event("E7", "2026-03-17T09:30:00.000Z"),
-	event("E8", "2026-03-19T22:00:00.000Z"),
-	event("E9", "2026-03-20T12:00:00.000Z"),
-	event("E10", "2026-03-20T12:00:00.001Z"),
-	event("T1", "2026-03-20T12:30:00.000Z", {
-		validAt: "2026-03-20T10:00:00.000Z",
-	}),
-	event("V1", "2026-03-18T10:00:00.000Z", {
-		invalidAt: "2026-03-19T00:00:00.000Z",
-	}),
-	event("V2", "2026-03-18T11:00:00.000Z", {
-		validAt: "2026-03-21T00:00:00.000Z",
-	}),
-	event("V3", "2026-03-18T12:00:00.000Z", { invalidAt: D_AS_OF }),
-	event("V4", "2026-03-18T13:00:00.000Z", { validAt: D_AS_OF }),
-]
+	"A fixed set of timestamped events with explicit validity is written once. Each query-less recallConversation request is then compared with an expected exact sequence that was derived by hand from the fixture clock: events inside the requested window, recorded no later than the fixed asOf, valid at it, newest first with later writes first on equal timestamps, cut at the limit. A request passes only when it returns that exact sequence with the stored timestamps. It fails on any missing or extra event, a duplicate, a wrong order or a changed timestamp. The window edges, the asOf edges, date-only boundaries in UTC and in three zones including the daylight-saving day, an earlier asOf, a limit and an inverted window are each their own request. An unhealthy or unassessable response and an unacknowledged fixture event make the request inconclusive. Chronology is never judged by a model. The searchDetailed time range is checked for soundness only: no event outside the range may be returned, and the same query without a range must first have returned events outside it and at least one event inside it must be returned with the range. Relative phrases that the engine resolves against asOf (yesterday, today, this week, last week, this month, last month) are checked on a hybrid recall whose query is a fixed filler plus the phrase. The engine applies the phrase as a soft boost in the text lane and not as a filter, so the case compares the text-lane ranks from the score details with each eligible event's distance from the origin that was resolved by hand from the fixture clock, ignoring pairs less than one hour apart. It fails when a closer event ranks below a farther one, and is inconclusive when the unphrased control already orders every pair that way or the lane returns no text-lane ranks. Phrase families the engine does not resolve (day offsets, weekday names, relative years) are declared gaps that stay inconclusive, so the probe cannot pass while they are open. Fused ranking of a querying recall and searchDetailed ordering are declared coverage gaps."
 
 export type DWindow = { start?: string; end?: string }
 
@@ -182,12 +160,7 @@ export const D_GAPS: readonly { route: string; reason: string }[] = [
 	{
 		route: "recall-with-query",
 		reason:
-			"A querying recall uses the non-deterministic hybrid lane; its ranking and ordering are not asserted",
-	},
-	{
-		route: "relative-phrases",
-		reason:
-			"Relative phrases such as yesterday or three days ago depend on wall-clock now and on the hybrid lane, so they have no fixed expected sequence",
+			"A querying recall uses the non-deterministic hybrid lane; its fused ranking and ordering are not asserted, only the text-lane rank under a relative phrase",
 	},
 	{
 		route: "searchDetailed-ordering",
@@ -196,19 +169,16 @@ export const D_GAPS: readonly { route: string; reason: string }[] = [
 	},
 ]
 
-function windowOf(event: DEvent, window: DWindow, asOf: number): boolean {
+function windowOf(
+	event: (typeof D_EVENTS)[number],
+	window: DWindow,
+	asOf: number,
+): boolean {
 	const at = Date.parse(event.timestamp)
 	const start =
 		window.start === undefined ? -Infinity : Date.parse(window.start)
 	const requestedEnd = window.end === undefined ? asOf : Date.parse(window.end)
 	return at >= start && at <= Math.min(requestedEnd, asOf)
-}
-
-function validAt(event: DEvent, asOf: number): boolean {
-	return (
-		Date.parse(event.validAt) <= asOf &&
-		(event.invalidAt === undefined || Date.parse(event.invalidAt) > asOf)
-	)
 }
 
 export function expectedLabels(query: DQuery): string[] {
@@ -230,14 +200,8 @@ export function requiredCaseIdsD(): string[] {
 	return [
 		...D_QUERIES.map((query) => `D/recall/${query.id}`),
 		"D/searchDetailed/timeRange",
+		...relativeCaseIds(),
 	]
-}
-
-export type DQueryRead = {
-	queryId: string
-	observation: Observation
-	health: RouteHealth
-	request: unknown
 }
 
 export type ProbeDInput = {
@@ -249,6 +213,7 @@ export type ProbeDInput = {
 		control: DQueryRead
 		markers: Readonly<Record<string, string>>
 	}
+	relative?: Omit<DRelativeInput, "labelOf" | "acknowledged">
 }
 
 export type ProbeDEvaluation = {
@@ -429,15 +394,33 @@ export function evaluateProbeD(input: ProbeDInput): ProbeDEvaluation {
 				},
 	)
 	if (input.detailed) graded.push(detailedCase(input.detailed))
-	const verdict = aggregateRun(graded, requiredCaseIdsD())
+	graded.push(
+		...relativeCases(
+			input.relative && {
+				...input.relative,
+				labelOf: input.labelOf,
+				acknowledged: input.acknowledged,
+			},
+		),
+	)
+	const tagged = graded.map(
+		(item): CaseResult => ({ ...item, contractBasis: "code-derived" }),
+	)
+	const verdict = aggregateRun(tagged, requiredCaseIdsD())
 	return {
 		outcome: verdict.outcome,
 		reasons: verdict.reasons,
-		cases: graded,
+		cases: tagged,
 		counts: tallyHealth([
 			...input.reads.map((read) => read.health),
 			...(input.detailed
 				? [input.detailed.control.health, input.detailed.read.health]
+				: []),
+			...(input.relative
+				? [
+						input.relative.control.health,
+						...input.relative.reads.map((read) => read.health),
+					]
 				: []),
 		]),
 	}

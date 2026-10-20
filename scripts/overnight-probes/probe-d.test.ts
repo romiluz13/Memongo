@@ -17,6 +17,29 @@ type Options = {
 	neverIndexed?: boolean
 	failWriteAt?: number
 	failRecall?: boolean
+	ignorePhrase?: boolean
+	wallClockPhrase?: boolean
+	standardOnly?: boolean
+	controlLagReads?: number
+}
+
+const DAY_MS = 86_400_000
+const BASE_QUERY = "Dated archive log entry"
+
+function phraseOrigin(query: string, at: number): number | undefined {
+	const text = query.toLowerCase()
+	const date = new Date(at)
+	const dayStart = Math.floor(at / DAY_MS) * DAY_MS
+	const weekStart = dayStart - ((date.getUTCDay() + 6) % 7) * DAY_MS
+	const year = date.getUTCFullYear()
+	const month = date.getUTCMonth()
+	if (text.includes("last week")) return weekStart - 7 * DAY_MS
+	if (text.includes("this week")) return weekStart
+	if (text.includes("today")) return dayStart
+	if (text.includes("yesterday")) return dayStart - DAY_MS
+	if (text.includes("last month")) return Date.UTC(year, month - 1, 1)
+	if (text.includes("this month")) return Date.UTC(year, month, 1)
+	return undefined
 }
 
 type Stored = {
@@ -90,7 +113,75 @@ function boundary(
 function createFakeD(options: Options = {}) {
 	const clock = createFakeClock()
 	const events: Stored[] = []
+	const queries: { query: string; asOf: unknown; limit: unknown }[] = []
 	let writes = 0
+	let controlReads = 0
+	const hybrid = (input: Json) => {
+		const query = input.query as string
+		queries.push({ query, asOf: input.asOf, limit: input.limit })
+		const asOf = Date.parse(input.asOf as string)
+		if (query === BASE_QUERY) controlReads += 1
+		const lagging =
+			query === BASE_QUERY && controlReads <= (options.controlLagReads ?? 0)
+		const eligible = events
+			.filter(
+				(item) =>
+					Date.parse(item.timestamp) <= asOf &&
+					Date.parse(item.validAt) <= asOf &&
+					(item.invalidAt === undefined || Date.parse(item.invalidAt) > asOf),
+			)
+			.slice(0, lagging ? -2 : undefined)
+		const origin = options.ignorePhrase
+			? undefined
+			: phraseOrigin(
+					query,
+					options.wallClockPhrase ? Date.parse("2026-10-19T09:00:00Z") : asOf,
+				)
+		const textOrder = [...eligible].sort((a, b) =>
+			origin === undefined
+				? a.seq - b.seq
+				: Math.abs(Date.parse(a.timestamp) - origin) -
+						Math.abs(Date.parse(b.timestamp) - origin) || a.seq - b.seq,
+		)
+		return {
+			results: textOrder.map((item, index) => ({
+				citation: {
+					eventId: item.eventId,
+					role: "user",
+					timestamp: item.timestamp,
+					preview: item.body,
+				},
+				matchType: "hybrid",
+				...(options.standardOnly
+					? {}
+					: {
+							scoreDetails: {
+								value: 0.03,
+								details: [
+									{
+										inputPipelineName: "vector",
+										rank: ((item.seq * 7) % 19) + 1,
+										weight: 1,
+										value: 0.01,
+									},
+									{
+										inputPipelineName: "text",
+										rank: index + 1,
+										weight: 1,
+										value: 0.01,
+									},
+								],
+							},
+						}),
+			})),
+			metadata: {
+				totalMatched: textOrder.length,
+				queryUsed: query,
+				filtersApplied: [],
+				searchMethod: options.standardOnly ? "standard" : "hybrid",
+			},
+		}
+	}
 	const api = {
 		writeEvent: async (input: Json) => {
 			const body = input.body as string
@@ -109,6 +200,9 @@ function createFakeD(options: Options = {}) {
 		},
 		recallConversation: async (input: Json) => {
 			if (options.failRecall) throw httpError(503, "SEARCH_LANES_UNAVAILABLE")
+			if (typeof input.query === "string" && input.query !== "") {
+				return hybrid(input)
+			}
 			const asOf = Date.parse(input.asOf as string)
 			const zone = input.timezone as string | undefined
 			const start = input.startTime
@@ -173,7 +267,7 @@ function createFakeD(options: Options = {}) {
 			}
 		},
 	}
-	return { api, clock, events }
+	return { api, clock, events, queries }
 }
 
 function context(options: Options = {}) {
@@ -188,13 +282,84 @@ function caseOf(result: Awaited<ReturnType<typeof runProbeD>>, id: string) {
 }
 
 describe("runProbeD", () => {
-	it("passes every recall query and the range soundness check against a correct engine", async () => {
+	it("passes every checkable case against a correct engine and stays incomplete because phrase gaps are open", async () => {
 		const { ctx } = context()
 		const result = await runProbeD(ctx)
-		expect(result.cases.filter((item) => item.outcome !== "pass")).toEqual([])
-		expect(result.cases).toHaveLength(11)
-		expect(result.outcome).toBe("pass")
+		const open = result.cases.filter((item) => item.outcome !== "pass")
+		expect(open.map((item) => item.caseId)).toEqual([
+			"D/relative/day-offset",
+			"D/relative/weekday",
+			"D/relative/relative-year",
+		])
+		expect(open.every((item) => item.reason?.startsWith("declared-gap:"))).toBe(
+			true,
+		)
+		expect(result.cases).toHaveLength(20)
+		expect(result.outcome).toBe("inconclusive")
 		expect(result.extra?.coverageGaps).toBeDefined()
+	})
+
+	it("resolves relative phrases through recallConversation with the fixture asOf and a bounded limit", async () => {
+		const { ctx, fake } = context()
+		await runProbeD(ctx)
+		const phrased = fake.queries.filter((item) => item.query !== BASE_QUERY)
+		expect(phrased.map((item) => item.query)).toEqual([
+			`${BASE_QUERY} yesterday`,
+			`${BASE_QUERY} today`,
+			`${BASE_QUERY} this week`,
+			`${BASE_QUERY} last week`,
+			`${BASE_QUERY} this month`,
+			`${BASE_QUERY} last month`,
+		])
+		for (const item of fake.queries) {
+			expect(item.asOf).toBe("2026-03-20T12:00:00.000Z")
+			expect(item.limit).toBe(50)
+		}
+	})
+
+	it("fails every supported phrase when the engine ignores relative phrases", async () => {
+		const { ctx } = context({ ignorePhrase: true })
+		const result = await runProbeD(ctx)
+		const failed = result.cases
+			.filter((item) => item.outcome === "fail")
+			.map((item) => item.caseId)
+		expect(failed).toEqual(
+			[
+				"yesterday",
+				"today",
+				"this-week",
+				"last-week",
+				"this-month",
+				"last-month",
+			].map((id) => `D/relative/${id}`),
+		)
+		expect(result.outcome).toBe("fail")
+	})
+
+	it("fails the phrases when they are resolved against the wall clock instead of asOf", async () => {
+		const { ctx } = context({ wallClockPhrase: true })
+		const result = await runProbeD(ctx)
+		expect(caseOf(result, "D/relative/yesterday").outcome).toBe("fail")
+		expect(caseOf(result, "D/recall/full-window").outcome).toBe("pass")
+		expect(result.outcome).toBe("fail")
+	})
+
+	it("is inconclusive, not failed, when a querying recall is not a hybrid recall", async () => {
+		const { ctx } = context({ standardOnly: true })
+		const result = await runProbeD(ctx)
+		const found = caseOf(result, "D/relative/yesterday")
+		expect(found.outcome).toBe("inconclusive")
+		expect(found.reason).toBe("unassessable:not-hybrid")
+		expect(result.cases.some((item) => item.outcome === "fail")).toBe(false)
+	})
+
+	it("polls the unphrased control until every eligible event is returned", async () => {
+		const { ctx, fake } = context({ controlLagReads: 3 })
+		const result = await runProbeD(ctx)
+		expect(
+			fake.queries.filter((item) => item.query === BASE_QUERY),
+		).toHaveLength(4)
+		expect(caseOf(result, "D/relative/yesterday").outcome).toBe("pass")
 	})
 
 	it("stays within the planned call counts", async () => {

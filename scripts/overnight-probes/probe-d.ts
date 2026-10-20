@@ -10,16 +10,23 @@ import { evaluateRouteHealth } from "./health.ts"
 import { MAX_POLLS, pollUntil, type Scope, stamped } from "./kit.ts"
 import { findMarkers } from "./markers.ts"
 import {
+	D_AS_OF,
+	D_DEFAULT_LIMIT,
 	D_DETAILED_RANGE,
 	D_EVENTS,
 	D_GAPS,
 	D_QUERIES,
-	type DQuery,
 	type DQueryRead,
 	evaluateProbeD,
 	PROBE_D_RULE,
 	PROBE_D_VERSION,
 } from "./probe-d-model.ts"
+import { eligibleLabels } from "./probe-d-fixture.ts"
+import {
+	D_RELATIVE,
+	D_RELATIVE_BASE_QUERY,
+	relativeLabels,
+} from "./probe-d-relative.ts"
 import type { GRead } from "./probe-g-model.ts"
 import type { ProbeRunResult } from "./types.ts"
 
@@ -28,7 +35,8 @@ const SETTLED_LABELS = ["E1", "E3", "E5"]
 
 export function planProbeD(): { "api-read": number; "api-write": number } {
 	return {
-		"api-read": D_QUERIES.length + MAX_POLLS + 1,
+		"api-read":
+			D_QUERIES.length + MAX_POLLS + 1 + MAX_POLLS + D_RELATIVE.length,
 		"api-write": D_EVENTS.length,
 	}
 }
@@ -36,9 +44,10 @@ export function planProbeD(): { "api-read": number; "api-write": number } {
 async function recallRead(
 	ctx: ProbeContext,
 	scope: Scope,
-	query: DQuery,
+	queryId: string,
+	body: Record<string, unknown>,
 ): Promise<DQueryRead> {
-	const request = { ...query.request, ...scope }
+	const request = { ...body, ...scope }
 	const observation = await countedObserve(
 		ctx,
 		API_READ,
@@ -46,7 +55,7 @@ async function recallRead(
 		() => ctx.api.recallConversation(request),
 	)
 	return {
-		queryId: query.id,
+		queryId,
 		observation,
 		health: evaluateRouteHealth("recallConversation", observation),
 		request,
@@ -73,9 +82,11 @@ export async function runProbeD(ctx: ProbeContext): Promise<ProbeRunResult> {
 	const acknowledged: string[] = []
 	const notes: string[] = []
 	const reads: DQueryRead[] = []
+	const labelOf = (eventId: string) => labels.get(eventId)
 	let detailed:
 		| { read: DQueryRead; control: DQueryRead; markers: Record<string, string> }
 		| undefined
+	let relative: { control: DQueryRead; reads: DQueryRead[] } | undefined
 	try {
 		for (const item of D_EVENTS) {
 			markers[item.label] = ctx.token("zqd")
@@ -101,7 +112,7 @@ export async function runProbeD(ctx: ProbeContext): Promise<ProbeRunResult> {
 			}
 		}
 		for (const query of D_QUERIES) {
-			reads.push(await recallRead(ctx, scope, query))
+			reads.push(await recallRead(ctx, scope, query.id, query.request))
 		}
 		const settle = await pollUntil(
 			ctx,
@@ -146,14 +157,49 @@ export async function runProbeD(ctx: ProbeContext): Promise<ProbeRunResult> {
 			control: asQueryRead(settle.last, "timeRange-control"),
 			markers,
 		}
+		const relativeRequest = (query: string) => ({
+			query,
+			asOf: D_AS_OF,
+			limit: D_DEFAULT_LIMIT,
+		})
+		const eligible = eligibleLabels(D_AS_OF).filter((label) =>
+			acknowledged.includes(label),
+		)
+		const control = await pollUntil(
+			ctx,
+			() =>
+				recallRead(
+					ctx,
+					scope,
+					"relative/control",
+					relativeRequest(D_RELATIVE_BASE_QUERY),
+				),
+			(read) =>
+				read.health.evaluable &&
+				eligible.every((label) =>
+					relativeLabels(read, labelOf).includes(label),
+				),
+		)
+		relative = { control: control.last, reads: [] }
+		for (const item of D_RELATIVE) {
+			relative.reads.push(
+				await recallRead(
+					ctx,
+					scope,
+					`relative/${item.id}`,
+					relativeRequest(`${D_RELATIVE_BASE_QUERY} ${item.phrase}`),
+				),
+			)
+		}
 	} catch (error) {
 		notes.push(abortReason(error))
 	}
 	const evaluation = evaluateProbeD({
 		reads,
-		labelOf: (eventId) => labels.get(eventId),
+		labelOf,
 		acknowledged,
 		...(detailed ? { detailed } : {}),
+		...(relative ? { relative } : {}),
 	})
 	const failed = evaluation.cases.some((item) => item.outcome === "fail")
 	return {
