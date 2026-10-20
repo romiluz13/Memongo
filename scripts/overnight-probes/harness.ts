@@ -130,6 +130,10 @@ const PASSTHROUGH = [
 	"SSL_CERT_DIR",
 	"VOYAGE_API_QUERY_KEY",
 	"VOYAGE_API_INDEXING_KEY",
+	// Network transport only, so an operator can A/B a connectivity fix.
+	"MEMONGO_MONGODB_NETWORK_FAMILY",
+	"MEMONGO_MONGODB_SOCKET_TIMEOUT_MS",
+	"MEMONGO_MONGODB_MAX_IDLE_TIME_MS",
 ] as const
 
 export function buildChildEnv(

@@ -117,6 +117,31 @@ describe("child environment", () => {
 		expect(env.MEMONGO_API_RATE_LIMIT).toBe("0")
 	})
 
+	it("passes the MongoDB network settings through only when the parent sets them", () => {
+		const tuned = buildChildEnv(
+			{
+				...inherited,
+				MEMONGO_MONGODB_NETWORK_FAMILY: "4",
+				MEMONGO_MONGODB_SOCKET_TIMEOUT_MS: "20000",
+				MEMONGO_MONGODB_MAX_IDLE_TIME_MS: "60000",
+			},
+			{
+				database: "memongo_probe_0a1b2c3d",
+				port: 51234,
+				apiKey: "run-key-SENTINEL-000000",
+				mongoUri: URI,
+				voyageKey: VOYAGE,
+				configPath: "/scratch/config.json",
+			},
+		)
+		expect(tuned.MEMONGO_MONGODB_NETWORK_FAMILY).toBe("4")
+		expect(tuned.MEMONGO_MONGODB_SOCKET_TIMEOUT_MS).toBe("20000")
+		expect(tuned.MEMONGO_MONGODB_MAX_IDLE_TIME_MS).toBe("60000")
+		expect(env.MEMONGO_MONGODB_NETWORK_FAMILY).toBeUndefined()
+		expect(env.MEMONGO_MONGODB_SOCKET_TIMEOUT_MS).toBeUndefined()
+		expect(env.MEMONGO_MONGODB_MAX_IDLE_TIME_MS).toBeUndefined()
+	})
+
 	it("passes only Voyage query and indexing keys when the parent has them", () => {
 		expect(env.VOYAGE_API_QUERY_KEY).toBe("al-query-key-SENTINEL-00000")
 		expect(env.VOYAGE_API_INDEXING_KEY).toBeUndefined()
