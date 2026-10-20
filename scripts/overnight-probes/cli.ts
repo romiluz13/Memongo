@@ -53,6 +53,8 @@ export type Io = {
 
 const USAGE = "usage: overnight-probes [--probes A,B,...] [--runs N] [--json]"
 const TOKEN_HEX_CHARS = 12
+const REASONS_SHOWN = 3
+const REASON_CHARS = 160
 
 function describeError(error: unknown): string {
 	return error instanceof Error ? `${error.name}: ${error.message}` : "error"
@@ -69,7 +71,11 @@ function summaryLines(report: InvocationReport, exit: number): string[] {
 			),
 		]
 		const suffix = labels.length > 0 ? `; ${labels.join("; ")}` : ""
-		return `probe ${item.probe}: ${item.outcome} (${item.runs} runs)${suffix}`
+		const why = item.reasons
+			.slice(0, REASONS_SHOWN)
+			.map((reason) => reason.slice(0, REASON_CHARS))
+		const detail = why.length > 0 ? ` | ${why.join(" | ")}` : ""
+		return `probe ${item.probe}: ${item.outcome} (${item.runs} runs)${suffix}${detail}`
 	})
 	lines.push(`overall: ${report.outcome} (exit ${exit})`)
 	return lines

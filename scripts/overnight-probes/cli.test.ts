@@ -111,6 +111,36 @@ describe("exit codes", () => {
 		expect(await main(["--probes", "A"], ENV, notRun.io)).toBe(3)
 	})
 
+	it("shows why a probe did not pass, a few reasons at a time and truncated", async () => {
+		const state = setup(async (letter, ctx) => ({
+			...resultOf(letter, ctx, "inconclusive", [caseOf("c1", "inconclusive")]),
+			reasons: [
+				"first",
+				"second",
+				"third",
+				"fourth",
+				`long ${"x".repeat(400)}`,
+			],
+		}))
+		await main(["--probes", "A", "--runs", "1"], ENV, state.io)
+		const line = state.err
+			.join("")
+			.split("\n")
+			.find((entry) => entry.startsWith("probe A"))
+		expect(line).toContain("run 1: first | run 1: second | run 1: third")
+		expect(line).not.toContain("fourth")
+		const wide = setup(async (letter, ctx) => ({
+			...resultOf(letter, ctx, "inconclusive", [caseOf("c1", "inconclusive")]),
+			reasons: [`long ${"x".repeat(400)}`],
+		}))
+		await main(["--probes", "A", "--runs", "1"], ENV, wide.io)
+		const wideLine = wide.err
+			.join("")
+			.split("\n")
+			.find((entry) => entry.startsWith("probe A"))
+		expect((wideLine ?? "").length).toBeLessThan(300)
+	})
+
 	it("turns a throwing probe into an inconclusive exit, still cleaning up", async () => {
 		const state = setup(async () => {
 			throw new Error(`boom ${URI}`)
