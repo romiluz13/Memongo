@@ -11,7 +11,7 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import { evaluateRouteHealth } from "./health.ts"
-import { SETTLE_MAX_MS, SETTLE_STEP_MS } from "./kit.ts"
+import { resolveLiveHandle, SETTLE_MAX_MS, SETTLE_STEP_MS } from "./kit.ts"
 import { containsMarker } from "./markers.ts"
 import {
 	evaluateProbeG,
@@ -131,17 +131,6 @@ async function readRoute(
 	}
 }
 
-function liveHandle(
-	fallback: MemongoStructuredStableHandle,
-	pre: GRead | undefined,
-): MemongoStructuredStableHandle {
-	if (pre?.observation.kind !== "response") return fallback
-	const handle = asRecord(asRecord(pre.observation.body)?.handle)
-	return handle && typeof handle.revision === "number"
-		? ({ ...fallback, ...handle } as MemongoStructuredStableHandle)
-		: fallback
-}
-
 async function settle(
 	ctx: ProbeContext,
 	target: Target,
@@ -241,7 +230,12 @@ async function runSequence(
 		seedHandle,
 	)
 	reads.push(firstGet)
-	const handle = liveHandle(seedHandle, firstGet)
+	const live = resolveLiveHandle(seedHandle, firstGet)
+	if (!live.ok) {
+		notes.push(`handle-invalid:${spec.sequence}:${live.reason}`)
+		return undefined
+	}
+	const handle = live.handle
 	for (const route of ROUTES) {
 		if (route === "lifecycleGet") continue
 		reads.push(await readRoute(ctx, route, "pre", target, handle))

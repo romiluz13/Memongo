@@ -6,7 +6,13 @@ import {
 	countedObserve,
 	type ProbeContext,
 } from "./context.ts"
-import { liveHandle, MAX_POLLS, pollUntil, type Scope, stamped } from "./kit.ts"
+import {
+	MAX_POLLS,
+	pollUntil,
+	resolveLiveHandle,
+	type Scope,
+	stamped,
+} from "./kit.ts"
 import { bodyContains, containsMarker } from "./markers.ts"
 import {
 	type CSequenceFacts,
@@ -137,7 +143,12 @@ async function runUpdate(
 		{ route: "lifecycleGet", phase: "pre" },
 	)
 	const reads: GRead[] = [firstGet]
-	const handle = liveHandle(seedHandle, firstGet)
+	const live = resolveLiveHandle(seedHandle, firstGet)
+	if (!live.ok) {
+		notes.push(`handle-invalid:update:${live.reason}`)
+		return undefined
+	}
+	const handle = live.handle
 	const pre = await pollUntil(
 		ctx,
 		() => searchRead(ctx, scope, query, "pre"),

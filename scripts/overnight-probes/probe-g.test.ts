@@ -17,6 +17,7 @@ type Options = {
 	updateFails?: boolean
 	searchNeverShowsNew?: boolean
 	degradeSearchAfterUpdate?: boolean
+	handleWithoutRevision?: boolean
 	clock?: ReturnType<typeof createFakeClock>
 }
 
@@ -30,6 +31,7 @@ function createFakeG(options: Options = {}) {
 	const items = new Map<string, Stored>()
 	let counter = 0
 	let updated = false
+	const tally = { mutations: 0 }
 	const clock = options.clock ?? createFakeClock()
 	const byHandle = (handle: Json) => {
 		const key = (handle.structured as Json).key as string
@@ -42,6 +44,7 @@ function createFakeG(options: Options = {}) {
 		value: item.value,
 		revision: item.revision,
 		state: item.state,
+		identity: item.identity,
 		...(item.validTo ? { validTo: item.validTo } : {}),
 	})
 	const shownFor = (route: GRouteId): GItem[] => {
@@ -72,6 +75,7 @@ function createFakeG(options: Options = {}) {
 	return {
 		clock,
 		items,
+		tally,
 		api: {
 			writeStructured: async (input: Json) => {
 				counter += 1
@@ -83,11 +87,23 @@ function createFakeG(options: Options = {}) {
 					revision: 1,
 					state: "active",
 					revisions: [],
+					identity: {
+						id: `st-${counter}`,
+						agentId: input.agentId as string,
+						scope: entry.scope as string,
+						scopeRef: entry.scopeRef as string,
+					},
 				})
 				return { upserted: true, id: `st-${counter}` }
 			},
-			getLifecycleItem: async (input: Json) =>
-				routeBody("lifecycleGet", [plain(byHandle(input.handle as Json))]),
+			getLifecycleItem: async (input: Json) => {
+				const body = routeBody("lifecycleGet", [
+					plain(byHandle(input.handle as Json)),
+				]) as { handle: Json }
+				return options.handleWithoutRevision
+					? { ...body, handle: { ...body.handle, revision: undefined } }
+					: body
+			},
 			getLifecycleHistory: async (input: Json) => {
 				const item = byHandle(input.handle as Json)
 				const current =
@@ -104,12 +120,14 @@ function createFakeG(options: Options = {}) {
 					throw httpError(409, "MEMORY_LIFECYCLE_CONFLICT")
 				const item = byHandle(input.handle as Json)
 				updated = true
+				tally.mutations += 1
 				item.revisions.push(plain(item))
 				item.value = (input.patch as Json).value as string
 				item.revision += 1
 				return routeBody("lifecycleGet", [plain(item)])
 			},
 			deleteLifecycleItem: async (input: Json) => {
+				tally.mutations += 1
 				const item = byHandle(input.handle as Json)
 				item.revisions.push(plain(item))
 				item.state = "invalidated"
@@ -244,6 +262,15 @@ describe("runProbeG against faulty fakes", () => {
 		).update
 		expect(settle?.satisfied).toBe(false)
 		expect(settle?.polls).toBe(SETTLE_MAX_MS / 1_000 + 1)
+	})
+
+	it("does not mutate with a substitute handle when the pre-read handle is malformed", async () => {
+		const { ctx, fake } = fakeContext({ handleWithoutRevision: true })
+		const result = await runProbeG(ctx)
+		expect(fake.tally.mutations).toBe(0)
+		expect(result.reasons.join(" ")).toContain("handle-invalid:update:revision")
+		expect(result.reasons.join(" ")).toContain("handle-invalid:delete:revision")
+		expect(result.outcome).toBe("inconclusive")
 	})
 
 	it("stops cleanly when the budget refuses mid-sequence", async () => {

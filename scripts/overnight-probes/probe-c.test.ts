@@ -16,6 +16,7 @@ type Options = {
 	historyDropsRevisions?: boolean
 	dropInvalidatedByLink?: boolean
 	degradeUpdateSearch?: boolean
+	handleWithoutRevision?: boolean
 }
 
 type Stored = GItem & {
@@ -31,12 +32,13 @@ function createFakeC(options: Options = {}) {
 	const events: { body: string; timestamp: string }[] = []
 	let counter = 0
 	let updated = false
-	const tally = { degradedSearches: 0 }
+	const tally = { degradedSearches: 0, updates: 0 }
 	const plain = (item: Stored): GItem => ({
 		key: item.key,
 		value: item.value,
 		revision: item.revision,
 		state: item.state,
+		identity: item.identity,
 		...(item.validTo ? { validTo: item.validTo } : {}),
 	})
 	const byKey = (key: string) => {
@@ -75,6 +77,12 @@ function createFakeC(options: Options = {}) {
 				revision: 1,
 				state: "active",
 				revisions: [],
+				identity: {
+					id: `st-${counter}`,
+					agentId: input.agentId as string,
+					scope: entry.scope as string,
+					scopeRef: entry.scopeRef as string,
+				},
 			})
 			return { upserted: true, id: `st-${counter}` }
 		},
@@ -85,8 +93,14 @@ function createFakeC(options: Options = {}) {
 			})
 			return { ok: true, eventId: `ev-${events.length}`, chunkCreated: true }
 		},
-		getLifecycleItem: async (input: Json) =>
-			routeBody("lifecycleGet", [plain(byKey(keyOf(input.handle as Json)))]),
+		getLifecycleItem: async (input: Json) => {
+			const body = routeBody("lifecycleGet", [
+				plain(byKey(keyOf(input.handle as Json))),
+			]) as { handle: Json }
+			return options.handleWithoutRevision
+				? { ...body, handle: { ...body.handle, revision: undefined } }
+				: body
+		},
 		getLifecycleHistory: async (input: Json) => {
 			const item = byKey(keyOf(input.handle as Json))
 			return routeBody("lifecycleHistory", [], {
@@ -98,6 +112,7 @@ function createFakeC(options: Options = {}) {
 			if (options.updateFails) throw httpError(409, "MEMORY_LIFECYCLE_CONFLICT")
 			const item = byKey(keyOf(input.handle as Json))
 			updated = true
+			tally.updates += 1
 			item.revisions.push(plain(item))
 			item.value = (input.patch as Json).value as string
 			item.revision += 1
@@ -210,6 +225,17 @@ describe("runProbeC", () => {
 			(item) => item.caseId === "C/update/search",
 		)
 		expect(search?.outcome).toBe("inconclusive")
+	})
+
+	it("does not mutate with a substitute handle when the pre-read handle is malformed", async () => {
+		const { ctx, fake } = context({ handleWithoutRevision: true })
+		const result = await runProbeC(ctx)
+		expect(fake.tally.updates).toBe(0)
+		expect(result.reasons.join(" ")).toContain("handle-invalid:update:revision")
+		expect(result.outcome).toBe("inconclusive")
+		expect(
+			result.cases.some((item) => item.caseId.startsWith("C/update/")),
+		).toBe(false)
 	})
 
 	it("fails when history keeps no revision of the old value", async () => {

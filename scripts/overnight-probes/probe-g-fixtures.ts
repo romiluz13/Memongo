@@ -13,6 +13,7 @@ export type GItem = {
 	state: "active" | "invalidated"
 	validTo?: string
 	key?: string
+	identity?: { id: string; agentId: string; scope: string; scopeRef: string }
 }
 
 const HANDLE = { agentId: "a", scope: "workspace", scopeRef: "w", id: "x" }
@@ -22,7 +23,7 @@ function lifecycleItem(item: GItem) {
 	return {
 		family: "structured",
 		handle: {
-			...HANDLE,
+			...(item.identity ?? HANDLE),
 			family: "structured",
 			revision: item.revision,
 			state: item.state,
