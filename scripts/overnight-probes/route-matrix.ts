@@ -80,9 +80,9 @@ export const READ_ROWS: RouteRow[] = [
 		id: "readFile:structured-locator",
 		route: "readFile",
 		clientMethod: "readFile",
-		partitions: ["agent"],
+		partitions: ALL,
 		setup:
-			"structured memory per tenant with a tenant-unique key; the locator carries scope and scopeRef",
+			"structured memory per tenant with a tenant-unique key; the locator carries scope and scopeRef, so agent, scope and scopeRef partitions are all addressable",
 		control: "the owner reads its own locator and the text contains its marker",
 		extraction: DEEP,
 		postErase:
@@ -160,6 +160,44 @@ export const READ_ROWS: RouteRow[] = [
 		extraction: DEEP,
 		postErase: ERASED_ABSENT,
 		coverage: "covered",
+	},
+	{
+		id: "discovery:entity-brief",
+		route: "buildDiscoveryProjection",
+		clientMethod: "buildDiscoveryProjection",
+		partitions: ALL,
+		setup:
+			"structured memory per tenant, searchable; the entity brief reads the structured lane for the query beside the graph lane",
+		control: OWN_FOUND,
+		extraction: DEEP,
+		postErase: ERASED_ABSENT,
+		coverage: "covered",
+	},
+	{
+		id: "discovery:what-changed",
+		route: "buildDiscoveryProjection",
+		clientMethod: "buildDiscoveryProjection",
+		partitions: ALL,
+		setup:
+			"events per tenant inside the default window, searchable; the recent anchors section reads event bodies for the query",
+		control: OWN_FOUND,
+		extraction: DEEP,
+		postErase: ERASED_ABSENT,
+		coverage: "covered",
+	},
+	{
+		id: "discovery:contradiction-report",
+		route: "buildDiscoveryProjection",
+		clientMethod: "buildDiscoveryProjection",
+		partitions: ALL,
+		setup:
+			"none staged: the report lists only conflicted or invalidated records, and A seeds active ones",
+		control: "none possible without a seeded contradiction",
+		extraction: DEEP,
+		postErase: "not assessed",
+		coverage: "gap",
+		gapReason:
+			"a positive control needs a conflicted or invalidated record per tenant, and creating one means a lifecycle mutation that would alter the fixtures every other row reads",
 	},
 	{
 		id: "contextBundle",

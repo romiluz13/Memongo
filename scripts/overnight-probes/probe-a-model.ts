@@ -19,7 +19,7 @@ import {
 import type { CaseResult, Observation, Outcome } from "./types.ts"
 import { aggregateRun } from "./verdict.ts"
 
-export const PROBE_A_VERSION = "A-1"
+export const PROBE_A_VERSION = "A-2"
 
 export const PROBE_A_RULE =
 	"A pre-erase case fails when another tenant's marker appears anywhere in the returned content of the response, healthy or not; fields that only echo the request, such as the query, are not content. An erase case fails when an erased tenant's marker appears anywhere in the returned content after an erase confirmed complete. A case passes only when the response was healthy, complete and evaluable and a control on the same route found the reader's own marker (pre-erase) or the untouched agent's marker (post-erase). Every other case is inconclusive."

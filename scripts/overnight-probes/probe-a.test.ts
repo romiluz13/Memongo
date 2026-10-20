@@ -198,13 +198,14 @@ function createFakeMemongo(options: Options = {}) {
 }
 
 describe("runProbeA against a correctly isolated fake", () => {
-	it("passes with every required case executed and records the searchKB gap", async () => {
+	it("passes with every required case executed and records the declared gaps", async () => {
 		const fake = createFakeMemongo()
 		const ctx = createFakeContext(fake.api)
 		const result = await runProbeA(ctx)
 		expect(result.outcome).toBe("pass")
 		expect(result.cases.every((item) => item.outcome === "pass")).toBe(true)
 		expect(result.extra?.gaps).toEqual([
+			expect.objectContaining({ rowId: "discovery:contradiction-report" }),
 			expect.objectContaining({ rowId: "searchKB" }),
 		])
 		expect(result.extra?.erase).toEqual({ confirmed: true })
@@ -218,6 +219,35 @@ describe("runProbeA against a correctly isolated fake", () => {
 		const counted = ctx.budget.snapshot().calls
 		expect(counted["api-read"]).toBe(plan["api-read"])
 		expect(counted["api-write"]).toBe(plan["api-write"])
+	})
+
+	it("reads every covered discovery kind and presents the readFile locator under each differing partition", async () => {
+		const fake = createFakeMemongo()
+		await runProbeA(createFakeContext(fake.api))
+		const parsed = fake.requests.map((request) => JSON.parse(request) as Json)
+		const kinds = new Set(parsed.map((request) => request.kind).filter(Boolean))
+		expect([...kinds].sort()).toEqual([
+			"entity-brief",
+			"topic-brief",
+			"what-changed",
+		])
+		const locators = parsed
+			.map((request) => request.relPath)
+			.filter((path): path is string => typeof path === "string")
+		expect(locators.some((path) => path.includes("scope=tenant"))).toBe(true)
+		expect(
+			locators.some(
+				(path) =>
+					path.includes("codeword-self-") &&
+					path.includes("scopeRef=probe-w2-"),
+			),
+		).toBe(true)
+		expect(
+			locators.some(
+				(path) =>
+					path.includes("codeword-self-") && path.includes("scope=tenant"),
+			),
+		).toBe(true)
 	})
 
 	it("never puts a marker in a request", async () => {

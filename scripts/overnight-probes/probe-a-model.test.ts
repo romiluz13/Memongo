@@ -31,17 +31,19 @@ describe("evaluateProbeA clean runs", () => {
 			expect(ids.has(required)).toBe(true)
 	})
 
-	it("reports the searchKB gap with its reason and does not count it as a pass", () => {
+	it("reports every declared gap with its reason and does not count any as a pass", () => {
 		const result = evaluate(buildCleanRecords())
-		expect(result.gaps).toEqual([
-			{
-				rowId: "searchKB",
-				reason: READ_ROWS.find((row) => row.id === "searchKB")?.gapReason,
-			},
-		])
-		expect(result.cases.some((item) => item.caseId.includes("searchKB"))).toBe(
-			false,
+		expect(result.gaps).toEqual(
+			["discovery:contradiction-report", "searchKB"].map((rowId) => ({
+				rowId,
+				reason: READ_ROWS.find((row) => row.id === rowId)?.gapReason,
+			})),
 		)
+		for (const rowId of ["searchKB", "contradiction-report"]) {
+			expect(result.cases.some((item) => item.caseId.includes(rowId))).toBe(
+				false,
+			)
+		}
 	})
 
 	it("counts attempted, completed, healthy and evaluable reads", () => {
@@ -54,7 +56,7 @@ describe("evaluateProbeA clean runs", () => {
 		expect(PROBE_A_RULE).toMatch(/anywhere in the returned content/)
 		expect(PROBE_A_RULE).toMatch(/only echo the request/)
 		expect(PROBE_A_RULE).toMatch(/inconclusive/)
-		expect(PROBE_A_VERSION).toBe("A-1")
+		expect(PROBE_A_VERSION).toBe("A-2")
 	})
 })
 

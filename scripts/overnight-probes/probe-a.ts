@@ -96,6 +96,18 @@ const CALLS: Record<string, Call> = {
 			query: QUERY,
 			...coords(reader),
 		}),
+	"discovery:entity-brief": (api, reader) =>
+		api.buildDiscoveryProjection({
+			kind: "entity-brief",
+			query: QUERY,
+			...coords(reader),
+		}),
+	"discovery:what-changed": (api, reader) =>
+		api.buildDiscoveryProjection({
+			kind: "what-changed",
+			query: QUERY,
+			...coords(reader),
+		}),
 	contextBundle: (api, reader) =>
 		api.buildContextBundle({ query: QUERY, ...coords(reader) }),
 	relevanceExplain: (api, reader) =>

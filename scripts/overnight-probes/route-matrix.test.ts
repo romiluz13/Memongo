@@ -12,6 +12,22 @@ const CLIENT_SOURCE = readFileSync(
 	"utf8",
 )
 
+const TYPES_SOURCE = readFileSync(
+	new URL("../../packages/client/src/types.ts", import.meta.url),
+	"utf8",
+)
+
+function discoveryKinds(): string[] {
+	const block = TYPES_SOURCE.split(
+		"export type MemongoDiscoveryProjectionInput = {",
+	)[1]
+	const line =
+		block
+			?.split("\n")
+			.find((candidate) => candidate.trim().startsWith("kind:")) ?? ""
+	return [...line.matchAll(/"([a-z-]+)"/g)].map((match) => match[1] as string)
+}
+
 function clientMethods(): string[] {
 	const names: string[] = []
 	for (const line of CLIENT_SOURCE.split("\n")) {
@@ -75,8 +91,35 @@ describe("route matrix inventory", () => {
 	it("covers all four partitions across the matrix and declares agent-only routes", () => {
 		const union = new Set(READ_ROWS.flatMap((row) => row.partitions))
 		expect([...union].sort()).toEqual(["agent", "ref", "scope"])
+		const agentOnly = READ_ROWS.filter(
+			(row) => row.partitions.length === 1,
+		).map((row) => row.id)
+		expect(agentOnly).toEqual(["relevanceExplain"])
+	})
+
+	it("addresses readFile by agent, scope and scopeRef because its locator carries all three", () => {
 		const readFile = READ_ROWS.find((row) => row.clientMethod === "readFile")
-		expect(readFile?.partitions).toEqual(["agent"])
+		expect(readFile?.partitions).toEqual(["agent", "scope", "ref"])
+	})
+
+	it("covers every discovery projection kind the client exposes, or declares it a gap with a reason", () => {
+		const kinds = discoveryKinds()
+		expect(kinds).toEqual([
+			"entity-brief",
+			"topic-brief",
+			"what-changed",
+			"contradiction-report",
+		])
+		for (const kind of kinds) {
+			const row = READ_ROWS.find(
+				(candidate) => candidate.id === `discovery:${kind}`,
+			)
+			expect(row, kind).toBeDefined()
+			expect(row?.route).toBe("buildDiscoveryProjection")
+			if (row?.coverage === "gap") {
+				expect(row.gapReason?.length ?? 0, kind).toBeGreaterThan(30)
+			}
+		}
 	})
 })
 
@@ -91,17 +134,35 @@ describe("requiredCaseIds", () => {
 		expect(new Set(ids).size).toBe(ids.length)
 	})
 
+	it("requires the scope and scopeRef partitions of the readFile locator", () => {
+		const ids = requiredCaseIds()
+		for (const foreign of ["agent", "scope", "ref"]) {
+			expect(ids).toContain(
+				`A/readFile:structured-locator/reader=self/foreign=${foreign}/pre-erase`,
+			)
+		}
+	})
+
 	it("does not require partitions a route cannot express", () => {
 		const ids = requiredCaseIds()
 		expect(ids).toContain(
-			"A/readFile:structured-locator/reader=self/foreign=agent/pre-erase",
+			"A/relevanceExplain/reader=self/foreign=agent/pre-erase",
 		)
 		expect(ids).not.toContain(
-			"A/readFile:structured-locator/reader=self/foreign=scope/pre-erase",
+			"A/relevanceExplain/reader=self/foreign=scope/pre-erase",
 		)
 		expect(ids).not.toContain(
-			"A/readFile:structured-locator/reader=self/foreign=ref/pre-erase",
+			"A/relevanceExplain/reader=self/foreign=ref/pre-erase",
 		)
+	})
+
+	it("requires the covered discovery kinds and leaves the declared gap out", () => {
+		const ids = requiredCaseIds()
+		expect(ids).toContain(
+			"A/discovery:entity-brief/reader=self/control/pre-erase",
+		)
+		expect(ids).toContain("A/discovery:what-changed/erased=self/post-erase")
+		expect(ids.some((id) => id.includes("contradiction-report"))).toBe(false)
 	})
 
 	it("uses four tenant roles", () => {
