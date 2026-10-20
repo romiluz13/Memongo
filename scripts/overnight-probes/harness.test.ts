@@ -1,161 +1,14 @@
 import { describe, expect, it } from "vitest"
+import { fixture, SENTINELS, URI, VOYAGE } from "./fake-harness.ts"
 import {
 	buildChildEnv,
 	generateAgentId,
 	generateDatabaseName,
 	HarnessRefusal,
 	isOwnedDatabaseName,
-	type ApiProcess,
-	type HarnessDeps,
-	type MongoAdmin,
-	type OwnershipMarker,
 	startHarness,
+	withAppName,
 } from "./harness.ts"
-import { collectSecretValues, createSanitizer } from "./sanitize.ts"
-
-const URI = "mongodb://dbuser:dbpass-SENTINEL@cluster.sentinel.example/"
-const VOYAGE = "al-SENTINEL-voyage-harness-0001"
-const SENTINELS = ["dbpass-SENTINEL", VOYAGE, "cluster.sentinel.example"]
-
-type Calls = {
-	dropped: string[]
-	killed: Array<{ pid: number; signal: string }>
-	spawned: Array<Record<string, string>>
-	notes: string[]
-	markers: Map<string, OwnershipMarker>
-	closed: number
-	pathsRemoved: number
-}
-
-class FakeChild implements ApiProcess {
-	pid = 4242
-	exited = false
-	private lineCb?: (s: "stdout" | "stderr", l: string) => void
-	private buffered: string[] = []
-	private exitCb: (c: number | null, s: string | null) => void = () => {}
-	constructor(private readonly calls: Calls) {}
-	onLine(cb: (s: "stdout" | "stderr", l: string) => void) {
-		this.lineCb = cb
-		for (const line of this.buffered) cb("stderr", line)
-		this.buffered = []
-	}
-	onExit(cb: (c: number | null, s: string | null) => void) {
-		this.exitCb = cb
-	}
-	kill(signal: "SIGTERM" | "SIGKILL") {
-		this.calls.killed.push({ pid: this.pid, signal })
-		this.exited = true
-		this.exitCb(null, signal)
-	}
-	emit(line: string) {
-		if (this.lineCb) this.lineCb("stderr", line)
-		else this.buffered.push(line)
-	}
-	die(code: number) {
-		this.exited = true
-		this.exitCb(code, null)
-	}
-}
-
-type Overrides = {
-	existingDatabases?: string[]
-	portFree?: boolean
-	spawnThrows?: boolean
-	markerWriteFails?: boolean
-	dropFails?: boolean
-	status?: (calls: Calls) => { status: number; body: unknown }
-	onSpawn?: (child: FakeChild) => void
-	collections?: string[]
-	apiBuilt?: boolean
-	markerTamper?: boolean
-	readyAfter?: number
-}
-
-function fixture(overrides: Overrides = {}) {
-	const calls: Calls = {
-		dropped: [],
-		killed: [],
-		spawned: [],
-		notes: [],
-		markers: new Map(),
-		closed: 0,
-		pathsRemoved: 0,
-	}
-	let fetches = 0
-	let clock = 0
-	const mongo: MongoAdmin = {
-		databaseExists: async (name) =>
-			(overrides.existingDatabases ?? []).includes(name),
-		writeMarker: async (name, marker) => {
-			if (overrides.markerWriteFails) throw new Error(`marker failed ${URI}`)
-			calls.markers.set(name, marker)
-		},
-		readMarker: async (name) => {
-			const marker = calls.markers.get(name)
-			if (overrides.markerTamper && marker) {
-				return { ...marker, runId: "someone-else" }
-			}
-			return marker
-		},
-		listCollections: async () =>
-			overrides.collections ?? ["__probe_owner", "memongo_events"],
-		dropDatabase: async (name) => {
-			if (overrides.dropFails) throw new Error(`drop failed for ${URI}`)
-			calls.dropped.push(name)
-		},
-		listOperations: async () => [],
-		killOperation: async () => {},
-		close: async () => {
-			calls.closed += 1
-		},
-	}
-	let child: FakeChild | undefined
-	const deps: HarnessDeps = {
-		mongo,
-		sanitizer: createSanitizer({
-			secretValues: collectSecretValues({
-				MEMONGO_MONGODB_URI: URI,
-				VOYAGE_API_KEY: VOYAGE,
-			}),
-		}),
-		fileExists: () => overrides.apiBuilt ?? true,
-		allocatePort: async () => 51234,
-		isPortFree: async () => overrides.portFree ?? true,
-		spawnApi: (env) => {
-			if (overrides.spawnThrows) throw new Error(`spawn failed ${URI}`)
-			calls.spawned.push(env)
-			child = new FakeChild(calls)
-			overrides.onSpawn?.(child)
-			return child
-		},
-		fetchJson: async (_url, _headers) => {
-			fetches += 1
-			if (overrides.readyAfter && fetches <= overrides.readyAfter) {
-				return { status: 503, body: {} }
-			}
-			if (overrides.status) return overrides.status(calls)
-			const database = [...calls.markers.keys()][0]
-			return {
-				status: 200,
-				body: { backend: "mongodb", custom: { database } },
-			}
-		},
-		sleep: async (ms) => {
-			clock += ms
-		},
-		now: () => clock,
-		randomHex: () => "0a1b2c3d",
-		randomUuid: () => "11111111-2222-4333-8444-555555555555",
-		withConfigFile: () => ({
-			path: "/scratch/config.json",
-			remove: () => {
-				calls.pathsRemoved += 1
-			},
-		}),
-		note: (line) => calls.notes.push(line),
-	}
-	return { deps, calls, child: () => child }
-}
 
 const START = {
 	mongoUri: URI,
@@ -258,7 +111,36 @@ describe("child environment", () => {
 	})
 })
 
+describe("withAppName", () => {
+	it("adds the client name as a query parameter, inserting the path slash a bare host needs", () => {
+		expect(withAppName("mongodb://u:p@h1:27017,h2:27017", "probe-x")).toBe(
+			"mongodb://u:p@h1:27017,h2:27017/?appName=probe-x",
+		)
+		expect(withAppName("mongodb+srv://u:p@cluster.example/", "probe-x")).toBe(
+			"mongodb+srv://u:p@cluster.example/?appName=probe-x",
+		)
+	})
+
+	it("keeps existing options and replaces an existing client name in any letter case", () => {
+		expect(
+			withAppName(
+				"mongodb://h/db?retryWrites=true&APPNAME=other&w=majority",
+				"n",
+			),
+		).toBe("mongodb://h/db?retryWrites=true&w=majority&appName=n")
+	})
+})
+
 describe("startHarness", () => {
+	it("hands the child a connection whose client name identifies this run and exposes the same name", async () => {
+		const f = fixture()
+		const harness = await startHarness(f.deps, START)
+		expect(harness.appName).toBe("memongo-probe-api-0a1b2c3d")
+		expect(f.calls.spawned[0]?.MEMONGO_FORCE_MONGODB_URI).toContain(
+			"appName=memongo-probe-api-0a1b2c3d",
+		)
+	})
+
 	it("starts the API on the generated database, verifies the effective target and exposes a run-scoped base URL", async () => {
 		const f = fixture()
 		const harness = await startHarness(f.deps, START)
@@ -314,6 +196,48 @@ describe("startHarness", () => {
 		expect(error.reason).toBe("spawn-failed")
 		expect(f.calls.dropped).toEqual(["memongo_probe_0a1b2c3d"])
 		expect(f.calls.killed).toEqual([])
+		for (const s of SENTINELS) expect(error.message).not.toContain(s)
+	})
+
+	it("flags a refusal whose cleanup could not drop the database and names that database", async () => {
+		const failed = fixture({ spawnThrows: true, dropFails: true })
+		const error = await refusal(startHarness(failed.deps, START))
+		expect(error.cleanupFailed).toBe(true)
+		expect(error.message).toContain(
+			"cleanup incomplete for database memongo_probe_0a1b2c3d",
+		)
+		for (const s of SENTINELS) expect(error.message).not.toContain(s)
+		const clean = await refusal(
+			startHarness(fixture({ spawnThrows: true }).deps, START),
+		)
+		expect(clean.cleanupFailed).toBe(false)
+	})
+
+	it("turns an unexpected failure after the API is ready into a refusal that stops the child and drops the database", async () => {
+		const f = fixture({ listThrows: true })
+		const error = await refusal(startHarness(f.deps, START))
+		expect(error.reason).toBe("startup-failed")
+		expect(f.calls.killed.length).toBeGreaterThan(0)
+		expect(f.calls.dropped).toEqual(["memongo_probe_0a1b2c3d"])
+		expect(f.calls.closed).toBe(1)
+		for (const s of SENTINELS) expect(error.message).not.toContain(s)
+	})
+
+	it("drops the marked database when preparing the child configuration fails", async () => {
+		const f = fixture({ configThrows: true })
+		const error = await refusal(startHarness(f.deps, START))
+		expect(error.reason).toBe("startup-failed")
+		expect(f.calls.spawned).toHaveLength(0)
+		expect(f.calls.dropped).toEqual(["memongo_probe_0a1b2c3d"])
+	})
+
+	it("closes the connection and drops nothing when the collision lookup itself fails", async () => {
+		const f = fixture({ existsThrows: true })
+		const error = await refusal(startHarness(f.deps, START))
+		expect(error.reason).toBe("startup-failed")
+		expect(f.calls.dropped).toEqual([])
+		expect(f.calls.markers.size).toBe(0)
+		expect(f.calls.closed).toBe(1)
 		for (const s of SENTINELS) expect(error.message).not.toContain(s)
 	})
 

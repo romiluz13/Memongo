@@ -3,88 +3,23 @@ import {
 	buildCleanRecords,
 	FIXTURE_MARKERS,
 	healthyBody,
-	makeRecord,
 } from "./probe-a-fixtures.ts"
 import {
-	evaluateProbeA,
 	isConfirmedErase,
 	PROBE_A_RULE,
 	PROBE_A_VERSION,
-	type ReadRecord,
 } from "./probe-a-model.ts"
+import {
+	caseOf,
+	evaluate,
+	replace,
+	SEARCH_SELF_AGENT,
+	SEARCH_SELF_CONTROL,
+	searchBody,
+	UNCONFIRMED,
+	without,
+} from "./probe-a-testkit.ts"
 import { READ_ROWS, requiredCaseIds } from "./route-matrix.ts"
-import type { Observation } from "./types.ts"
-
-const CONFIRMED = { confirmed: true } as const
-const UNCONFIRMED = { confirmed: false, reason: "status:partial" } as const
-
-function evaluate(
-	records: ReadRecord[],
-	erase = CONFIRMED as { confirmed: boolean; reason?: string },
-) {
-	return evaluateProbeA({ records, markers: FIXTURE_MARKERS, erase })
-}
-
-function replace(
-	records: ReadRecord[],
-	match: {
-		rowId: string
-		phase: "pre-erase" | "post-erase"
-		reader: ReadRecord["reader"]
-		foreign?: ReadRecord["foreign"]
-	},
-	observation: Observation,
-): ReadRecord[] {
-	return records.map((record) =>
-		record.rowId === match.rowId &&
-		record.phase === match.phase &&
-		record.reader === match.reader &&
-		record.foreign === match.foreign
-			? makeRecord(
-					match.rowId,
-					match.phase,
-					match.reader,
-					match.foreign,
-					observation,
-				)
-			: record,
-	)
-}
-
-function without(
-	records: ReadRecord[],
-	rowId: string,
-	phase: string,
-	reader: string,
-	foreign?: string,
-) {
-	return records.filter(
-		(r) =>
-			!(
-				r.rowId === rowId &&
-				r.phase === phase &&
-				r.reader === reader &&
-				r.foreign === foreign
-			),
-	)
-}
-
-function caseOf(result: ReturnType<typeof evaluate>, caseId: string) {
-	const found = result.cases.find((item) => item.caseId === caseId)
-	if (!found) throw new Error(`case ${caseId} missing`)
-	return found
-}
-
-const SEARCH_SELF_AGENT = "A/search/reader=self/foreign=agent/pre-erase"
-const SEARCH_SELF_CONTROL = "A/search/reader=self/control/pre-erase"
-
-function searchBody(shown: string[], overrides: Record<string, unknown> = {}) {
-	return {
-		kind: "response" as const,
-		route: "search",
-		body: { ...(healthyBody("search", shown) as object), ...overrides },
-	}
-}
 
 describe("evaluateProbeA clean runs", () => {
 	it("passes with every required case executed and passed", () => {

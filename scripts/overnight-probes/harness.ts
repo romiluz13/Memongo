@@ -21,6 +21,7 @@ export type HarnessRefusalReason =
 	| "target-mismatch"
 	| "target-unverified"
 	| "bad-identity"
+	| "startup-failed"
 
 export class HarnessRefusal extends Error {
 	override name = "HarnessRefusal"
@@ -28,6 +29,7 @@ export class HarnessRefusal extends Error {
 		readonly reason: HarnessRefusalReason,
 		message: string,
 		readonly tail: string[] = [],
+		readonly cleanupFailed = false,
 	) {
 		super(message)
 	}
@@ -40,25 +42,13 @@ export type OwnershipMarker = {
 	tool: "overnight-probes"
 }
 
-export type OperationInfo = {
-	opid: number | string
-	ns: string
-	op: string
-	active: boolean
-	secsRunning?: number
-	appName?: string
-	client?: string
-	desc?: string
-	commandName?: string
-}
-
 export type MongoAdmin = {
 	databaseExists(name: string): Promise<boolean>
 	writeMarker(name: string, marker: OwnershipMarker): Promise<void>
 	readMarker(name: string): Promise<OwnershipMarker | undefined>
 	listCollections(name: string): Promise<string[]>
 	dropDatabase(name: string): Promise<void>
-	listOperations(): Promise<OperationInfo[]>
+	listOperations(): Promise<unknown[]>
 	killOperation(opid: number | string): Promise<void>
 	close(): Promise<void>
 }
@@ -77,7 +67,7 @@ export type HarnessDeps = {
 	fileExists(path: string): boolean
 	allocatePort(): Promise<number>
 	isPortFree(port: number): Promise<boolean>
-	spawnApi(env: Record<string, string>): ApiProcess
+	spawnApi(env: Record<string, string>, entry: string): ApiProcess
 	fetchJson(
 		url: string,
 		headers: Record<string, string>,
@@ -110,6 +100,21 @@ export function generateDatabaseName(
 
 export function generateAgentId(randomUuid: () => string): string {
 	return `probe-${randomUuid()}`
+}
+
+export const APP_NAME_PREFIX = "memongo-probe-api-"
+
+export function withAppName(uri: string, appName: string): string {
+	const queryAt = uri.indexOf("?")
+	const base = queryAt === -1 ? uri : uri.slice(0, queryAt)
+	const query = queryAt === -1 ? "" : uri.slice(queryAt + 1)
+	const params = query
+		.split("&")
+		.filter((part) => part !== "" && !part.toLowerCase().startsWith("appname="))
+	params.push(`appName=${appName}`)
+	const hostStart = base.indexOf("://") + 3
+	const path = base.indexOf("/", hostStart) === -1 ? "/" : ""
+	return `${base}${path}?${params.join("&")}`
 }
 
 const PASSTHROUGH = [
@@ -169,6 +174,7 @@ export type Harness = {
 	readonly runId: string
 	readonly baseUrl: string
 	readonly apiKey: string
+	readonly appName: string
 	readonly pid: number | undefined
 	readonly effectiveTarget: { database: string; verified: boolean }
 	readonly mongo: MongoAdmin
@@ -195,6 +201,7 @@ export async function startHarness(
 	const runId = deps.randomUuid()
 	const database = generateDatabaseName(deps.randomHex)
 	const apiKey = `probe-${deps.randomUuid()}${deps.randomUuid()}`
+	const appName = `${APP_NAME_PREFIX}${database.slice(DATABASE_PREFIX.length)}`
 	const apiEntry = input.apiEntry ?? "apps/api/dist/server.js"
 
 	async function stopAll(): Promise<CleanupReport> {
@@ -264,119 +271,140 @@ export async function startHarness(
 		const suffix = report.cleanupFailed
 			? ` (cleanup incomplete for database ${report.database})`
 			: ""
-		throw new HarnessRefusal(reason, safe(`${message}${suffix}`), [...tail])
-	}
-
-	if (await deps.mongo.databaseExists(database)) {
-		return refuse("collision", "generated database name already exists")
-	}
-	if (!deps.fileExists(apiEntry)) {
-		return refuse(
-			"api-not-built",
-			"API build output is missing; run bun run build",
-		)
-	}
-	const port = await deps.allocatePort()
-	if (!(await deps.isPortFree(port))) {
-		return refuse("port-occupied", `port ${port} is already in use`)
-	}
-	try {
-		await deps.mongo.writeMarker(database, {
-			runId,
-			database,
-			createdAt: new Date(deps.now()).toISOString(),
-			tool: "overnight-probes",
-		})
-		markerWritten = true
-	} catch (error) {
-		return refuse(
-			"marker-failed",
-			`ownership marker could not be written: ${error instanceof Error ? error.message : String(error)}`,
+		throw new HarnessRefusal(
+			reason,
+			safe(`${message}${suffix}`),
+			[...tail],
+			report.cleanupFailed,
 		)
 	}
 
-	configFile = deps.withConfigFile("{}")
-	const env = buildChildEnv(input.baseEnv ?? {}, {
-		database,
-		port,
-		apiKey,
-		mongoUri: input.mongoUri,
-		voyageKey: input.voyageKey,
-		configPath: configFile.path,
-	})
-	try {
-		child = deps.spawnApi(env)
-	} catch (error) {
-		return refuse(
-			"spawn-failed",
-			`API process could not be started: ${error instanceof Error ? error.message : String(error)}`,
-		)
-	}
-	child.onLine((_stream, line) => {
-		tail.push(safe(line).slice(0, TAIL_LINE_CHARS))
-		if (tail.length > TAIL_LINES) tail.shift()
-	})
-	child.onExit(() => {
-		childExited = true
-	})
-
-	const baseUrl = `http://127.0.0.1:${port}`
-	const startedAt = deps.now()
-	let status: { status: number; body: unknown } | undefined
-	for (;;) {
-		if (childExited) {
-			return refuse("child-exited", "API process exited before it became ready")
+	async function boot(): Promise<Harness> {
+		if (await deps.mongo.databaseExists(database)) {
+			return refuse("collision", "generated database name already exists")
 		}
-		try {
-			const res = await deps.fetchJson(`${baseUrl}/v1/status`, {
-				Authorization: `Bearer ${apiKey}`,
-			})
-			if (res.status === 200) {
-				status = res
-				break
-			}
-		} catch {
-			// not listening yet
-		}
-		if (deps.now() - startedAt > BOOT_DEADLINE_MS) {
+		if (!deps.fileExists(apiEntry)) {
 			return refuse(
-				"boot-timeout",
-				"API did not become ready before the deadline",
+				"api-not-built",
+				"API build output is missing; run bun run build",
 			)
 		}
-		await deps.sleep(POLL_MS)
+		const port = await deps.allocatePort()
+		if (!(await deps.isPortFree(port))) {
+			return refuse("port-occupied", `port ${port} is already in use`)
+		}
+		try {
+			await deps.mongo.writeMarker(database, {
+				runId,
+				database,
+				createdAt: new Date(deps.now()).toISOString(),
+				tool: "overnight-probes",
+			})
+			markerWritten = true
+		} catch (error) {
+			return refuse(
+				"marker-failed",
+				`ownership marker could not be written: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+
+		configFile = deps.withConfigFile("{}")
+		const env = buildChildEnv(input.baseEnv ?? {}, {
+			database,
+			port,
+			apiKey,
+			mongoUri: withAppName(input.mongoUri, appName),
+			voyageKey: input.voyageKey,
+			configPath: configFile.path,
+		})
+		try {
+			child = deps.spawnApi(env, apiEntry)
+		} catch (error) {
+			return refuse(
+				"spawn-failed",
+				`API process could not be started: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+		child.onLine((_stream, line) => {
+			tail.push(safe(line).slice(0, TAIL_LINE_CHARS))
+			if (tail.length > TAIL_LINES) tail.shift()
+		})
+		child.onExit(() => {
+			childExited = true
+		})
+
+		const baseUrl = `http://127.0.0.1:${port}`
+		const startedAt = deps.now()
+		let status: { status: number; body: unknown } | undefined
+		for (;;) {
+			if (childExited) {
+				return refuse(
+					"child-exited",
+					"API process exited before it became ready",
+				)
+			}
+			try {
+				const res = await deps.fetchJson(`${baseUrl}/v1/status`, {
+					Authorization: `Bearer ${apiKey}`,
+				})
+				if (res.status === 200) {
+					status = res
+					break
+				}
+			} catch {
+				// not listening yet
+			}
+			if (deps.now() - startedAt > BOOT_DEADLINE_MS) {
+				return refuse(
+					"boot-timeout",
+					"API did not become ready before the deadline",
+				)
+			}
+			await deps.sleep(POLL_MS)
+		}
+
+		const reported = (status.body as { custom?: { database?: unknown } } | null)
+			?.custom?.database
+		if (typeof reported !== "string") {
+			return refuse(
+				"target-unverified",
+				"API status does not report its database",
+			)
+		}
+		if (reported !== database) {
+			return refuse(
+				"target-mismatch",
+				"API reports a database other than the generated one",
+			)
+		}
+		const collections = await deps.mongo.listCollections(database)
+		if (!collections.some((name) => name !== OWNER_COLLECTION)) {
+			return refuse(
+				"target-unverified",
+				"API created no collections in the generated database",
+			)
+		}
+
+		return {
+			database,
+			runId,
+			baseUrl,
+			apiKey,
+			appName,
+			pid: child.pid,
+			effectiveTarget: { database, verified: true },
+			mongo: deps.mongo,
+			stop: stopAll,
+		}
 	}
 
-	const reported = (status.body as { custom?: { database?: unknown } } | null)
-		?.custom?.database
-	if (typeof reported !== "string") {
+	try {
+		return await boot()
+	} catch (error) {
+		if (error instanceof HarnessRefusal) throw error
 		return refuse(
-			"target-unverified",
-			"API status does not report its database",
+			"startup-failed",
+			`startup failed: ${error instanceof Error ? error.message : String(error)}`,
 		)
-	}
-	if (reported !== database) {
-		return refuse(
-			"target-mismatch",
-			"API reports a database other than the generated one",
-		)
-	}
-	const collections = await deps.mongo.listCollections(database)
-	if (!collections.some((name) => name !== OWNER_COLLECTION)) {
-		return refuse(
-			"target-unverified",
-			"API created no collections in the generated database",
-		)
-	}
-
-	return {
-		database,
-		runId,
-		baseUrl,
-		apiKey,
-		pid: child.pid,
-		effectiveTarget: { database, verified: true },
-		mongo: deps.mongo,
-		stop: stopAll,
 	}
 }
