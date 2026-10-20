@@ -2,8 +2,8 @@ import type {
 	MemongoScope,
 	MemongoStructuredStableHandle,
 } from "@memongo/client"
-import { BudgetRefusal } from "./budget.ts"
 import {
+	abortReason,
 	API_READ,
 	API_WRITE,
 	asRecord,
@@ -309,11 +309,6 @@ async function readPhase(
 			)
 		}
 	}
-}
-
-function abortReason(error: unknown): string {
-	if (error instanceof BudgetRefusal) return `budget-refusal:${error.reason}`
-	return `aborted:${error instanceof Error ? error.name : "error"}`
 }
 
 export async function runProbeA(ctx: ProbeContext): Promise<ProbeRunResult> {

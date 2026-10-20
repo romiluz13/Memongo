@@ -24,6 +24,7 @@ export function createFakeClock(start = 1_700_000_000_000): FakeClock {
 	const sleeps: number[] = []
 	return {
 		now: () => current,
+		mono: () => current - start,
 		sleep: async (ms) => {
 			sleeps.push(ms)
 			current += ms

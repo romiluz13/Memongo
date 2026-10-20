@@ -1,4 +1,4 @@
-import type { Budget } from "./budget.ts"
+import { BudgetRefusal, type Budget } from "./budget.ts"
 import { observeCall } from "./observe.ts"
 import type { EvidenceWriter } from "./output.ts"
 import type { ProbeApi } from "./probe-api.ts"
@@ -9,6 +9,7 @@ export const API_WRITE = "api-write"
 
 export type Clock = {
 	now(): number
+	mono(): number
 	sleep(ms: number): Promise<void>
 }
 
@@ -40,4 +41,9 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined
+}
+
+export function abortReason(error: unknown): string {
+	if (error instanceof BudgetRefusal) return `budget-refusal:${error.reason}`
+	return `aborted:${error instanceof Error ? error.name : "error"}`
 }
