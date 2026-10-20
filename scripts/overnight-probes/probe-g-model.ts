@@ -4,6 +4,7 @@ import {
 	tallyHealth,
 } from "./health.ts"
 import { containsMarker } from "./markers.ts"
+import { bodyOf } from "./observe.ts"
 import {
 	historical,
 	isRecord,
@@ -19,7 +20,7 @@ import type {
 	Observation,
 	Outcome,
 } from "./types.ts"
-import { aggregateRun } from "./verdict.ts"
+import { aggregateRun, inconclusive, passCase } from "./verdict.ts"
 
 export const PROBE_G_VERSION = "G-2"
 
@@ -155,10 +156,6 @@ export function requiredCaseIdsG(): string[] {
 	)
 }
 
-function bodyOf(observation: Observation): unknown {
-	return observation.kind === "response" ? observation.body : undefined
-}
-
 type OldStatus = { present: boolean; current: boolean; unassessable?: string }
 
 function classifyReadFile(text: string, token: string, at: number): OldStatus {
@@ -289,22 +286,6 @@ function failCase(
 		controlEligible: control,
 		detail: { issues: read.health.issues, basis: G_ROUTES[route].basis },
 		evidence: evidence(read),
-	}
-}
-
-function inconclusive(caseId: string, reason: string): CaseResult {
-	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
-}
-
-function passCase(
-	caseId: string,
-	detail?: Record<string, unknown>,
-): CaseResult {
-	return {
-		caseId,
-		outcome: "pass",
-		controlEligible: true,
-		...(detail ? { detail } : {}),
 	}
 }
 

@@ -1,7 +1,7 @@
 import type { RouteHealth } from "./health.ts"
 import { isRecord } from "./rows.ts"
 import type { CaseResult, Observation, Outcome } from "./types.ts"
-import { aggregateRun } from "./verdict.ts"
+import { aggregateRun, inconclusive } from "./verdict.ts"
 
 export const PROBE_F_VERSION = "F-1"
 export const F_DURATION_MS = 60_000
@@ -175,10 +175,6 @@ export function summarizeLatencies(values: readonly number[]): {
 		p95: at(0.95),
 		max: sorted[sorted.length - 1] as number,
 	}
-}
-
-function inconclusive(caseId: string, reason: string): CaseResult {
-	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
 }
 
 function loadViolation(facts: FPhaseFacts): string | undefined {

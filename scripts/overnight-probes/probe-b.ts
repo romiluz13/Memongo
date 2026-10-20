@@ -31,6 +31,7 @@ import {
 	PROBE_B_VERSION,
 } from "./probe-b-model.ts"
 import type { ProbeRunResult } from "./types.ts"
+import { inconclusiveWhenNotRun } from "./verdict.ts"
 
 const PASSAGE_LIMIT = 10
 const ANSWER_MAX_OUTPUT_TOKENS = 512
@@ -315,16 +316,12 @@ export async function runProbeB(ctx: ProbeContext): Promise<ProbeRunResult> {
 		notes.push(abortReason(error))
 	}
 	const evaluation = evaluateProbeB(facts, violations)
-	const failed = evaluation.cases.some((item) => item.outcome === "fail")
 	return {
 		probe: "B",
 		run: ctx.run,
 		rule: PROBE_B_RULE,
 		version: PROBE_B_VERSION,
-		outcome:
-			evaluation.outcome === "not-run" && !failed
-				? "inconclusive"
-				: evaluation.outcome,
+		outcome: inconclusiveWhenNotRun(evaluation.outcome, evaluation.cases),
 		reasons: [...new Set([...notes, ...evaluation.reasons])],
 		cases: evaluation.cases,
 		counts: evaluation.counts,

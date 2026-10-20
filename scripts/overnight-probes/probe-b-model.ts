@@ -2,7 +2,7 @@ import { isAbstaining } from "../mongodb-e2e-qa.ts"
 import { type RouteHealth, tallyHealth } from "./health.ts"
 import { type BFixture, buildBFixture } from "./probe-b-fixtures.ts"
 import type { CaseResult, Outcome } from "./types.ts"
-import { aggregateRun } from "./verdict.ts"
+import { aggregateRun, inconclusive } from "./verdict.ts"
 
 export const PROBE_B_VERSION = "B-1"
 
@@ -76,10 +76,6 @@ export function requiredCaseIdsB(
 		...fixture.controls.map((control) => control.caseId),
 		...fixture.never.map((item) => item.caseId),
 	]
-}
-
-function inconclusive(caseId: string, reason: string): CaseResult {
-	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
 }
 
 function gate(facts: BCaseFacts): CaseResult | { call: BCall } {

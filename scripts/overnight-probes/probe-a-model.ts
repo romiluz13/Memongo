@@ -1,6 +1,7 @@
 import type { RouteHealth } from "./health.ts"
 import { tallyHealth } from "./health.ts"
 import { containsMarker, rawContains } from "./markers.ts"
+import { isRecord } from "./rows.ts"
 import {
 	ERASED_ROLES,
 	isTargeted,
@@ -50,10 +51,6 @@ export type ProbeAEvaluation = {
 }
 
 type Markers = Readonly<Record<TenantRole, string>>
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-}
 
 export function isConfirmedErase(
 	response: unknown,

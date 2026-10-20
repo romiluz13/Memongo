@@ -7,6 +7,7 @@ import {
 	type ProbeContext,
 } from "./context.ts"
 import {
+	handleFor,
 	MAX_POLLS,
 	pollUntil,
 	resolveLiveHandle,
@@ -22,25 +23,9 @@ import {
 } from "./probe-c-model.ts"
 import type { GRead } from "./probe-g-model.ts"
 import type { ProbeRunResult } from "./types.ts"
+import { inconclusiveWhenNotRun } from "./verdict.ts"
 
 const BARRIER = { timeoutMs: 10_000 }
-
-function handleFor(
-	scope: Scope,
-	key: string,
-	id: string,
-): MemongoStructuredStableHandle {
-	return {
-		family: "structured",
-		id,
-		agentId: scope.agentId,
-		scope: scope.scope,
-		scopeRef: scope.scopeRef,
-		revision: 1,
-		state: "active",
-		structured: { type: "fact", key },
-	}
-}
 
 export function planProbeC(): { "api-read": number; "api-write": number } {
 	const handleRead = 1
@@ -375,11 +360,7 @@ export async function runProbeC(ctx: ProbeContext): Promise<ProbeRunResult> {
 		notes.push(abortReason(error))
 	}
 	const evaluation = evaluateProbeC(facts)
-	const failed = evaluation.cases.some((item) => item.outcome === "fail")
-	const outcome =
-		evaluation.outcome === "not-run" && !failed
-			? "inconclusive"
-			: evaluation.outcome
+	const outcome = inconclusiveWhenNotRun(evaluation.outcome, evaluation.cases)
 	return {
 		probe: "C",
 		run: ctx.run,

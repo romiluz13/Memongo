@@ -27,3 +27,7 @@ export async function observeCall(
 		}
 	}
 }
+
+export function bodyOf(observation: Observation): unknown {
+	return observation.kind === "response" ? observation.body : undefined
+}

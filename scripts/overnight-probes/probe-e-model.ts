@@ -1,7 +1,7 @@
 import type { RouteHealth } from "./health.ts"
 import { containsMarker } from "./markers.ts"
 import type { CaseResult, Observation, Outcome } from "./types.ts"
-import { aggregateRun } from "./verdict.ts"
+import { aggregateRun, inconclusive } from "./verdict.ts"
 
 export const PROBE_E_VERSION = "E-2"
 export const E_DEADLINE_MS = 60_000
@@ -122,10 +122,6 @@ function emptyClasses(): Record<ReadClass, number> {
 		"explicit-not-ready": 0,
 		error: 0,
 	}
-}
-
-function inconclusive(caseId: string, reason: string): CaseResult {
-	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
 }
 
 function evaluateControl(control: EControl): {

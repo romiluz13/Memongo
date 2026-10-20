@@ -12,10 +12,12 @@ import {
 } from "./context.ts"
 import { evaluateRouteHealth } from "./health.ts"
 import {
+	coords,
+	handleFor,
+	MAX_POLLS,
 	observeSent,
+	pollUntil,
 	resolveLiveHandle,
-	SETTLE_MAX_MS,
-	SETTLE_STEP_MS,
 } from "./kit.ts"
 import { containsMarker } from "./markers.ts"
 import {
@@ -30,6 +32,7 @@ import {
 } from "./probe-g-model.ts"
 import type { ProbeApi } from "./probe-api.ts"
 import type { Observation, ProbeRunResult } from "./types.ts"
+import { inconclusiveWhenNotRun } from "./verdict.ts"
 
 const BARRIER = { timeoutMs: 10_000 }
 const ROUTES = Object.keys(G_ROUTES) as GRouteId[]
@@ -47,14 +50,6 @@ type Call = (
 	target: Target,
 	handle: MemongoStructuredStableHandle,
 ) => Promise<unknown>
-
-function coords(target: Target) {
-	return {
-		agentId: target.agentId,
-		scope: target.scope,
-		scopeRef: target.scopeRef,
-	}
-}
 
 const CALLS: Record<GRouteId, Call> = {
 	lifecycleGet: (api, _target, handle) => api.getLifecycleItem({ handle }),
@@ -90,27 +85,9 @@ const CALLS: Record<GRouteId, Call> = {
 }
 
 export function planProbeG(): { "api-read": number; "api-write": number } {
-	const polls = SETTLE_MAX_MS / SETTLE_STEP_MS + 1
 	return {
-		"api-read": 2 * (ROUTES.length * 2 + polls),
+		"api-read": 2 * (ROUTES.length * 2 + MAX_POLLS),
 		"api-write": 4,
-	}
-}
-
-function handleFor(
-	target: Target,
-	id: string,
-	revision = 1,
-): MemongoStructuredStableHandle {
-	return {
-		family: "structured",
-		id,
-		agentId: target.agentId,
-		scope: target.scope,
-		scopeRef: target.scopeRef,
-		revision,
-		state: "active",
-		structured: { type: "fact", key: target.key },
 	}
 }
 
@@ -143,21 +120,15 @@ async function settle(
 	target: Target,
 	done: (observation: Observation) => boolean,
 ): Promise<{ polls: number; elapsedMs: number; satisfied: boolean }> {
-	const start = ctx.clock.now()
-	let polls = 0
-	for (;;) {
-		const observation = await countedObserve(ctx, API_READ, "search", () =>
-			CALLS.search(ctx.api, target, handleFor(target, "")),
-		)
-		polls += 1
-		if (done(observation)) {
-			return { polls, elapsedMs: ctx.clock.now() - start, satisfied: true }
-		}
-		if (ctx.clock.now() - start >= SETTLE_MAX_MS) {
-			return { polls, elapsedMs: ctx.clock.now() - start, satisfied: false }
-		}
-		await ctx.clock.sleep(SETTLE_STEP_MS)
-	}
+	const { polls, elapsedMs, satisfied } = await pollUntil(
+		ctx,
+		() =>
+			countedObserve(ctx, API_READ, "search", () =>
+				CALLS.search(ctx.api, target, handleFor(target, target.key, "")),
+			),
+		done,
+	)
+	return { polls, elapsedMs, satisfied }
 }
 
 type SpecBase = {
@@ -228,7 +199,7 @@ async function runSequence(
 		return undefined
 	}
 	const reads: GRead[] = []
-	const seedHandle = handleFor(target, body.id)
+	const seedHandle = handleFor(target, target.key, body.id)
 	const firstGet = await readRoute(
 		ctx,
 		"lifecycleGet",
@@ -321,11 +292,7 @@ export async function runProbeG(ctx: ProbeContext): Promise<ProbeRunResult> {
 		notes.push(abortReason(error))
 	}
 	const evaluation = evaluateProbeG(facts)
-	const failed = evaluation.cases.some((item) => item.outcome === "fail")
-	const outcome =
-		evaluation.outcome === "not-run" && !failed
-			? "inconclusive"
-			: evaluation.outcome
+	const outcome = inconclusiveWhenNotRun(evaluation.outcome, evaluation.cases)
 	return {
 		probe: "G",
 		run: ctx.run,

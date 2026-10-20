@@ -1,9 +1,10 @@
 import { tallyHealth } from "./health.ts"
 import { bodyContains, containsMarker } from "./markers.ts"
+import { bodyOf } from "./observe.ts"
 import type { GRead } from "./probe-g-model.ts"
 import { historical, isRecord, labelled, textField, viewOf } from "./rows.ts"
-import type { CaseResult, Observation, Outcome } from "./types.ts"
-import { aggregateRun } from "./verdict.ts"
+import type { CaseResult, Outcome } from "./types.ts"
+import { aggregateRun, inconclusive, passCase } from "./verdict.ts"
 
 export const PROBE_C_VERSION = "C-2"
 
@@ -46,14 +47,6 @@ function find(
 	)
 }
 
-function bodyOf(observation: Observation): unknown {
-	return observation.kind === "response" ? observation.body : undefined
-}
-
-function inconclusive(caseId: string, reason: string): CaseResult {
-	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
-}
-
 function failCase(
 	caseId: string,
 	predicate: string,
@@ -69,18 +62,6 @@ function failCase(
 		controlEligible,
 		...(detail ? { detail } : {}),
 		evidence: { request: read.request, response: read.observation },
-	}
-}
-
-function passCase(
-	caseId: string,
-	detail?: Record<string, unknown>,
-): CaseResult {
-	return {
-		caseId,
-		outcome: "pass",
-		controlEligible: true,
-		...(detail ? { detail } : {}),
 	}
 }
 

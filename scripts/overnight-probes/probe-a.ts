@@ -19,7 +19,7 @@ import {
 	type EraseVerdict,
 	type ReadRecord,
 } from "./probe-a-model.ts"
-import { observeSent } from "./kit.ts"
+import { coords, observeSent } from "./kit.ts"
 import type { ProbeApi } from "./probe-api.ts"
 import {
 	ERASED_ROLES,
@@ -32,6 +32,7 @@ import {
 	type TenantRole,
 } from "./route-matrix.ts"
 import type { ProbeRunResult } from "./types.ts"
+import { inconclusiveWhenNotRun } from "./verdict.ts"
 
 const QUERY = "What is the project Alpha codeword?"
 const BARRIER = { timeoutMs: 10_000 }
@@ -59,14 +60,6 @@ function handleOf(tenant: Tenant): MemongoStructuredStableHandle {
 		revision: 1,
 		state: "active",
 		structured: { type: "fact", key: tenant.key },
-	}
-}
-
-function coords(reader: Tenant) {
-	return {
-		agentId: reader.agentId,
-		scope: reader.scope,
-		scopeRef: reader.scopeRef,
 	}
 }
 
@@ -346,11 +339,7 @@ export async function runProbeA(ctx: ProbeContext): Promise<ProbeRunResult> {
 		agent: tenants.agent.marker,
 	}
 	const evaluation = evaluateProbeA({ records, markers, erase })
-	const failed = evaluation.cases.some((item) => item.outcome === "fail")
-	const outcome =
-		evaluation.outcome === "not-run" && records.length === 0 && !failed
-			? "inconclusive"
-			: evaluation.outcome
+	const outcome = inconclusiveWhenNotRun(evaluation.outcome, evaluation.cases)
 	return {
 		probe: "A",
 		run: ctx.run,

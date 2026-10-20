@@ -1,6 +1,6 @@
 import type { MemongoStructuredStableHandle } from "@memongo/client"
 import { describe, expect, it } from "vitest"
-import { resolveLiveHandle } from "./kit.ts"
+import { coords, handleFor, resolveLiveHandle } from "./kit.ts"
 import { makeRead } from "./probe-g-fixtures.ts"
 import type { GRead } from "./probe-g-model.ts"
 
@@ -77,5 +77,23 @@ describe("resolveLiveHandle", () => {
 		const result = resolveLiveHandle(SEED, readWith(handle))
 		expect(result.ok).toBe(false)
 		if (!result.ok) expect(result.reason.length).toBeGreaterThan(0)
+	})
+})
+
+describe("handleFor and coords", () => {
+	const scope = {
+		agentId: "agent-1",
+		scope: "workspace",
+		scopeRef: "ref-1",
+	} as const
+
+	it("builds a structured handle at revision 1 unless told otherwise", () => {
+		expect(handleFor(scope, "launch-key", "st-1")).toEqual(SEED)
+		expect(handleFor(scope, "launch-key", "st-1", 4).revision).toBe(4)
+	})
+
+	it("keeps exactly the three identity fields of whatever it is given", () => {
+		const target = { ...scope, key: "k", query: "q" }
+		expect(coords(target)).toEqual(scope)
 	})
 })

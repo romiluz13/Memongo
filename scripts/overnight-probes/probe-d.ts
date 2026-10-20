@@ -29,6 +29,7 @@ import {
 } from "./probe-d-relative.ts"
 import type { GRead } from "./probe-g-model.ts"
 import type { ProbeRunResult } from "./types.ts"
+import { inconclusiveWhenNotRun } from "./verdict.ts"
 
 const DETAILED_QUERY = "dated archive log entry"
 const SETTLED_LABELS = ["E1", "E3", "E5"]
@@ -183,16 +184,12 @@ export async function runProbeD(ctx: ProbeContext): Promise<ProbeRunResult> {
 		...(detailed ? { detailed } : {}),
 		...(relative ? { relative } : {}),
 	})
-	const failed = evaluation.cases.some((item) => item.outcome === "fail")
 	return {
 		probe: "D",
 		run: ctx.run,
 		rule: PROBE_D_RULE,
 		version: PROBE_D_VERSION,
-		outcome:
-			evaluation.outcome === "not-run" && !failed
-				? "inconclusive"
-				: evaluation.outcome,
+		outcome: inconclusiveWhenNotRun(evaluation.outcome, evaluation.cases),
 		reasons: [...notes, ...evaluation.reasons],
 		cases: evaluation.cases,
 		counts: evaluation.counts,

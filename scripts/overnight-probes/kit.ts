@@ -46,6 +46,32 @@ export async function observeSent(
 	return { observation, request: sink.request }
 }
 
+export function coords(source: Scope): Scope {
+	return {
+		agentId: source.agentId,
+		scope: source.scope,
+		scopeRef: source.scopeRef,
+	}
+}
+
+export function handleFor(
+	scope: Scope,
+	key: string,
+	id: string,
+	revision = 1,
+): MemongoStructuredStableHandle {
+	return {
+		family: "structured",
+		id,
+		agentId: scope.agentId,
+		scope: scope.scope,
+		scopeRef: scope.scopeRef,
+		revision,
+		state: "active",
+		structured: { type: "fact", key },
+	}
+}
+
 export async function stamped(
 	ctx: ProbeContext,
 	route: GRouteId,

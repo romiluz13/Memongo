@@ -3,6 +3,7 @@ import { BudgetRefusal, type Budget } from "./budget.ts"
 import { observeCall } from "./observe.ts"
 import type { EvidenceWriter } from "./output.ts"
 import type { ProbeApi } from "./probe-api.ts"
+import { isRecord } from "./rows.ts"
 import type { Observation } from "./types.ts"
 
 export const API_READ = "api-read"
@@ -59,9 +60,7 @@ export async function countedObserve(
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined
+	return isRecord(value) ? value : undefined
 }
 
 export function abortReason(error: unknown): string {

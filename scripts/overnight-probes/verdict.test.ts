@@ -6,6 +6,9 @@ import {
 	combineRuns,
 	countFailsByBasis,
 	exitCodeFor,
+	inconclusive,
+	inconclusiveWhenNotRun,
+	passCase,
 } from "./verdict.ts"
 import type { CaseResult, Outcome, ProbeRunResult } from "./types.ts"
 
@@ -161,6 +164,47 @@ describe("countFailsByBasis", () => {
 				]),
 			]),
 		).toEqual({ "code-derived": 0, documented: 0, unclassified: 0 })
+	})
+})
+
+describe("inconclusive", () => {
+	it("builds a case that is never control eligible and carries its reason", () => {
+		expect(inconclusive("X/1", "why")).toEqual({
+			caseId: "X/1",
+			outcome: "inconclusive",
+			reason: "why",
+			controlEligible: false,
+		})
+	})
+})
+
+describe("passCase", () => {
+	it("builds a control eligible pass and only carries a detail it was given", () => {
+		expect(passCase("X/1")).toEqual({
+			caseId: "X/1",
+			outcome: "pass",
+			controlEligible: true,
+		})
+		expect(passCase("X/1", { n: 2 }).detail).toEqual({ n: 2 })
+	})
+})
+
+describe("inconclusiveWhenNotRun", () => {
+	it("turns a not-run probe with no failed case into inconclusive", () => {
+		expect(inconclusiveWhenNotRun("not-run", [c("a", "not-run")])).toBe(
+			"inconclusive",
+		)
+		expect(inconclusiveWhenNotRun("not-run", [])).toBe("inconclusive")
+	})
+
+	it("keeps a not-run probe not-run when a case failed", () => {
+		expect(inconclusiveWhenNotRun("not-run", [c("a", "fail")])).toBe("not-run")
+	})
+
+	it("leaves every other outcome alone", () => {
+		for (const outcome of ["pass", "fail", "inconclusive"] as const) {
+			expect(inconclusiveWhenNotRun(outcome, [c("a", "pass")])).toBe(outcome)
+		}
 	})
 })
 

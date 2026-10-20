@@ -13,7 +13,7 @@ import {
 } from "./probe-d-relative.ts"
 import { isRecord } from "./rows.ts"
 import type { CaseResult, Outcome } from "./types.ts"
-import { aggregateRun } from "./verdict.ts"
+import { aggregateRun, inconclusive } from "./verdict.ts"
 
 export {
 	D_AS_OF,
@@ -226,10 +226,6 @@ export type ProbeDEvaluation = {
 type Returned = { label: string; timestamp?: string }
 
 const STORED = new Map(D_EVENTS.map((item) => [item.label, item.timestamp]))
-
-function inconclusive(caseId: string, reason: string): CaseResult {
-	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
-}
 
 function unevaluable(caseId: string, read: DQueryRead): CaseResult {
 	return inconclusive(

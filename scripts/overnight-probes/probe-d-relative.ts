@@ -6,6 +6,7 @@ import {
 } from "./probe-d-fixture.ts"
 import { isRecord } from "./rows.ts"
 import type { CaseResult } from "./types.ts"
+import { inconclusive } from "./verdict.ts"
 
 export const D_RELATIVE_BASE_QUERY = "Dated archive log entry"
 export const D_RELATIVE_MIN_GAP_MS = 3_600_000
@@ -160,10 +161,6 @@ function textRanks(
 	return ranks.size < 2
 		? { ok: false, reason: "fewer-than-two-text-ranks" }
 		: { ok: true, ranks }
-}
-
-function inconclusive(caseId: string, reason: string): CaseResult {
-	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
 }
 
 function timestampOf(label: string): number {

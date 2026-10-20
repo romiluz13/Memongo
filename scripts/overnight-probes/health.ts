@@ -1,3 +1,4 @@
+import { isRecord } from "./rows.ts"
 import type { Observation } from "./types.ts"
 
 export type RouteId =
@@ -37,10 +38,6 @@ const DENIAL_ROUTES: ReadonlySet<RouteId> = new Set([
 	"lifecycleGet",
 	"lifecycleHistory",
 ])
-
-function isRecord(value: unknown): value is Json {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-}
 
 function asRows(value: unknown): Json[] {
 	return Array.isArray(value) ? value.filter(isRecord) : []

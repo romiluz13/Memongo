@@ -6,6 +6,30 @@ import {
 	type ProbeRunResult,
 } from "./types.ts"
 
+export function inconclusive(caseId: string, reason: string): CaseResult {
+	return { caseId, outcome: "inconclusive", reason, controlEligible: false }
+}
+
+export function passCase(
+	caseId: string,
+	detail?: Record<string, unknown>,
+): CaseResult {
+	return {
+		caseId,
+		outcome: "pass",
+		controlEligible: true,
+		...(detail ? { detail } : {}),
+	}
+}
+
+export function inconclusiveWhenNotRun(
+	outcome: Outcome,
+	cases: readonly CaseResult[],
+): Outcome {
+	const failed = cases.some((item) => item.outcome === "fail")
+	return outcome === "not-run" && !failed ? "inconclusive" : outcome
+}
+
 export function aggregateRun(
 	cases: readonly CaseResult[],
 	requiredCaseIds: readonly string[],
@@ -16,7 +40,7 @@ export function aggregateRun(
 		byId.set(item.caseId, [...(byId.get(item.caseId) ?? []), item])
 	}
 	const failed = cases.filter((item) => item.outcome === "fail")
-	const inconclusive = cases.filter((item) => item.outcome === "inconclusive")
+	const inconclusives = cases.filter((item) => item.outcome === "inconclusive")
 	const notRun = cases.filter((item) => item.outcome === "not-run")
 	const unexecuted = requiredCaseIds.filter((id) => !byId.has(id))
 	const unproven = requiredCaseIds.filter(
@@ -33,9 +57,9 @@ export function aggregateRun(
 	if (unexecuted.length > 0) {
 		reasons.push(`unexecuted required cases: ${unexecuted.join(", ")}`)
 	}
-	if (inconclusive.length > 0) {
+	if (inconclusives.length > 0) {
 		reasons.push(
-			`inconclusive cases: ${inconclusive.map((item) => item.caseId).join(", ")}`,
+			`inconclusive cases: ${inconclusives.map((item) => item.caseId).join(", ")}`,
 		)
 	}
 	if (notRun.length > 0) {
@@ -50,7 +74,7 @@ export function aggregateRun(
 	const passedAll =
 		unexecuted.length === 0 &&
 		unproven.length === 0 &&
-		inconclusive.length === 0 &&
+		inconclusives.length === 0 &&
 		notRun.length === 0
 	return { outcome: passedAll ? "pass" : "inconclusive", reasons }
 }
