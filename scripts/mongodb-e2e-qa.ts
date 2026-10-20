@@ -65,7 +65,7 @@ function recordProviderCall(
 	}
 }
 
-const ANSWER_SYSTEM_PROMPT = `You answer the QUESTION using ONLY the provided context passages from a user's memory.
+export const ANSWER_SYSTEM_PROMPT = `You answer the QUESTION using ONLY the provided context passages from a user's memory.
 Rules:
 - Be concise and factual; answer with just the fact asked for.
 - If the context does not contain enough information to answer, return an empty answer string.

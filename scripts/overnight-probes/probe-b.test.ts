@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import type { EnrichmentProvider } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import {
@@ -9,6 +8,7 @@ import {
 	recordInputs,
 	sentTo,
 } from "./fake-api.ts"
+import { ANSWER_SYSTEM_PROMPT } from "../mongodb-e2e-qa.ts"
 import { planProbeB, runProbeB } from "./probe-b.ts"
 
 const EXPECTED_ANSWER_SYSTEM_PROMPT = `You answer the QUESTION using ONLY the provided context passages from a user's memory.
@@ -160,20 +160,15 @@ describe("runProbeB", () => {
 		expect(ctx.budget.snapshot().calls["answer-llm"]).toBe(40)
 	})
 
-	it("sends the unchanged answer prompt and message layout, pinned to the source file", async () => {
+	it("sends the exported answer prompt and the unchanged message layout", async () => {
 		const { ctx, recorded } = setup()
 		await runProbeB(ctx)
-		const source = readFileSync(
-			new URL("../mongodb-e2e-qa.ts", import.meta.url),
-			"utf8",
-		)
-		const start =
-			source.indexOf("const ANSWER_SYSTEM_PROMPT = `") +
-			"const ANSWER_SYSTEM_PROMPT = `".length
-		const fromSource = source.slice(start, source.indexOf("`", start))
 		const first = recorded[0] as Recorded
-		expect(first.messages[0]).toEqual({ role: "system", content: fromSource })
-		expect(fromSource).toBe(EXPECTED_ANSWER_SYSTEM_PROMPT)
+		expect(first.messages[0]).toEqual({
+			role: "system",
+			content: ANSWER_SYSTEM_PROMPT,
+		})
+		expect(ANSWER_SYSTEM_PROMPT).toBe(EXPECTED_ANSWER_SYSTEM_PROMPT)
 		const user = first.messages[1]?.content ?? ""
 		expect(
 			user.startsWith(
