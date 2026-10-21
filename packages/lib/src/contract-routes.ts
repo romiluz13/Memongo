@@ -295,6 +295,16 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		tools: ["memongo_read_file"],
 	},
 	{
+		path: "/v1/events/get",
+		method: "post",
+		operationId: "getEvent",
+		summary: "Get one conversation event by id in the caller's scope",
+		requiredFields: ["eventId"],
+		optionalFields: ["agentId", "scope", "scopeRef", "sessionId"],
+		errorStatuses: [400, 404, 500],
+		tools: [],
+	},
+	{
 		path: "/v1/add",
 		method: "post",
 		operationId: "addMemory",

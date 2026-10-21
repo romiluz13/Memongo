@@ -37,6 +37,7 @@ import type {
 	RecallTrace,
 	MemoryStats,
 	MemoryLifecycleHistoryEntry,
+	MemoryEventRecord,
 	MemoryLifecycleItem,
 	ProcedureLifecyclePatch,
 	ProcedureEntry,
@@ -237,6 +238,22 @@ export async function memongoBridgeReadFile(params: {
 		relPath: params.relPath,
 		from: params.from,
 		lines: params.lines,
+	})
+}
+
+export async function memongoBridgeGetEvent(params: {
+	eventId: string
+	agentId?: string
+	scope?: MemoryScope
+	scopeRef?: string
+	sessionKey?: string
+}): Promise<MemoryEventRecord | null> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.getEvent({
+		eventId: params.eventId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+		sessionKey: params.sessionKey,
 	})
 }
 

@@ -33,6 +33,7 @@ export type {
 	MemoryLifecycleFamily,
 	MemoryLifecycleHistoryEntry,
 	MemoryLifecycleHistoryKind,
+	MemoryEventRecord,
 	MemoryLifecycleItem,
 	MemoryLifecycleProcedureData,
 	MemoryLifecycleState,

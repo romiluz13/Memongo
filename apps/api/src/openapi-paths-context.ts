@@ -439,4 +439,68 @@ export const contextPaths = {
 			responses: { "200": { description: "File read result" } },
 		},
 	},
+	"/v1/events/get": {
+		post: {
+			summary: "Get one conversation event by id in the caller's scope",
+			description:
+				"Returns the event only when it belongs to the request's agentId, scope and scopeRef (resolved by the same rule as reads: an explicit scope wins, a sessionId implies session scope, otherwise the default scope) and has not expired. Any other event, including one owned by another agent or scope, returns the same 404 EVENT_NOT_FOUND as an unknown id.",
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							required: ["eventId"],
+							properties: {
+								eventId: { type: "string", minLength: 1, maxLength: 256 },
+								agentId: {
+									type: "string",
+									description: AGENT_ID_FIELD_DESCRIPTION,
+								},
+								scope: { type: "string", enum: memoryScopeEnum },
+								scopeRef: { type: "string" },
+								sessionId: {
+									type: "string",
+									description:
+										"Session coordinate; implies session scope when scope is omitted.",
+								},
+							},
+						},
+					},
+				},
+			},
+			responses: {
+				"200": {
+					description: "The event",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: [
+									"eventId",
+									"role",
+									"body",
+									"timestamp",
+									"scope",
+									"scopeRef",
+								],
+								properties: {
+									eventId: { type: "string" },
+									role: { type: "string" },
+									body: { type: "string" },
+									timestamp: { type: "string", format: "date-time" },
+									scope: { type: "string", enum: memoryScopeEnum },
+									scopeRef: { type: "string" },
+									validAt: { type: "string", format: "date-time" },
+								},
+							},
+						},
+					},
+				},
+				"400": { description: "Validation error" },
+				"404": { description: "Event not found in the caller's scope" },
+				"500": { description: "Event read failed" },
+			},
+		},
+	},
 } as const

@@ -19,6 +19,7 @@ import { withFencedWrite } from "./mongodb-write-fence.js"
 import type { MemoryScope } from "@memongo/lib"
 import type { ClientSession, Document } from "mongodb"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import type { MemoryEventRecord } from "./types.js"
 
 /**
  * Read seam extracted from `mongodb-manager.ts` (P4.3): locator-based reads
@@ -664,22 +665,59 @@ export class MongoDBManagerReadOps {
 		}
 	}
 
+	async getEvent(params: {
+		eventId: string
+		scope?: MemoryScope
+		scopeRef?: string
+		sessionKey?: string
+	}): Promise<MemoryEventRecord | null> {
+		const identity = this.host.resolveSearchIdentity({
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionKey: params.sessionKey,
+		})
+		const event = await this.findCanonicalEvent(params.eventId, identity)
+		if (!event) {
+			return null
+		}
+		return {
+			eventId: String(event.eventId),
+			role: typeof event.role === "string" ? event.role : "unknown-role",
+			body: typeof event.body === "string" ? event.body : "",
+			timestamp:
+				event.timestamp instanceof Date ? event.timestamp.toISOString() : "",
+			scope: identity.scope,
+			scopeRef: identity.scopeRef,
+			...(event.validAt instanceof Date
+				? { validAt: event.validAt.toISOString() }
+				: {}),
+		}
+	}
+
+	private async findCanonicalEvent(
+		eventId: string,
+		identity?: { scope: MemoryScope; scopeRef: string },
+		session?: ClientSession,
+	): Promise<Document | null> {
+		return eventsCollection(this.host.db, this.host.prefix).findOne(
+			{
+				agentId: this.host.agentId,
+				eventId,
+				...(identity
+					? { scope: identity.scope, scopeRef: identity.scopeRef }
+					: {}),
+				...buildUnexpiredClause(),
+			},
+			...(session ? [{ session }] : []),
+		)
+	}
+
 	async readCanonicalEvent(
 		eventId: string,
 		rawPath: string,
 		session?: ClientSession,
 	): Promise<ManagerReadResult> {
-		const event = await eventsCollection(
-			this.host.db,
-			this.host.prefix,
-		).findOne(
-			{
-				agentId: this.host.agentId,
-				eventId,
-				...buildUnexpiredClause(),
-			},
-			...(session ? [{ session }] : []),
-		)
+		const event = await this.findCanonicalEvent(eventId, undefined, session)
 		if (!event) {
 			return {
 				text: "",

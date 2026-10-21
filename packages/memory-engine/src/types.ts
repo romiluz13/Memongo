@@ -254,6 +254,17 @@ export type MemoryLifecycleProcedureData = {
 	sourceAgent?: MemorySourceAgent
 }
 
+/** One canonical event read by id inside the caller's tenant identity. */
+export type MemoryEventRecord = {
+	eventId: string
+	role: string
+	body: string
+	timestamp: string
+	scope: MemoryScope
+	scopeRef: string
+	validAt?: string
+}
+
 export type MemoryLifecycleItem =
 	| {
 			family: "structured"
@@ -815,6 +826,12 @@ export interface MemorySearchManager {
 		scope?: MemoryScope
 		scopeRef?: string
 	}): Promise<{ jobId: string; scheduled: boolean }>
+	getEvent(params: {
+		eventId: string
+		scope?: MemoryScope
+		scopeRef?: string
+		sessionKey?: string
+	}): Promise<MemoryEventRecord | null>
 	listRecallTraces(params?: { limit?: number }): Promise<RecallTrace[]>
 	getRecallTrace(params: { traceId: string }): Promise<RecallTrace | null>
 	listMemoryJobs(params?: {

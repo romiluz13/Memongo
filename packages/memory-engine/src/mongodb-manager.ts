@@ -269,6 +269,7 @@ import type {
 	MemoryDiscoveryProjection,
 	MemoryDiscoveryProjectionRequest,
 	MemoryEmbeddingProbeResult,
+	MemoryEventRecord,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
 	MemoryConversationImportResult,
@@ -1304,6 +1305,15 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		lines?: number
 	}): Promise<ManagerReadResult> {
 		return readOpsOf(this).readFile(params)
+	}
+
+	async getEvent(params: {
+		eventId: string
+		scope?: MemoryScope
+		scopeRef?: string
+		sessionKey?: string
+	}): Promise<MemoryEventRecord | null> {
+		return readOpsOf(this).getEvent(params)
 	}
 
 	// ---------------------------------------------------------------------------

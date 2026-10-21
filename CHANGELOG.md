@@ -2,6 +2,14 @@
 
 All notable changes to Memongo will be documented in this file.
 
+## 2.3.0 — 2026-10-22
+
+- Add `POST /v1/events/get`, which returns one conversation event by id only
+  inside the caller's agentId, scope and scopeRef, and only while it is
+  unexpired. Every other case returns the same 404 `EVENT_NOT_FOUND`.
+
+See [release details and validation limits](docs/platform/releases/2.3.0.md).
+
 ## 2.2.3 — 2026-10-13
 
 - Preserve explicitly requested autoEmbed scalar and binary quantization when

@@ -3,6 +3,7 @@ import type { z } from "zod"
 import {
 	memongoBridgeBuildContextBundle,
 	memongoBridgeBuildDiscoveryProjection,
+	memongoBridgeGetEvent,
 	memongoBridgeHydrateActiveSlate,
 	memongoBridgeReadFile,
 } from "@memongo/memory-bridge"
@@ -25,6 +26,23 @@ import {
 	readDiscoveryProjectionKind,
 	type V1RouterEnv,
 } from "./v1-helpers.js"
+
+const MAX_EVENT_ID_LENGTH = 256
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this rejects
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/
+
+function readEventId(raw: unknown): string | null {
+	if (typeof raw !== "string") return null
+	const eventId = raw.trim()
+	if (
+		!eventId ||
+		eventId.length > MAX_EVENT_ID_LENGTH ||
+		CONTROL_CHARACTER.test(eventId)
+	) {
+		return null
+	}
+	return eventId
+}
 
 /**
  * Parse an optional strict-schema field from a route body; `undefined`
@@ -192,6 +210,38 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			return c.json(out)
 		} catch (err) {
 			return internalError(c, err, "READ_FILE_FAILED")
+		}
+	})
+
+	// Every miss (unknown id, another agent, scope or scopeRef, expired) is the
+	// same 404 body, so the response never reveals that an id exists elsewhere.
+	v1.post("/events/get", async (c) => {
+		const body = (await readJsonBody(c)) as Record<string, unknown>
+		const eventId = readEventId(body.eventId)
+		if (!eventId) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				`eventId must be a non-empty string of at most ${MAX_EVENT_ID_LENGTH} characters without control characters`,
+			)
+		}
+		const scopeError = await readScopeInputError(c)
+		if (scopeError) return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		try {
+			const event = await memongoBridgeGetEvent({
+				eventId,
+				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
+				sessionKey: await readSessionCoordinate(c),
+			})
+			if (!event) {
+				return jsonError(c, 404, "EVENT_NOT_FOUND", "event not found")
+			}
+			return c.json(event)
+		} catch (err) {
+			return internalError(c, err, "EVENT_GET_FAILED")
 		}
 	})
 }
