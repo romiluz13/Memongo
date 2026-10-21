@@ -35,6 +35,9 @@ import {
 	memongoBridgeGetManager,
 	memongoBridgeShutdown,
 } from "@memongo/memory-bridge"
+import { benchmarkArmsRunError } from "./benchmark/benchmark-arms.js"
+import type { PairedArmsRunReport } from "./benchmark/benchmark-arms-run.js"
+import type { TokenTotals } from "./benchmark/benchmark-arms-report.js"
 import { parseBenchmarkFingerprintKey } from "./benchmark/benchmark-credential-fingerprint.js"
 import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark/benchmark-quality-contracts.js"
 import { OFFICIAL_LONGMEMEVAL_QA_JUDGE_MODEL } from "./benchmark/longmemeval-official-qa.js"
@@ -230,6 +233,28 @@ export function customJudgeDifferenceDisclosure(answerQuality: {
 		`${judgeModel} under the custom-judge protocol; this is NOT the official ` +
 		"LongMemEval protocol number (the judge is not the pinned official judge)"
 	)
+}
+
+function describeTokens(totals: TokenTotals): string {
+	return `${totals.inputTokens}/${totals.outputTokens}${totals.callsWithoutUsage > 0 ? ` (+${totals.callsWithoutUsage} calls without usage)` : ""}`
+}
+
+function printPairedArms(report: PairedArmsRunReport): void {
+	console.log("")
+	console.log(`paired arms (baseline ${report.baseline})`)
+	for (const arm of report.arms) {
+		console.log(
+			`  ${arm.name}: accuracy ${arm.accuracy?.toFixed(4) ?? "n/a"} (${arm.correct}/${arm.verdicts})  parse failures ${arm.parseFailures}  missing ${arm.missingVerdicts}  answer tokens ${describeTokens(arm.tokens.answer)}  judge tokens ${describeTokens(arm.tokens.judge)}`,
+		)
+	}
+	for (const pair of report.comparisons) {
+		console.log(
+			`  ${pair.arm} vs ${pair.baseline}: pairs ${pair.pairs}  both ${pair.bothCorrect}  ${pair.baseline} only ${pair.baselineOnly}  ${pair.arm} only ${pair.armOnly}  neither ${pair.bothWrong}  unpaired ${pair.unpaired}  McNemar p ${pair.mcnemar.pTwoSided.toFixed(4)}`,
+		)
+	}
+	for (const failure of report.ingestFailures) {
+		console.log(`  ⚠ ${failure}: judged questions may lack ingested evidence`)
+	}
 }
 
 function fail(message: string): never {
@@ -492,6 +517,12 @@ export async function main(
 	} catch (error) {
 		fail((error as Error).message)
 	}
+	const armsError = benchmarkArmsRunError(process.env, {
+		publishable: sample === 0 && !questionsPath,
+	})
+	if (armsError) {
+		fail(armsError)
+	}
 
 	let datasetPath = DATASET
 	try {
@@ -732,6 +763,10 @@ export async function main(
 		console.log(
 			`    p95 band          median ${passes.p95LatencyMs.median.toFixed(0)} ms  min ${passes.p95LatencyMs.min.toFixed(0)} ms  max ${passes.p95LatencyMs.max.toFixed(0)} ms  stddev ${passes.p95LatencyMs.stddev.toFixed(0)} ms`,
 		)
+	}
+
+	if (result.pairedArms) {
+		printPairedArms(result.pairedArms)
 	}
 
 	const report = result.benchmarkReport

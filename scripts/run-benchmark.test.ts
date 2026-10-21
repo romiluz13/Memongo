@@ -767,6 +767,104 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 		expect(getManagerMock).not.toHaveBeenCalled()
 	})
 
+	it("refuses paired arms on the full500 run before any external work", async () => {
+		stubFullRunEnv({
+			MEMONGO_BENCHMARK_QA_PROTOCOL: undefined,
+			MEMONGO_BENCHMARK_ARMS: "a=custom-v1,b=custom-v3+recall",
+		})
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+		vi.spyOn(console, "log").mockImplementation(() => {})
+
+		await expect(main([], offlineDeps)).rejects.toThrow("process.exit called")
+		expect(consoleError).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"MEMONGO_BENCHMARK_ARMS cannot run on the publishable full500 run",
+			),
+		)
+		expect(getManagerMock).not.toHaveBeenCalled()
+		expect(relevanceBenchmarkMock).not.toHaveBeenCalled()
+	})
+
+	it("refuses invalid paired arms on a subset run before any external work", async () => {
+		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://offline-test")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", FINGERPRINT_KEY)
+		vi.stubEnv("MEMONGO_BENCHMARK_ARMS", "a=custom-v1,a=custom-v2")
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+		vi.spyOn(console, "log").mockImplementation(() => {})
+		const recall = vi.fn(offlineDeps.runRecallRegression)
+
+		await expect(
+			main(["--sample", "5"], { ...offlineDeps, runRecallRegression: recall }),
+		).rejects.toThrow("process.exit called")
+		expect(consoleError).toHaveBeenCalledWith(
+			expect.stringContaining('duplicate arm name "a"'),
+		)
+		expect(recall).not.toHaveBeenCalled()
+		expect(getManagerMock).not.toHaveBeenCalled()
+		expect(relevanceBenchmarkMock).not.toHaveBeenCalled()
+	})
+
+	it("prints the paired arms report of a subset run", async () => {
+		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://offline-test")
+		vi.stubEnv("MEMONGO_BENCHMARK_FINGERPRINT_KEY", FINGERPRINT_KEY)
+		vi.stubEnv("MEMONGO_BENCHMARK_ARMS", "a=custom-v1,b=custom-v3+recall")
+		delete process.env.MEMONGO_BENCHMARK_QA_PROTOCOL
+		const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {})
+		vi.spyOn(console, "error").mockImplementation(() => {})
+		const tokens = {
+			answer: { inputTokens: 200, outputTokens: 10, callsWithoutUsage: 0 },
+			judge: { inputTokens: 100, outputTokens: 6, callsWithoutUsage: 0 },
+		}
+		const arm = (name: string, correct: number) => ({
+			name,
+			protocol: "custom-v1",
+			sessionTurnRecall: false,
+			configurationHash: "a".repeat(64),
+			questions: 8,
+			verdicts: 8,
+			correct,
+			accuracy: correct / 8,
+			parseFailures: 0,
+			missingVerdicts: 0,
+			tokens,
+		})
+		relevanceBenchmarkMock.mockResolvedValue({
+			...officialRunResult(),
+			pairedArms: {
+				baseline: "a",
+				arms: [arm("a", 1), arm("b", 7)],
+				comparisons: [
+					{
+						baseline: "a",
+						arm: "b",
+						pairs: 8,
+						bothCorrect: 0,
+						baselineOnly: 1,
+						armOnly: 7,
+						bothWrong: 0,
+						unpaired: 0,
+						baselineAccuracy: 0.125,
+						armAccuracy: 0.875,
+						mcnemar: { discordant: 8, pTwoSided: 0.0703125 },
+					},
+				],
+				perQuestion: [],
+				ingestFailures: [],
+			},
+		})
+
+		await main(["--sample", "5"], offlineDeps)
+
+		const printed = consoleLog.mock.calls.map((call) => String(call[0]))
+		expect(printed).toContain("paired arms (baseline a)")
+		expect(printed).toContain(
+			"  b vs a: pairs 8  both 0  a only 1  b only 7  neither 0  unpaired 0  McNemar p 0.0703",
+		)
+		expect(printed).toContain(
+			"  b: accuracy 0.8750 (7/8)  parse failures 0  missing 0  answer tokens 200/10  judge tokens 100/6",
+		)
+	})
+
 	it("questionsCheckpointStem strips the extension and the longmemeval prefix", () => {
 		expect(
 			questionsCheckpointStem(
