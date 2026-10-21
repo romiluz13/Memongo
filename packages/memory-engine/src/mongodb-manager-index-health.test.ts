@@ -539,6 +539,22 @@ describe("running manager: searchDetailed and search take capabilities from the 
 		expect(optionOfCall(1)).not.toHaveProperty("includeRoundPartner")
 	})
 
+	it("search() hands the session turn recall option to searchV2 only when given", async () => {
+		const { manager } = await boot()
+		const optionOfCall = (position: number) =>
+			(
+				vi.mocked(searchV2).mock.calls[position]?.[4] as {
+					searchOptions?: Record<string, unknown>
+				}
+			).searchOptions
+		await manager.search("deploy notes", { sessionTurnRecall: true })
+		await manager.search("deploy notes", { sessionTurnRecall: false })
+		await manager.search("deploy notes")
+		expect(optionOfCall(0)?.sessionTurnRecall).toBe(true)
+		expect(optionOfCall(1)?.sessionTurnRecall).toBe(false)
+		expect(optionOfCall(2)).not.toHaveProperty("sessionTurnRecall")
+	})
+
 	it("runs every pass of one request inside one budget, with the snapshot open", async () => {
 		const { manager } = await boot()
 		let budgetActive = false

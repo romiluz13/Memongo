@@ -966,6 +966,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			questionDate?: Date
 			/** C-2: attach each conversation turn's round partner (opt-in). */
 			includeRoundPartner?: boolean
+			/** C-1 stage 2 for this search; absent, MEMONGO_SESSION_TURN_RECALL decides. */
+			sessionTurnRecall?: boolean
 			/**
 			 * #66: receives the per-lane latency breakdown of this call. A sink
 			 * rather than instance state so concurrent searches (#67 scenario

@@ -494,6 +494,11 @@ export type SearchV2Context = {
 		questionDate?: Date
 		/** C-2: attach each conversation turn's round partner (opt-in). */
 		includeRoundPartner?: boolean
+		/**
+		 * C-1 stage 2 for this search only; absent, MEMONGO_SESSION_TURN_RECALL
+		 * decides. Lets paired benchmark arms differ inside one process.
+		 */
+		sessionTurnRecall?: boolean
 		operationRunContext?: OperationRunContext
 		/** P3.2: per-request cost budget overrides (resolved over defaults). */
 		budget?: Partial<SearchBudgetLimits>
@@ -2373,9 +2378,12 @@ async function searchV2WithBudget(
 		latencyByPath["phase:precision-merge"] =
 			Date.now() - precisionMergeStartedAt
 		const laneControlsStartedAt = Date.now()
+		const sessionTurnRecall =
+			context.searchOptions?.sessionTurnRecall ?? isSessionTurnRecallEnabled()
 		const laneControlled = applyLaneAwareResultControls({
 			query,
 			results: precisionScored,
+			sessionTurnRecall,
 			classification: classifyExecutorSearch({
 				query,
 				timeRange: context.searchOptions?.timeRange,
@@ -2389,7 +2397,7 @@ async function searchV2WithBudget(
 		latencyByPath["phase:lane-controls"] = Date.now() - laneControlsStartedAt
 
 		// C-1 stage 2, opt-in: unset, no query runs and no row is recorded.
-		const recalledTurns = isSessionTurnRecallEnabled()
+		const recalledTurns = sessionTurnRecall
 			? await timeLane("phase:session-turn-recall", () =>
 					runLane("session-turn-recall", (onTierOutcome) =>
 						recallSessionTurns({

@@ -341,3 +341,75 @@ describe("searchV2 session turn recall", () => {
 		])
 	})
 })
+
+// Paired benchmark arms run in one process, so the mode is a per-search
+// option that overrides the env flag; absent, the flag decides.
+describe("searchV2 per-search session turn recall", () => {
+	// Five turns of one session over a ten-result top block: two are session
+	// capped, and only recall mode moves them ahead of the later results.
+	const overflowing = [
+		...[0.99, 0.98, 0.97, 0.96, 0.95].map((score, index) =>
+			chunk(`oak-${index}`, "s-oak", score),
+		),
+		...[0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4].map((score, index) =>
+			chunk(`other-${index}`, `s-${index}`, score),
+		),
+	]
+
+	it("runs stage 2 when the option is true and the flag is unset", async () => {
+		plan(["hybrid"])
+		vi.mocked(mongoSearch).mockResolvedValue(stageOne)
+		vi.mocked(recallSessionTurns).mockResolvedValue([
+			{ ...chunk("turn", "s-oak", 0.2), canonicalId: "event:turn" },
+		])
+		const result = await run("what did we decide", ["hybrid"], {
+			sessionTurnRecall: true,
+		})
+		expect(recallSessionTurns).toHaveBeenCalledTimes(1)
+		expect(result.results.map((r) => r.canonicalId)).toEqual([
+			"chunk:a",
+			"event:turn",
+			"chunk:b",
+		])
+	})
+
+	it("runs nothing when the option is false and the flag is enabled", async () => {
+		vi.stubEnv("MEMONGO_SESSION_TURN_RECALL", "enabled")
+		plan(["hybrid"])
+		vi.mocked(mongoSearch).mockResolvedValue(stageOne)
+		const result = await run("what did we decide", ["hybrid"], {
+			sessionTurnRecall: false,
+		})
+		expect(recallSessionTurns).not.toHaveBeenCalled()
+		expect(
+			rowsFor(result.metadata.laneOutcomes, "session-turn-recall"),
+		).toEqual([])
+	})
+
+	it("orders over-cap turns as the env flag would, in both directions", async () => {
+		plan(["hybrid"])
+		vi.mocked(recallSessionTurns).mockResolvedValue([])
+		const order = async (
+			env: string | undefined,
+			option: boolean | undefined,
+		) => {
+			vi.unstubAllEnvs()
+			vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "false")
+			vi.stubEnv("MEMONGO_CONVERSATION_EVIDENCE_MODE", "disabled")
+			if (env) vi.stubEnv("MEMONGO_SESSION_TURN_RECALL", env)
+			vi.mocked(mongoSearch).mockResolvedValue(overflowing)
+			const result = await run(
+				"what did we decide",
+				["hybrid"],
+				option === undefined ? {} : { sessionTurnRecall: option },
+				{ maxResults: 14 },
+			)
+			return result.results.map((r) => r.canonicalId)
+		}
+		const flagOn = await order("enabled", undefined)
+		const flagOff = await order(undefined, undefined)
+		expect(flagOn).not.toEqual(flagOff)
+		expect(await order(undefined, true)).toEqual(flagOn)
+		expect(await order("enabled", false)).toEqual(flagOff)
+	})
+})
