@@ -179,6 +179,46 @@ CI providers may provide `GITHUB_SHA`, `GITHUB_RUN_ID`,
 `VERCEL_GIT_COMMIT_SHA`, or `VERCEL_DEPLOYMENT_ID`; Memongo reads those as
 fallbacks.
 
+## QA protocols
+
+`MEMONGO_BENCHMARK_QA_PROTOCOL` selects how answers are generated and judged.
+Only these exact values are accepted; any other value fails before scenario or
+provider work.
+
+| Value | Path | Answer request | Envelope |
+|---|---|---|---|
+| unset or `custom-v1` | Legacy harness | `QUESTION:` line, up to 20 passages as `[n] text` in rank order | `judgeVersion: "v1"` |
+| `custom-v2` | Legacy harness | custom-v1 plus the question date and each passage's date(s) and role | `judgeVersion: "v2"` |
+| `official` | Durable sidecar path | Dated, chronological chain-of-note prompt; pinned judge | `official` block |
+| `custom-judge` | Durable sidecar path | As `official`, with a non-pinned judge | `customJudge` block |
+
+`custom-v2` changes one thing: the answer user content uses the official
+renderer's line format, in rank order. The system prompt, judge prompt and
+judge flow, 20-passage cap, 512-token answer budget and `answerAttempt`
+classification stay those of custom-v1. A passage keeps its own dates and role
+through filtering and the cap; one with no date or role renders without that
+prefix, and a passage that already starts with its role label is not labeled
+twice. For example:
+
+```text
+QUESTION (asked on 2031/02/14 (Fri) 09:30): Where did the heron nest?
+<context>
+[1] [2031/01/20 (Mon) 10:00] User: The heron nested by Quillmarsh pond
+[2] [2030/11/02 (Sat) 18:45; 2030/12/01 (Mon) 08:00] Assistant: The heron nested in Brindlewick reeds
+[3] An undated note with no known speaker
+</context>
+Return only {"answer":"..."}.
+```
+
+The run configuration records the raw value as
+`env.MEMONGO_BENCHMARK_QA_PROTOCOL`, so custom-v1 and custom-v2 runs have
+different configuration hashes and never resume each other's checkpoints.
+Accepting `custom-v2` added a known value, not a covered key, so coverage stays
+`b02-keyed-v5`; a reader built before `custom-v2` refuses such a manifest.
+Neither custom protocol writes a prediction sidecar, so `b2-join.ts` cannot
+compare them, and neither is the official protocol: a full500 publishable run
+refuses both.
+
 ## Private QA diagnostic capture
 
 For a fresh official or custom-judge QA run, set
@@ -239,7 +279,8 @@ provider capture. Context can contain personal data not recognized as a
 configured API key; this is sensitive opt-in evidence, not anonymized output.
 Do not commit it or attach it to public issues/PRs. Disabling capture retains
 the prior prompts, prediction sidecar, call accounting and scoring behavior.
-This facility covers `official` and `custom-judge`, not legacy `custom-v1`.
+This facility covers `official` and `custom-judge`, not `custom-v1` or
+`custom-v2`.
 
 Use this evidence to select an experiment before changing answer prompts or
 retrieval. The current durable answer path already passes full retrieved text
