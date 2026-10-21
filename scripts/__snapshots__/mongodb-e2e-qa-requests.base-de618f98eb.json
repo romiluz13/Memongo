@@ -1,0 +1,121 @@
+[
+	{
+		"model": "fixture-answer-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You answer the QUESTION using ONLY the provided context passages from a user's memory.\nRules:\n- Be concise and factual; answer with just the fact asked for.\n- If the context does not contain enough information to answer, return an empty answer string.\n- Do not use outside knowledge.\nReturn JSON only: {\"answer\":\"<concise answer, or empty string>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Where did Zoë’s café ☕ move?\n<context>\n[1] passage 0 — שלום 👩‍👩‍👧\n[2] passage 1 — שלום 👩‍👩‍👧\n[3] passage 2 — שלום 👩‍👩‍👧\n[4] passage 3 — שלום 👩‍👩‍👧\n[5] passage 4 — שלום 👩‍👩‍👧\n[6] passage 5 — שלום 👩‍👩‍👧\n[7] passage 6 — שלום 👩‍👩‍👧\n[8] passage 7 — שלום 👩‍👩‍👧\n[9] passage 8 — שלום 👩‍👩‍👧\n[10] passage 9 — שלום 👩‍👩‍👧\n[11] passage 10 — שלום 👩‍👩‍👧\n[12] passage 11 — שלום 👩‍👩‍👧\n[13] passage 12 — שלום 👩‍👩‍👧\n[14] passage 13 — שלום 👩‍👩‍👧\n[15] passage 14 — שלום 👩‍👩‍👧\n[16] passage 15 — שלום 👩‍👩‍👧\n[17] passage 16 — שלום 👩‍👩‍👧\n[18] passage 17 — שלום 👩‍👩‍👧\n[19] passage 18 — שלום 👩‍👩‍👧\n[20] passage 19 — שלום 👩‍👩‍👧\n</context>\nReturn only {\"answer\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Where did Zoë’s café ☕ move?\nGOLD ANSWER: Lisbon\nCANDIDATE ANSWER: Lisbon\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Where did Zoë’s café ☕ move?\nGOLD ANSWER: Lisbon\nCANDIDATE ANSWER: Tagus\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-answer-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You answer the QUESTION using ONLY the provided context passages from a user's memory.\nRules:\n- Be concise and factual; answer with just the fact asked for.\n- If the context does not contain enough information to answer, return an empty answer string.\n- Do not use outside knowledge.\nReturn JSON only: {\"answer\":\"<concise answer, or empty string>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: What is the fictional secret?\n<context>\n[1] nothing relevant\n</context>\nReturn only {\"answer\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-answer-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You answer the QUESTION using ONLY the provided context passages from a user's memory.\nRules:\n- Be concise and factual; answer with just the fact asked for.\n- If the context does not contain enough information to answer, return an empty answer string.\n- Do not use outside knowledge.\nReturn JSON only: {\"answer\":\"<concise answer, or empty string>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Which river?\n<context>\n[1]   padded\t \n[2] \n</context>\nReturn only {\"answer\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Which river?\nGOLD ANSWER: Tagus\nCANDIDATE ANSWER: Lisbon\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Which river?\nGOLD ANSWER: Tagus\nCANDIDATE ANSWER: Lisbon\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	}
+]
