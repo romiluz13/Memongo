@@ -2061,8 +2061,9 @@ export type BenchmarkReaderBudgetCaseRecord = {
 	providerInputTokens: number | null
 	providerUsageReported: boolean
 	/**
-	 * Each gold turn present in the context, at the start of the unit that
-	 * holds it, as a percentile (0-100) of the estimated context tokens.
+	 * Each gold turn present in the context, at the start of the first
+	 * admitted unit that holds or maps to it, as a percentile (0-100) of the
+	 * estimated context tokens.
 	 */
 	goldTurnPositions: Array<{ turnId: string; positionPercentile: number }>
 }

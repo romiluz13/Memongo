@@ -189,6 +189,7 @@ provider work.
 |---|---|---|---|
 | unset or `custom-v1` | Legacy harness | `QUESTION:` line, up to 20 passages as `[n] text` in rank order | `judgeVersion: "v1"` |
 | `custom-v2` | Legacy harness | custom-v1 plus the question date and each passage's date(s) and role | `judgeVersion: "v2"` |
+| `custom-v3` | Legacy harness | Round units admitted under a 16,000 estimated-token budget, rendered as official dated sessions | `judgeVersion: "v3"`, `readerBudget` per case, `readerBudgetCalibration` |
 | `official` | Durable sidecar path | Dated, chronological chain-of-note prompt; pinned judge | `official` block |
 | `custom-judge` | Durable sidecar path | As `official`, with a non-pinned judge | `customJudge` block |
 
@@ -210,7 +211,82 @@ QUESTION (asked on 2031/02/14 (Fri) 09:30): Where did the heron nest?
 Return only {"answer":"..."}.
 ```
 
-In both custom protocols every answer, judge and decoy-judge call ends in one
+### custom-v3: reader budget and session order
+
+`custom-v3` changes what reaches the answerer and how it is laid out; the
+system prompt, judge prompt and flow, 512-token answer budget and
+`answerAttempt` classification stay those of custom-v1. There is no
+20-passage cap: the token budget replaces it.
+
+- **Retrieval.** The benchmark search passes `includeRoundPartner: true`, so a
+  user turn comes back with the next turn of its session and an assistant turn
+  with the previous one. `buildRoundUnits` merges them into round units; a turn
+  without a partner stays a single-turn unit. Each unit carries its best
+  stage-1 rank, its benchmark session and that session's dates, and its first
+  turn index. A unit that resolves to no session is its own undated session.
+  `MEMONGO_SESSION_TURN_RECALL` stays an independent flag.
+- **Budget.** 16,000 estimated tokens of the whole serialized user content,
+  session headers, question lines and return line included. Tokens are counted
+  with `js-tiktoken` 1.0.21 `o200k_base`, which is not the answer provider's
+  tokenizer, so every count is a labelled estimate (`estimatedContextTokens`).
+- **Admission, by relevance, never by date.** Duplicates drop first (same unit
+  id or same text SHA-256; the better-ranked copy stays). Then a breadth pass
+  takes each session's best unit, sessions in the order of that unit's rank,
+  and a depth pass takes the remaining units in rank order; ties break on unit
+  id. A unit is admitted whole when the context with it still fits the budget,
+  so a session header counts when its session's first unit is admitted. A unit
+  that does not fit is skipped with its rank recorded, and admission continues
+  with the next unit. The first unit is always admitted, and
+  `budgetExceededByFirstUnit` records when it alone exceeds the budget. Nothing
+  is cut after the chronological sort, so a well-ranked newest session cannot
+  fall off the end the way a sort-then-truncate reader drops it.
+- **Presentation.** Admitted sessions are numbered in this order: undated
+  sessions first by relevance, with no `Session Date:` line, then dated
+  sessions by date ascending, ties by session id. Units inside a session follow
+  turn order, role-labeled once (B9-2). `Current Date:` is omitted when the
+  question has no date. For example:
+
+```text
+History Chats:
+
+### Session 1:
+Session Content:
+User: An undated note.
+
+### Session 2:
+Session Date: 2030/11/02 (Sat) 18:45
+Session Content:
+User: The ferry to Quillmarsh leaves at noon.
+
+### Session 3:
+Session Date: 2031/01/20 (Mon) 10:00
+Session Content:
+User: The mill sits on Brindle creek.
+User: Did the miller fix the wheel?
+Assistant: Yes, on Tuesday.
+
+Current Date: 2031/02/14 (Fri) 09:30
+Question: When was the wheel fixed?
+Return only {"answer":"..."}.
+```
+
+Each custom-v3 case result carries `readerBudget`: the tokenizer and budget,
+`estimatedContextTokens`, `budgetExceededByFirstUnit`, candidate, admitted,
+deduplicated and skipped unit counts, the stage-1 ranks of skipped units, the
+answer call's provider-reported input tokens (`null` with
+`providerUsageReported: false` when usage is missing, never zero), and for each
+gold turn present in the context its position as a percentile of the estimated
+context tokens, measured at the start of the first admitted unit that holds
+or maps to it. Context diagnostics describe the admitted units in presentation
+order. The envelope's `readerBudgetCalibration` divides the summed provider
+input tokens by the summed estimated tokens over answer calls that reported
+usage, and is `complete: false` when any answer call lacked usage. Provider
+input tokens also count the system prompt and chat framing, so the ratio
+carries that overhead. A custom-v3 case without reader units is refused before
+any provider call. Gold is read only by these diagnostics, after the request is
+built; nothing selects by it.
+
+In all custom protocols every answer, judge and decoy-judge call ends in one
 fixed status, decided by the first layer that fails: transport, envelope, then
 content. A token-budget stop (`length` shape, or finish reason `length` or
 `max_tokens`) whose content does not parse is `truncated`, never
@@ -224,15 +300,17 @@ accounting counts ended calls per operation in `statusCounts` and
 response or error text.
 
 The run configuration records the raw value as
-`env.MEMONGO_BENCHMARK_QA_PROTOCOL`, so custom-v1 and custom-v2 runs have
-different configuration hashes and never resume each other's checkpoints.
-Accepting `custom-v2` added a known value, not a covered key, so coverage stays
-`b02-keyed-v5`; a reader built before `custom-v2` refuses such a manifest.
-Neither custom protocol writes a prediction sidecar, so `b2-join.ts` cannot
-compare them, and neither is the official protocol: a full500 publishable run
-refuses both.
+`env.MEMONGO_BENCHMARK_QA_PROTOCOL`, so custom-v1, custom-v2 and custom-v3
+runs have different configuration hashes and never resume each other's
+checkpoints. Accepting `custom-v2` added a known value, not a covered key, so
+coverage stayed `b02-keyed-v5`; a reader built before `custom-v2` refuses such a
+manifest. custom-v3 also records `readerBudgetEstimatedTokens` and
+`readerBudgetTokenizer` in every run configuration (see the coverage marker
+below). No custom protocol writes a prediction sidecar, so `b2-join.ts` cannot
+compare them, and none is the official protocol: a full500 publishable run and
+the durable sidecar path refuse all three by name.
 
-### Reader-cut metrics (custom-v1, custom-v2)
+### Reader-cut metrics (custom-v1, custom-v2, custom-v3)
 
 A custom-protocol run adds `e2eQa.readerCut` (pooled and per question type) and
 a `readerCut` block on each matching `questionTypeBreakdown` row. Gold-turn
@@ -304,8 +382,8 @@ provider capture. Context can contain personal data not recognized as a
 configured API key; this is sensitive opt-in evidence, not anonymized output.
 Do not commit it or attach it to public issues/PRs. Disabling capture retains
 the prior prompts, prediction sidecar, call accounting and scoring behavior.
-This facility covers `official` and `custom-judge`, not `custom-v1` or
-`custom-v2`.
+This facility covers `official` and `custom-judge`, not `custom-v1`,
+`custom-v2` or `custom-v3`.
 
 Use this evidence to select an experiment before changing answer prompts or
 retrieval. The current durable answer path already passes full retrieved text
@@ -362,13 +440,15 @@ QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage (`b02-keyed-v6`) includes the judge model, auth
+run cannot verify. Coverage (`b02-keyed-v7`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, the configured MongoDB connection inputs described below, the
 extraction-job drain stall window (`MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS`, raw
 and resolved), and session turn recall (`MEMONGO_SESSION_TURN_RECALL` raw,
 `effectiveSessionTurnRecall`, and its frozen seed-result, seed-session and
-turns-per-session bounds), so a `b02-keyed-v5` manifest does not resume.
+turns-per-session bounds), and the custom-v3 reader budget
+(`readerBudgetEstimatedTokens`, `readerBudgetTokenizer`), so a `b02-keyed-v6`
+manifest does not resume.
 Checkpoints without a valid manifest, including every earlier run, every
 `b02-keyed-v1` run without connection inputs and every `b02-judge-v1` run with
 plain sha256 fingerprints, stay descriptive and are refused for resume: equal hashes alone once missed a
