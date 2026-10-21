@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { readFile } from "node:fs/promises"
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import {
@@ -12,6 +20,7 @@ import {
 	materializeNew25Dataset,
 	repoRootFromHere,
 	selectRoundRobinByType,
+	writePinnedSubset,
 } from "./longmemeval-new25.js"
 
 type New25IdentityPin = {
@@ -99,6 +108,41 @@ describe("materializeNew25Dataset", () => {
 	})
 })
 
+const sha256 = (bytes: string | Buffer) =>
+	createHash("sha256").update(bytes).digest("hex")
+
+describe("writePinnedSubset", () => {
+	it("writes the materialized subset and its identity pin, byte for byte", async () => {
+		const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "memongo-pin-"))
+		try {
+			const parent =
+				'[{"question_id":"a1","question_type":"alpha","x":1},{"question_id":"b1","question_type":"beta"},{"question_id":"a2","question_type":"alpha"}]'
+			await mkdir(path.join(fixtureRoot, "data"))
+			await writeFile(path.join(fixtureRoot, "data/parent.json"), parent)
+			const pin = await writePinnedSubset({
+				root: fixtureRoot,
+				datasetRelative: "data/parent.json",
+				outputRelative: "data/subset.json",
+				pinRelative: "pin.json",
+				size: 2,
+				excludedIds: ["a1"],
+			})
+			const subset =
+				'[\n\t{\n\t\t"question_id": "a2",\n\t\t"question_type": "alpha"\n\t},\n\t{\n\t\t"question_id": "b1",\n\t\t"question_type": "beta"\n\t}\n]\n'
+			const pinFile = `{\n\t"version": 1,\n\t"parentSha256": "${sha256(parent)}",\n\t"subsetSha256": "${sha256(subset)}",\n\t"excludedIds": [\n\t\t"a1"\n\t],\n\t"ids": [\n\t\t"a2",\n\t\t"b1"\n\t]\n}\n`
+			expect(
+				await readFile(path.join(fixtureRoot, "data/subset.json"), "utf8"),
+			).toBe(subset)
+			expect(await readFile(path.join(fixtureRoot, "pin.json"), "utf8")).toBe(
+				pinFile,
+			)
+			expect(pin).toEqual(JSON.parse(pinFile))
+		} finally {
+			await rm(fixtureRoot, { recursive: true, force: true })
+		}
+	})
+})
+
 const root = repoRootFromHere(import.meta.url)
 const datasetPath = path.join(root, NEW25_DATASET_RELATIVE)
 
@@ -132,6 +176,49 @@ describe.skipIf(!existsSync(datasetPath))(
 					.update(await readFile(materializedPath))
 					.digest("hex")
 				expect(subsetSha256).toBe(pin.subsetSha256)
+			}
+		})
+
+		// The committed pin is Biome-formatted, so the comparison is with the
+		// generator's serialization of its content.
+		it("regenerates the committed pin byte for byte through writePinnedSubset", async () => {
+			const fixtureRoot = await mkdtemp(
+				path.join(os.tmpdir(), "memongo-new25-"),
+			)
+			try {
+				await mkdir(
+					path.join(fixtureRoot, path.dirname(NEW25_DATASET_RELATIVE)),
+					{
+						recursive: true,
+					},
+				)
+				await mkdir(
+					path.join(fixtureRoot, path.dirname(NEW25_IDENTITY_PIN_RELATIVE)),
+					{ recursive: true },
+				)
+				await symlink(
+					datasetPath,
+					path.join(fixtureRoot, NEW25_DATASET_RELATIVE),
+				)
+				await writePinnedSubset({
+					root: fixtureRoot,
+					datasetRelative: NEW25_DATASET_RELATIVE,
+					outputRelative: NEW25_MATERIALIZED_OUTPUT_RELATIVE,
+					pinRelative: NEW25_IDENTITY_PIN_RELATIVE,
+					size: NEW25_SIZE,
+					excludedIds: NEW25_EXCLUDED_IDS,
+				})
+				const committed: unknown = JSON.parse(
+					await readFile(path.join(root, NEW25_IDENTITY_PIN_RELATIVE), "utf8"),
+				)
+				expect(
+					await readFile(
+						path.join(fixtureRoot, NEW25_IDENTITY_PIN_RELATIVE),
+						"utf8",
+					),
+				).toBe(`${JSON.stringify(committed, null, "\t")}\n`)
+			} finally {
+				await rm(fixtureRoot, { recursive: true, force: true })
 			}
 		})
 	},

@@ -16,8 +16,7 @@
  * Regenerate from the repo root:
  *   bun scripts/benchmark/longmemeval-held25.ts
  */
-import { createHash } from "node:crypto"
-import { readFile, writeFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { B2_IDENTITY_PIN_RELATIVE } from "./longmemeval-b2-frozen50.js"
@@ -25,9 +24,9 @@ import {
 	NEW25_DATASET_RELATIVE,
 	NEW25_EXCLUDED_IDS,
 	NEW25_IDENTITY_PIN_RELATIVE,
-	materializeNew25Dataset,
 	repoRootFromHere,
 	selectRoundRobinByType,
+	writePinnedSubset,
 } from "./longmemeval-new25.js"
 
 export const HELD25_SIZE = 25
@@ -93,34 +92,14 @@ export async function readCommittedHeld25Exclusions(
 
 async function main(): Promise<void> {
 	const root = repoRootFromHere(import.meta.url)
-	const datasetBytes = await readFile(path.join(root, HELD25_DATASET_RELATIVE))
-	const parentSha256 = createHash("sha256").update(datasetBytes).digest("hex")
-	const parsed: unknown = JSON.parse(datasetBytes.toString("utf8"))
-	if (!Array.isArray(parsed)) {
-		throw new Error("LongMemEval dataset is not a JSON array")
-	}
-	const entries = parsed as RawQuestion[]
-	const exclusions = await readCommittedHeld25Exclusions(root)
-	const ids = selectHeld25(entries, exclusions)
-	const materializedBytes = `${JSON.stringify(materializeNew25Dataset(entries, ids), null, "\t")}\n`
-	const subsetSha256 = createHash("sha256")
-		.update(materializedBytes)
-		.digest("hex")
-	await writeFile(
-		path.join(root, HELD25_MATERIALIZED_OUTPUT_RELATIVE),
-		materializedBytes,
-	)
-	const pin = {
-		version: 1,
-		parentSha256,
-		subsetSha256,
-		excludedIds: held25ExcludedIds(exclusions),
-		ids,
-	}
-	await writeFile(
-		path.join(root, HELD25_IDENTITY_PIN_RELATIVE),
-		`${JSON.stringify(pin, null, "\t")}\n`,
-	)
+	const pin = await writePinnedSubset({
+		root,
+		datasetRelative: HELD25_DATASET_RELATIVE,
+		outputRelative: HELD25_MATERIALIZED_OUTPUT_RELATIVE,
+		pinRelative: HELD25_IDENTITY_PIN_RELATIVE,
+		size: HELD25_SIZE,
+		excludedIds: held25ExcludedIds(await readCommittedHeld25Exclusions(root)),
+	})
 	console.log(JSON.stringify(pin, null, 2))
 }
 

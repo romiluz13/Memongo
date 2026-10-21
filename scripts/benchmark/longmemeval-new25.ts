@@ -114,9 +114,30 @@ export function repoRootFromHere(importMetaUrl: string): string {
 	return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "../..")
 }
 
-async function main(): Promise<void> {
-	const root = repoRootFromHere(import.meta.url)
-	const datasetBytes = await readFile(path.join(root, NEW25_DATASET_RELATIVE))
+export type SubsetIdentityPin = {
+	version: 1
+	parentSha256: string
+	subsetSha256: string
+	excludedIds: string[]
+	ids: string[]
+}
+
+/**
+ * Hashes the parent dataset, selects `size` questions round-robin by type
+ * outside `excludedIds`, writes the materialized subset and its identity pin
+ * under `root`, and returns the pin.
+ */
+export async function writePinnedSubset(params: {
+	root: string
+	datasetRelative: string
+	outputRelative: string
+	pinRelative: string
+	size: number
+	excludedIds: readonly string[]
+}): Promise<SubsetIdentityPin> {
+	const datasetBytes = await readFile(
+		path.join(params.root, params.datasetRelative),
+	)
 	const parentSha256 = createHash("sha256").update(datasetBytes).digest("hex")
 	const parsed: unknown = JSON.parse(datasetBytes.toString("utf8"))
 	if (!Array.isArray(parsed)) {
@@ -124,28 +145,40 @@ async function main(): Promise<void> {
 	}
 	const entries = parsed as RawQuestion[]
 	const ids = selectRoundRobinByType(entries, {
-		size: NEW25_SIZE,
-		excluded: NEW25_EXCLUDED_IDS,
+		size: params.size,
+		excluded: params.excludedIds,
 	})
 	const materializedBytes = `${JSON.stringify(materializeNew25Dataset(entries, ids), null, "\t")}\n`
 	const subsetSha256 = createHash("sha256")
 		.update(materializedBytes)
 		.digest("hex")
 	await writeFile(
-		path.join(root, NEW25_MATERIALIZED_OUTPUT_RELATIVE),
+		path.join(params.root, params.outputRelative),
 		materializedBytes,
 	)
-	const pin = {
+	const pin: SubsetIdentityPin = {
 		version: 1,
 		parentSha256,
 		subsetSha256,
-		excludedIds: [...NEW25_EXCLUDED_IDS],
+		excludedIds: [...params.excludedIds],
 		ids,
 	}
 	await writeFile(
-		path.join(root, NEW25_IDENTITY_PIN_RELATIVE),
+		path.join(params.root, params.pinRelative),
 		`${JSON.stringify(pin, null, "\t")}\n`,
 	)
+	return pin
+}
+
+async function main(): Promise<void> {
+	const pin = await writePinnedSubset({
+		root: repoRootFromHere(import.meta.url),
+		datasetRelative: NEW25_DATASET_RELATIVE,
+		outputRelative: NEW25_MATERIALIZED_OUTPUT_RELATIVE,
+		pinRelative: NEW25_IDENTITY_PIN_RELATIVE,
+		size: NEW25_SIZE,
+		excludedIds: NEW25_EXCLUDED_IDS,
+	})
 	console.log(JSON.stringify(pin, null, 2))
 }
 
