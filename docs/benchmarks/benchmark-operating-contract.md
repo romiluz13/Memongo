@@ -341,6 +341,93 @@ harness's abstention rule classifies as abstaining over answerable cases. A
 rate without a denominator is `null`. Both are computed from the case results
 after the run and never feed retrieval or selection.
 
+### Paired arms (`MEMONGO_BENCHMARK_ARMS`)
+
+A paired run measures several query-time variants against one stored copy of
+each question. Ingestion and enrichment are slow and nondeterministic, so
+separate runs would compare different stores; paired arms compare the same one.
+
+```text
+MEMONGO_BENCHMARK_ARMS=v1=custom-v1,v2=custom-v2,v3=custom-v3,v3r=custom-v3+recall
+```
+
+Each comma-separated entry is `name=protocol[+recall]`. The name matches
+`[A-Za-z0-9][A-Za-z0-9_-]{0,31}`; the protocol is `custom-v1`, `custom-v2` or
+`custom-v3`; `+recall` turns session turn recall on for that arm's searches,
+and its absence turns it off. The first arm is the baseline. Unset, the run
+behaves exactly as before. The CLI refuses, before it reads the dataset: an
+empty or blank value, a malformed entry, an invalid or duplicate name, an
+unknown protocol or modifier, `official` or `custom-judge` (they score through
+the durable sidecar path, which pairs nothing), fewer than two arms, a set
+`MEMONGO_BENCHMARK_QA_PROTOCOL` or `MEMONGO_SESSION_TURN_RECALL` (the arms fix
+both), and the publishable full500 run (use `--questions` or `--sample`). The
+runner then refuses, before the first scenario: quality thresholds, a dataset
+other than LongMemEval, the raw-session lane, query decomposition, and a
+scoped relevance search.
+
+Per question, in this order: ingest and settle once; then for each arm in the
+listed order, every measurement pass searches with that arm's turn recall
+(`sessionTurnRecall` per search, see below), builds that arm's reader input,
+answers and judges; cleanup runs only after the last arm. Search access
+bookkeeping does not enter ranking, so an earlier arm's searches do not change
+a later arm's results. Because each question is judged as soon as its arms
+finish, the decoy probe draws from a pool of every judgeable question in the
+run, as the unpaired harness does after the run.
+
+Each arm keeps its own case results, retrieval metrics (pass 0), miss ledger,
+case diagnostics, reader-cut metrics, reader-budget calibration and terciles
+(custom-v3), and configuration identity: `benchmarkArmConfiguration` sets
+`benchmarkArm`, `benchmarkArmQaProtocol` and `effectiveSessionTurnRecall` on
+the run settings and hashes them, so no two arms share a hash. The run's
+top-level result and `e2eQa` are the baseline arm's. A question is
+checkpointed only when every arm has a verdict; resume restores a question
+only when every arm is in its checkpoint entry, and re-ingests any other.
+
+`result.pairedArms` is the paired report:
+
+- `arms[]`: name, protocol, `sessionTurnRecall`, `configurationHash`,
+  `questions`, `verdicts`, `correct`, `accuracy`, `parseFailures`,
+  `missingVerdicts`, and `tokens.answer` and `tokens.judge` (judge includes
+  decoy calls), each `{inputTokens, outputTokens, callsWithoutUsage}` from
+  provider-reported usage.
+- `comparisons[]`, each arm against the baseline: `pairs`, `bothCorrect`,
+  `baselineOnly`, `armOnly`, `bothWrong`, `unpaired`, both accuracies, and
+  `mcnemar: {discordant, pTwoSided}`, the exact two-sided McNemar p over the
+  discordant pairs.
+- `perQuestion[]`: each case id with every arm's verdict.
+
+A verdict is `correct`, `incorrect` or `missing`. An answer or judge call
+that fails after transport (invalid or truncated JSON, for example) counts as
+incorrect and also in `parseFailures`. A retrieval failure or a transport
+failure is `missing`: it is not scored, its question is unpaired, and the
+question is not checkpointed, so a resume retries it. The CLI prints one line per comparison and one per
+arm after the run.
+
+Turn recall per search: `MongoDBMemoryManager.search` accepts
+`sessionTurnRecall?: boolean`. When given, it overrides
+`MEMONGO_SESSION_TURN_RECALL` for that search only; when omitted, the flag
+decides as before.
+
+### Held-out LongMemEval 25
+
+`scripts/benchmark/longmemeval-held25.ids.json` pins 25 LongMemEval_S
+questions no earlier run has seen, for paired-arms measurement. They are
+selected with new25's round-robin-by-type rule over the questions left after
+excluding the five ids new25 excluded, the 25 new25 ids and the B2 frozen-50
+ids (79 distinct ids), all read from their committed pins. The pin records the
+parent dataset SHA-256, the subset SHA-256, the excluded ids and the 25 ids. To
+materialize the gitignored subset file and rewrite the pin from the parent
+dataset:
+
+```bash
+bun scripts/benchmark/longmemeval-held25.ts
+MEMONGO_BENCHMARK_ARMS=v1=custom-v1,v2=custom-v2,v3=custom-v3,v3r=custom-v3+recall \
+  bun run benchmark --questions benchmarks/data/lme_s_held25.json
+```
+
+A regenerated pin that differs from the committed one means the parent dataset
+or a committed exclusion pin changed.
+
 ## Private QA diagnostic capture
 
 For a fresh official or custom-judge QA run, set
@@ -459,7 +546,7 @@ QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage (`b02-keyed-v7`) includes the judge model, auth
+run cannot verify. Coverage (`b02-keyed-v8`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, the configured MongoDB connection inputs described below, the
 extraction-job drain stall window (`MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS`, raw
@@ -468,8 +555,9 @@ a positive, finite number of milliseconds fails the run naming the variable and
 the rule, without echoing the value), and session turn recall (`MEMONGO_SESSION_TURN_RECALL` raw,
 `effectiveSessionTurnRecall`, and its frozen seed-result, seed-session and
 turns-per-session bounds), and the custom-v3 reader budget
-(`readerBudgetEstimatedTokens`, `readerBudgetTokenizer`), so a `b02-keyed-v6`
-manifest does not resume.
+(`readerBudgetEstimatedTokens`, `readerBudgetTokenizer`), and paired arms
+(`MEMONGO_BENCHMARK_ARMS` raw, `benchmarkArm`, `benchmarkArmQaProtocol`), so a
+`b02-keyed-v7` manifest does not resume.
 Checkpoints without a valid manifest, including every earlier run, every
 `b02-keyed-v1` run without connection inputs and every `b02-judge-v1` run with
 plain sha256 fingerprints, stay descriptive and are refused for resume: equal hashes alone once missed a
