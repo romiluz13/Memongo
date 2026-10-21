@@ -1144,6 +1144,57 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 		}
 	})
 
+	it("custom-v3 marks scoped relevance-search units as not-requested", async () => {
+		vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "synthetic")
+		vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "synthetic-model")
+		vi.stubEnv("MEMONGO_BENCHMARK_JUDGE_MODEL", "synthetic-judge-model")
+		vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", "custom-v3")
+		enrichmentProbe.reset()
+		try {
+			const search = buildSearchStub()
+			const relevanceExplain = vi.fn(async () => ({
+				results: [
+					{
+						path: "events/e-u1",
+						startLine: 1,
+						endLine: 1,
+						score: 0.9,
+						snippet: "The sky is violet today.",
+						text: "The sky is violet today.",
+						source: "conversation",
+						canonicalId: "event:e-u1",
+						sessionId: "session-1",
+						role: "user",
+					},
+				] satisfies MemorySearchResult[],
+			}))
+			const manager = Object.assign(buildProbeManager(search), {
+				relevanceExplain,
+			})
+			const dataset = syntheticLongMemEvalDataset()
+			const evaluation = dataset.scenarios[0]?.evaluations[0]
+			if (!evaluation) throw new Error("fixture has no evaluation")
+			Object.assign(evaluation, { sourceScope: "memory" })
+			const result = await benchmarkOps(manager).runScenarioBenchmarkDataset({
+				datasetPath: "/tmp/benchmark.json",
+				dataset: { ...dataset, scenarios: [dataset.scenarios[0]] },
+				datasetVersion: "w5-harness-v1",
+				maxResults: 10,
+				minScore: 0.1,
+				executionProfile: "shipped",
+				runContext: probeRunContext("run-custom-v3-scoped"),
+			})
+			expect(relevanceExplain).toHaveBeenCalledTimes(1)
+			expect(search).not.toHaveBeenCalled()
+			expect(result.e2eQa?.caseResults[0]?.readerBudget).toMatchObject({
+				units: { candidates: 1, admitted: 1 },
+				admittedRoundPartnerMissing: { "not-requested": 1 },
+			})
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
 	it("custom-v1 and custom-v2 search without round partners", async () => {
 		for (const protocol of ["custom-v1", "custom-v2"]) {
 			vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", protocol)

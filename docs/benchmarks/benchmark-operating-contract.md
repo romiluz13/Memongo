@@ -221,7 +221,12 @@ system prompt, judge prompt and flow, 512-token answer budget and
 - **Retrieval.** The benchmark search passes `includeRoundPartner: true`, so a
   user turn comes back with the next turn of its session and an assistant turn
   with the previous one. `buildRoundUnits` merges them into round units; a turn
-  without a partner stays a single-turn unit. Each unit carries its best
+  without a partner stays a single-turn unit and keeps the engine's
+  `roundPartnerMissing` reason. A case searched another way (a scoped
+  `relevanceExplain` search, query decomposition or the raw-session lane) asks
+  for no partners, so each of its units is marked
+  `roundPartnerMissing: "not-requested"` rather than passing as an ordinary
+  single turn. Each unit carries its best
   stage-1 rank, its benchmark session and that session's dates, and its first
   turn index. A unit that resolves to no session is its own undated session.
   `MEMONGO_SESSION_TURN_RECALL` stays an independent flag.
@@ -279,7 +284,8 @@ answer call's provider-reported input tokens (`null` with
 `providerUsageReported: false` when usage is missing, never zero), and for each
 gold turn present in the context its position as a percentile of the estimated
 context tokens, measured at the start of the first admitted unit that holds
-or maps to it. Context diagnostics describe the admitted units in presentation
+or maps to it, and `admittedRoundPartnerMissing`, the admitted units counted by
+`roundPartnerMissing` reason. Context diagnostics describe the admitted units in presentation
 order. The envelope's `readerBudgetCalibration` divides the summed provider
 input tokens by the summed `estimatedRequestTokens` over answer calls that
 reported usage, and is `complete: false` when any answer call lacked usage.

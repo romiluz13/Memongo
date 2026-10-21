@@ -54,9 +54,10 @@ const resolve = (map: Map<string, string>) => (result: MemorySearchResult) => [
 	),
 ]
 
-function build(results: MemorySearchResult[]) {
+function build(results: MemorySearchResult[], roundPartnerRequested = true) {
 	return buildReaderUnits({
 		results,
+		roundPartnerRequested,
 		evidence,
 		collectSourceEventIds: (result) => result.sourceEventIds ?? [],
 		resolveSessionIds: resolve(evidence.sessionIds),
@@ -120,6 +121,7 @@ describe("buildReaderUnits", () => {
 				sessionId: "sess-reeds",
 				sessionDates: ["2030/11/02 (Sat) 18:45"],
 				turnOrder: 1,
+				roundPartnerMissing: "session-end",
 			},
 			{
 				id: "single:chunk:c9",
@@ -168,5 +170,19 @@ describe("buildReaderUnits", () => {
 		])
 		expect(lineage[0]?.provenance).toBe("partial")
 		expect(lineage[0]?.turnIds).toEqual(["sess-reeds::turn_1"])
+	})
+
+	it("marks every unit not-requested when the search asked for no partners", () => {
+		const { units } = build(
+			[
+				event("e-u2", "user", "Where did the heron nest?", 0.9),
+				event("e-a2", "assistant", "By Quillmarsh pond.", 0.8),
+			],
+			false,
+		)
+		expect(units.map((unit) => [unit.id, unit.roundPartnerMissing])).toEqual([
+			["single:event:e-u2", "not-requested"],
+			["single:event:e-a2", "not-requested"],
+		])
 	})
 })

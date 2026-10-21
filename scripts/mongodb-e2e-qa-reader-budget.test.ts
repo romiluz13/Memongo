@@ -183,6 +183,32 @@ describe("custom-v3 per-case record", () => {
 			providerInputTokens: 171,
 			providerUsageReported: true,
 			goldTurnPositions: [],
+			admittedRoundPartnerMissing: {},
+		})
+	})
+
+	it("counts admitted units by why they have no round partner", async () => {
+		const notRequested = (u: ReaderUnit): ReaderUnit => ({
+			...u,
+			roundPartnerMissing: "not-requested",
+		})
+		const { envelope } = await run([
+			heronCase({
+				readerUnits: [
+					notRequested(HERON_UNITS[0] as ReaderUnit),
+					notRequested(HERON_UNITS[1] as ReaderUnit),
+					{
+						...(HERON_UNITS[1] as ReaderUnit),
+						id: "single:event:u8",
+						rank: 3,
+						passage: "User: The pond froze in winter.",
+						roundPartnerMissing: "session-end",
+					},
+				],
+			}),
+		])
+		expect(envelope.caseResults[0]?.readerBudget).toMatchObject({
+			admittedRoundPartnerMissing: { "not-requested": 2, "session-end": 1 },
 		})
 	})
 

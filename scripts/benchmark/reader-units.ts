@@ -40,6 +40,8 @@ function combine(
 
 export function buildReaderUnits(params: {
 	results: readonly MemorySearchResult[]
+	/** False when the search ran without `includeRoundPartner`. */
+	roundPartnerRequested: boolean
 	evidence: ContextEvidenceMaps
 	collectSourceEventIds: (result: MemorySearchResult) => string[]
 	resolveSessionIds: (result: MemorySearchResult) => string[]
@@ -96,6 +98,9 @@ export function buildReaderUnits(params: {
 			return match ? [Number(match[1])] : []
 		})
 		const sessions = [...sessionIds]
+		const roundPartnerMissing = params.roundPartnerRequested
+			? round.roundPartnerMissing
+			: "not-requested"
 		units.push({
 			id: round.key,
 			passage: round.passage,
@@ -105,6 +110,7 @@ export function buildReaderUnits(params: {
 				...new Set(sessions.flatMap((id) => params.sessionDates(id))),
 			].sort(),
 			turnOrder: turnIndices.length > 0 ? Math.min(...turnIndices) : null,
+			...(roundPartnerMissing ? { roundPartnerMissing } : {}),
 		})
 		lineage.push({
 			retrievedRank: rank,

@@ -14,6 +14,7 @@ import {
 	type ReaderContext,
 	type ReaderUnit,
 } from "./benchmark/reader-budget.js"
+import type { RoundPartnerMissingReason } from "./benchmark/round-units.js"
 import { ANSWER_SYSTEM_PROMPT } from "./mongodb-e2e-qa-calls.js"
 
 /**
@@ -33,6 +34,10 @@ export type AnswerCallUsage = { inputTokens: number | null }
  */
 export type ReaderBudgetCaseRecord = BenchmarkReaderBudgetCaseRecord & {
 	estimatedRequestTokens: number
+	/** Admitted units by why they have no round partner (C-2). */
+	admittedRoundPartnerMissing: Partial<
+		Record<RoundPartnerMissingReason, number>
+	>
 }
 
 export type ReaderBudgetCalibration = BenchmarkReaderBudgetCalibration & {
@@ -102,7 +107,20 @@ export function readerBudgetCaseRecord(
 		providerInputTokens: usage.inputTokens,
 		providerUsageReported: usage.inputTokens !== null,
 		goldTurnPositions: goldTurnPositions(diagnostics, reader),
+		admittedRoundPartnerMissing: countMissingPartners(reader.admitted),
 	}
+}
+
+function countMissingPartners(
+	units: readonly ReaderUnit[],
+): ReaderBudgetCaseRecord["admittedRoundPartnerMissing"] {
+	const counts: ReaderBudgetCaseRecord["admittedRoundPartnerMissing"] = {}
+	for (const { roundPartnerMissing } of units) {
+		if (roundPartnerMissing) {
+			counts[roundPartnerMissing] = (counts[roundPartnerMissing] ?? 0) + 1
+		}
+	}
+	return counts
 }
 
 /** Calibration over the answer calls recorded in the case results. */

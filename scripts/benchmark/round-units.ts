@@ -6,9 +6,15 @@ import type {
 import { roleLabeledText } from "./dated-answer-context.js"
 
 /**
- * C-2 round units, built from results searched with `includeRoundPartner`.
- * Not wired into any QA protocol yet; `custom-v3` will use it.
+ * Why a C-2 round unit has no partner: the engine's reasons, plus the
+ * harness's `not-requested` when the search that produced the turn did not
+ * ask for round partners.
  */
+export type RoundPartnerMissingReason =
+	| MemoryRoundPartnerMissingReason
+	| "not-requested"
+
+/** C-2 round units, built from results searched with `includeRoundPartner`. */
 export type RoundUnit = {
 	/** `round:` or `single:` plus the turn ids in session order. */
 	key: string
