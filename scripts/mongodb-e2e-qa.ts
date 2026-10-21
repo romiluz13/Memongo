@@ -33,8 +33,10 @@ import {
 	buildReaderCaseDiagnostics,
 	type ReaderBudgetCalibration,
 	type ReaderBudgetCaseRecord,
+	type ReaderPositionTerciles,
 	readerBudgetCalibration,
 	readerBudgetCaseRecord,
+	readerPositionTerciles,
 } from "./mongodb-e2e-qa-reader-budget.js"
 
 export {
@@ -86,6 +88,7 @@ export type E2eQaProtocol = "custom-v1" | "custom-v2" | "custom-v3"
 /** custom-v3 adds the harness-side reader budget records to the envelope. */
 export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
 	readerBudgetCalibration?: ReaderBudgetCalibration
+	readerPositionTerciles?: ReaderPositionTerciles
 }
 
 export type E2eQaCase = {
@@ -409,6 +412,7 @@ export async function runE2eQa(params: {
 						budgetRecords,
 						READER_BUDGET_ESTIMATED_TOKENS,
 					),
+					readerPositionTerciles: readerPositionTerciles(caseResults),
 				}
 			: {}),
 	}

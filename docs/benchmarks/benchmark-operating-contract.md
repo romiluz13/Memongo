@@ -285,7 +285,17 @@ input tokens by the summed `estimatedRequestTokens` over answer calls that
 reported usage, and is `complete: false` when any answer call lacked usage.
 Both estimate sums are recorded. Because the request estimate counts the
 system prompt too, the ratio measures tokenizer error plus the provider's chat
-framing only, not the system prompt the budget leaves out. A custom-v3 case without reader units is refused before
+framing only, not the system prompt the budget leaves out. The envelope's
+`readerPositionTerciles` reports accuracy by gold position (D-2.3): a case with
+a gold turn in the context counts in the tercile of its earliest one (`start`
+below 33⅓, `middle` below 66⅔, `end` up to 100, by position percentile);
+a case whose gold was measured but is not in the context (an abstention case,
+or every marked turn proven absent) counts in `noGoldTurnInContext`; a case
+whose gold could not be placed (no diagnostics, a retrieval failure, or an
+`unknown` sent status with none present) counts in `unmeasured`. Each bucket
+has `cases`, `correct` and `accuracy` (`null` when empty), and the five buckets
+add up to every case. It is computed from the judged case results after the
+run and never feeds admission. A custom-v3 case without reader units is refused before
 any provider call. Gold is read only by these diagnostics, after the request is
 built; nothing selects by it.
 

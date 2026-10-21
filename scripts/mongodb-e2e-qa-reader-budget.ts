@@ -1,5 +1,6 @@
 import type {
 	BenchmarkCaseContextDiagnostics,
+	BenchmarkE2eQaEnvelope,
 	BenchmarkReaderBudgetCalibration,
 	BenchmarkReaderBudgetCaseRecord,
 } from "../packages/memory-engine/src/types.js"
@@ -136,5 +137,85 @@ export function readerBudgetCalibration(
 				? providerInputTokens / estimatedRequestTokens
 				: null,
 		complete: reported.length === records.length,
+	}
+}
+
+type CaseResult = BenchmarkE2eQaEnvelope["caseResults"][number]
+
+export type PositionBucket = {
+	cases: number
+	correct: number
+	/** Null when the bucket is empty. */
+	accuracy: number | null
+}
+
+/**
+ * D-2.3: accuracy by where the gold sits in the context, computed from the
+ * judged case results after the run; nothing here feeds admission. A case
+ * with an in-context gold turn falls in the tercile of its earliest one:
+ * start [0, 100/3), middle [100/3, 200/3), end [200/3, 100]. A case whose
+ * gold is measured but not in the context (none marked, or every marked
+ * turn proven absent) is `noGoldTurnInContext`; one whose gold could not be
+ * placed (no diagnostics, or an unknown sent status) is `unmeasured`.
+ */
+export type ReaderPositionTerciles = {
+	positionRule: "earliest-gold-turn-percentile"
+	terciles: {
+		start: PositionBucket
+		middle: PositionBucket
+		end: PositionBucket
+	}
+	noGoldTurnInContext: PositionBucket
+	unmeasured: PositionBucket
+}
+
+type BucketName =
+	| "start"
+	| "middle"
+	| "end"
+	| "noGoldTurnInContext"
+	| "unmeasured"
+
+function positionBucket(result: CaseResult): BucketName {
+	const positions =
+		result.readerBudget?.goldTurnPositions.map((p) => p.positionPercentile) ??
+		[]
+	if (positions.length > 0) {
+		const earliest = Math.min(...positions)
+		if (earliest < 100 / 3) return "start"
+		return earliest < 200 / 3 ? "middle" : "end"
+	}
+	const gold = result.gold
+	if (gold?.status === "not-applicable") return "noGoldTurnInContext"
+	if (
+		gold?.status === "applicable" &&
+		gold.turns.every((turn) => turn.sentStatus === "absent")
+	) {
+		return "noGoldTurnInContext"
+	}
+	return "unmeasured"
+}
+
+export function readerPositionTerciles(
+	caseResults: readonly CaseResult[],
+): ReaderPositionTerciles {
+	const bucket = (name: BucketName): PositionBucket => {
+		const members = caseResults.filter((r) => positionBucket(r) === name)
+		const correct = members.filter((r) => r.correct).length
+		return {
+			cases: members.length,
+			correct,
+			accuracy: members.length > 0 ? correct / members.length : null,
+		}
+	}
+	return {
+		positionRule: "earliest-gold-turn-percentile",
+		terciles: {
+			start: bucket("start"),
+			middle: bucket("middle"),
+			end: bucket("end"),
+		},
+		noGoldTurnInContext: bucket("noGoldTurnInContext"),
+		unmeasured: bucket("unmeasured"),
 	}
 }
