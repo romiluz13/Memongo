@@ -221,14 +221,19 @@ system prompt, judge prompt and flow, 512-token answer budget and
 - **Retrieval.** The benchmark search passes `includeRoundPartner: true`, so a
   user turn comes back with the next turn of its session and an assistant turn
   with the previous one. `buildRoundUnits` merges them into round units; a turn
-  without a partner stays a single-turn unit. Each unit carries its best
+  without a partner stays a single-turn unit and keeps the engine's
+  `roundPartnerMissing` reason. A case searched another way (a scoped
+  `relevanceExplain` search, query decomposition or the raw-session lane) asks
+  for no partners, so each of its units is marked
+  `roundPartnerMissing: "not-requested"` rather than passing as an ordinary
+  single turn. Each unit carries its best
   stage-1 rank, its benchmark session and that session's dates, and its first
   turn index. A unit that resolves to no session is its own undated session.
   `MEMONGO_SESSION_TURN_RECALL` stays an independent flag.
 - **Budget.** 16,000 estimated tokens of the whole serialized user content,
   session headers, question lines and return line included. Tokens are counted
   with `js-tiktoken` 1.0.21 `o200k_base`, which is not the answer provider's
-  tokenizer, so every count is a labelled estimate (`estimatedContextTokens`).
+  tokenizer, so every count is a labeled estimate (`estimatedContextTokens`).
 - **Admission, by relevance, never by date.** Duplicates drop first (same unit
   id or same text SHA-256; the better-ranked copy stays). Then a breadth pass
   takes each session's best unit, sessions in the order of that unit's rank,
@@ -271,18 +276,32 @@ Return only {"answer":"..."}.
 ```
 
 Each custom-v3 case result carries `readerBudget`: the tokenizer and budget,
-`estimatedContextTokens`, `budgetExceededByFirstUnit`, candidate, admitted,
+two estimates with that tokenizer (`estimatedContextTokens`, the serialized
+user content the budget applies to, and `estimatedRequestTokens`, the system
+prompt plus that user content), `budgetExceededByFirstUnit`, candidate, admitted,
 deduplicated and skipped unit counts, the stage-1 ranks of skipped units, the
 answer call's provider-reported input tokens (`null` with
 `providerUsageReported: false` when usage is missing, never zero), and for each
 gold turn present in the context its position as a percentile of the estimated
 context tokens, measured at the start of the first admitted unit that holds
-or maps to it. Context diagnostics describe the admitted units in presentation
+or maps to it, and `admittedRoundPartnerMissing`, the admitted units counted by
+`roundPartnerMissing` reason. Context diagnostics describe the admitted units in presentation
 order. The envelope's `readerBudgetCalibration` divides the summed provider
-input tokens by the summed estimated tokens over answer calls that reported
-usage, and is `complete: false` when any answer call lacked usage. Provider
-input tokens also count the system prompt and chat framing, so the ratio
-carries that overhead. A custom-v3 case without reader units is refused before
+input tokens by the summed `estimatedRequestTokens` over answer calls that
+reported usage, and is `complete: false` when any answer call lacked usage.
+Both estimate sums are recorded. Because the request estimate counts the
+system prompt too, the ratio measures tokenizer error plus the provider's chat
+framing only, not the system prompt the budget leaves out. The envelope's
+`readerPositionTerciles` reports accuracy by gold position (D-2.3): a case with
+a gold turn in the context counts in the tercile of its earliest one (`start`
+below 33⅓, `middle` below 66⅔, `end` up to 100, by position percentile);
+a case whose gold was measured but is not in the context (an abstention case,
+or every marked turn proven absent) counts in `noGoldTurnInContext`; a case
+whose gold could not be placed (no diagnostics, a retrieval failure, or an
+`unknown` sent status with none present) counts in `unmeasured`. Each bucket
+has `cases`, `correct` and `accuracy` (`null` when empty), and the five buckets
+add up to every case. It is computed from the judged case results after the
+run and never feeds admission. A custom-v3 case without reader units is refused before
 any provider call. Gold is read only by these diagnostics, after the request is
 built; nothing selects by it.
 
@@ -444,7 +463,9 @@ run cannot verify. Coverage (`b02-keyed-v7`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, the configured MongoDB connection inputs described below, the
 extraction-job drain stall window (`MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS`, raw
-and resolved), and session turn recall (`MEMONGO_SESSION_TURN_RECALL` raw,
+and resolved; unset or blank resolves to 600000 ms, and a set value that is not
+a positive, finite number of milliseconds fails the run naming the variable and
+the rule, without echoing the value), and session turn recall (`MEMONGO_SESSION_TURN_RECALL` raw,
 `effectiveSessionTurnRecall`, and its frozen seed-result, seed-session and
 turns-per-session bounds), and the custom-v3 reader budget
 (`readerBudgetEstimatedTokens`, `readerBudgetTokenizer`), so a `b02-keyed-v6`

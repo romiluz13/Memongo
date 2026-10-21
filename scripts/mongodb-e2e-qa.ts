@@ -7,13 +7,13 @@ import type {
 	BenchmarkAnswerAttempt,
 	BenchmarkCaseContextDiagnostics,
 	BenchmarkE2eQaEnvelope,
-	MemoryResultRole,
 } from "../packages/memory-engine/src/types.js"
 import {
 	buildCaseContextDiagnostics,
 	describeDiagnosticsFailure,
 	type Pass0ContextDiagnostics,
 } from "./benchmark/benchmark-context-diagnostics.js"
+import type { DatedAnswerPassages } from "./benchmark/dated-answer-context.js"
 import {
 	buildReaderContext,
 	READER_BUDGET_ESTIMATED_TOKENS,
@@ -21,6 +21,7 @@ import {
 	type ReaderUnit,
 } from "./benchmark/reader-budget.js"
 import {
+	type AnswerContent,
 	type E2eQaCallResult,
 	type E2eQaProviderOperation,
 	generateAnswer,
@@ -31,8 +32,12 @@ import {
 import {
 	type AnswerCallUsage,
 	buildReaderCaseDiagnostics,
+	type ReaderBudgetCalibration,
+	type ReaderBudgetCaseRecord,
+	type ReaderPositionTerciles,
 	readerBudgetCalibration,
 	readerBudgetCaseRecord,
+	readerPositionTerciles,
 } from "./mongodb-e2e-qa-reader-budget.js"
 
 export {
@@ -81,15 +86,18 @@ const E2E_QA_READER_BUDGET_JUDGE_VERSION = "v3"
  */
 export type E2eQaProtocol = "custom-v1" | "custom-v2" | "custom-v3"
 
-export type E2eQaCase = {
+/** custom-v3 adds the harness-side reader budget records to the envelope. */
+export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
+	readerBudgetCalibration?: ReaderBudgetCalibration
+	readerPositionTerciles?: ReaderPositionTerciles
+}
+
+/** Passage dates and roles render only under custom-v2; the question date under custom-v2 and custom-v3. */
+export type E2eQaCase = DatedAnswerPassages & {
 	caseId: string
 	question: string
 	goldAnswer: string
-	contextPassages: string[]
-	/** Index-aligned with contextPassages; rendered only under custom-v2. */
 	questionDate?: string
-	passageDates?: string[][]
-	passageRoles?: Array<MemoryResultRole | undefined>
 	/** custom-v3 only: every candidate unit, before admission. */
 	readerUnits?: ReaderUnit[]
 	abstention?: boolean
@@ -225,6 +233,7 @@ export async function runE2eQa(params: {
 	let answerJudgeAttempts = 0
 	let decoyJudgeAttempts = 0
 	const caseResults: BenchmarkE2eQaEnvelope["caseResults"] = []
+	const budgetRecords: ReaderBudgetCaseRecord[] = []
 
 	for (let i = 0; i < cases.length; i++) {
 		const testCase = cases[i]
@@ -253,21 +262,22 @@ export async function runE2eQa(params: {
 				})
 			: undefined
 		const answerUsage: AnswerCallUsage = { inputTokens: null }
+		const content: AnswerContent = reader
+			? { kind: "reader", userContent: reader.userContent }
+			: dated
+				? {
+						kind: "dated-passages",
+						questionDate: testCase.questionDate,
+						contextPassages: testCase.contextPassages,
+						passageDates: testCase.passageDates,
+						passageRoles: testCase.passageRoles,
+					}
+				: { kind: "passages", contextPassages: testCase.contextPassages }
 		const candidate = await generateAnswer({
 			provider,
 			model: answerModel,
 			question: testCase.question,
-			contextPassages: testCase.contextPassages,
-			...(dated
-				? {
-						dated: {
-							questionDate: testCase.questionDate,
-							passageDates: testCase.passageDates,
-							passageRoles: testCase.passageRoles,
-						},
-					}
-				: {}),
-			...(reader ? { readerContent: reader.userContent } : {}),
+			content,
 			onProviderCall: (outcome, usage, call) => {
 				if (outcome !== "attempted") {
 					answerUsage.inputTokens = usage ? usage.inputTokens : null
@@ -283,15 +293,11 @@ export async function runE2eQa(params: {
 		})
 
 		const diagnostics = caseDiagnostics(testCase, reader)
-		const budgetRecord = reader
-			? {
-					readerBudget: readerBudgetCaseRecord(
-						reader,
-						answerUsage,
-						diagnostics,
-					),
-				}
-			: {}
+		const readerBudget = reader
+			? readerBudgetCaseRecord(reader, answerUsage, diagnostics)
+			: undefined
+		if (readerBudget) budgetRecords.push(readerBudget)
+		const budgetRecord = readerBudget ? { readerBudget } : {}
 
 		if (testCase.abstention) {
 			// Correct behavior for an abstention case is to decline, not to match a
@@ -376,7 +382,7 @@ export async function runE2eQa(params: {
 		})
 	}
 
-	return {
+	const envelope: E2eQaEnvelope = {
 		answerModel,
 		judge: judgeModel,
 		judgeVersion,
@@ -402,12 +408,12 @@ export async function runE2eQa(params: {
 		...(budgeted
 			? {
 					readerBudgetCalibration: readerBudgetCalibration(
-						caseResults.flatMap((result) =>
-							result.readerBudget ? [result.readerBudget] : [],
-						),
+						budgetRecords,
 						READER_BUDGET_ESTIMATED_TOKENS,
 					),
+					readerPositionTerciles: readerPositionTerciles(caseResults),
 				}
 			: {}),
 	}
+	return envelope
 }

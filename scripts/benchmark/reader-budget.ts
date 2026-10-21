@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto"
 import { Tiktoken } from "js-tiktoken/lite"
 import o200kBase from "js-tiktoken/ranks/o200k_base"
+import type { RoundPartnerMissingReason } from "./round-units.js"
 
 /**
- * D: the custom-v3 reader budget. Token counts are a labelled estimate
+ * D: the custom-v3 reader budget. Token counts are a labeled estimate
  * from an offline o200k_base encoder, not the answer provider's tokenizer;
  * each run calibrates them against the provider-reported input tokens.
  */
@@ -31,6 +32,8 @@ export type ReaderUnit = {
 	sessionDates: string[]
 	/** Index of the unit's first turn in its session; null when unknown. */
 	turnOrder: number | null
+	/** Why a single-turn unit has no round partner, when known. */
+	roundPartnerMissing?: RoundPartnerMissingReason
 }
 
 export type ReaderContext = {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	type JobCounts,
 	awaitBenchmarkJobsDrained,
+	resolveJobDrainStallMs,
 	sleepUnlessAborted,
 } from "./benchmark-job-drain.js"
 import { hasCompleteConfigurationCoverage } from "./benchmark-run-configuration-schema.js"
@@ -185,12 +186,51 @@ describe("job drain stall identity", () => {
 		)
 		expect(configured.configurationHash).not.toBe(unset.configurationHash)
 
-		const invalid = producedRunConfiguration({
-			MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS: "0",
-		})
-		expect(invalid.configuration.settings.effectiveJobDrainStallMs).toBe(
-			600_000,
-		)
-		expect(invalid.configurationHash).not.toBe(unset.configurationHash)
+		expect(() =>
+			producedRunConfiguration({
+				MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS: "0",
+			}),
+		).toThrow(/MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS/)
+	})
+})
+
+describe("job drain stall setting", () => {
+	const name = "MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS"
+	const saved = process.env[name]
+	afterEach(() => {
+		if (saved === undefined) delete process.env[name]
+		else process.env[name] = saved
+	})
+
+	it("uses the 600000ms default when unset or blank", () => {
+		delete process.env[name]
+		expect(resolveJobDrainStallMs()).toBe(600_000)
+		process.env[name] = "  "
+		expect(resolveJobDrainStallMs()).toBe(600_000)
+	})
+
+	it("uses a set positive value", () => {
+		process.env[name] = " 90000 "
+		expect(resolveJobDrainStallMs()).toBe(90_000)
+	})
+
+	it.each([
+		"0",
+		"-5",
+		"abc7731",
+		"Infinity",
+		"NaN",
+		"12ms",
+	])("throws on %j, naming the variable and the rule without the value", (raw) => {
+		process.env[name] = raw
+		let message = ""
+		try {
+			resolveJobDrainStallMs()
+		} catch (error) {
+			message = (error as Error).message
+		}
+		expect(message).toMatch(name)
+		expect(message).toMatch(/positive, finite number of milliseconds/)
+		expect(message).not.toContain(raw)
 	})
 })

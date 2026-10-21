@@ -1688,6 +1688,7 @@ export class MongoDBManagerBenchmarkOps {
 							// #66: per-lane latency of the search that produced `results`.
 							// Only the plain search() path carries a lane breakdown.
 							let latencyByLane: Record<string, number> | undefined
+							let roundPartnerRequested = false
 
 							if (rawSessionLane) {
 								results = await runForegroundRead(
@@ -1780,6 +1781,8 @@ export class MongoDBManagerBenchmarkOps {
 									evaluation.sourceScope !== "all"
 										? evaluation.sourceScope
 										: undefined
+								roundPartnerRequested =
+									!relevanceScope && benchmarkQaProtocol === "custom-v3"
 								results = relevanceScope
 									? (
 											await runForegroundRead(
@@ -1807,8 +1810,7 @@ export class MongoDBManagerBenchmarkOps {
 														onLaneLatency: (lanes) => {
 															latencyByLane = lanes
 														},
-														// custom-v3 (C-2): turns come back with their round partner.
-														...(benchmarkQaProtocol === "custom-v3"
+														...(roundPartnerRequested
 															? { includeRoundPartner: true }
 															: {}),
 													},
@@ -1881,6 +1883,7 @@ export class MongoDBManagerBenchmarkOps {
 										? captureReaderUnits({
 												caseId: evaluation.caseId,
 												results,
+												roundPartnerRequested,
 												evidence: eventEvidence,
 												collectSourceEventIds: (result) =>
 													this.collectBenchmarkResultSourceEventIds(result),

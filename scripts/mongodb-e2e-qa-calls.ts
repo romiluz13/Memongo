@@ -7,9 +7,9 @@ import type {
 	BenchmarkAnswerAttempt,
 	BenchmarkAnswerFinishReason,
 	BenchmarkProviderCallStatus,
-	MemoryResultRole,
 } from "../packages/memory-engine/src/types.js"
 import {
+	type DatedAnswerPassages,
 	renderDatedPassageLines,
 	renderDatedQuestionLine,
 } from "./benchmark/dated-answer-context.js"
@@ -66,7 +66,7 @@ function recordProviderCall(
 	}
 }
 
-const ANSWER_SYSTEM_PROMPT = `You answer the QUESTION using ONLY the provided context passages from a user's memory.
+export const ANSWER_SYSTEM_PROMPT = `You answer the QUESTION using ONLY the provided context passages from a user's memory.
 Rules:
 - Be concise and factual; answer with just the fact asked for.
 - If the context does not contain enough information to answer, return an empty answer string.
@@ -81,31 +81,33 @@ Rules:
 - Judge only against the gold answer; do not invent new criteria.
 Return JSON only: {"correct":true|false,"rationale":"<one sentence>"}`
 
+/**
+ * What the answer request carries: custom-v1 passages, custom-v2 dated
+ * passages (dates and roles index-aligned with `contextPassages`), or the
+ * whole custom-v3 user content, sent as is.
+ */
+export type AnswerContent =
+	| { kind: "passages"; contextPassages: string[] }
+	| ({ kind: "dated-passages"; questionDate?: string } & DatedAnswerPassages)
+	| { kind: "reader"; userContent: string }
+
 /** The custom-v1 and custom-v2 user content: question line and passages. */
-function passageUserContent(params: {
-	question: string
-	contextPassages: string[]
-	dated?: {
-		questionDate?: string
-		passageDates?: string[][]
-		passageRoles?: Array<MemoryResultRole | undefined>
-	}
-}): string {
-	const passages = params.contextPassages.slice(0, MAX_CONTEXT_PASSAGES)
-	const context = params.dated
+function passageUserContent(
+	question: string,
+	content: Exclude<AnswerContent, { kind: "reader" }>,
+): string {
+	const passages = content.contextPassages.slice(0, MAX_CONTEXT_PASSAGES)
+	const dated = content.kind === "dated-passages"
+	const context = dated
 		? renderDatedPassageLines(
-				{
-					contextPassages: params.contextPassages,
-					passageDates: params.dated.passageDates,
-					passageRoles: params.dated.passageRoles,
-				},
+				content,
 				passages.map((_, index) => index),
 			).join("\n")
 		: passages.map((p, i) => `[${i + 1}] ${p}`).join("\n")
 	return [
-		params.dated
-			? renderDatedQuestionLine(params.question, params.dated.questionDate)
-			: `QUESTION: ${params.question}`,
+		dated
+			? renderDatedQuestionLine(question, content.questionDate)
+			: `QUESTION: ${question}`,
 		"<context>",
 		context,
 		"</context>",
@@ -117,23 +119,15 @@ export async function generateAnswer(params: {
 	provider: EnrichmentProvider
 	model: string
 	question: string
-	contextPassages: string[]
-	/** custom-v2 only: index-aligned with contextPassages. */
-	dated?: {
-		questionDate?: string
-		passageDates?: string[][]
-		passageRoles?: Array<MemoryResultRole | undefined>
-	}
-	/** custom-v3 only: the whole answer user content, sent as is. */
-	readerContent?: string
+	content: AnswerContent
 	onFailure?: (error: Error) => void
 	onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
 	onProviderCall?: ProviderCallObserver
 }): Promise<string> {
 	const user =
-		params.readerContent !== undefined
-			? params.readerContent
-			: passageUserContent(params)
+		params.content.kind === "reader"
+			? params.content.userContent
+			: passageUserContent(params.question, params.content)
 
 	recordProviderCall(params.onProviderCall, "attempted")
 	let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
