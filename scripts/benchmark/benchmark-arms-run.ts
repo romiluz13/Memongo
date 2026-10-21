@@ -430,7 +430,10 @@ export function buildArmResults(params: {
 		]),
 	)
 	const arms = params.runs.map((run): BenchmarkArmResult => {
-		const executions = run.executionsByPass[0] ?? []
+		const executions = run.executionsByPass[0]
+		if (!executions) {
+			throw new Error(`arm ${run.arm.name} has no first measurement pass`)
+		}
 		const summary = params.summarize(executions)
 		const readerCut = attachReaderCutMetrics({
 			e2eQa: summarizeArmQa({

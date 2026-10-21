@@ -9,6 +9,7 @@ import {
 import {
 	type BenchmarkArmScenarioQa,
 	type BenchmarkCheckpointArm,
+	buildArmResults,
 	createArmRuns,
 	restoreCheckpointArms,
 	runArmScenarioQa,
@@ -220,5 +221,26 @@ describe("runArmScenarioQa decoy probes", () => {
 		})
 		expect(qa.judge).toBeNull()
 		expect(qa.decoyProbes).toBeNull()
+	})
+})
+
+describe("buildArmResults", () => {
+	it("refuses an arm with no first measurement pass", () => {
+		const runs = createArmRuns(ARMS, 1, configuration).map((run) => ({
+			...run,
+			executionsByPass: [],
+		}))
+		expect(() =>
+			buildArmResults({
+				runs,
+				scenarios: [],
+				ingest: { failedScenarios: 0, failedSessions: 0 } as never,
+				summarize: () => {
+					throw new Error("summarize must not run")
+				},
+				expectedSessionMap: new Map(),
+				expectedTurnMap: new Map(),
+			}),
+		).toThrow(/arm a has no first measurement pass/)
 	})
 })
