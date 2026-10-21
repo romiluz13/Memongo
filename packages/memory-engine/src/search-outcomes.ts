@@ -22,6 +22,7 @@ export type SearchLane =
 	| "temporal-coverage"
 	| "turn-precision"
 	| "session-turn-recall"
+	| "round-partner"
 	| "recall"
 	| "backstop:procedural-exact"
 	| "backstop:procedural"

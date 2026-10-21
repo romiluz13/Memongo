@@ -16,8 +16,9 @@
 //   - findOneAndUpdate (classic AND aggregation-pipeline updates, upsert)
 //   - deleteMany, createIndex/dropIndex (unique index registration)
 //   - aggregate with the stages on those paths: $match, $sort, $limit,
-//     $count, $group ($sum/$max), $facet, $addFields, $project, and a
-//     token-Jaccard $vectorSearch stand-in for the autoEmbed indexes
+//     $count, $group ($sum/$max), $facet, $addFields, $project,
+//     $setWindowFields ($shift only), and a token-Jaccard $vectorSearch
+//     stand-in for the autoEmbed indexes
 //
 // Semantics that matter for the P0/P2 bugs:
 //   - unique-index enforcement: a repeated unique key throws a
@@ -1130,6 +1131,8 @@ class FakeCollection {
 				docs = [faceted]
 			} else if (stage.$vectorSearch) {
 				docs = runVectorSearch(docs, stage.$vectorSearch as Document)
+			} else if (stage.$setWindowFields) {
+				docs = setWindowFields(docs, stage.$setWindowFields as Document)
 			} else if (stage.$unset !== undefined) {
 				const fields = Array.isArray(stage.$unset)
 					? (stage.$unset as string[])
@@ -1147,6 +1150,41 @@ class FakeCollection {
 		}
 		return docs
 	}
+}
+
+/**
+ * `$setWindowFields` with a `$field` partition, a `sortBy`, and `$shift`
+ * outputs only; any other window operator throws.
+ */
+function setWindowFields(docs: Document[], spec: Document): Document[] {
+	const partitionPath = String(spec.partitionBy).replace(/^\$/, "")
+	const partitions = new Map<string, Document[]>()
+	for (const doc of sortDocuments(docs, spec.sortBy as Document)) {
+		const key = JSON.stringify(getPath(doc, partitionPath) ?? null)
+		partitions.set(key, [...(partitions.get(key) ?? []), doc])
+	}
+	const outputs = Object.entries(spec.output as Document)
+	const windowed: Document[] = []
+	for (const members of partitions.values()) {
+		const shifted = members.map((_, index) => {
+			const fields: Document = {}
+			for (const [field, operator] of outputs) {
+				const shift = (operator as Document).$shift as Document | undefined
+				if (!shift) {
+					throw new Error(`fake $setWindowFields: unsupported output ${field}`)
+				}
+				const neighbor = members[index + Number(shift.by)]
+				fields[field] = neighbor
+					? (getPath(neighbor, String(shift.output).replace(/^\$/, "")) ?? null)
+					: shift.default
+			}
+			return fields
+		})
+		members.forEach((doc, index) => {
+			windowed.push({ ...doc, ...shifted[index] })
+		})
+	}
+	return windowed
 }
 
 function groupDocuments(docs: Document[], spec: Document): Document[] {

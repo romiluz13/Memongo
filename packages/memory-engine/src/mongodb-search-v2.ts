@@ -143,6 +143,10 @@ import {
 	stripSessionSummaryTurnProvenance,
 } from "./mongodb-search-ranking.js"
 import {
+	attachRoundPartners,
+	markRoundPartnerLookupFailed,
+} from "./mongodb-round-partner.js"
+import {
 	insertRecalledTurns,
 	isSessionTurnRecallEnabled,
 	recallSessionTurns,
@@ -485,6 +489,8 @@ export type SearchV2Context = {
 		graphMaxDepth?: number
 		searchConfig?: ResolvedSearchConfig
 		questionDate?: Date
+		/** C-2: attach each conversation turn's round partner (opt-in). */
+		includeRoundPartner?: boolean
 		operationRunContext?: OperationRunContext
 		/** P3.2: per-request cost budget overrides (resolved over defaults). */
 		budget?: Partial<SearchBudgetLimits>
@@ -2409,9 +2415,33 @@ async function searchV2WithBudget(
 		// Preserve their ordering and relative score gaps while enforcing the
 		// public searchV2 score contract for every lane.
 		const finalNormalizeStartedAt = Date.now()
-		const sliced = normalizeFinalSearchScores(finalResults).slice(0, maxResults)
+		const normalized = normalizeFinalSearchScores(finalResults).slice(
+			0,
+			maxResults,
+		)
 		latencyByPath["phase:final-normalize"] =
 			Date.now() - finalNormalizeStartedAt
+
+		// C-2, opt-in: one batched partner query over the returned turns. A
+		// failure is the lane's failed row, and every turn says lookup-failed.
+		let sliced = normalized
+		if (context.searchOptions?.includeRoundPartner === true) {
+			let partnered: MemorySearchResult[] | undefined
+			await timeLane("phase:round-partner", () =>
+				runLane("round-partner", async (onTierOutcome) => {
+					partnered = await attachRoundPartners({
+						onTierOutcome,
+						db,
+						prefix,
+						namespace: { agentId, scope, scopeRef: agentScopeRef },
+						questionDate: context.searchOptions?.questionDate,
+						results: normalized,
+					})
+					return partnered.filter((result) => result.roundPartner)
+				}),
+			)
+			sliced = partnered ?? markRoundPartnerLookupFailed(normalized)
+		}
 
 		// Phase 9: Tiered retrieval — strip text for ids-only projection mode
 		const projectionMode = context.searchOptions?.projection ?? "full"

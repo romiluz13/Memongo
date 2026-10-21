@@ -151,7 +151,36 @@ export type MemorySearchResult = {
 	 * no notion of rank fusion).
 	 */
 	scoreDetails?: MemorySearchScoreDetails
+	/**
+	 * C-2, only with the `includeRoundPartner` search option: the other turn
+	 * of this conversation turn's round (the next turn for a user turn, the
+	 * previous one for an assistant turn), or null with `roundPartnerMissing`.
+	 */
+	roundPartner?: MemoryRoundPartner | null
+	roundPartnerMissing?: MemoryRoundPartnerMissingReason
 }
+
+export type MemoryRoundPartner = {
+	canonicalId: string
+	role?: MemoryResultRole
+	text: string
+	timestamp?: Date
+}
+
+/**
+ * - `session-end`: no adjacent turn in the session at or before the question.
+ * - `partner-excluded`: the adjacent turn exists but fails the lifecycle,
+ *   validity or question-date constraints.
+ * - `turn-not-found`: the result's own turn is not readable in this namespace.
+ * - `no-round-role`: neither a user nor an assistant turn.
+ * - `lookup-failed`: the partner query did not run; the lane row says why.
+ */
+export type MemoryRoundPartnerMissingReason =
+	| "session-end"
+	| "partner-excluded"
+	| "turn-not-found"
+	| "no-round-role"
+	| "lookup-failed"
 
 /**
  * Task 35: rank-fusion per-pipeline contribution for observability.

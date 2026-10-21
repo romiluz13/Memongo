@@ -51,6 +51,10 @@ vi.mock("./mongodb-search-lanes.js", async (original) => ({
 	searchTurnEventsWithinSessions: vi.fn(),
 	searchRawWindowEvents: vi.fn(async () => []),
 }))
+vi.mock("./mongodb-round-partner.js", async (original) => ({
+	...(await original<typeof import("./mongodb-round-partner.js")>()),
+	attachRoundPartners: vi.fn(),
+}))
 
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import { planRetrieval } from "./mongodb-retrieval-planner.js"
@@ -64,6 +68,7 @@ import { expandGraph, searchEntitiesAutocomplete } from "./mongodb-graph.js"
 import { mongoSearch } from "./mongodb-search.js"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import { searchV2 } from "./mongodb-search-v2.js"
+import { attachRoundPartners } from "./mongodb-round-partner.js"
 import type { MemorySearchResult } from "./types.js"
 import { HEALTHY_TEST_CAPABILITIES } from "./test-helpers/search-capabilities.js"
 
@@ -156,5 +161,97 @@ describe("searchV2 round partner option", () => {
 			  "turn-precision:plan",
 			]
 		`)
+	})
+	it("runs no partner query and records no row when the option is false", async () => {
+		const result = await run({ includeRoundPartner: false })
+		expect(attachRoundPartners).not.toHaveBeenCalled()
+		expect(
+			result.metadata.laneOutcomes?.filter(
+				(row) => row.lane === "round-partner",
+			),
+		).toEqual([])
+		const unchanged = await run()
+		expect(JSON.stringify(result.results)).toBe(
+			JSON.stringify(unchanged.results),
+		)
+	})
+
+	it("attaches partners to the final results in one call, scoped to the search namespace", async () => {
+		const questionDate = new Date("2031-04-03T00:00:00.000Z")
+		vi.mocked(attachRoundPartners).mockImplementation(async ({ results }) =>
+			results.map((result, index) =>
+				index === 0
+					? {
+							...result,
+							roundPartner: {
+								canonicalId: "event:a1",
+								role: "assistant",
+								text: "fictional answer",
+							},
+						}
+					: {
+							...result,
+							roundPartner: null,
+							roundPartnerMissing: "session-end",
+						},
+			),
+		)
+		const result = await run({ includeRoundPartner: true, questionDate })
+		expect(attachRoundPartners).toHaveBeenCalledTimes(1)
+		const call = vi.mocked(attachRoundPartners).mock.calls[0]?.[0]
+		expect(call?.namespace).toEqual({
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:wren",
+		})
+		expect(call?.questionDate).toBe(questionDate)
+		expect(call?.results.map((r) => [r.canonicalId, r.score])).toEqual([
+			["event:u1", 1],
+			["event:a2", 0.6666666666666667],
+		])
+		expect(
+			result.results.map((r) => [
+				r.roundPartner?.canonicalId ?? null,
+				r.roundPartnerMissing,
+			]),
+		).toEqual([
+			["event:a1", undefined],
+			[null, "session-end"],
+		])
+		expect(
+			result.metadata.laneOutcomes?.filter(
+				(row) => row.lane === "round-partner",
+			),
+		).toEqual([
+			{ lane: "round-partner", stage: "lane", outcome: "ok", resultCount: 1 },
+		])
+	})
+
+	it("reports a failed partner query as a failed row and marks every turn lookup-failed", async () => {
+		vi.mocked(attachRoundPartners).mockRejectedValue(new Error("down"))
+		const result = await run({ includeRoundPartner: true })
+		expect(
+			result.metadata.laneOutcomes?.filter(
+				(row) => row.lane === "round-partner",
+			),
+		).toEqual([
+			{
+				lane: "round-partner",
+				stage: "lane",
+				outcome: "failed",
+				reason: "internal-error",
+			},
+		])
+		expect(result.metadata.outcomeStatus).toBe("partial")
+		expect(
+			result.results.map((r) => [
+				r.canonicalId,
+				r.roundPartner,
+				r.roundPartnerMissing,
+			]),
+		).toEqual([
+			["event:u1", null, "lookup-failed"],
+			["event:a2", null, "lookup-failed"],
+		])
 	})
 })
