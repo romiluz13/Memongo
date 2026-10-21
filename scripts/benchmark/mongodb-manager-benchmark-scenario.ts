@@ -39,6 +39,7 @@ import {
 	awaitBenchmarkJobsDrained,
 	countBenchmarkExtractionJobs,
 	resolveJobDrainStallMs,
+	sleepUnlessAborted,
 } from "./benchmark-job-drain.js"
 import {
 	cleanupRegistry,
@@ -364,7 +365,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 						wake: () => manager.startMemoryJobWorker(),
 						workerPromise: () =>
 							manager.memoryJobWorkerPromise ?? Promise.resolve(),
-						sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+						sleep: sleepUnlessAborted,
 						now: () => Date.now(),
 					},
 					{

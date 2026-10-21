@@ -11,8 +11,26 @@ export type JobDrainDeps = {
 	countJobs(): Promise<JobCounts>
 	wake(): void
 	workerPromise(): Promise<void>
-	sleep(ms: number): Promise<void>
+	sleep(ms: number, signal: AbortSignal): Promise<void>
 	now(): number
+}
+
+/** Resolves after `ms`, or at once when `signal` aborts, clearing its timer. */
+export function sleepUnlessAborted(
+	ms: number,
+	signal: AbortSignal,
+): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms)
+		signal.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer)
+				resolve()
+			},
+			{ once: true },
+		)
+	})
 }
 
 export const JOB_DRAIN_POLL_MS = 5_000
@@ -64,13 +82,42 @@ export async function countBenchmarkExtractionJobs(
  * leaves the rest to a later sweep. Scoring then would read partial derived
  * memory, so wait until the job collection itself is drained, waking the
  * worker each round, and fail loudly on dead letters or a stalled drain.
+ *
+ * No wait here outlives the stall window: a worker run is awaited for at most
+ * one poll, so counts are re-read while a long run makes progress, and each
+ * count read is bounded by what is left of the window. A drain that keeps
+ * progressing has no total deadline.
  */
 export async function awaitBenchmarkJobsDrained(
 	deps: JobDrainDeps,
 	options: { agentId: string; pollMs: number; stallMs: number },
 ): Promise<void> {
-	let last = await deps.countJobs()
 	let lastProgressAt = deps.now()
+	const readCounts = async (step: string): Promise<JobCounts> => {
+		// A read always gets one poll, even when the window is already spent by
+		// the poll that preceded it.
+		const budgetMs = Math.max(
+			lastProgressAt + options.stallMs - deps.now(),
+			options.pollMs,
+		)
+		const expired = new AbortController()
+		const timedOut = Symbol("timedOut")
+		try {
+			const result = await Promise.race([
+				deps.countJobs(),
+				deps.sleep(budgetMs, expired.signal).then(() => timedOut),
+			])
+			if (result === timedOut) {
+				throw new Error(
+					`benchmark scenario ${options.agentId}: extraction job ${step} did not return within ${budgetMs}ms; no extraction progress for ${deps.now() - lastProgressAt}ms`,
+				)
+			}
+			return result as JobCounts
+		} finally {
+			expired.abort()
+		}
+	}
+	let last = await readCounts("initial count")
 	for (;;) {
 		if (last.deadLettered > 0) {
 			throw new Error(
@@ -78,20 +125,27 @@ export async function awaitBenchmarkJobsDrained(
 			)
 		}
 		if (last.outstanding === 0) return
-		deps.wake()
-		await deps.workerPromise()
-		const next = await deps.countJobs()
-		if (
-			next.outstanding < last.outstanding ||
-			next.completed > last.completed
-		) {
-			lastProgressAt = deps.now()
-		} else if (deps.now() - lastProgressAt >= options.stallMs) {
+		if (deps.now() - lastProgressAt >= options.stallMs) {
 			throw new Error(
-				`benchmark scenario ${options.agentId}: no extraction progress for ${options.stallMs}ms (outstanding=${next.outstanding}, completed=${next.completed})`,
+				`benchmark scenario ${options.agentId}: no extraction progress for ${options.stallMs}ms (outstanding=${last.outstanding}, completed=${last.completed})`,
 			)
 		}
-		if (next.outstanding > 0) await deps.sleep(options.pollMs)
-		last = next
+		deps.wake()
+		const poll = new AbortController()
+		try {
+			const tick = deps.sleep(options.pollMs, poll.signal)
+			await Promise.race([deps.workerPromise(), tick])
+			const next = await readCounts("count after wake")
+			if (
+				next.outstanding < last.outstanding ||
+				next.completed > last.completed
+			) {
+				lastProgressAt = deps.now()
+			}
+			if (next.outstanding > 0) await tick
+			last = next
+		} finally {
+			poll.abort()
+		}
 	}
 }
