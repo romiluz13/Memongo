@@ -525,6 +525,20 @@ describe("running manager: searchDetailed and search take capabilities from the 
 		})
 	})
 
+	it("search() hands the round partner option to searchV2 only when asked", async () => {
+		const { manager } = await boot()
+		const optionOfCall = (position: number) =>
+			(
+				vi.mocked(searchV2).mock.calls[position]?.[4] as {
+					searchOptions?: Record<string, unknown>
+				}
+			).searchOptions
+		await manager.search("deploy notes", { includeRoundPartner: true })
+		await manager.search("deploy notes")
+		expect(optionOfCall(0)?.includeRoundPartner).toBe(true)
+		expect(optionOfCall(1)).not.toHaveProperty("includeRoundPartner")
+	})
+
 	it("runs every pass of one request inside one budget, with the snapshot open", async () => {
 		const { manager } = await boot()
 		let budgetActive = false

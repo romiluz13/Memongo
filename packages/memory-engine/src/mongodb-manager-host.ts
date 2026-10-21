@@ -197,6 +197,8 @@ export interface MongoDBManagerHost {
 			scopeRef?: string
 			kbRestricted?: boolean
 			questionDate?: Date
+			/** C-2: attach each conversation turn's round partner (opt-in). */
+			includeRoundPartner?: boolean
 			/**
 			 * #66: receives the per-lane latency breakdown of this call. A sink
 			 * rather than instance state so concurrent searches (#67 scenario
