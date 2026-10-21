@@ -1,0 +1,52 @@
+[
+	[
+		{
+			"role": "system",
+			"content": "You answer questions about a user from stored memory passages. Work in two steps. First take notes: for each passage that bears on the question, record the passage number, the relevant fact, and the session date(s) that passage carries. Then reason over your notes in order and answer. The passages are presented in chronological order by session date (earliest first); passages without a session date come last, in retrieval order. Each passage is labeled with its session date(s) and, when known, the speaking role (User or Assistant). When the question or the context carries date(s) of the conversation session(s), use those dates to resolve relative time references (\"last week\", \"recently\"). For facts that changed across sessions, the latest dated statement wins: answer with the most recent value, and mention the earlier value too. If the passages do not contain the answer, say that the memory does not cover it instead of guessing. Return only JSON of the form {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"} with a concise final answer."
+		},
+		{
+			"role": "user",
+			"content": "QUESTION (asked on 2031/02/14 (Fri) 09:30): Where did Zoë’s café ☕ move?\n<context>\n[1] [2030/11/02 (Sat) 18:45; 2030/12/01 (Mon) 08:00] Assistant: The café was in Brindlewick\n[2] [2030/11/02 (Sat) 18:45] User: The café owner liked teal\n[3] [2031/01/20 (Mon) 10:00] User: The café moved to Quillmarsh — שלום 👩‍👩‍👧\n[4] Undated rumor about the café\n</context>\nReturn only {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"}."
+		}
+	],
+	[
+		{
+			"role": "system",
+			"content": "You answer questions about a user from stored memory passages. Work in two steps. First take notes: for each passage that bears on the question, record the passage number, the relevant fact, and the session date(s) that passage carries. Then reason over your notes in order and answer. The passages are presented in chronological order by session date (earliest first); passages without a session date come last, in retrieval order. Each passage is labeled with its session date(s) and, when known, the speaking role (User or Assistant). When the question or the context carries date(s) of the conversation session(s), use those dates to resolve relative time references (\"last week\", \"recently\"). For facts that changed across sessions, the latest dated statement wins: answer with the most recent value, and mention the earlier value too. If the passages do not contain the answer, say that the memory does not cover it instead of guessing. Return only JSON of the form {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"} with a concise final answer."
+		},
+		{
+			"role": "user",
+			"content": "QUESTION: Which river?\n<context>\n[1]   padded\t \n[2] plain passage\n</context>\nReturn only {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"}."
+		}
+	],
+	[
+		{
+			"role": "system",
+			"content": "You answer questions about a user from stored memory passages. Work in two steps. First take notes: for each passage that bears on the question, record the passage number, the relevant fact, and the session date(s) that passage carries. Then reason over your notes in order and answer. The passages are presented in chronological order by session date (earliest first); passages without a session date come last, in retrieval order. Each passage is labeled with its session date(s) and, when known, the speaking role (User or Assistant). When the question or the context carries date(s) of the conversation session(s), use those dates to resolve relative time references (\"last week\", \"recently\"). For facts that changed across sessions, the latest dated statement wins: answer with the most recent value, and mention the earlier value too. If the passages do not contain the answer, say that the memory does not cover it instead of guessing. Return only JSON of the form {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"} with a concise final answer."
+		},
+		{
+			"role": "user",
+			"content": "QUESTION (asked on 2031/03/01 (Sat) 12:00): Who named the lighthouse?\n<context>\n[1] [2031/02/02 (Sun) 07:00] User: I named the lighthouse Pellow\n[2] [2031/02/02 (Sun) 07:00] Assistant: Pellow is a fine name.\n[3] [2031/02/03 (Mon) 07:00] User: Assistant: the user said Pellow\n[4] [2031/02/04 (Tue) 07:00] System: archived note\n[5] [2031/02/05 (Wed) 07:00] Tool: lookup result\n</context>\nReturn only {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"}."
+		}
+	],
+	[
+		{
+			"role": "system",
+			"content": "You answer questions about a user from stored memory passages. Work in two steps. First take notes: for each passage that bears on the question, record the passage number, the relevant fact, and the session date(s) that passage carries. Then reason over your notes in order and answer. The passages are presented in chronological order by session date (earliest first); passages without a session date come last, in retrieval order. Each passage is labeled with its session date(s) and, when known, the speaking role (User or Assistant). When the question or the context carries date(s) of the conversation session(s), use those dates to resolve relative time references (\"last week\", \"recently\"). For facts that changed across sessions, the latest dated statement wins: answer with the most recent value, and mention the earlier value too. If the passages do not contain the answer, say that the memory does not cover it instead of guessing. Return only JSON of the form {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"} with a concise final answer."
+		},
+		{
+			"role": "user",
+			"content": "QUESTION (asked on 2031/06/30 (Mon) 20:00): What did the gardener plant?\n<context>\n[1] [2031/01/12 (Tue) 10:00] gardener note 12\n[2] [2031/01/14 (Tue) 10:00] User: gardener note 4\n[3] [2031/01/16 (Tue) 10:00] User: gardener note 16\n[4] [2031/01/18 (Tue) 10:00] Assistant: gardener note 8\n[5] [2031/02/11 (Tue) 10:00] User: gardener note 1\n[6] [2031/02/11 (Tue) 10:00] gardener note 21\n[7] [2031/02/13 (Tue) 10:00] User: gardener note 13\n[8] [2031/02/17 (Tue) 10:00] Assistant: gardener note 17\n[9] [2031/02/19 (Tue) 10:00] gardener note 9\n[10] [2031/03/12 (Tue) 10:00] Assistant: gardener note 2\n[11] [2031/03/12 (Tue) 10:00] User: gardener note 22\n[12] [2031/03/14 (Tue) 10:00] Assistant: gardener note 14\n[13] [2031/03/16 (Tue) 10:00] gardener note 6\n[14] [2031/03/18 (Tue) 10:00] gardener note 18\n[15] [2031/04/11 (Tue) 10:00] Assistant: gardener note 11\n[16] [2031/04/13 (Tue) 10:00] gardener note 3\n[17] [2031/04/13 (Tue) 10:00] Assistant: gardener note 23\n[18] [2031/04/17 (Tue) 10:00] User: gardener note 7\n[19] [2031/04/19 (Tue) 10:00] User: gardener note 19\n[20] gardener note 0\n[21] Assistant: gardener note 5\n[22] User: gardener note 10\n[23] gardener note 15\n[24] Assistant: gardener note 20\n</context>\nReturn only {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"}."
+		}
+	],
+	[
+		{
+			"role": "system",
+			"content": "You answer questions about a user from stored memory passages. Work in two steps. First take notes: for each passage that bears on the question, record the passage number, the relevant fact, and the session date(s) that passage carries. Then reason over your notes in order and answer. The passages are presented in chronological order by session date (earliest first); passages without a session date come last, in retrieval order. Each passage is labeled with its session date(s) and, when known, the speaking role (User or Assistant). When the question or the context carries date(s) of the conversation session(s), use those dates to resolve relative time references (\"last week\", \"recently\"). For facts that changed across sessions, the latest dated statement wins: answer with the most recent value, and mention the earlier value too. If the passages do not contain the answer, say that the memory does not cover it instead of guessing. Return only JSON of the form {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"} with a concise final answer."
+		},
+		{
+			"role": "user",
+			"content": "QUESTION (asked on 2031/07/01 (Tue) 08:00): Is anything known?\n<context>\n</context>\nReturn only {\"notes\":[{\"passage\":<number>,\"relevant_fact\":\"...\",\"date\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"...\"}."
+		}
+	]
+]
