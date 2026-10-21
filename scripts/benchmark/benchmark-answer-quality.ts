@@ -24,6 +24,7 @@ import {
 } from "./benchmark-answer-provider.js"
 import type { Pass0ContextDiagnostics } from "./benchmark-context-diagnostics.js"
 import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
+import type { ReaderUnit } from "./reader-budget.js"
 import type { E2eQaCase, E2eQaProtocol } from "../mongodb-e2e-qa.js"
 import { runE2eQa } from "../mongodb-e2e-qa.js"
 import type {
@@ -58,6 +59,8 @@ export type BenchmarkJudgedAnswerMaterial = {
 	questionDate?: string
 	passageDates?: string[][]
 	passageRoles?: Array<MemoryResultRole | undefined>
+	/** custom-v3 only: every candidate reader unit, before admission. */
+	readerUnits?: ReaderUnit[]
 	/** Legacy custom-v1 path only. */
 	diagnostics?: Pass0ContextDiagnostics
 	diagnosticsError?: string
@@ -180,6 +183,7 @@ export function buildJudgedAnswerCases(
 				: {}),
 			...(material.passageDates ? { passageDates: material.passageDates } : {}),
 			...(material.passageRoles ? { passageRoles: material.passageRoles } : {}),
+			...(material.readerUnits ? { readerUnits: material.readerUnits } : {}),
 			...(material.abstention ? { abstention: true } : {}),
 			...(material.upstreamFailure
 				? { upstreamFailure: material.upstreamFailure }

@@ -392,7 +392,7 @@ describe("runBenchmarkJudgedAnswers", () => {
 		process.env.MEMONGO_ENRICHMENT_BASE_URL = "https://bench.example.invalid"
 		process.env.MEMONGO_ENRICHMENT_MODEL = "answer-model"
 		process.env.MEMONGO_BENCHMARK_JUDGE_MODEL = "judge-model"
-		for (const protocol of ["custom-v1", "custom-v2"] as const) {
+		for (const protocol of ["custom-v1", "custom-v2", "custom-v3"] as const) {
 			vi.mocked(runE2eQa).mockClear()
 			await runBenchmarkJudgedAnswers({
 				datasetKind: "longmemeval",

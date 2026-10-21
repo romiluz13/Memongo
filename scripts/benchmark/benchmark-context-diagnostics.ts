@@ -238,7 +238,7 @@ function hasDefectiveSourceEventId(result: MemorySearchResult): boolean {
 	)
 }
 
-function classifyProvenance(
+export function classifyProvenance(
 	result: MemorySearchResult,
 	sourceEventIds: string[],
 	evidence: ContextEvidenceMaps,

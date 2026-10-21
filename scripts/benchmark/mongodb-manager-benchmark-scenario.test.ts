@@ -1062,6 +1062,112 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 		}
 	})
 
+	it("custom-v3 searches with round partners and sends budgeted sessions", async () => {
+		vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "synthetic")
+		vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "synthetic-model")
+		vi.stubEnv("MEMONGO_BENCHMARK_JUDGE_MODEL", "synthetic-judge-model")
+		vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", "custom-v3")
+		enrichmentProbe.reset()
+		const chat = vi.spyOn(enrichmentProbe.provider, "chatCompletion")
+		try {
+			const search = vi.fn(
+				async () =>
+					[
+						{
+							path: "events/e-u1",
+							startLine: 1,
+							endLine: 1,
+							score: 0.9,
+							snippet: "What color is the sky?",
+							text: "What color is the sky?",
+							source: "conversation",
+							canonicalId: "event:e-u1",
+							sessionId: "session-1",
+							role: "user",
+							roundPartner: {
+								canonicalId: "event:e-a1",
+								role: "assistant",
+								text: "The sky is violet.",
+							},
+						},
+					] satisfies MemorySearchResult[],
+			)
+			const dataset = syntheticLongMemEvalDataset()
+			const evaluation = dataset.scenarios[0]?.evaluations[0]
+			if (!evaluation) throw new Error("fixture has no evaluation")
+			Object.assign(evaluation, {
+				metadata: { questionDate: "2031/02/14 (Fri) 09:30" },
+			})
+			const result = await benchmarkOps(
+				buildProbeManager(search as never),
+			).runScenarioBenchmarkDataset({
+				datasetPath: "/tmp/benchmark.json",
+				dataset: { ...dataset, scenarios: [dataset.scenarios[0]] },
+				datasetVersion: "w5-harness-v1",
+				maxResults: 10,
+				minScore: 0.1,
+				executionProfile: "shipped",
+				runContext: probeRunContext("run-custom-v3"),
+			})
+			expect(
+				(search.mock.calls[0] as unknown[] | undefined)?.[1],
+			).toMatchObject({
+				includeRoundPartner: true,
+			})
+			const answerUsers = chat.mock.calls
+				.map(([call]) => call.messages.find((m) => m.role === "user")?.content)
+				.filter((user) => user !== undefined && !user.includes("GOLD ANSWER:"))
+			expect(answerUsers).toEqual([
+				[
+					"History Chats:",
+					"",
+					"### Session 1:",
+					"Session Content:",
+					"User: What color is the sky?",
+					"Assistant: The sky is violet.",
+					"",
+					"Current Date: 2031/02/14 (Fri) 09:30",
+					"Question: What color is the sky in case one?",
+					'Return only {"answer":"..."}.',
+				].join("\n"),
+			])
+			expect(result.e2eQa?.judgeVersion).toBe("v3")
+			expect(result.e2eQa?.caseResults[0]?.readerBudget).toMatchObject({
+				budgetEstimatedTokens: 16_000,
+				units: { candidates: 1, admitted: 1, deduplicated: 0, skipped: 0 },
+			})
+			expect(result.e2eQa?.readerBudgetCalibration?.answerCalls).toBe(1)
+			expect(result.e2eQa?.readerCut?.goldTurnMatchRule).toBe("containment-v2")
+		} finally {
+			chat.mockRestore()
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("custom-v1 and custom-v2 search without round partners", async () => {
+		for (const protocol of ["custom-v1", "custom-v2"]) {
+			vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", protocol)
+			const search = buildSearchStub()
+			try {
+				await benchmarkOps(
+					buildProbeManager(search),
+				).runScenarioBenchmarkDataset({
+					datasetPath: "/tmp/benchmark.json",
+					dataset: syntheticLongMemEvalDataset(),
+					datasetVersion: "w5-harness-v1",
+					maxResults: 10,
+					minScore: 0.1,
+					executionProfile: "shipped",
+					runContext: probeRunContext(`run-${protocol}-search`),
+				})
+				const options = (search.mock.calls[0] as unknown[] | undefined)?.[1]
+				expect(options).not.toHaveProperty("includeRoundPartner")
+			} finally {
+				vi.unstubAllEnvs()
+			}
+		}
+	})
+
 	describe("official QA protocol (Slice B)", () => {
 		it("unknown protocol value fails preflight before any scenario work", async () => {
 			vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", "banana")
