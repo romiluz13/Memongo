@@ -2039,6 +2039,51 @@ export type BenchmarkAnswerAttempt = {
 	droppedEnvelopeFields?: Array<"id" | "model">
 }
 
+/**
+ * custom-v3 (D): what the reader budget admitted for one case. Token counts
+ * are labelled estimates from `tokenizer`, not provider counts; the
+ * provider-reported input tokens of the same answer call sit beside them.
+ */
+export type BenchmarkReaderBudgetCaseRecord = {
+	tokenizer: string
+	budgetEstimatedTokens: number
+	estimatedContextTokens: number
+	budgetExceededByFirstUnit: boolean
+	units: {
+		candidates: number
+		admitted: number
+		deduplicated: number
+		skipped: number
+	}
+	/** Stage-1 ranks of the units skipped for the budget. */
+	skippedRanks: number[]
+	/** Null when the answer call reported no usage or did not complete. */
+	providerInputTokens: number | null
+	providerUsageReported: boolean
+	/**
+	 * Each gold turn present in the context, at the start of the unit that
+	 * holds it, as a percentile (0-100) of the estimated context tokens.
+	 */
+	goldTurnPositions: Array<{ turnId: string; positionPercentile: number }>
+}
+
+/**
+ * custom-v3 (D): provider input tokens over estimated context tokens, summed
+ * over answer calls that reported usage. Incomplete when any ended answer
+ * call lacked usage.
+ */
+export type BenchmarkReaderBudgetCalibration = {
+	tokenizer: string
+	budgetEstimatedTokens: number
+	answerCalls: number
+	callsWithUsage: number
+	callsMissingUsage: number
+	providerInputTokens: number
+	estimatedContextTokens: number
+	ratio: number | null
+	complete: boolean
+}
+
 /** Gate-5 extension. Populated by Task 5.E2E / Task 5.adv; null at Phase 1. */
 export type BenchmarkE2eQaEnvelope = {
 	answerModel: string | null
@@ -2067,9 +2112,13 @@ export type BenchmarkE2eQaEnvelope = {
 			latencyMs: number
 			error?: string
 			answerAttempt?: BenchmarkAnswerAttempt
+			/** custom-v3 only. */
+			readerBudget?: BenchmarkReaderBudgetCaseRecord
 		} & BenchmarkCaseContextDiagnostics
 	>
 	unavailableReason?: string
+	/** custom-v3 only: per-run calibration of the token estimate. */
+	readerBudgetCalibration?: BenchmarkReaderBudgetCalibration
 	/** C-5: reader-cut metrics over the case results, pooled and per category. */
 	readerCut?: {
 		goldTurnMatchRule: string

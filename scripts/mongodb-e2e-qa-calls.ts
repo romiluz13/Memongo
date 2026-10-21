@@ -81,21 +81,16 @@ Rules:
 - Judge only against the gold answer; do not invent new criteria.
 Return JSON only: {"correct":true|false,"rationale":"<one sentence>"}`
 
-export async function generateAnswer(params: {
-	provider: EnrichmentProvider
-	model: string
+/** The custom-v1 and custom-v2 user content: question line and passages. */
+function passageUserContent(params: {
 	question: string
 	contextPassages: string[]
-	/** custom-v2 only: index-aligned with contextPassages. */
 	dated?: {
 		questionDate?: string
 		passageDates?: string[][]
 		passageRoles?: Array<MemoryResultRole | undefined>
 	}
-	onFailure?: (error: Error) => void
-	onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
-	onProviderCall?: ProviderCallObserver
-}): Promise<string> {
+}): string {
 	const passages = params.contextPassages.slice(0, MAX_CONTEXT_PASSAGES)
 	const context = params.dated
 		? renderDatedPassageLines(
@@ -107,7 +102,7 @@ export async function generateAnswer(params: {
 				passages.map((_, index) => index),
 			).join("\n")
 		: passages.map((p, i) => `[${i + 1}] ${p}`).join("\n")
-	const user = [
+	return [
 		params.dated
 			? renderDatedQuestionLine(params.question, params.dated.questionDate)
 			: `QUESTION: ${params.question}`,
@@ -116,6 +111,29 @@ export async function generateAnswer(params: {
 		"</context>",
 		'Return only {"answer":"..."}.',
 	].join("\n")
+}
+
+export async function generateAnswer(params: {
+	provider: EnrichmentProvider
+	model: string
+	question: string
+	contextPassages: string[]
+	/** custom-v2 only: index-aligned with contextPassages. */
+	dated?: {
+		questionDate?: string
+		passageDates?: string[][]
+		passageRoles?: Array<MemoryResultRole | undefined>
+	}
+	/** custom-v3 only: the whole answer user content, sent as is. */
+	readerContent?: string
+	onFailure?: (error: Error) => void
+	onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
+	onProviderCall?: ProviderCallObserver
+}): Promise<string> {
+	const user =
+		params.readerContent !== undefined
+			? params.readerContent
+			: passageUserContent(params)
 
 	recordProviderCall(params.onProviderCall, "attempted")
 	let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>

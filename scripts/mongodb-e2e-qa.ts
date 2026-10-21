@@ -15,6 +15,12 @@ import {
 	type Pass0ContextDiagnostics,
 } from "./benchmark/benchmark-context-diagnostics.js"
 import {
+	buildReaderContext,
+	READER_BUDGET_ESTIMATED_TOKENS,
+	type ReaderContext,
+	type ReaderUnit,
+} from "./benchmark/reader-budget.js"
+import {
 	type E2eQaCallResult,
 	type E2eQaProviderOperation,
 	generateAnswer,
@@ -22,6 +28,12 @@ import {
 	MAX_CONTEXT_PASSAGES,
 	type ProviderCallOutcome,
 } from "./mongodb-e2e-qa-calls.js"
+import {
+	type AnswerCallUsage,
+	buildReaderCaseDiagnostics,
+	readerBudgetCalibration,
+	readerBudgetCaseRecord,
+} from "./mongodb-e2e-qa-reader-budget.js"
 
 export {
 	type E2eQaCallResult,
@@ -57,13 +69,17 @@ export const E2E_QA_JUDGE_VERSION = "v1"
 // custom-v2 changes only the answer user content (question and passage
 // dates, passage roles); it is recorded under its own version.
 const E2E_QA_DATED_JUDGE_VERSION = "v2"
+// custom-v3 changes the answer user content again (budgeted round units in
+// official session form).
+const E2E_QA_READER_BUDGET_JUDGE_VERSION = "v3"
 
 /**
  * The QA protocols this harness runs. custom-v2 is custom-v1 with the
  * question date and each passage's date(s) and role in the answer request,
- * passages kept in rank order.
+ * passages kept in rank order. custom-v3 admits round units under the
+ * reader token budget and renders them as official dated sessions.
  */
-export type E2eQaProtocol = "custom-v1" | "custom-v2"
+export type E2eQaProtocol = "custom-v1" | "custom-v2" | "custom-v3"
 
 export type E2eQaCase = {
 	caseId: string
@@ -74,18 +90,30 @@ export type E2eQaCase = {
 	questionDate?: string
 	passageDates?: string[][]
 	passageRoles?: Array<MemoryResultRole | undefined>
+	/** custom-v3 only: every candidate unit, before admission. */
+	readerUnits?: ReaderUnit[]
 	abstention?: boolean
 	upstreamFailure?: string
 	diagnostics?: Pass0ContextDiagnostics
 	diagnosticsError?: string
 }
 
-function caseDiagnostics(testCase: E2eQaCase): BenchmarkCaseContextDiagnostics {
+function caseDiagnostics(
+	testCase: E2eQaCase,
+	reader: ReaderContext | undefined,
+): BenchmarkCaseContextDiagnostics {
 	if (testCase.diagnosticsError !== undefined) {
 		return { diagnosticsError: testCase.diagnosticsError }
 	}
 	if (!testCase.diagnostics) return {}
 	try {
+		if (reader) {
+			return buildReaderCaseDiagnostics(
+				testCase.readerUnits as ReaderUnit[],
+				testCase.diagnostics,
+				reader,
+			)
+		}
 		return buildCaseContextDiagnostics({
 			contextPassages: testCase.contextPassages,
 			maxPassages: MAX_CONTEXT_PASSAGES,
@@ -157,9 +185,22 @@ export async function runE2eQa(params: {
 	const answerModel = params.answerModel ?? model
 	const judgeModel = params.judgeModel ?? model
 	const dated = params.protocol === "custom-v2"
+	const budgeted = params.protocol === "custom-v3"
 	const judgeVersion =
 		params.judgeVersion ??
-		(dated ? E2E_QA_DATED_JUDGE_VERSION : E2E_QA_JUDGE_VERSION)
+		(budgeted
+			? E2E_QA_READER_BUDGET_JUDGE_VERSION
+			: dated
+				? E2E_QA_DATED_JUDGE_VERSION
+				: E2E_QA_JUDGE_VERSION)
+	if (budgeted) {
+		const bare = cases.find(
+			(testCase) => !testCase.upstreamFailure && !testCase.readerUnits,
+		)
+		if (bare) {
+			throw new Error(`custom-v3 case ${bare.caseId} has no reader units`)
+		}
+	}
 	if (cases.length === 0) {
 		return {
 			answerModel: null,
@@ -203,6 +244,15 @@ export async function runE2eQa(params: {
 		let caseError: string | undefined
 		let answerAttempt: BenchmarkAnswerAttempt | undefined
 		answerGenerationAttempts += 1
+		const reader = budgeted
+			? buildReaderContext({
+					units: testCase.readerUnits as ReaderUnit[],
+					question: testCase.question,
+					questionDate: testCase.questionDate,
+					budget: READER_BUDGET_ESTIMATED_TOKENS,
+				})
+			: undefined
+		const answerUsage: AnswerCallUsage = { inputTokens: null }
 		const candidate = await generateAnswer({
 			provider,
 			model: answerModel,
@@ -217,8 +267,13 @@ export async function runE2eQa(params: {
 						},
 					}
 				: {}),
-			onProviderCall: (outcome, usage, call) =>
-				params.onProviderCall?.("answer-generation", outcome, usage, call),
+			...(reader ? { readerContent: reader.userContent } : {}),
+			onProviderCall: (outcome, usage, call) => {
+				if (outcome !== "attempted") {
+					answerUsage.inputTokens = usage ? usage.inputTokens : null
+				}
+				params.onProviderCall?.("answer-generation", outcome, usage, call)
+			},
 			onAttempt: (attempt) => {
 				answerAttempt = attempt
 			},
@@ -226,6 +281,17 @@ export async function runE2eQa(params: {
 				caseError = `answer-generation: ${error.message}`
 			},
 		})
+
+		const diagnostics = caseDiagnostics(testCase, reader)
+		const budgetRecord = reader
+			? {
+					readerBudget: readerBudgetCaseRecord(
+						reader,
+						answerUsage,
+						diagnostics,
+					),
+				}
+			: {}
 
 		if (testCase.abstention) {
 			// Correct behavior for an abstention case is to decline, not to match a
@@ -245,7 +311,8 @@ export async function runE2eQa(params: {
 				latencyMs,
 				...(caseError ? { error: caseError } : {}),
 				...(answerAttempt ? { answerAttempt } : {}),
-				...caseDiagnostics(testCase),
+				...diagnostics,
+				...budgetRecord,
 			})
 			continue
 		}
@@ -304,7 +371,8 @@ export async function runE2eQa(params: {
 			latencyMs,
 			...(caseError ? { error: caseError } : {}),
 			...(answerAttempt ? { answerAttempt } : {}),
-			...caseDiagnostics(testCase),
+			...diagnostics,
+			...budgetRecord,
 		})
 	}
 
@@ -331,5 +399,15 @@ export async function runE2eQa(params: {
 			decoyJudge: decoyJudgeAttempts,
 		},
 		caseResults,
+		...(budgeted
+			? {
+					readerBudgetCalibration: readerBudgetCalibration(
+						caseResults.flatMap((result) =>
+							result.readerBudget ? [result.readerBudget] : [],
+						),
+						READER_BUDGET_ESTIMATED_TOKENS,
+					),
+				}
+			: {}),
 	}
 }

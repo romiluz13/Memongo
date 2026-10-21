@@ -9,6 +9,8 @@ import o200kBase from "js-tiktoken/ranks/o200k_base"
  */
 
 export const READER_BUDGET_TOKENIZER = "js-tiktoken@1.0.21/o200k_base"
+/** Frozen 2026-10-22: estimated tokens of the serialized user content. */
+export const READER_BUDGET_ESTIMATED_TOKENS = 16_000
 
 const encoder = new Tiktoken(o200kBase)
 
@@ -40,6 +42,8 @@ export type ReaderContext = {
 	budgetExceededByFirstUnit: boolean
 	/** Admitted units in presentation order. */
 	admitted: ReaderUnit[]
+	/** Character offset of each admitted unit in `userContent`. */
+	admittedOffsets: number[]
 	counts: {
 		candidates: number
 		admitted: number
@@ -123,27 +127,32 @@ function presentationOrder(units: readonly ReaderUnit[]): SessionGroup[] {
 	}))
 }
 
+/** The user content and each unit's character offset in it, in order. */
 function render(
 	sessions: readonly SessionGroup[],
 	question: string,
 	questionDate: string | undefined,
-): string {
-	const blocks = sessions.map((session, index) =>
-		[
-			`### Session ${index + 1}:`,
-			...(session.dates.length > 0
-				? [`Session Date: ${session.dates.join("; ")}`]
-				: []),
-			"Session Content:",
-			...session.units.map((unit) => unit.passage),
-		].join("\n"),
-	)
+): { text: string; offsets: number[] } {
+	let text = "History Chats:"
+	const offsets: number[] = []
+	sessions.forEach((session, index) => {
+		text += `\n\n### Session ${index + 1}:\n`
+		if (session.dates.length > 0) {
+			text += `Session Date: ${session.dates.join("; ")}\n`
+		}
+		text += "Session Content:"
+		for (const unit of session.units) {
+			text += "\n"
+			offsets.push(text.length)
+			text += unit.passage
+		}
+	})
 	const tail = [
 		...(questionDate ? [`Current Date: ${questionDate}`] : []),
 		`Question: ${question}`,
 		RETURN_LINE,
 	].join("\n")
-	return ["History Chats:", ...blocks, tail].join("\n\n")
+	return { text: `${text}\n\n${tail}`, offsets }
 }
 
 export function buildReaderContext(params: {
@@ -154,11 +163,16 @@ export function buildReaderContext(params: {
 }): ReaderContext {
 	const serialize = (units: readonly ReaderUnit[]) => {
 		const sessions = presentationOrder(units)
-		const userContent = render(sessions, params.question, params.questionDate)
+		const { text, offsets } = render(
+			sessions,
+			params.question,
+			params.questionDate,
+		)
 		return {
 			sessions,
-			userContent,
-			tokens: estimateTokens(userContent),
+			userContent: text,
+			offsets,
+			tokens: estimateTokens(text),
 		}
 	}
 	const unique = dropDuplicates([...params.units].sort(byRankThenId))
@@ -197,6 +211,7 @@ export function buildReaderContext(params: {
 		budgetEstimatedTokens: params.budget,
 		budgetExceededByFirstUnit,
 		admitted: current.sessions.flatMap((session) => session.units),
+		admittedOffsets: current.offsets,
 		counts: {
 			candidates: params.units.length,
 			admitted: admitted.length,
