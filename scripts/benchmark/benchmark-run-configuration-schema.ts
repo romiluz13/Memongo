@@ -12,7 +12,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v5"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v6"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -67,6 +67,7 @@ export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
 	"MEMONGO_SCORING_ABLATION",
 	"MEMONGO_SEARCH_MAX_TIME_MS",
 	"MEMONGO_SESSION_EVIDENCE_MODE",
+	"MEMONGO_SESSION_TURN_RECALL",
 	"MEMONGO_TEMPORAL_COVERAGE_MODE",
 	"MEMONGO_USERFACT_EVIDENCE_MODE",
 	"MEMONGO_VECTOR_INDEXING_METHOD",
@@ -185,6 +186,10 @@ const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	effectiveTextSearchSettleTimeoutMs: scalar,
 	effectiveVectorSearchSettleTimeoutMs: scalar,
 	effectiveJobDrainStallMs: scalar,
+	effectiveSessionTurnRecall: scalar,
+	sessionTurnRecallSeedResults: scalar,
+	sessionTurnRecallSeedSessions: scalar,
+	sessionTurnRecallTurnsPerSession: scalar,
 	answerProviderSource: oneOf(["dedicated", "enrichment-fallback"]),
 }
 

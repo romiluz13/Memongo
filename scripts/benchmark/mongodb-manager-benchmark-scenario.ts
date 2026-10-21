@@ -53,6 +53,12 @@ import {
 } from "../../packages/memory-engine/src/mongodb-evidence-mirror.js"
 import { updateLaneCoverage } from "../../packages/memory-engine/src/mongodb-lane-coverage.js"
 import {
+	SESSION_TURN_RECALL_SEED_RESULTS,
+	SESSION_TURN_RECALL_SEED_SESSIONS,
+	SESSION_TURN_RECALL_TURNS_PER_SESSION,
+	isSessionTurnRecallEnabled,
+} from "../../packages/memory-engine/src/mongodb-session-turn-recall.js"
+import {
 	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
 	benchmarkConvergenceFilter,
 	benchmarkSearchEqualsFilters,
@@ -274,6 +280,10 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				300_000,
 			),
 			effectiveJobDrainStallMs: resolveJobDrainStallMs(),
+			effectiveSessionTurnRecall: isSessionTurnRecallEnabled(),
+			sessionTurnRecallSeedResults: SESSION_TURN_RECALL_SEED_RESULTS,
+			sessionTurnRecallSeedSessions: SESSION_TURN_RECALL_SEED_SESSIONS,
+			sessionTurnRecallTurnsPerSession: SESSION_TURN_RECALL_TURNS_PER_SESSION,
 		}
 		for (const name of BENCHMARK_MONGO_CLIENT_SETTING_NAMES) {
 			settings[`configuredMongoClient.${name}`] = mongoCfg[name] ?? null
