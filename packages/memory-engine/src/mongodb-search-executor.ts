@@ -14,6 +14,7 @@ import {
 	shouldAbstainForLowTrust,
 	summarizeTrust,
 } from "./mongodb-trust.js"
+import { isSessionTurnRecallEnabled } from "./mongodb-session-turn-recall.js"
 import type { MemorySearchResult } from "./types.js"
 import type {
 	EvidenceCoverage,
@@ -1642,10 +1643,15 @@ export function applyLaneAwareResultControls(params: {
 	// assistant turn, and one more piece of the same conversation.
 	const multiSessionBreadthQuery = queryNeedsMultiSessionBreadth(params.query)
 	const composed = [...top, ...rest, ...overflow]
+	const preControlRank = new Map(
+		rescored.map((result, index) => [result, index + 1]),
+	)
 	const diversified = diversifyTopSessions({
 		results: composed,
 		topK,
 		maxPerSession: multiSessionBreadthQuery ? 1 : 3,
+		preControlRank,
+		demoteAfterTop: isSessionTurnRecallEnabled(),
 	})
 	summary.sessionCapped = diversified.capped
 	summary.applied =
@@ -1657,10 +1663,18 @@ export function applyLaneAwareResultControls(params: {
 	return { results: diversified.results, summary }
 }
 
+/**
+ * Over-cap turns always carry `laneControl: "session-capped"` and their
+ * 1-based rank in the controls' input. Only with session turn recall
+ * enabled do they move to right after the top block (score order, ties by
+ * that rank); otherwise they stay after every lower-scored result.
+ */
 function diversifyTopSessions(params: {
 	results: MemorySearchResult[]
 	topK: number
 	maxPerSession?: number
+	preControlRank: Map<MemorySearchResult, number>
+	demoteAfterTop: boolean
 }): { results: MemorySearchResult[]; capped: number } {
 	const maxPerSession = params.maxPerSession ?? 2
 	if (params.results.length <= 1 || params.topK <= 1) {
@@ -1689,7 +1703,14 @@ function diversifyTopSessions(params: {
 		if (sessionId) {
 			const used = counts.get(sessionId) ?? 0
 			if (used >= maxPerSession) {
-				overflow.push(result)
+				overflow.push({
+					...result,
+					provenance: {
+						...(result.provenance ?? {}),
+						laneControl: "session-capped",
+						preControlRank: params.preControlRank.get(result),
+					},
+				})
 				capped++
 				continue
 			}
@@ -1698,7 +1719,16 @@ function diversifyTopSessions(params: {
 		top.push(result)
 	}
 
-	return { results: [...top, ...rest, ...overflow], capped }
+	if (!params.demoteAfterTop) {
+		return { results: [...top, ...rest, ...overflow], capped }
+	}
+	const demoted = overflow.toSorted(
+		(left, right) =>
+			right.score - left.score ||
+			Number(left.provenance?.preControlRank) -
+				Number(right.provenance?.preControlRank),
+	)
+	return { results: [...top, ...demoted, ...rest], capped }
 }
 
 export async function executeMongoSearchPlan(params: {

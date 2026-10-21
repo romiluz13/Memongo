@@ -70,3 +70,102 @@ describe("session cap with turn recall unset (characterization)", () => {
 		expect(controlled.summary.sessionCapped).toBe(2)
 	})
 })
+
+const sessionCapTrace = (result: MemorySearchResult) => ({
+	laneControl: result.provenance?.laneControl,
+	preControlRank: result.provenance?.preControlRank,
+})
+
+describe("session-capped trace (always on)", () => {
+	it("flags each over-cap turn with its pre-control rank and keeps the order when recall is unset", () => {
+		const controlled = control()
+		expect(ids(controlled.results)).toEqual([
+			"a1",
+			"a2",
+			"a3",
+			"b1",
+			"c1",
+			"d1",
+			"a4",
+			"a5",
+		])
+		const byId = new Map(
+			controlled.results.map((result) => [result.canonicalId, result]),
+		)
+		expect(sessionCapTrace(byId.get("event:a4") as MemorySearchResult)).toEqual(
+			{ laneControl: "session-capped", preControlRank: 4 },
+		)
+		expect(sessionCapTrace(byId.get("event:a5") as MemorySearchResult)).toEqual(
+			{ laneControl: "session-capped", preControlRank: 5 },
+		)
+		for (const id of ["a1", "a2", "a3", "b1", "c1", "d1"]) {
+			expect(byId.get(`event:${id}`)?.provenance).toBeUndefined()
+		}
+	})
+
+	it("ranks the pre-control position from the controls' input order", () => {
+		const shuffled = [
+			fixture[7],
+			fixture[4],
+			...fixture.slice(0, 4),
+			...fixture.slice(5, 7),
+		]
+		const controlled = control(shuffled as MemorySearchResult[])
+		const a5 = controlled.results.find((r) => r.canonicalId === "event:a5")
+		expect(a5?.provenance?.preControlRank).toBe(2)
+	})
+})
+
+describe("session-capped demotion with turn recall enabled", () => {
+	it("moves over-cap turns right after the top block, in score order", () => {
+		vi.stubEnv("MEMONGO_SESSION_TURN_RECALL", "enabled")
+		const controlled = control()
+		expect(ids(controlled.results)).toEqual([
+			"a1",
+			"a2",
+			"a3",
+			"b1",
+			"a4",
+			"a5",
+			"c1",
+			"d1",
+		])
+		expect(
+			controlled.results.slice(4, 6).map((result) => result.provenance),
+		).toEqual([
+			{ laneControl: "session-capped", preControlRank: 4 },
+			{ laneControl: "session-capped", preControlRank: 5 },
+		])
+	})
+
+	it("breaks equal-score over-cap ties by their pre-control order", () => {
+		vi.stubEnv("MEMONGO_SESSION_TURN_RECALL", "enabled")
+		const tied = [
+			turn("a1", "s-a", 1.0),
+			turn("a2", "s-a", 0.99),
+			turn("a3", "s-a", 0.98),
+			turn("a5", "s-a", 0.97),
+			turn("a4", "s-a", 0.97),
+			turn("b1", "s-b", 0.9),
+			turn("c1", "s-c", 0.8),
+		]
+		const first = ids(control(tied).results)
+		const second = ids(control(tied.map((result) => ({ ...result }))).results)
+		expect(first).toEqual(["a1", "a2", "a3", "b1", "a5", "a4", "c1"])
+		expect(second).toEqual(first)
+	})
+
+	it("keeps other values of the flag on the unset order", () => {
+		vi.stubEnv("MEMONGO_SESSION_TURN_RECALL", "true")
+		expect(ids(control().results)).toEqual([
+			"a1",
+			"a2",
+			"a3",
+			"b1",
+			"c1",
+			"d1",
+			"a4",
+			"a5",
+		])
+	})
+})
