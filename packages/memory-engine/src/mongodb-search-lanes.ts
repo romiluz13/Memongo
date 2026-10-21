@@ -72,11 +72,11 @@ async function expandTemporalCoverageSessionEvents(params: {
 			scopeRef: params.scopeRef,
 		},
 		sessionIds: params.sessionIds,
-		asOf: params.questionDate,
 		perSession: params.maxPerSession,
 		policy: {
 			kind: "temporal-terms",
 			terms: params.terms,
+			questionDate: params.questionDate,
 			candidateLimit: params.maxEvents * 4,
 		},
 		onTierOutcome: params.onTierOutcome,

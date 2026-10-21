@@ -55,12 +55,16 @@ export type SessionScopedPolicy =
 	| {
 			kind: "temporal-terms"
 			terms: string[]
+			/** The question clock: turns after it are out of reach. */
+			questionDate: Date
 			/** Lower bound of the Search candidate limit. */
 			candidateLimit: number
 	  }
 	| {
 			kind: "fused"
 			query: string
+			/** The question clock, when the search has one. */
+			asOf: Date | undefined
 			numCandidates: number
 			capabilities: DetectedCapabilities
 			embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
@@ -82,8 +86,6 @@ export async function selectSessionScopedTurns(params: {
 	prefix: string
 	namespace: SessionNamespace
 	sessionIds: string[]
-	/** The question clock: turns after it are out of reach. */
-	asOf: Date | undefined
 	perSession: number
 	policy: SessionScopedPolicy
 	onTierOutcome?: SearchTierOutcomeSink
@@ -171,7 +173,7 @@ async function selectByTemporalTerms(
 	policy: Extract<SessionScopedPolicy, { kind: "temporal-terms" }>,
 ): Promise<SessionScopedTurn[]> {
 	const { sessionIds } = params
-	const questionDate = params.asOf as Date
+	const { questionDate } = policy
 	// M2 (G1-28): the hit sessions' user turns are selected through $search
 	// with the session ids in compound.filter. The lane's terms are an
 	// optional `should`, so a session opener without a term match stays a
@@ -291,7 +293,7 @@ async function selectByFusedRank(
 	const { searchFilters, canonicalFilter } = sessionScopedEventFilters({
 		namespace: params.namespace,
 		sessionIds,
-		asOf: params.asOf,
+		asOf: policy.asOf,
 	})
 	const inputLimit =
 		sessionIds.length * params.perSession * FUSED_CANDIDATES_PER_KEPT_TURN
@@ -306,7 +308,7 @@ async function selectByFusedRank(
 		queryEmbeddingModel: policy.queryEmbeddingModel,
 		canonicalFilter,
 		textFilters: searchFilters,
-		lifecycleMatch: buildEventLifecycleClause({ asOf: params.asOf }),
+		lifecycleMatch: buildEventLifecycleClause({ asOf: policy.asOf }),
 		consumeWork: tryConsumeSearchWork,
 		denialReason: searchWorkDenialReason,
 		onTierOutcome: params.onTierOutcome,

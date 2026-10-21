@@ -57,11 +57,11 @@ export async function recallSessionTurns(params: {
 		prefix: params.prefix,
 		namespace: params.namespace,
 		sessionIds: seeds,
-		asOf: params.questionDate,
 		perSession: SESSION_TURN_RECALL_TURNS_PER_SESSION,
 		policy: {
 			kind: "fused",
 			query: params.query,
+			asOf: params.questionDate,
 			numCandidates: params.numCandidates,
 			capabilities: params.capabilities,
 			embeddingMode: params.embeddingMode,

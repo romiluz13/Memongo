@@ -2041,7 +2041,7 @@ export type BenchmarkAnswerAttempt = {
 
 /**
  * custom-v3 (D): what the reader budget admitted for one case. Token counts
- * are labelled estimates from `tokenizer`, not provider counts; the
+ * are labeled estimates from `tokenizer`, not provider counts; the
  * provider-reported input tokens of the same answer call sit beside them.
  */
 export type BenchmarkReaderBudgetCaseRecord = {

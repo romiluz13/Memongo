@@ -194,9 +194,10 @@ export function createOperationRunContext(params: {
 		operations.set(key, created)
 		return created
 	}
-	// Usage is recorded once, when a call ends, whether it succeeded or
-	// failed: a call can be billed and still fail downstream.
-	const recordUsage = (
+	// A call's outcome (status, finish reason and token usage) is recorded
+	// once, when it ends, whether it succeeded or failed: a call can be
+	// billed and still fail downstream.
+	const recordCallOutcome = (
 		entry: BenchmarkOperationAccounting,
 		metadata: OperationMutation | undefined,
 		count: number,
@@ -271,14 +272,14 @@ export function createOperationRunContext(params: {
 				if (!Number.isFinite(count) || count <= 0) return
 				const entry = measuredOperation(operation, metadata)
 				entry.succeeded = (entry.succeeded ?? 0) + count
-				recordUsage(entry, metadata, count)
+				recordCallOutcome(entry, metadata, count)
 			},
 			recordFailure(operation, metadata) {
 				const count = metadata?.count ?? 1
 				if (!Number.isFinite(count) || count <= 0) return
 				const entry = measuredOperation(operation, metadata)
 				entry.failed = (entry.failed ?? 0) + count
-				recordUsage(entry, metadata, count)
+				recordCallOutcome(entry, metadata, count)
 			},
 		},
 	}
