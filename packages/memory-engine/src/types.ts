@@ -2069,9 +2069,9 @@ export type BenchmarkReaderBudgetCaseRecord = {
 }
 
 /**
- * custom-v3 (D): provider input tokens over estimated context tokens, summed
- * over answer calls that reported usage. Incomplete when any ended answer
- * call lacked usage.
+ * custom-v3 (D): provider input tokens over estimated request tokens (system
+ * prompt plus user content), summed over answer calls that reported usage.
+ * Incomplete when any ended answer call lacked usage.
  */
 export type BenchmarkReaderBudgetCalibration = {
 	tokenizer: string
