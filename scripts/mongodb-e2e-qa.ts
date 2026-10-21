@@ -4,6 +4,7 @@ import type {
 	EnrichmentProvider,
 } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import type {
+	BenchmarkAnswerAttempt,
 	BenchmarkCaseContextDiagnostics,
 	BenchmarkE2eQaEnvelope,
 } from "../packages/memory-engine/src/types.js"
@@ -12,6 +13,11 @@ import {
 	describeDiagnosticsFailure,
 	type Pass0ContextDiagnostics,
 } from "./benchmark/benchmark-context-diagnostics.js"
+import {
+	classifyAnswerResponse,
+	stripFences,
+	TRANSPORT_FAILURE_ATTEMPT,
+} from "./mongodb-e2e-qa-answer-attempt.js"
 
 /**
  * End-to-end QA: answer generation + LLM judge (issue #24 / Wave 4).
@@ -80,16 +86,13 @@ Rules:
 - Judge only against the gold answer; do not invent new criteria.
 Return JSON only: {"correct":true|false,"rationale":"<one sentence>"}`
 
-function stripFences(content: string): string {
-	return content.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "")
-}
-
 export async function generateAnswer(params: {
 	provider: EnrichmentProvider
 	model: string
 	question: string
 	contextPassages: string[]
 	onFailure?: (error: Error) => void
+	onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
 	onProviderCall?: (
 		outcome: ProviderCallOutcome,
 		usage?: EnrichmentChatUsage,
@@ -119,32 +122,37 @@ export async function generateAnswer(params: {
 			responseFormat: { type: "json_object" },
 			maxTokens: ANSWER_MAX_TOKENS,
 		})
-	} catch (err) {
+	} catch {
 		recordProviderCall(params.onProviderCall, "failed")
-		const error = err instanceof Error ? err : new Error(String(err))
-		params.onFailure?.(error)
-		log.warn("answer generation failed", {
-			error: error.message,
-		})
-		return ""
+		return answerFailure(params, { ...TRANSPORT_FAILURE_ATTEMPT })
 	}
 	// The transport succeeded: record success — with any usage it reported —
-	// BEFORE parsing the body, so a malformed response neither loses billed
+	// BEFORE classifying the body, so a malformed response neither loses billed
 	// usage nor double-counts as a transport failure.
 	recordProviderCall(params.onProviderCall, "succeeded", response.usage)
-	try {
-		const parsed = JSON.parse(stripFences(response.content)) as {
-			answer?: unknown
-		}
-		return typeof parsed.answer === "string" ? parsed.answer.trim() : ""
-	} catch (err) {
-		const error = err instanceof Error ? err : new Error(String(err))
-		params.onFailure?.(error)
-		log.warn("answer generation returned unparseable output", {
-			error: error.message,
-		})
-		return ""
-	}
+	const { attempt, answer } = classifyAnswerResponse(response)
+	if (answer === undefined) return answerFailure(params, attempt)
+	params.onAttempt?.(attempt)
+	return answer
+}
+
+// Only the fixed status is reported: provider error text and parser messages
+// can quote the response body.
+function answerFailure(
+	params: {
+		onFailure?: (error: Error) => void
+		onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
+	},
+	attempt: BenchmarkAnswerAttempt,
+): string {
+	params.onAttempt?.(attempt)
+	params.onFailure?.(new Error(attempt.status))
+	log.warn("answer generation failed", {
+		status: attempt.status,
+		...(attempt.shape ? { shape: attempt.shape } : {}),
+		...(attempt.finishReason ? { finishReason: attempt.finishReason } : {}),
+	})
+	return ""
 }
 
 export async function judgeAnswer(params: {
@@ -338,6 +346,7 @@ export async function runE2eQa(params: {
 			continue
 		}
 		let caseError: string | undefined
+		let answerAttempt: BenchmarkAnswerAttempt | undefined
 		answerGenerationAttempts += 1
 		const candidate = await generateAnswer({
 			provider,
@@ -346,6 +355,9 @@ export async function runE2eQa(params: {
 			contextPassages: testCase.contextPassages,
 			onProviderCall: (outcome, usage) =>
 				params.onProviderCall?.("answer-generation", outcome, usage),
+			onAttempt: (attempt) => {
+				answerAttempt = attempt
+			},
 			onFailure: (error) => {
 				caseError = `answer-generation: ${error.message}`
 			},
@@ -368,6 +380,7 @@ export async function runE2eQa(params: {
 				abstention: true,
 				latencyMs,
 				...(caseError ? { error: caseError } : {}),
+				...(answerAttempt ? { answerAttempt } : {}),
 				...caseDiagnostics(testCase),
 			})
 			continue
@@ -426,6 +439,7 @@ export async function runE2eQa(params: {
 			abstention: false,
 			latencyMs,
 			...(caseError ? { error: caseError } : {}),
+			...(answerAttempt ? { answerAttempt } : {}),
 			...caseDiagnostics(testCase),
 		})
 	}

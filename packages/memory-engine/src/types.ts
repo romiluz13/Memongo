@@ -3,6 +3,7 @@ import type {
 	MemoryMongoDBFusionMethod,
 	MemoryScope,
 } from "@memongo/lib"
+import type { EnrichmentResponseShape } from "./mongodb-llm-enrichment.js"
 import type { ProcedureLifecyclePatch } from "./mongodb-procedures.js"
 import type { SearchBudgetSnapshot } from "./mongodb-search-budget.js"
 import type {
@@ -1883,6 +1884,48 @@ export type BenchmarkCaseContextDiagnostics = {
 	diagnosticsError?: string
 }
 
+/**
+ * Fixed classification of one custom-v1 answer-generation call. `status` is
+ * decided by the first layer that fails: transport, then the response
+ * envelope, then the content. `shape` and `finishReason` keep the envelope
+ * evidence even when the content decides, so a `length` stop with valid JSON
+ * stays visible. Raw response text and parser messages are never recorded.
+ */
+export type BenchmarkAnswerAttemptStatus =
+	| "transport-failure"
+	| "refusal"
+	| "content-filter"
+	| "missing-choices"
+	| "malformed-message"
+	| "malformed-body"
+	| "empty-body"
+	| "invalid-json"
+	| "missing-answer"
+	| "wrong-answer-type"
+	| "empty-answer"
+	| "answer"
+
+export type BenchmarkAnswerFinishReason =
+	| "stop"
+	| "length"
+	| "content_filter"
+	| "tool_calls"
+	| "function_call"
+	| "max_tokens"
+	| "end_turn"
+	| "other"
+
+export type BenchmarkAnswerAttempt = {
+	layer: "transport" | "envelope" | "content"
+	status: BenchmarkAnswerAttemptStatus
+	/** Envelope shape from the provider; `unvalidated` when it reported none. */
+	shape?: EnrichmentResponseShape | "unvalidated"
+	/** Allowlisted stop signal; any other reported value is `other`. */
+	finishReason?: BenchmarkAnswerFinishReason
+	contentBytes?: number
+	contentSha256?: string
+}
+
 /** Gate-5 extension. Populated by Task 5.E2E / Task 5.adv; null at Phase 1. */
 export type BenchmarkE2eQaEnvelope = {
 	answerModel: string | null
@@ -1910,6 +1953,7 @@ export type BenchmarkE2eQaEnvelope = {
 			abstention: boolean
 			latencyMs: number
 			error?: string
+			answerAttempt?: BenchmarkAnswerAttempt
 		} & BenchmarkCaseContextDiagnostics
 	>
 	unavailableReason?: string
