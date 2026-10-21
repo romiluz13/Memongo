@@ -127,14 +127,19 @@ export function insertRecalledTurns(
 			anchorIndex.set(sessionId, index)
 		}
 	})
-	const placed: Array<{ turn: MemorySearchResult; anchor: number }> = []
+	const placed: Array<{
+		turn: MemorySearchResult
+		anchor: number
+		rank: number
+	}> = []
 	let recalledDroppedPastCap = 0
 	for (const turn of recalled) {
+		const rank = inSessionRankOf(turn)
 		const anchor = anchorIndex.get(turn.sessionId as string)
 		if (anchor === undefined) {
 			recalledDroppedPastCap += 1
 		} else {
-			placed.push({ turn, anchor })
+			placed.push({ turn, anchor, rank })
 		}
 	}
 	let overflow = base.length + placed.length - maxResults
@@ -156,8 +161,7 @@ export function insertRecalledTurns(
 			.map((entry, position) => ({ ...entry, position }))
 			.toSorted(
 				(left, right) =>
-					inSessionRankOf(right.turn) - inSessionRankOf(left.turn) ||
-					right.position - left.position,
+					right.rank - left.rank || right.position - left.position,
 			)
 			.slice(0, Math.max(overflow, 0))
 			.map((entry) => entry.turn),
@@ -184,9 +188,15 @@ export function insertRecalledTurns(
 	}
 }
 
+/** recallSessionTurns ranks every turn it returns. */
 function inSessionRankOf(result: MemorySearchResult): number {
 	const rank = result.provenance?.inSessionRank
-	return typeof rank === "number" ? rank : 0
+	if (typeof rank !== "number") {
+		throw new Error(
+			`recalled turn ${searchResultIdentityKey(result)} has no in-session rank`,
+		)
+	}
+	return rank
 }
 
 function selectSeedSessions(results: MemorySearchResult[]): string[] {

@@ -329,4 +329,14 @@ describe("session turn recall: merge under maxResults", () => {
 			recalledDroppedPastCap: 1,
 		})
 	})
+
+	it("throws on a recalled turn without its in-session rank", () => {
+		const unranked = {
+			...result("tu", "s-a", 0.01),
+			provenance: { lane: "session-turn-recall" as const },
+		}
+		expect(() =>
+			insertRecalledTurns([result("a1", "s-a", 0.9)], [unranked], 5),
+		).toThrow("recalled turn canonical:event:tu has no in-session rank")
+	})
 })

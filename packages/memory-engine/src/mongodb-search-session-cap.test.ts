@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { applyLaneAwareResultControls } from "./mongodb-search-executor.js"
+import { isSessionTurnRecallEnabled } from "./mongodb-session-turn-recall.js"
 import type { MemorySearchResult } from "./types.js"
 
 // The per-session cap of the lane controls (3 turns per session, 1 for
@@ -43,6 +44,7 @@ function control(results: MemorySearchResult[] = fixture) {
 		classification: "direct",
 		planPaths: ["hybrid"],
 		topK: 4,
+		sessionTurnRecall: isSessionTurnRecallEnabled(),
 	})
 }
 

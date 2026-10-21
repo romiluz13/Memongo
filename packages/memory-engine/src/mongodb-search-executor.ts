@@ -14,7 +14,6 @@ import {
 	shouldAbstainForLowTrust,
 	summarizeTrust,
 } from "./mongodb-trust.js"
-import { isSessionTurnRecallEnabled } from "./mongodb-session-turn-recall.js"
 import type { MemorySearchResult } from "./types.js"
 import type {
 	EvidenceCoverage,
@@ -1502,8 +1501,7 @@ export function applyLaneAwareResultControls(params: {
 	classification: MemorySearchClassification
 	planPaths?: RetrievalPath[]
 	topK?: number
-	/** Absent, MEMONGO_SESSION_TURN_RECALL decides. */
-	sessionTurnRecall?: boolean
+	sessionTurnRecall: boolean
 }): { results: MemorySearchResult[]; summary: LaneControlSummary } {
 	const planPaths = params.planPaths ?? []
 	const topK = params.topK ?? 10
@@ -1653,7 +1651,7 @@ export function applyLaneAwareResultControls(params: {
 		topK,
 		maxPerSession: multiSessionBreadthQuery ? 1 : 3,
 		preControlRank,
-		demoteAfterTop: params.sessionTurnRecall ?? isSessionTurnRecallEnabled(),
+		demoteAfterTop: params.sessionTurnRecall,
 	})
 	summary.sessionCapped = diversified.capped
 	summary.applied =

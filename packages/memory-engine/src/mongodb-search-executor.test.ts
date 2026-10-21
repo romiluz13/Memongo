@@ -587,6 +587,7 @@ describe("lane-aware result controls", () => {
 			classification: "direct",
 			planPaths: ["hybrid", "raw-window", "graph"],
 			topK: 3,
+			sessionTurnRecall: false,
 		})
 
 		expect(controlled.summary.applied).toBe(true)
@@ -627,6 +628,7 @@ describe("lane-aware result controls", () => {
 			classification: "direct",
 			planPaths: ["hybrid"],
 			topK: 2,
+			sessionTurnRecall: false,
 		})
 
 		expect(controlled.summary.recencyBoosted).toBeGreaterThan(0)
@@ -659,6 +661,7 @@ describe("lane-aware result controls", () => {
 			classification: "direct",
 			planPaths: ["hybrid"],
 			topK: 5,
+			sessionTurnRecall: false,
 		})
 
 		expect(controlled.summary.sessionCapped).toBeGreaterThan(0)
@@ -707,6 +710,7 @@ describe("lane-aware result controls", () => {
 			classification: "direct",
 			planPaths: ["hybrid"],
 			topK: 5,
+			sessionTurnRecall: false,
 		})
 
 		expect(
@@ -745,6 +749,7 @@ describe("lane-aware result controls", () => {
 			classification: "direct",
 			planPaths: ["hybrid"],
 			topK: 5,
+			sessionTurnRecall: false,
 		})
 		expect(
 			controlled.results
@@ -781,6 +786,7 @@ describe("lane-aware result controls", () => {
 			classification: "temporal",
 			planPaths: ["hybrid"],
 			topK: 5,
+			sessionTurnRecall: false,
 		})
 
 		expect(controlled.summary.sessionCapped).toBeGreaterThan(0)
@@ -820,6 +826,7 @@ describe("lane-aware result controls", () => {
 			classification: "direct",
 			planPaths: ["hybrid"],
 			topK: 2,
+			sessionTurnRecall: false,
 		})
 
 		expect(controlled.summary.boosted).toBe(2)
@@ -843,6 +850,7 @@ describe("lane-aware result controls", () => {
 			classification: "multi-hop",
 			planPaths: ["graph", "hybrid"],
 			topK: 3,
+			sessionTurnRecall: false,
 		})
 
 		expect(controlled.summary.capped).toBe(0)
@@ -1877,6 +1885,7 @@ describe("scoring ablation", () => {
 				classification: "direct",
 				planPaths: ["hybrid"],
 				topK: 3,
+				sessionTurnRecall: false,
 			})
 			expect(controlled.summary.boosted).toBe(0)
 			expect(controlled.results[0]?.score).toBe(0.78)

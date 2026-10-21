@@ -183,7 +183,11 @@ describe("searchV2 session turn recall", () => {
 		plan(["hybrid"])
 		vi.mocked(mongoSearch).mockResolvedValue(stageOne)
 		vi.mocked(recallSessionTurns).mockResolvedValue([
-			{ ...chunk("turn", "s-oak", 0.2), canonicalId: "event:turn" },
+			{
+				...chunk("turn", "s-oak", 0.2),
+				canonicalId: "event:turn",
+				provenance: { lane: "session-turn-recall", inSessionRank: 1 },
+			},
 		])
 		const result = await run("what did we decide", ["hybrid"], {
 			scope: "agent",
@@ -360,7 +364,11 @@ describe("searchV2 per-search session turn recall", () => {
 		plan(["hybrid"])
 		vi.mocked(mongoSearch).mockResolvedValue(stageOne)
 		vi.mocked(recallSessionTurns).mockResolvedValue([
-			{ ...chunk("turn", "s-oak", 0.2), canonicalId: "event:turn" },
+			{
+				...chunk("turn", "s-oak", 0.2),
+				canonicalId: "event:turn",
+				provenance: { lane: "session-turn-recall", inSessionRank: 1 },
+			},
 		])
 		const result = await run("what did we decide", ["hybrid"], {
 			sessionTurnRecall: true,
