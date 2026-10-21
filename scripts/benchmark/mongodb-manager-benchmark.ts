@@ -79,9 +79,28 @@ import {
 import type { BenchmarkCaseExecution } from "./mongodb-benchmark-runner.js"
 import {
 	mergeLongMemEvalAnswerQuality,
+	resolveJudgedAnswerSetup,
 	runBenchmarkJudgedAnswers,
 	type BenchmarkJudgedAnswerMaterial,
+	type JudgedAnswerSetup,
 } from "./benchmark-answer-quality.js"
+import {
+	benchmarkArmConfiguration,
+	resolveBenchmarkArms,
+	type BenchmarkArm,
+} from "./benchmark-arms.js"
+import {
+	armsDecoyPool,
+	assertArmsRunnable,
+	buildArmResults,
+	checkpointArmsComplete,
+	createArmRuns,
+	judgeableCaseIds,
+	restoreCheckpointArms,
+	runArmScenarioQa,
+	type BenchmarkArmScenarioQa,
+	type BenchmarkCheckpointArm,
+} from "./benchmark-arms-run.js"
 import {
 	buildPass0ContextDiagnostics,
 	captureContextDiagnostics,
@@ -426,6 +445,12 @@ export class MongoDBManagerBenchmarkOps {
 			)
 		}
 
+		const arms = resolveBenchmarkArms(process.env)
+		if (arms && qualityThresholds) {
+			throw new Error(
+				"publication quality contracts cannot run paired arms: unset MEMONGO_BENCHMARK_ARMS",
+			)
+		}
 		const executionProfile = resolveBenchmarkExecutionProfile({
 			requested: params?.executionProfile,
 			retrievalLane,
@@ -452,7 +477,7 @@ export class MongoDBManagerBenchmarkOps {
 				allowedRoots: this.getBenchmarkAllowedRoots(),
 			})
 		} catch (datasetErr) {
-			if (!isLegacyBenchmarkFallbackCandidate(datasetErr)) {
+			if (!isLegacyBenchmarkFallbackCandidate(datasetErr) || arms) {
 				throw datasetErr
 			}
 			if (qualityThresholds) {
@@ -501,7 +526,7 @@ export class MongoDBManagerBenchmarkOps {
 			const noEvaluationError = new Error(
 				"benchmark dataset contains no evaluation cases",
 			)
-			if (qualityThresholds) {
+			if (qualityThresholds || arms) {
 				throw noEvaluationError
 			}
 			const cases = await loadLegacyRelevanceDataset(resolvedDatasetPath)
@@ -569,6 +594,7 @@ export class MongoDBManagerBenchmarkOps {
 			executableDigest: executable?.digest ?? "unavailable",
 			datasetSha256,
 			runContext,
+			...(arms ? { arms } : {}),
 		})
 		const parity = await this.buildBenchmarkParityBundle({
 			datasetPath: resolvedDatasetPath,
@@ -810,6 +836,12 @@ export class MongoDBManagerBenchmarkOps {
 		executableDigest?: string
 		datasetSha256?: string
 		runContext: BenchmarkRunContext
+		/**
+		 * Paired arms (benchmark-arms.ts): each question is ingested once and
+		 * every arm searches, answers and judges it before cleanup. The first
+		 * arm is the baseline and supplies the run's own result.
+		 */
+		arms?: readonly BenchmarkArm[]
 	}): Promise<{
 		result: RelevanceBenchmarkResult
 		latencySamples: number[]
@@ -882,12 +914,35 @@ export class MongoDBManagerBenchmarkOps {
 			throw new Error("benchmark checkpoint ingest counts are invalid")
 
 		const measurementPasses = resolveBenchmarkMeasurementPasses()
+		const armRuns = params.arms
+			? createArmRuns(params.arms, measurementPasses)
+			: undefined
+		let armsSetup: JudgedAnswerSetup | undefined
+		if (armRuns) {
+			assertArmsRunnable({
+				datasetKind: params.dataset.datasetKind,
+				retrievalLane: params.retrievalLane,
+				qaProtocol: resolveBenchmarkQaProtocol(process.env),
+				queryDecomposition:
+					params.executionProfile !== "shipped" &&
+					resolveDecompositionMode(
+						process.env.MEMONGO_QUERY_DECOMPOSITION_MODE,
+					) === "enabled",
+				scenarios,
+			})
+			const setup = resolveJudgedAnswerSetup(process.env)
+			if ("reason" in setup) {
+				throw new Error(`paired arms need judged answers: ${setup.reason}`)
+			}
+			armsSetup = setup
+		}
+		const armsDecoys = armRuns ? armsDecoyPool(scenarios) : []
 		// #66: index 0 is the gate pass — the one the published result, the
-		// release gates, and the regression baseline are computed from.
-		const executionsByPass: BenchmarkCaseExecution[][] = Array.from(
-			{ length: measurementPasses },
-			() => [],
-		)
+		// release gates, and the regression baseline are computed from. With
+		// paired arms these are the baseline arm's passes.
+		const executionsByPass: BenchmarkCaseExecution[][] = armRuns?.[0]
+			? armRuns[0].executionsByPass
+			: Array.from({ length: measurementPasses }, () => [])
 		const executions = executionsByPass[0]!
 		const expectedSessionMap = new Map<string, string[]>()
 		const expectedTurnMap = new Map<string, string[]>()
@@ -932,9 +987,23 @@ export class MongoDBManagerBenchmarkOps {
 				"benchmark checkpointing requires the resolved dataset digest",
 			)
 		}
-		const completedCheckpointScenarios = [
-			...(params.resumeCheckpoint?.completedScenarios ?? []),
-		]
+		// With paired arms a question is complete only when every arm has its
+		// verdict; any other restored scenario re-runs.
+		const completedCheckpointScenarios = (
+			params.resumeCheckpoint?.completedScenarios ?? []
+		).filter((checkpointScenario) => {
+			if (!params.arms) return true
+			const restored = scenarios[checkpointScenario.index]
+			return (
+				restored !== undefined &&
+				checkpointArmsComplete(
+					checkpointScenario.arms,
+					params.arms,
+					judgeableCaseIds(restored),
+					measurementPasses,
+				)
+			)
+		})
 		// Snapshot original restored work before current completions are appended.
 		// An empty restored checkpoint has no missing pass-0 material.
 		const restoredCheckpointScenarioCount = completedCheckpointScenarios.length
@@ -960,10 +1029,15 @@ export class MongoDBManagerBenchmarkOps {
 					`benchmark checkpoint measurement pass count does not match: scenario=${checkpointScenario.scenarioId}`,
 				)
 			}
-			for (let pass = 0; pass < measurementPasses; pass++) {
-				executionsByPass[pass]!.push(
-					...(checkpointScenario.executionsByPass[pass] ?? []),
-				)
+			if (armRuns) {
+				// The baseline arm's passes are executionsByPass.
+				restoreCheckpointArms(armRuns, checkpointScenario.arms ?? [])
+			} else {
+				for (let pass = 0; pass < measurementPasses; pass++) {
+					executionsByPass[pass]!.push(
+						...(checkpointScenario.executionsByPass[pass] ?? []),
+					)
+				}
 			}
 			ingest.conversationsIngested +=
 				checkpointScenario.ingest.conversationsIngested
@@ -1125,6 +1199,11 @@ export class MongoDBManagerBenchmarkOps {
 			const passExecutionOffsets = executionsByPass.map(
 				(passExecutions) => passExecutions.length,
 			)
+			const armExecutionOffsets = armRuns?.map((run) =>
+				run.executionsByPass.map((passExecutions) => passExecutions.length),
+			)
+			const scenarioArmQa: BenchmarkArmScenarioQa[] = []
+			let scenarioCheckpointArms: BenchmarkCheckpointArm[] | undefined
 			const scenarioIngestTotals = {
 				conversationsIngested: 0,
 				turnsIngested: 0,
@@ -1153,6 +1232,8 @@ export class MongoDBManagerBenchmarkOps {
 			// is only assigned inside the try, so a scoring throw propagates
 			// through the finally without ever reaching the checkpoint write.
 			let officialScenarioComplete = true
+			// Paired arms: false until every arm has a verdict per question.
+			let armsScenarioComplete = !armRuns
 			// Closes the scenario manager, measures storage and records cleanup.
 			// A close/measurement error stays primary over the scenario error;
 			// a cleanup failure is attached to whichever error propagates.
@@ -1663,83 +1744,116 @@ export class MongoDBManagerBenchmarkOps {
 				// #66: repeat ONLY the measurement loop. Ingest, evidence, settle,
 				// convergence, and cleanup each stay at exactly one per scenario, so
 				// n samples of a condition cost n eval loops instead of n full runs.
-				for (let pass = 0; pass < measurementPasses; pass++) {
-					const passExecutions = executionsByPass[pass]!
-					for (const evaluation of scenario.evaluations) {
-						const startedAt = Date.now()
-						const validQuestionDate = questionDates.get(evaluation)
-						// B3: search with the end of the question's calendar day (see
-						// endOfBenchmarkQuestionDay) so same-day answer sessions remain
-						// eligible under the engine's validAt guard.
-						const searchableQuestionDate = validQuestionDate
-							? endOfBenchmarkQuestionDay(validQuestionDate)
-							: undefined
-						try {
-							// Query decomposition: break preference-style queries into sub-queries
-							const decompositionMode = resolveDecompositionMode(
-								process.env.MEMONGO_QUERY_DECOMPOSITION_MODE,
-							)
-							const decompositionProvider =
-								decompositionMode === "enabled"
-									? resolveBenchmarkAnswerProvider(process.env)
-									: null
-
-							let results: MemorySearchResult[]
-							// #66: per-lane latency of the search that produced `results`.
-							// Only the plain search() path carries a lane breakdown.
-							let latencyByLane: Record<string, number> | undefined
-							let roundPartnerRequested = false
-
-							if (rawSessionLane) {
-								results = await runForegroundRead(
-									`raw-session search for ${evaluation.caseId}`,
-									() =>
-										scenarioOps.searchBenchmarkRawSession(evaluation.query, {
-											maxResults: params.maxResults,
-											minScore: params.minScore,
-										}),
+				// Paired arms: each arm measures, then answers and judges, in arm
+				// order, against this one ingest; cleanup waits for every arm.
+				for (const armRun of armRuns ?? [undefined]) {
+					const qaProtocol = armRun?.arm.protocol ?? benchmarkQaProtocol
+					const armExecutionsByPass =
+						armRun?.executionsByPass ?? executionsByPass
+					const materialByCaseId =
+						armRun?.materialByCaseId ?? e2eQaMaterialByCaseId
+					for (let pass = 0; pass < measurementPasses; pass++) {
+						const passExecutions = armExecutionsByPass[pass]!
+						for (const evaluation of scenario.evaluations) {
+							const startedAt = Date.now()
+							const validQuestionDate = questionDates.get(evaluation)
+							// B3: search with the end of the question's calendar day (see
+							// endOfBenchmarkQuestionDay) so same-day answer sessions remain
+							// eligible under the engine's validAt guard.
+							const searchableQuestionDate = validQuestionDate
+								? endOfBenchmarkQuestionDay(validQuestionDate)
+								: undefined
+							try {
+								// Query decomposition: break preference-style queries into sub-queries
+								const decompositionMode = resolveDecompositionMode(
+									process.env.MEMONGO_QUERY_DECOMPOSITION_MODE,
 								)
-							} else if (
-								decompositionProvider &&
-								decompositionMode === "enabled" &&
-								params.executionProfile !== "shipped"
-							) {
-								// #66: decomposition sits outside search(), so its cost and the
-								// N sub-searches it fans out never reach the lane breakdown.
-								const decomposeStartedAt = Date.now()
-								const decomposed = await decomposeQuery({
-									provider: decompositionProvider,
-									// B1: decomposition is a query-side call in the answer
-									// pipeline, so it follows the benchmark answer provider,
-									// not the extraction provider.
-									model: benchmarkAnswerModelName(process.env),
-									query: evaluation.query,
-									questionType: evaluation.questionType,
-									onProviderCall: (outcome) => {
-										const accounting = params.runContext.accounting
-										const metadata = {
-											provider: decompositionProvider.name,
-											model: benchmarkAnswerModelName(process.env),
-										}
-										if (outcome === "attempted") {
-											accounting.recordAttempt("query-decomposition", metadata)
-										} else if (outcome === "succeeded") {
-											accounting.recordSuccess("query-decomposition", metadata)
-										} else {
-											accounting.recordFailure("query-decomposition", metadata)
-										}
-									},
-								})
-								const decomposeMs = Date.now() - decomposeStartedAt
-								// Run each sub-query through the search pipeline
-								const subSearchStartedAt = Date.now()
-								const resultSets: MemorySearchResult[][] = []
-								for (const subQuery of decomposed.subQueries) {
-									const subResults = await runForegroundRead(
-										`decomposed search for ${evaluation.caseId}`,
+								const decompositionProvider =
+									decompositionMode === "enabled"
+										? resolveBenchmarkAnswerProvider(process.env)
+										: null
+
+								let results: MemorySearchResult[]
+								// #66: per-lane latency of the search that produced `results`.
+								// Only the plain search() path carries a lane breakdown.
+								let latencyByLane: Record<string, number> | undefined
+								let roundPartnerRequested = false
+
+								if (rawSessionLane) {
+									results = await runForegroundRead(
+										`raw-session search for ${evaluation.caseId}`,
+										() =>
+											scenarioOps.searchBenchmarkRawSession(evaluation.query, {
+												maxResults: params.maxResults,
+												minScore: params.minScore,
+											}),
+									)
+								} else if (
+									decompositionProvider &&
+									decompositionMode === "enabled" &&
+									params.executionProfile !== "shipped"
+								) {
+									// #66: decomposition sits outside search(), so its cost and the
+									// N sub-searches it fans out never reach the lane breakdown.
+									const decomposeStartedAt = Date.now()
+									const decomposed = await decomposeQuery({
+										provider: decompositionProvider,
+										// B1: decomposition is a query-side call in the answer
+										// pipeline, so it follows the benchmark answer provider,
+										// not the extraction provider.
+										model: benchmarkAnswerModelName(process.env),
+										query: evaluation.query,
+										questionType: evaluation.questionType,
+										onProviderCall: (outcome) => {
+											const accounting = params.runContext.accounting
+											const metadata = {
+												provider: decompositionProvider.name,
+												model: benchmarkAnswerModelName(process.env),
+											}
+											if (outcome === "attempted") {
+												accounting.recordAttempt(
+													"query-decomposition",
+													metadata,
+												)
+											} else if (outcome === "succeeded") {
+												accounting.recordSuccess(
+													"query-decomposition",
+													metadata,
+												)
+											} else {
+												accounting.recordFailure(
+													"query-decomposition",
+													metadata,
+												)
+											}
+										},
+									})
+									const decomposeMs = Date.now() - decomposeStartedAt
+									// Run each sub-query through the search pipeline
+									const subSearchStartedAt = Date.now()
+									const resultSets: MemorySearchResult[][] = []
+									for (const subQuery of decomposed.subQueries) {
+										const subResults = await runForegroundRead(
+											`decomposed search for ${evaluation.caseId}`,
+											() =>
+												scenarioManager.search(
+													subQuery,
+													{
+														maxResults: params.maxResults,
+														minScore: params.minScore,
+														questionDate: searchableQuestionDate,
+													},
+													params.runContext,
+												),
+										)
+										resultSets.push(subResults)
+									}
+									// Also run the original query to avoid losing good direct matches
+									const originalResults = await runForegroundRead(
+										`original decomposed search for ${evaluation.caseId}`,
 										() =>
 											scenarioManager.search(
-												subQuery,
+												evaluation.query,
 												{
 													maxResults: params.maxResults,
 													minScore: params.minScore,
@@ -1748,169 +1862,135 @@ export class MongoDBManagerBenchmarkOps {
 												params.runContext,
 											),
 									)
-									resultSets.push(subResults)
-								}
-								// Also run the original query to avoid losing good direct matches
-								const originalResults = await runForegroundRead(
-									`original decomposed search for ${evaluation.caseId}`,
-									() =>
-										scenarioManager.search(
-											evaluation.query,
-											{
-												maxResults: params.maxResults,
-												minScore: params.minScore,
-												questionDate: searchableQuestionDate,
-											},
-											params.runContext,
-										),
-								)
-								resultSets.push(originalResults)
-								latencyByLane = {
-									"phase:decompose": decomposeMs,
-									"phase:decompose-searches": Date.now() - subSearchStartedAt,
-								}
-								// Merge all result sets with RRF
-								results = mergeMultiQueryResults(
-									resultSets,
-									params.maxResults,
-								) as MemorySearchResult[]
-							} else {
-								const relevanceScope =
-									evaluation.sourceScope &&
-									scenarioManager.relevance &&
-									evaluation.sourceScope !== "all"
-										? evaluation.sourceScope
-										: undefined
-								roundPartnerRequested =
-									!relevanceScope && benchmarkQaProtocol === "custom-v3"
-								results = relevanceScope
-									? (
-											await runForegroundRead(
-												`relevance search for ${evaluation.caseId}`,
+									resultSets.push(originalResults)
+									latencyByLane = {
+										"phase:decompose": decomposeMs,
+										"phase:decompose-searches": Date.now() - subSearchStartedAt,
+									}
+									// Merge all result sets with RRF
+									results = mergeMultiQueryResults(
+										resultSets,
+										params.maxResults,
+									) as MemorySearchResult[]
+								} else {
+									const relevanceScope =
+										evaluation.sourceScope &&
+										scenarioManager.relevance &&
+										evaluation.sourceScope !== "all"
+											? evaluation.sourceScope
+											: undefined
+									roundPartnerRequested =
+										!relevanceScope && qaProtocol === "custom-v3"
+									results = relevanceScope
+										? (
+												await runForegroundRead(
+													`relevance search for ${evaluation.caseId}`,
+													() =>
+														scenarioManager.relevanceExplain({
+															query: evaluation.query,
+															sourceScope: relevanceScope,
+															maxResults: params.maxResults,
+															minScore: params.minScore,
+															deep: false,
+															questionDate: searchableQuestionDate,
+														}),
+												)
+											).results
+										: await runForegroundRead(
+												`search for ${evaluation.caseId}`,
 												() =>
-													scenarioManager.relevanceExplain({
-														query: evaluation.query,
-														sourceScope: relevanceScope,
-														maxResults: params.maxResults,
-														minScore: params.minScore,
-														deep: false,
-														questionDate: searchableQuestionDate,
-													}),
-											)
-										).results
-									: await runForegroundRead(
-											`search for ${evaluation.caseId}`,
-											() =>
-												scenarioManager.search(
-													evaluation.query,
-													{
-														maxResults: params.maxResults,
-														minScore: params.minScore,
-														questionDate: searchableQuestionDate,
-														onLaneLatency: (lanes) => {
-															latencyByLane = lanes
+													scenarioManager.search(
+														evaluation.query,
+														{
+															maxResults: params.maxResults,
+															minScore: params.minScore,
+															questionDate: searchableQuestionDate,
+															onLaneLatency: (lanes) => {
+																latencyByLane = lanes
+															},
+															...(roundPartnerRequested
+																? { includeRoundPartner: true }
+																: {}),
+															...(armRun
+																? {
+																		sessionTurnRecall:
+																			armRun.arm.sessionTurnRecall,
+																	}
+																: {}),
 														},
-														...(roundPartnerRequested
-															? { includeRoundPartner: true }
-															: {}),
-													},
-													params.runContext,
-												),
+														params.runContext,
+													),
+											)
+								}
+								passExecutions.push(
+									evaluateRankingCase({
+										caseId: evaluation.caseId,
+										results,
+										latencyMs: Date.now() - startedAt,
+										...(latencyByLane && Object.keys(latencyByLane).length > 0
+											? { latencyByLane }
+											: {}),
+										relevantSessionIds: evaluation.expectedSessionIds,
+										relevantTurnIds: evaluation.expectedTurnIds,
+										relevantDialogIds: evaluation.expectedDialogIds,
+										resolveSessionIds: (result) =>
+											this.resolveBenchmarkResultSessionIds(
+												result,
+												eventEvidence,
+											),
+										resolveTurnIds: (result) =>
+											this.resolveBenchmarkResultTurnIds(result, eventEvidence),
+										resolveDialogIds: (result) =>
+											this.resolveBenchmarkResultDialogIds(
+												result,
+												eventEvidence,
+											),
+										datasetKind: params.dataset.datasetKind,
+										officialRetrieval: evaluation.officialRetrieval,
+										questionType: evaluation.questionType,
+										abstention: evaluation.abstention,
+										traceOptions: { maxCandidates: 50 },
+									}),
+								)
+								if (pass === 0) {
+									// Keep passages and their per-passage session dates
+									// and roles index-aligned: a dropped passage drops
+									// its dates and role too. B5: the reader gets the
+									// full passage text, not the 700-char display
+									// preview. B9: the role labels the speaking turn
+									// (User:/Assistant:) in the dated answer prompt.
+									const passagesWithDates = results
+										.map((result, index) => ({
+											passage: result.text ?? result.snippet,
+											dates: sessionDatesForResult(result),
+											role: result.role,
+											retrievedRank: index + 1,
+										}))
+										.filter(
+											(entry) =>
+												typeof entry.passage === "string" &&
+												entry.passage.trim().length > 0,
 										)
-							}
-							passExecutions.push(
-								evaluateRankingCase({
-									caseId: evaluation.caseId,
-									results,
-									latencyMs: Date.now() - startedAt,
-									...(latencyByLane && Object.keys(latencyByLane).length > 0
-										? { latencyByLane }
-										: {}),
-									relevantSessionIds: evaluation.expectedSessionIds,
-									relevantTurnIds: evaluation.expectedTurnIds,
-									relevantDialogIds: evaluation.expectedDialogIds,
-									resolveSessionIds: (result) =>
-										this.resolveBenchmarkResultSessionIds(
-											result,
-											eventEvidence,
+									materialByCaseId.set(evaluation.caseId, {
+										caseId: evaluation.caseId,
+										question: evaluation.query,
+										goldAnswer: evaluation.answer ?? "",
+										abstention: evaluation.abstention === true,
+										contextPassages: passagesWithDates.map(
+											(entry) => entry.passage,
 										),
-									resolveTurnIds: (result) =>
-										this.resolveBenchmarkResultTurnIds(result, eventEvidence),
-									resolveDialogIds: (result) =>
-										this.resolveBenchmarkResultDialogIds(result, eventEvidence),
-									datasetKind: params.dataset.datasetKind,
-									officialRetrieval: evaluation.officialRetrieval,
-									questionType: evaluation.questionType,
-									abstention: evaluation.abstention,
-									traceOptions: { maxCandidates: 50 },
-								}),
-							)
-							if (pass === 0) {
-								// Keep passages and their per-passage session dates
-								// and roles index-aligned: a dropped passage drops
-								// its dates and role too. B5: the reader gets the
-								// full passage text, not the 700-char display
-								// preview. B9: the role labels the speaking turn
-								// (User:/Assistant:) in the dated answer prompt.
-								const passagesWithDates = results
-									.map((result, index) => ({
-										passage: result.text ?? result.snippet,
-										dates: sessionDatesForResult(result),
-										role: result.role,
-										retrievedRank: index + 1,
-									}))
-									.filter(
-										(entry) =>
-											typeof entry.passage === "string" &&
-											entry.passage.trim().length > 0,
-									)
-								e2eQaMaterialByCaseId.set(evaluation.caseId, {
-									caseId: evaluation.caseId,
-									question: evaluation.query,
-									goldAnswer: evaluation.answer ?? "",
-									abstention: evaluation.abstention === true,
-									contextPassages: passagesWithDates.map(
-										(entry) => entry.passage,
-									),
-									questionType: evaluation.questionType,
-									questionDate:
-										typeof evaluation.metadata?.questionDate === "string"
-											? evaluation.metadata.questionDate
-											: undefined,
-									passageDates: passagesWithDates.map((entry) => entry.dates),
-									passageRoles: passagesWithDates.map((entry) => entry.role),
-									...(benchmarkQaProtocol === "custom-v3"
-										? captureReaderUnits({
-												caseId: evaluation.caseId,
-												results,
-												roundPartnerRequested,
-												evidence: eventEvidence,
-												collectSourceEventIds: (result) =>
-													this.collectBenchmarkResultSourceEventIds(result),
-												resolveSessionIds: (result) =>
-													this.resolveBenchmarkResultSessionIds(
-														result,
-														eventEvidence,
-													),
-												resolveTurnIds: (result) =>
-													this.resolveBenchmarkResultTurnIds(
-														result,
-														eventEvidence,
-													),
-												sessionDates: (sessionId) =>
-													sessionDatesBySessionId.get(sessionId) ?? [],
-												evaluation,
-												conversations: scenario.conversations,
-											})
-										: {}),
-									...(benchmarkQaProtocol === "custom-v1" ||
-									benchmarkQaProtocol === "custom-v2"
-										? captureContextDiagnostics(evaluation.caseId, () =>
-												buildPass0ContextDiagnostics({
+										questionType: evaluation.questionType,
+										questionDate:
+											typeof evaluation.metadata?.questionDate === "string"
+												? evaluation.metadata.questionDate
+												: undefined,
+										passageDates: passagesWithDates.map((entry) => entry.dates),
+										passageRoles: passagesWithDates.map((entry) => entry.role),
+										...(qaProtocol === "custom-v3"
+											? captureReaderUnits({
+													caseId: evaluation.caseId,
 													results,
-													keptRanks: passagesWithDates.map(
-														(entry) => entry.retrievedRank,
-													),
+													roundPartnerRequested,
 													evidence: eventEvidence,
 													collectSourceEventIds: (result) =>
 														this.collectBenchmarkResultSourceEventIds(result),
@@ -1924,89 +2004,148 @@ export class MongoDBManagerBenchmarkOps {
 															result,
 															eventEvidence,
 														),
+													sessionDates: (sessionId) =>
+														sessionDatesBySessionId.get(sessionId) ?? [],
 													evaluation,
 													conversations: scenario.conversations,
-												}),
-											)
-										: {}),
+												})
+											: {}),
+										...(qaProtocol === "custom-v1" || qaProtocol === "custom-v2"
+											? captureContextDiagnostics(evaluation.caseId, () =>
+													buildPass0ContextDiagnostics({
+														results,
+														keptRanks: passagesWithDates.map(
+															(entry) => entry.retrievedRank,
+														),
+														evidence: eventEvidence,
+														collectSourceEventIds: (result) =>
+															this.collectBenchmarkResultSourceEventIds(result),
+														resolveSessionIds: (result) =>
+															this.resolveBenchmarkResultSessionIds(
+																result,
+																eventEvidence,
+															),
+														resolveTurnIds: (result) =>
+															this.resolveBenchmarkResultTurnIds(
+																result,
+																eventEvidence,
+															),
+														evaluation,
+														conversations: scenario.conversations,
+													}),
+												)
+											: {}),
+									})
+								}
+								// Track expected IDs for miss ledger
+								expectedSessionMap.set(
+									evaluation.caseId,
+									evaluation.expectedSessionIds,
+								)
+								expectedTurnMap.set(
+									evaluation.caseId,
+									evaluation.expectedTurnIds ?? [],
+								)
+							} catch (err) {
+								const message = err instanceof Error ? err.message : String(err)
+								if (isBenchmarkStrictMode()) {
+									throw new Error(
+										`benchmark evaluation query failed in strict mode: scenario=${scenario.scenarioId} case=${evaluation.caseId}: ${message}`,
+									)
+								}
+								log.warn("benchmark evaluation query failed", {
+									scenarioId: scenario.scenarioId,
+									caseId: evaluation.caseId,
+									error: err instanceof Error ? err.message : String(err),
 								})
-							}
-							// Track expected IDs for miss ledger
-							expectedSessionMap.set(
-								evaluation.caseId,
-								evaluation.expectedSessionIds,
-							)
-							expectedTurnMap.set(
-								evaluation.caseId,
-								evaluation.expectedTurnIds ?? [],
-							)
-						} catch (err) {
-							const message = err instanceof Error ? err.message : String(err)
-							if (isBenchmarkStrictMode()) {
-								throw new Error(
-									`benchmark evaluation query failed in strict mode: scenario=${scenario.scenarioId} case=${evaluation.caseId}: ${message}`,
+								// B4: a query failure is a reliability failure, not a wrong
+								// answer. executionError (a pre-existing evaluateRankingCase
+								// mechanism) marks the case system-failure and excludes it
+								// from scoring.
+								passExecutions.push(
+									evaluateRankingCase({
+										caseId: evaluation.caseId,
+										results: [],
+										latencyMs: Date.now() - startedAt,
+										executionError: message,
+										relevantSessionIds: evaluation.expectedSessionIds,
+										relevantTurnIds: evaluation.expectedTurnIds,
+										relevantDialogIds: evaluation.expectedDialogIds,
+										resolveSessionIds: (result) =>
+											this.resolveBenchmarkResultSessionIds(
+												result,
+												eventEvidence,
+											),
+										resolveTurnIds: (result) =>
+											this.resolveBenchmarkResultTurnIds(result, eventEvidence),
+										resolveDialogIds: (result) =>
+											this.resolveBenchmarkResultDialogIds(
+												result,
+												eventEvidence,
+											),
+										datasetKind: params.dataset.datasetKind,
+										officialRetrieval: evaluation.officialRetrieval,
+										questionType: evaluation.questionType,
+										abstention: evaluation.abstention,
+									}),
+								)
+								if (pass === 0) {
+									materialByCaseId.set(evaluation.caseId, {
+										caseId: evaluation.caseId,
+										question: evaluation.query,
+										goldAnswer: evaluation.answer ?? "",
+										abstention: evaluation.abstention === true,
+										contextPassages: [],
+										passageDates: [],
+										passageRoles: [],
+										upstreamFailure: message,
+										questionType: evaluation.questionType,
+										questionDate:
+											typeof evaluation.metadata?.questionDate === "string"
+												? evaluation.metadata.questionDate
+												: undefined,
+									})
+								}
+								expectedSessionMap.set(
+									evaluation.caseId,
+									evaluation.expectedSessionIds,
+								)
+								expectedTurnMap.set(
+									evaluation.caseId,
+									evaluation.expectedTurnIds ?? [],
 								)
 							}
-							log.warn("benchmark evaluation query failed", {
-								scenarioId: scenario.scenarioId,
-								caseId: evaluation.caseId,
-								error: err instanceof Error ? err.message : String(err),
-							})
-							// B4: a query failure is a reliability failure, not a wrong
-							// answer. executionError (a pre-existing evaluateRankingCase
-							// mechanism) marks the case system-failure and excludes it
-							// from scoring.
-							passExecutions.push(
-								evaluateRankingCase({
-									caseId: evaluation.caseId,
-									results: [],
-									latencyMs: Date.now() - startedAt,
-									executionError: message,
-									relevantSessionIds: evaluation.expectedSessionIds,
-									relevantTurnIds: evaluation.expectedTurnIds,
-									relevantDialogIds: evaluation.expectedDialogIds,
-									resolveSessionIds: (result) =>
-										this.resolveBenchmarkResultSessionIds(
-											result,
-											eventEvidence,
-										),
-									resolveTurnIds: (result) =>
-										this.resolveBenchmarkResultTurnIds(result, eventEvidence),
-									resolveDialogIds: (result) =>
-										this.resolveBenchmarkResultDialogIds(result, eventEvidence),
-									datasetKind: params.dataset.datasetKind,
-									officialRetrieval: evaluation.officialRetrieval,
-									questionType: evaluation.questionType,
-									abstention: evaluation.abstention,
-								}),
-							)
-							if (pass === 0) {
-								e2eQaMaterialByCaseId.set(evaluation.caseId, {
-									caseId: evaluation.caseId,
-									question: evaluation.query,
-									goldAnswer: evaluation.answer ?? "",
-									abstention: evaluation.abstention === true,
-									contextPassages: [],
-									passageDates: [],
-									passageRoles: [],
-									upstreamFailure: message,
-									questionType: evaluation.questionType,
-									questionDate:
-										typeof evaluation.metadata?.questionDate === "string"
-											? evaluation.metadata.questionDate
-											: undefined,
-								})
-							}
-							expectedSessionMap.set(
-								evaluation.caseId,
-								evaluation.expectedSessionIds,
-							)
-							expectedTurnMap.set(
-								evaluation.caseId,
-								evaluation.expectedTurnIds ?? [],
-							)
 						}
 					}
+					if (armRun && armsSetup) {
+						const qa = await runArmScenarioQa({
+							arm: armRun.arm,
+							materials: scenario.evaluations.flatMap((evaluation) => {
+								const material = armRun.materialByCaseId.get(evaluation.caseId)
+								return material ? [material] : []
+							}),
+							decoyPool: armsDecoys,
+							setup: armsSetup,
+							accounting: params.runContext.accounting,
+						})
+						armRun.qa.push(qa)
+						scenarioArmQa.push(qa)
+					}
+				}
+				if (armRuns && params.arms) {
+					scenarioCheckpointArms = armRuns.map((run, armIndex) => ({
+						name: run.arm.name,
+						executionsByPass: run.executionsByPass.map((passExecutions, pass) =>
+							passExecutions.slice(armExecutionOffsets?.[armIndex]?.[pass]),
+						),
+						qa: scenarioArmQa[armIndex] as BenchmarkArmScenarioQa,
+					}))
+					armsScenarioComplete = checkpointArmsComplete(
+						scenarioCheckpointArms,
+						params.arms,
+						judgeableCaseIds(scenario),
+						measurementPasses,
+					)
 				}
 				log.info("benchmark scenario complete", {
 					scenarioId: scenario.scenarioId,
@@ -2097,7 +2236,8 @@ export class MongoDBManagerBenchmarkOps {
 			// keep the legacy always-write behavior.
 			if (
 				params.checkpointPath &&
-				(!officialQaContext || officialScenarioComplete)
+				(!officialQaContext || officialScenarioComplete) &&
+				armsScenarioComplete
 			) {
 				const datasetSha256 = params.datasetSha256
 				if (!datasetSha256) {
@@ -2125,6 +2265,7 @@ export class MongoDBManagerBenchmarkOps {
 						? { storageFailure: scenarioStorageFailure }
 						: {}),
 					...(scenarioCleanup ? { cleanup: scenarioCleanup } : {}),
+					...(scenarioCheckpointArms ? { arms: scenarioCheckpointArms } : {}),
 				}
 				completedCheckpointScenarios.push(checkpointScenario)
 				completedCheckpointScenarios.sort(
@@ -2155,7 +2296,7 @@ export class MongoDBManagerBenchmarkOps {
 		// #66: pass 1 is the gate pass — every published metric, release gate, and
 		// regression baseline below is computed from it alone, so gate semantics
 		// are identical whether one pass ran or ten.
-		const passSummaries = executionsByPass.map((passExecutions) =>
+		const summarizeExecutions = (passExecutions: BenchmarkCaseExecution[]) =>
 			summarizeBenchmarkExecutions({
 				datasetName: params.dataset.name,
 				datasetKind: params.dataset.datasetKind,
@@ -2164,8 +2305,8 @@ export class MongoDBManagerBenchmarkOps {
 				executions: passExecutions,
 				ingest,
 				readinessSkips: this.readinessSkips,
-			}),
-		)
+			})
+		const passSummaries = executionsByPass.map(summarizeExecutions)
 		const summary = passSummaries[0]!
 		const measurementPassReport = summarizeMeasurementPasses(passSummaries)
 		const regressions = await persistBenchmarkRegression({
@@ -2215,7 +2356,30 @@ export class MongoDBManagerBenchmarkOps {
 		// attachBenchmarkOperationsReport.
 		let e2eQa: BenchmarkE2eQaEnvelope | undefined
 		let questionTypeBreakdown = summary.questionTypeBreakdown
-		if (officialQaContext) {
+		const armResults = armRuns
+			? buildArmResults({
+					runs: armRuns,
+					configurationHashes: armRuns.map(
+						(run) =>
+							benchmarkArmConfiguration(
+								params.runContext.configuration,
+								run.arm,
+							).configurationHash,
+					),
+					scenarios,
+					ingest,
+					summarize: summarizeExecutions,
+					expectedSessionMap,
+					expectedTurnMap,
+				})
+			: undefined
+		if (armResults) {
+			// The baseline arm's answers are the run's own.
+			e2eQa = armResults.arms[0]?.e2eQa
+			questionTypeBreakdown =
+				armResults.arms[0]?.result.questionTypeBreakdown ??
+				questionTypeBreakdown
+		} else if (officialQaContext) {
 			// Covered = every scenario that either completed in this run or was
 			// restored from the checkpoint; official preflight guarantees a
 			// checkpoint exists, so these two sets are the full run.
@@ -2316,6 +2480,9 @@ export class MongoDBManagerBenchmarkOps {
 						.sort(([left], [right]) => left - right)
 						.map(([, outcome]) => outcome),
 				),
+				...(armResults
+					? { arms: armResults.arms, pairedArms: armResults.pairedArms }
+					: {}),
 			},
 			latencySamples: executions.map((e) => e.latencyMs),
 			...(e2eQa ? { e2eQa } : {}),

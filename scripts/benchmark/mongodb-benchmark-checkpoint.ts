@@ -14,6 +14,7 @@ import {
 	ADAPTER_DIAGNOSTIC_TOTAL_KEYS,
 	type BenchmarkAdapterDiagnosticTotals,
 } from "./benchmark-adapter-diagnostics.js"
+import type { BenchmarkCheckpointArm } from "./benchmark-arms-run.js"
 import { hasCompleteConfigurationCoverage } from "./benchmark-run-configuration-schema.js"
 import type { BenchmarkCaseExecution } from "./mongodb-benchmark-runner.js"
 
@@ -37,6 +38,8 @@ export type BenchmarkCheckpointScenario = {
 	storageFailure?: string
 	/** Absent in checkpoints written before cleanup outcomes; read as unknown. */
 	cleanup?: BenchmarkScenarioCleanupOutcome
+	/** Paired arms only; executionsByPass above is the baseline arm's. */
+	arms?: BenchmarkCheckpointArm[]
 }
 
 export type BenchmarkCheckpoint = {

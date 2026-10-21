@@ -90,6 +90,8 @@ export type E2eQaProtocol = "custom-v1" | "custom-v2" | "custom-v3"
 export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
 	readerBudgetCalibration?: ReaderBudgetCalibration
 	readerPositionTerciles?: ReaderPositionTerciles
+	/** Only with a decoy pool: the probe counts behind judgeFalsePositiveRate. */
+	decoyProbes?: { probes: number; passes: number }
 }
 
 /** Passage dates and roles render only under custom-v2; the question date under custom-v2 and custom-v3. */
@@ -147,13 +149,22 @@ export function isAbstaining(answer: string): boolean {
 	)
 }
 
+/** A decoy source: another case's question and gold answer. */
+export type E2eQaDecoyCandidate = Pick<
+	E2eQaCase,
+	"caseId" | "question" | "goldAnswer"
+>
+
 // A KNOWN-WRONG answer for the false-positive probe: the gold answer from a case
 // with BOTH a different question and a different gold, so it should not satisfy
 // this question. Returns null when no such decoy exists (e.g. a single case or a
 // homogeneous set) — the FP metric is then reported as "not measured" (null)
 // rather than a falsely-reassuring 0 obtained from nonsense the judge trivially
 // rejects.
-function pickDecoy(cases: E2eQaCase[], index: number): string | null {
+function pickDecoy(
+	cases: readonly E2eQaDecoyCandidate[],
+	index: number,
+): string | null {
 	const mineGold = cases[index].goldAnswer.trim().toLowerCase()
 	const mineQuestion = cases[index].question.trim().toLowerCase()
 	for (let offset = 1; offset < cases.length; offset++) {
@@ -182,6 +193,12 @@ export async function runE2eQa(params: {
 	/** Absent runs custom-v1. */
 	protocol?: E2eQaProtocol
 	judgeVersion?: string
+	/**
+	 * Decoys come from this pool instead of `cases`, so judging one question
+	 * at a time probes the decoy a whole-run batch would. Every case must be
+	 * in it.
+	 */
+	decoyPool?: readonly E2eQaDecoyCandidate[]
 	onProviderCall?: (
 		operation: E2eQaProviderOperation,
 		outcome: ProviderCallOutcome,
@@ -190,6 +207,17 @@ export async function runE2eQa(params: {
 	) => void
 }): Promise<BenchmarkE2eQaEnvelope> {
 	const { provider, model, cases } = params
+	const decoyPool = params.decoyPool ?? cases
+	const decoyIndex = (testCase: E2eQaCase, index: number) =>
+		params.decoyPool
+			? params.decoyPool.findIndex((entry) => entry.caseId === testCase.caseId)
+			: index
+	const outsidePool = cases.find(
+		(testCase, index) => decoyIndex(testCase, index) < 0,
+	)
+	if (outsidePool) {
+		throw new Error(`case ${outsidePool.caseId} is not in the decoy pool`)
+	}
 	const answerModel = params.answerModel ?? model
 	const judgeModel = params.judgeModel ?? model
 	const dated = params.protocol === "custom-v2"
@@ -345,7 +373,7 @@ export async function runE2eQa(params: {
 		// Calibration probe: a genuinely-wrong decoy should be judged incorrect.
 		// Only run it when a viable decoy exists, so the FP rate reflects real
 		// probes rather than trivially-rejected nonsense.
-		const decoy = pickDecoy(cases, i)
+		const decoy = pickDecoy(decoyPool, decoyIndex(testCase, i))
 		if (decoy !== null && !caseError) {
 			decoyJudgeAttempts += 1
 			const decoyVerdict = await judgeAnswer({
@@ -405,6 +433,9 @@ export async function runE2eQa(params: {
 			decoyJudge: decoyJudgeAttempts,
 		},
 		caseResults,
+		...(params.decoyPool
+			? { decoyProbes: { probes: decoyProbes, passes: decoyPasses } }
+			: {}),
 		...(budgeted
 			? {
 					readerBudgetCalibration: readerBudgetCalibration(

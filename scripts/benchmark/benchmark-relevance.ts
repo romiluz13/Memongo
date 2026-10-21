@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { Db } from "mongodb"
+import type {
+	BenchmarkArmResult,
+	PairedArmsRunReport,
+} from "./benchmark-arms-run.js"
 import { relevanceRegressionsCollection } from "../../packages/memory-engine/src/mongodb-schema.js"
 import type {
 	BenchmarkLatencyDistribution,
@@ -71,6 +75,9 @@ export type RelevanceBenchmarkResult = {
 	missLedger?: BenchmarkMissLedgerEntry[]
 	caseDiagnostics?: BenchmarkCaseDiagnosticEntry[]
 	scenarioCleanup?: BenchmarkScenarioCleanupReport
+	/** Paired arms only: every arm's results; the run's own are the baseline's. */
+	arms?: BenchmarkArmResult[]
+	pairedArms?: PairedArmsRunReport
 }
 
 export type BenchmarkRegression = {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
 	E2E_QA_JUDGE_VERSION,
+	type E2eQaEnvelope,
 	generateAnswer,
 	judgeAnswer,
 	runE2eQa,
@@ -362,6 +363,44 @@ describe("runE2eQa", () => {
 		// Vacuous probe must not read as a perfectly-calibrated judge.
 		expect(envelope.judgeFalsePositiveRate).toBeNull()
 		expect(envelope.accuracy).toBe(1)
+		expect(envelope).not.toHaveProperty("decoyProbes")
+	})
+
+	it("draws a single case's decoy from the pool and reports the probe counts", async () => {
+		const judged: string[] = []
+		const provider = scriptedProvider((sys, user) => {
+			if (sys.includes("answer the QUESTION")) {
+				return JSON.stringify({ answer: "Berlin" })
+			}
+			const candidate = user.match(/CANDIDATE ANSWER:\s*(.*)/)?.[1] ?? ""
+			judged.push(candidate)
+			return JSON.stringify({ correct: candidate === "Berlin", rationale: "x" })
+		})
+		const one = {
+			caseId: "1",
+			question: "Where does the user live?",
+			goldAnswer: "Berlin",
+			contextPassages: ["Berlin"],
+		}
+		const envelope = await runE2eQa({
+			provider,
+			model: "m",
+			cases: [one],
+			decoyPool: [
+				{ caseId: "0", question: "Q0", goldAnswer: "Oslo" },
+				one,
+				{ caseId: "2", question: "Q2", goldAnswer: "MongoDB" },
+			],
+		})
+		expect(judged).toEqual(["Berlin", "MongoDB"])
+		expect((envelope as E2eQaEnvelope).decoyProbes).toEqual({
+			probes: 1,
+			passes: 0,
+		})
+		expect(envelope.judgeFalsePositiveRate).toBe(0)
+		await expect(
+			runE2eQa({ provider, model: "m", cases: [one], decoyPool: [] }),
+		).rejects.toThrow("case 1 is not in the decoy pool")
 	})
 
 	it("grades an abstention case by refusal, not fact-match", async () => {

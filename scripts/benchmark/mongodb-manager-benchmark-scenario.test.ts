@@ -1114,6 +1114,9 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 			).toMatchObject({
 				includeRoundPartner: true,
 			})
+			expect(
+				(search.mock.calls[0] as unknown[] | undefined)?.[1],
+			).not.toHaveProperty("sessionTurnRecall")
 			const answerUsers = chat.mock.calls
 				.map(([call]) => call.messages.find((m) => m.role === "user")?.content)
 				.filter((user) => user !== undefined && !user.includes("GOLD ANSWER:"))
@@ -1213,6 +1216,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 				})
 				const options = (search.mock.calls[0] as unknown[] | undefined)?.[1]
 				expect(options).not.toHaveProperty("includeRoundPartner")
+				expect(options).not.toHaveProperty("sessionTurnRecall")
 			} finally {
 				vi.unstubAllEnvs()
 			}

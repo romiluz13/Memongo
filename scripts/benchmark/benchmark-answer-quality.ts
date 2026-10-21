@@ -24,6 +24,7 @@ import {
 } from "./benchmark-answer-provider.js"
 import type { Pass0ContextDiagnostics } from "./benchmark-context-diagnostics.js"
 import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
+import type { EnrichmentProvider } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import type { ReaderUnit } from "./reader-budget.js"
 import type { E2eQaCase, E2eQaProtocol } from "../mongodb-e2e-qa.js"
 import { runE2eQa } from "../mongodb-e2e-qa.js"
@@ -197,6 +198,86 @@ export function buildJudgedAnswerCases(
 	return { cases, excludedNoGold }
 }
 
+/** The answerer and its distinct judge, resolved from env. */
+export type JudgedAnswerSetup = {
+	provider: EnrichmentProvider
+	model: string
+	judgeModel: string
+}
+
+/**
+ * The answer provider, answer model and distinct judge model, or the reason
+ * judged answers cannot be measured. The contract requires a judge model
+ * DISTINCT from the answer model on the same provider: a model grading its
+ * own answers is self-judging. Pure env read; no provider call.
+ */
+export function resolveJudgedAnswerSetup(
+	env: Record<string, string | undefined>,
+): JudgedAnswerSetup | { reason: string } {
+	let provider: EnrichmentProvider | null = null
+	try {
+		provider = resolveBenchmarkAnswerProvider(env)
+	} catch (error) {
+		return {
+			reason: `benchmark answer provider misconfigured: ${error instanceof Error ? error.message : String(error)}`,
+		}
+	}
+	if (!provider) {
+		return {
+			reason:
+				"no benchmark answer provider configured (set MEMONGO_BENCHMARK_ANSWER_API_KEY, MEMONGO_BENCHMARK_ANSWER_BASE_URL, MEMONGO_BENCHMARK_ANSWER_MODEL, or the MEMONGO_ENRICHMENT_* fallback): judged answer accuracy not measured",
+		}
+	}
+	const model = benchmarkAnswerModelName(env)
+	if (!model) {
+		return {
+			reason:
+				"MEMONGO_BENCHMARK_ANSWER_MODEL (or the MEMONGO_ENRICHMENT_MODEL fallback) is not set, so the answer model is unknown",
+		}
+	}
+	const judgeModel = env.MEMONGO_BENCHMARK_JUDGE_MODEL?.trim() ?? ""
+	if (!judgeModel) {
+		return {
+			reason:
+				"MEMONGO_BENCHMARK_JUDGE_MODEL is not set: a judge model distinct from the answer model is required for the answer-accuracy contract, so judged answer accuracy was not measured",
+		}
+	}
+	if (judgeModel === model) {
+		return {
+			reason:
+				"MEMONGO_BENCHMARK_JUDGE_MODEL must differ from the benchmark answer model (MEMONGO_BENCHMARK_ANSWER_MODEL or the MEMONGO_ENRICHMENT_MODEL fallback): a judge cannot grade its own answers, so judged answer accuracy was not measured",
+		}
+	}
+	return { provider, model, judgeModel }
+}
+
+/**
+ * Per-role attribution: answer-generation bills the answer model;
+ * answer-judge/decoy-judge bill the judge model. Usage reported by the
+ * transport is forwarded unchanged, and a missing usage stays missing (never
+ * zeroed). The fixed call outcome feeds the per-operation status counters.
+ */
+export function judgedAnswerCallObserver(
+	setup: JudgedAnswerSetup,
+	accounting: BenchmarkRunAccounting,
+): NonNullable<Parameters<typeof runE2eQa>[0]["onProviderCall"]> {
+	return (operation, outcome, usage, call) => {
+		const metadata = {
+			provider: setup.provider.name,
+			model: operation === "answer-generation" ? setup.model : setup.judgeModel,
+			...(usage ?? {}),
+			...(call ?? {}),
+		}
+		if (outcome === "attempted") {
+			accounting.recordAttempt(operation, metadata)
+		} else if (outcome === "succeeded") {
+			accounting.recordSuccess(operation, metadata)
+		} else {
+			accounting.recordFailure(operation, metadata)
+		}
+	}
+}
+
 /**
  * Run judged answers for a benchmark scenario pass. Returns undefined for
  * datasets without an answer-accuracy contract (scope: LongMemEval), and an
@@ -240,84 +321,27 @@ export async function runBenchmarkJudgedAnswers(params: {
 			eligibleCases: 0,
 		})
 	}
-	let provider = null
-	try {
-		provider = resolveBenchmarkAnswerProvider(process.env)
-	} catch (error) {
+	const setup = resolveJudgedAnswerSetup(process.env)
+	if ("reason" in setup) {
 		return buildUnavailableE2eQaEnvelope({
-			reason: `benchmark answer provider misconfigured: ${error instanceof Error ? error.message : String(error)}`,
-			eligibleCases: cases.length,
-		})
-	}
-	if (!provider) {
-		return buildUnavailableE2eQaEnvelope({
-			reason:
-				"no benchmark answer provider configured (set MEMONGO_BENCHMARK_ANSWER_API_KEY, MEMONGO_BENCHMARK_ANSWER_BASE_URL, MEMONGO_BENCHMARK_ANSWER_MODEL, or the MEMONGO_ENRICHMENT_* fallback): judged answer accuracy not measured",
-			eligibleCases: cases.length,
-		})
-	}
-	const model = benchmarkAnswerModelName(process.env)
-	if (!model) {
-		return buildUnavailableE2eQaEnvelope({
-			reason:
-				"MEMONGO_BENCHMARK_ANSWER_MODEL (or the MEMONGO_ENRICHMENT_MODEL fallback) is not set, so the answer model is unknown",
-			eligibleCases: cases.length,
-		})
-	}
-	// The answer-accuracy contract requires a judge model DISTINCT from the
-	// answer model on the same provider: a model grading its own answers is
-	// self-judging. Refuse before any QA call so no tokens are billed for a
-	// run that cannot satisfy the contract.
-	const judgeModel = process.env.MEMONGO_BENCHMARK_JUDGE_MODEL?.trim() ?? ""
-	if (!judgeModel) {
-		return buildUnavailableE2eQaEnvelope({
-			reason:
-				"MEMONGO_BENCHMARK_JUDGE_MODEL is not set: a judge model distinct from the answer model is required for the answer-accuracy contract, so judged answer accuracy was not measured",
-			eligibleCases: cases.length,
-		})
-	}
-	if (judgeModel === model) {
-		return buildUnavailableE2eQaEnvelope({
-			reason:
-				"MEMONGO_BENCHMARK_JUDGE_MODEL must differ from the benchmark answer model (MEMONGO_BENCHMARK_ANSWER_MODEL or the MEMONGO_ENRICHMENT_MODEL fallback): a judge cannot grade its own answers, so judged answer accuracy was not measured",
+			reason: setup.reason,
 			eligibleCases: cases.length,
 		})
 	}
 	log.info("benchmark judged answers: generating and judging", {
 		cases: cases.length,
-		model,
-		judgeModel,
+		model: setup.model,
+		judgeModel: setup.judgeModel,
 	})
 	const envelope = await runE2eQa({
-		provider,
-		model,
-		answerModel: model,
-		judgeModel,
+		provider: setup.provider,
+		model: setup.model,
+		answerModel: setup.model,
+		judgeModel: setup.judgeModel,
 		cases,
 		...(params.protocol ? { protocol: params.protocol } : {}),
 		...(params.accounting
-			? {
-					onProviderCall: (operation, outcome, usage, call) => {
-						// Per-role attribution: answer-generation bills the answer
-						// model; answer-judge/decoy-judge bill the judge model. Usage
-						// reported by the transport is forwarded unchanged, and a
-						// missing usage stays missing (never zeroed). The fixed call
-						// outcome feeds the per-operation status counters.
-						const metadata = {
-							provider: provider?.name,
-							model: operation === "answer-generation" ? model : judgeModel,
-							...(usage ?? {}),
-							...(call ?? {}),
-						}
-						if (outcome === "attempted") {
-							params.accounting?.recordAttempt(operation, metadata)
-						} else if (outcome === "succeeded") {
-							params.accounting?.recordSuccess(operation, metadata)
-						} else {
-							params.accounting?.recordFailure(operation, metadata)
-						}
-					},
-				}
+			? { onProviderCall: judgedAnswerCallObserver(setup, params.accounting) }
 			: {}),
 	})
 	log.info("benchmark judged answers complete", {
