@@ -31,8 +31,9 @@ export function isSessionTurnRecallEnabled(): boolean {
 
 /**
  * Stage 2: seeds are the distinct sessions of the first R stage-1 results,
- * up to S, in rank order. One session-scoped fused query (namespace and
- * seeds on both inputs) keeps the top T turns per seed. Returns only the
+ * up to S, in rank order. One count and one session-scoped fused query
+ * (namespace and seeds on both inputs, each sized to every seed turn in
+ * reach) keep the top T turns of each seed among its own turns. Returns only the
  * recalled turns whose canonical id and text are not already present, with
  * their lane, seed rank and in-session rank; `insertRecalledTurns` places
  * them.
@@ -45,7 +46,6 @@ export async function recallSessionTurns(params: {
 	namespace: SessionNamespace
 	/** Stage-1 results in final order. */
 	results: MemorySearchResult[]
-	numCandidates: number
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
 	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
@@ -62,7 +62,6 @@ export async function recallSessionTurns(params: {
 			kind: "fused",
 			query: params.query,
 			asOf: params.questionDate,
-			numCandidates: params.numCandidates,
 			capabilities: params.capabilities,
 			embeddingMode: params.embeddingMode,
 			queryEmbeddingModel: params.queryEmbeddingModel,
@@ -94,30 +93,100 @@ export async function recallSessionTurns(params: {
 	return recalled
 }
 
+/** What the capped merge did with the recalled turns, and why. */
+export type SessionTurnRecallMergeSummary = {
+	recalled: number
+	inserted: number
+	/** Later stage-1 results of a session that keeps its best one, evicted from the tail for room. */
+	stageOneEvicted: number
+	/** Recalled turns dropped because no evictable stage-1 result was left. */
+	recalledDroppedForRoom: number
+	/** Recalled turns whose session's best stage-1 result lies past maxResults. */
+	recalledDroppedPastCap: number
+}
+
 /**
  * Each recalled turn goes right after the first (best) stage-1 result of its
- * session, in recall order, and takes that result's score so the final
- * order-preserving normalization keeps it in place. Stage-1 order is kept.
+ * session among the first maxResults, in recall order, and takes that
+ * result's score so the final order-preserving normalization keeps it in
+ * place. maxResults stays the hard cap. On overflow, stage-1 results leave
+ * from the tail only while their session keeps its best result, so every
+ * stage-1 session stays represented; if that is not enough, the recalled
+ * turns with the highest in-session rank go, the latest inserted first.
  */
 export function insertRecalledTurns(
 	results: MemorySearchResult[],
 	recalled: MemorySearchResult[],
-): MemorySearchResult[] {
-	const bySession = new Map<string, MemorySearchResult[]>()
-	for (const turn of recalled) {
-		const sessionId = turn.sessionId as string
-		bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), turn])
-	}
-	const merged: MemorySearchResult[] = []
-	for (const result of results) {
-		merged.push(result)
+	maxResults: number,
+): { results: MemorySearchResult[]; summary: SessionTurnRecallMergeSummary } {
+	const base = results.slice(0, maxResults)
+	const anchorIndex = new Map<string, number>()
+	base.forEach((result, index) => {
 		const sessionId = result.sessionId?.trim()
-		const turns = sessionId ? bySession.get(sessionId) : undefined
-		if (!sessionId || !turns) continue
-		merged.push(...turns.map((turn) => ({ ...turn, score: result.score })))
-		bySession.delete(sessionId)
+		if (sessionId && !anchorIndex.has(sessionId)) {
+			anchorIndex.set(sessionId, index)
+		}
+	})
+	const placed: Array<{ turn: MemorySearchResult; anchor: number }> = []
+	let recalledDroppedPastCap = 0
+	for (const turn of recalled) {
+		const anchor = anchorIndex.get(turn.sessionId as string)
+		if (anchor === undefined) {
+			recalledDroppedPastCap += 1
+		} else {
+			placed.push({ turn, anchor })
+		}
 	}
-	return merged
+	let overflow = base.length + placed.length - maxResults
+	const evicted = new Set<number>()
+	for (let index = base.length - 1; index >= 0 && overflow > 0; index -= 1) {
+		const sessionId = base[index]?.sessionId?.trim()
+		if (sessionId && anchorIndex.get(sessionId) !== index) {
+			evicted.add(index)
+			overflow -= 1
+		}
+	}
+	const inMergeOrder = placed
+		.map((entry, order) => ({ ...entry, order }))
+		.toSorted(
+			(left, right) => left.anchor - right.anchor || left.order - right.order,
+		)
+	const dropped = new Set(
+		inMergeOrder
+			.map((entry, position) => ({ ...entry, position }))
+			.toSorted(
+				(left, right) =>
+					inSessionRankOf(right.turn) - inSessionRankOf(left.turn) ||
+					right.position - left.position,
+			)
+			.slice(0, Math.max(overflow, 0))
+			.map((entry) => entry.turn),
+	)
+	const merged: MemorySearchResult[] = []
+	base.forEach((result, index) => {
+		if (evicted.has(index)) return
+		merged.push(result)
+		for (const entry of inMergeOrder) {
+			if (entry.anchor === index && !dropped.has(entry.turn)) {
+				merged.push({ ...entry.turn, score: result.score })
+			}
+		}
+	})
+	return {
+		results: merged,
+		summary: {
+			recalled: recalled.length,
+			inserted: placed.length - dropped.size,
+			stageOneEvicted: evicted.size,
+			recalledDroppedForRoom: dropped.size,
+			recalledDroppedPastCap,
+		},
+	}
+}
+
+function inSessionRankOf(result: MemorySearchResult): number {
+	const rank = result.provenance?.inSessionRank
+	return typeof rank === "number" ? rank : 0
 }
 
 function selectSeedSessions(results: MemorySearchResult[]): string[] {

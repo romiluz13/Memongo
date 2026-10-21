@@ -217,6 +217,107 @@ describe("searchV2 session turn recall", () => {
 		])
 	})
 
+	it("returns the same results, byte for byte, when the flag is unset and stage 1 overflows maxResults", async () => {
+		plan(["hybrid"])
+		vi.mocked(mongoSearch).mockResolvedValue([
+			chunk("a", "s-oak", 0.9),
+			chunk("b", "s-elm", 0.8),
+			chunk("c", "s-oak", 0.7),
+			chunk("d", "s-ash", 0.6),
+		])
+		const result = await run(
+			"what did we decide",
+			["hybrid"],
+			{},
+			{
+				maxResults: 3,
+			},
+		)
+		expect(recallSessionTurns).not.toHaveBeenCalled()
+		expect(result.metadata).not.toHaveProperty("sessionTurnRecall")
+		expect(result.results).toMatchInlineSnapshot(`
+			[
+			  {
+			    "canonicalId": "chunk:a",
+			    "endLine": 0,
+			    "path": "chunks/a",
+			    "score": 0.9,
+			    "sessionId": "s-oak",
+			    "snippet": "fictional passage a",
+			    "source": "memory",
+			    "startLine": 0,
+			  },
+			  {
+			    "canonicalId": "chunk:b",
+			    "endLine": 0,
+			    "path": "chunks/b",
+			    "score": 0.8,
+			    "sessionId": "s-elm",
+			    "snippet": "fictional passage b",
+			    "source": "memory",
+			    "startLine": 0,
+			  },
+			  {
+			    "canonicalId": "chunk:c",
+			    "endLine": 0,
+			    "path": "chunks/c",
+			    "provenance": {
+			      "heuristicRerankAdjustment": -0.10499999999999998,
+			    },
+			    "score": 0.595,
+			    "sessionId": "s-oak",
+			    "snippet": "fictional passage c",
+			    "source": "memory",
+			    "startLine": 0,
+			  },
+			]
+		`)
+	})
+
+	it("keeps every stage-1 session under maxResults and records what the merge dropped", async () => {
+		vi.stubEnv("MEMONGO_SESSION_TURN_RECALL", "enabled")
+		plan(["hybrid"])
+		vi.mocked(mongoSearch).mockResolvedValue([
+			chunk("a", "s-oak", 0.9),
+			chunk("b", "s-elm", 0.8),
+			chunk("c", "s-oak", 0.7),
+			chunk("d", "s-ash", 0.6),
+		])
+		vi.mocked(recallSessionTurns).mockResolvedValue([
+			{
+				...chunk("turn-1", "s-oak", 0.2),
+				canonicalId: "event:turn-1",
+				provenance: { lane: "session-turn-recall", inSessionRank: 1 },
+			},
+			{
+				...chunk("turn-2", "s-oak", 0.1),
+				canonicalId: "event:turn-2",
+				provenance: { lane: "session-turn-recall", inSessionRank: 2 },
+			},
+		])
+		const result = await run(
+			"what did we decide",
+			["hybrid"],
+			{},
+			{
+				maxResults: 4,
+			},
+		)
+		expect(result.results.map((r) => r.canonicalId)).toEqual([
+			"chunk:a",
+			"event:turn-1",
+			"chunk:b",
+			"chunk:d",
+		])
+		expect(result.metadata.sessionTurnRecall).toEqual({
+			recalled: 2,
+			inserted: 1,
+			stageOneEvicted: 1,
+			recalledDroppedForRoom: 1,
+			recalledDroppedPastCap: 0,
+		})
+	})
+
 	it("records a failed stage 2 as a failed row and keeps the stage-1 results", async () => {
 		vi.stubEnv("MEMONGO_SESSION_TURN_RECALL", "enabled")
 		plan(["hybrid"])

@@ -85,7 +85,6 @@ async function recall(
 		questionDate,
 		namespace,
 		results,
-		numCandidates: 100,
 		capabilities,
 		embeddingMode: "automated",
 		queryEmbeddingModel: "voyage-4-large",
@@ -93,7 +92,8 @@ async function recall(
 		...overrides,
 	})
 	return {
-		merged: insertRecalledTurns(overrides.results ?? results, recalled),
+		merged: insertRecalledTurns(overrides.results ?? results, recalled, 50)
+			.results,
 		recalled,
 		rows,
 	}
@@ -156,7 +156,10 @@ describe("session turn recall", () => {
 	})
 
 	it("sends the namespace and the seed sessions on both inputs", async () => {
-		const { db, pipelines } = fakeEventsDb([])
+		const { db, pipelines } = fakeEventsDb([
+			event("o-t1", "s-oak", "potting soil"),
+			event("e-t1", "s-elm", "seed trays"),
+		])
 		await recall(db, [stage1("a", "s-oak", 0.9), stage1("b", "s-elm", 0.8)])
 		expect(pipelines).toHaveLength(1)
 		expect(vectorFilterOf(pipelines[0])).toEqual({
@@ -191,16 +194,22 @@ describe("session turn recall", () => {
 	})
 
 	it("seeds one session from one result", async () => {
-		const { db, pipelines } = fakeEventsDb([])
+		const { db, pipelines } = fakeEventsDb([
+			event("o-t1", "s-oak", "potting soil"),
+		])
 		await recall(db, [stage1("a", "s-oak", 0.9), stage1("b", "s-oak", 0.8)])
 		expect(vectorFilterOf(pipelines[0]).sessionId).toEqual({ $in: ["s-oak"] })
 	})
 
 	it("seeds at most S sessions, in stage-1 rank order, from the first R results", async () => {
-		const { db, pipelines } = fakeEventsDb([])
 		const sessions = Array.from(
 			{ length: SESSION_TURN_RECALL_SEED_SESSIONS + 1 },
 			(_, index) => `s-${index}`,
+		)
+		const { db, pipelines } = fakeEventsDb(
+			sessions.map((sessionId, index) =>
+				event(`t${index}`, sessionId, "potting soil"),
+			),
 		)
 		const results = [
 			...sessions.map((sessionId, index) =>
@@ -218,7 +227,10 @@ describe("session turn recall", () => {
 	})
 
 	it("ignores sessions first named past the first R results", async () => {
-		const { db, pipelines } = fakeEventsDb([])
+		const { db, pipelines } = fakeEventsDb([
+			event("o-t1", "s-oak", "potting soil"),
+			event("l-t1", "s-late", "potting soil"),
+		])
 		const results = [
 			stage1("r0", "s-oak", 1),
 			...Array.from({ length: 19 }, (_, index) =>

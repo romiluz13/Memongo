@@ -6,7 +6,8 @@ import type { Db, Document } from "mongodb"
  * compound.filter and `must` text, each input's post-stage `$match` and
  * `$limit`, then RRF (k = 60). Vector similarity comes from the fixture, so a
  * turn that shares no query word can still rank. Lifecycle `$match` stages
- * (`$and` clauses) pass every fixture document.
+ * (`$and` clauses) pass every fixture document. `countDocuments` takes
+ * `{ $and: [canonicalFilter, lifecycle] }` and records each filter it gets.
  */
 
 export type FakeEvent = {
@@ -64,6 +65,7 @@ export function fakeEventsDb(
 	options: { similarity?: Record<string, number>; reverseTies?: boolean } = {},
 ) {
 	const pipelines: Document[][] = []
+	const counts: Document[] = []
 	const similarity = options.similarity ?? {}
 	const byId = (left: Document, right: Document) =>
 		String(left.eventId).localeCompare(String(right.eventId))
@@ -98,6 +100,14 @@ export function fakeEventsDb(
 
 	const db = {
 		collection: () => ({
+			countDocuments: async (filter: Document) => {
+				counts.push(filter)
+				return corpus.filter((doc) =>
+					(filter.$and as Document[]).every((clause) =>
+						matchesFilter(doc, clause),
+					),
+				).length
+			},
 			aggregate: (pipeline: Document[]) => {
 				pipelines.push(pipeline)
 				return {
@@ -132,5 +142,5 @@ export function fakeEventsDb(
 			},
 		}),
 	} as unknown as Db
-	return { db, pipelines }
+	return { db, pipelines, counts }
 }

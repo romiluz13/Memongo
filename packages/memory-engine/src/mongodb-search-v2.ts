@@ -150,6 +150,7 @@ import {
 	insertRecalledTurns,
 	isSessionTurnRecallEnabled,
 	recallSessionTurns,
+	type SessionTurnRecallMergeSummary,
 } from "./mongodb-session-turn-recall.js"
 import {
 	isConversationEvidenceQuery,
@@ -199,6 +200,8 @@ export type V2SearchMetadata = {
 	reranked?: boolean
 	queryRewritten?: boolean
 	laneControls?: ReturnType<typeof applyLaneAwareResultControls>["summary"]
+	/** C-1 stage 2: what the capped merge of recalled turns kept and dropped. */
+	sessionTurnRecall?: SessionTurnRecallMergeSummary
 	/** #66: wall-clock ms per executed lane, hybrid sub-lane, and serial backstop. */
 	latencyByPath?: Record<string, number>
 	/**
@@ -2397,7 +2400,6 @@ async function searchV2WithBudget(
 							questionDate: context.searchOptions?.questionDate,
 							namespace: { agentId, scope, scopeRef: agentScopeRef },
 							results: laneControlled.results,
-							numCandidates,
 							capabilities,
 							embeddingMode,
 							queryEmbeddingModel,
@@ -2405,10 +2407,11 @@ async function searchV2WithBudget(
 					),
 				)
 			: []
-		const finalResults =
+		const recallMerge =
 			recalledTurns.length > 0
-				? insertRecalledTurns(laneControlled.results, recalledTurns)
-				: laneControlled.results
+				? insertRecalledTurns(laneControlled.results, recalledTurns, maxResults)
+				: undefined
+		const finalResults = recallMerge?.results ?? laneControlled.results
 		const laneControlSummary = laneControlled.summary
 
 		// Ranking boosts run after lane normalization and can compound above 1.
@@ -2461,6 +2464,7 @@ async function searchV2WithBudget(
 				reranked: false,
 				queryRewritten: wasQueryRewritten,
 				laneControls: laneControlSummary,
+				...(recallMerge ? { sessionTurnRecall: recallMerge.summary } : {}),
 				latencyByPath,
 				// #101: per-lane outcome rows and the request status computed
 				// from them (section 5): required lanes are the executed plan

@@ -6,9 +6,10 @@
  * - the temporal-coverage lane ("temporal-terms"): one `$search` over the
  *   sessions' user turns, terms as an optional `should`, each session's
  *   earliest turn (its opener) always kept;
- * - session turn recall ("fused"): one native `$rankFusion` aggregate whose
- *   `$vectorSearch` and `$search` inputs are both filtered to the sessions,
- *   any role, top turns by fused score.
+ * - session turn recall ("fused"): one count of the sessions' turns in
+ *   reach, then one native `$rankFusion` aggregate whose `$vectorSearch` and
+ *   `$search` inputs are both filtered to the sessions and sized to that
+ *   count, so each session's top turns come from all of its own turns.
  *
  * The namespace (agentId, scope, scopeRef) is mandatory on every query sent,
  * in the Search filter and in the post-stage revalidation. Neither policy
@@ -25,6 +26,7 @@ import {
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { eventsCollection } from "./mongodb-schema.js"
 import {
+	resolveUserSearchMaxTimeMs,
 	searchWorkDenialReason,
 	tryConsumeSearchWork,
 } from "./mongodb-search-budget.js"
@@ -35,6 +37,7 @@ import {
 import { scoreTemporalCoverageSessionEvent } from "./mongodb-search-temporal.js"
 import {
 	freshnessRevalidationStages,
+	MONGODB_MAX_NUM_CANDIDATES,
 	runSearchAggregateWithRetry,
 } from "./mongodb-search.js"
 import { buildEventLifecycleClause } from "./mongodb-temporal.js"
@@ -65,7 +68,6 @@ export type SessionScopedPolicy =
 			query: string
 			/** The question clock, when the search has one. */
 			asOf: Date | undefined
-			numCandidates: number
 			capabilities: DetectedCapabilities
 			embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
 			queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
@@ -77,9 +79,6 @@ export type SessionScopedTurn = {
 	/** 1-based position of the turn in its session's pick. */
 	inSessionRank: number
 }
-
-/** Fused-input candidates per turn kept, so each input can fill every session. */
-const FUSED_CANDIDATES_PER_KEPT_TURN = 3
 
 export async function selectSessionScopedTurns(params: {
 	db: Db
@@ -295,20 +294,43 @@ async function selectByFusedRank(
 		sessionIds,
 		asOf: policy.asOf,
 	})
-	const inputLimit =
-		sessionIds.length * params.perSession * FUSED_CANDIDATES_PER_KEPT_TURN
+	const lifecycleMatch = buildEventLifecycleClause({ asOf: policy.asOf })
+	// Each input returns every turn in reach, so a session's top turns never
+	// depend on how its turns rank against the other sessions' turns.
+	let turnsInReach: number
+	try {
+		turnsInReach = await eventsCollection(
+			params.db,
+			params.prefix,
+		).countDocuments(
+			{ $and: [canonicalFilter, lifecycleMatch] },
+			{ maxTimeMS: resolveUserSearchMaxTimeMs() },
+		)
+	} catch (err) {
+		throw toTypedSearchError(err, "plan")
+	}
+	if (turnsInReach === 0 || turnsInReach > MONGODB_MAX_NUM_CANDIDATES) {
+		params.onTierOutcome?.({
+			stage: "plan",
+			outcome: "not-applicable",
+			reason: turnsInReach === 0 ? "no-candidates" : "query-shape",
+		})
+		return []
+	}
+	// ENN over the prefiltered turns: the $vectorSearch docs recommend exact
+	// search below 10000 documents, and an ANN queue could still miss a turn.
 	const fused = await runEventRankFusion({
 		db: params.db,
 		prefix: params.prefix,
 		query: policy.query,
-		maxResults: inputLimit,
-		numCandidates: Math.max(policy.numCandidates, inputLimit),
+		maxResults: turnsInReach,
+		numCandidates: "exact",
 		capabilities,
 		embeddingMode: policy.embeddingMode,
 		queryEmbeddingModel: policy.queryEmbeddingModel,
 		canonicalFilter,
 		textFilters: searchFilters,
-		lifecycleMatch: buildEventLifecycleClause({ asOf: policy.asOf }),
+		lifecycleMatch,
 		consumeWork: tryConsumeSearchWork,
 		denialReason: searchWorkDenialReason,
 		onTierOutcome: params.onTierOutcome,

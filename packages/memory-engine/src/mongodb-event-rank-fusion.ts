@@ -49,7 +49,8 @@ export async function runEventRankFusion(params: {
 	prefix: string
 	query: string
 	maxResults: number
-	numCandidates: number
+	/** ANN candidates, or "exact" for ENN: then no numCandidates is sent. */
+	numCandidates: number | "exact"
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
 	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
@@ -101,7 +102,9 @@ export async function runEventRankFusion(params: {
 									query: { text: params.query },
 									model: params.queryEmbeddingModel,
 									filter: params.canonicalFilter,
-									numCandidates: params.numCandidates,
+									...(params.numCandidates === "exact"
+										? { exact: true }
+										: { numCandidates: params.numCandidates }),
 									limit: params.maxResults,
 									returnStoredSource: false,
 								},
