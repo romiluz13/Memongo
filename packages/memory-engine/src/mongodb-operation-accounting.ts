@@ -188,6 +188,41 @@ export function createOperationRunContext(params: {
 		operations.set(key, created)
 		return created
 	}
+	// Usage is recorded once, when a call ends, whether it succeeded or
+	// failed: a call can be billed and still fail downstream.
+	const recordUsage = (
+		entry: BenchmarkOperationAccounting,
+		metadata: OperationMutation | undefined,
+		count: number,
+	) => {
+		// C-017: accumulate transport-reported tokens alongside the call
+		// count so a run snapshot answers "how many tokens" not just
+		// "how many calls". Transports without a usage block leave the
+		// fields untouched (absent = not reported, distinct from 0).
+		const inputTokens = metadata?.inputTokens
+		const outputTokens = metadata?.outputTokens
+		if (
+			inputTokens !== undefined &&
+			Number.isFinite(inputTokens) &&
+			outputTokens !== undefined &&
+			Number.isFinite(outputTokens)
+		) {
+			entry.callsWithUsage = (entry.callsWithUsage ?? 0) + count
+		}
+		if (inputTokens !== undefined && Number.isFinite(inputTokens)) {
+			entry.inputTokens = (entry.inputTokens ?? 0) + inputTokens
+			tokensMeasured = true
+		}
+		if (outputTokens !== undefined && Number.isFinite(outputTokens)) {
+			entry.outputTokens = (entry.outputTokens ?? 0) + outputTokens
+			tokensMeasured = true
+		}
+		const reasoningTokens = metadata?.reasoningTokens
+		if (reasoningTokens !== undefined && Number.isFinite(reasoningTokens)) {
+			entry.reasoningTokens = (entry.reasoningTokens ?? 0) + reasoningTokens
+			tokensMeasured = true
+		}
+	}
 	return {
 		runId: params.runId,
 		configuration,
@@ -202,7 +237,7 @@ export function createOperationRunContext(params: {
 						: "provider token usage and prices are not instrumented",
 					operations: [
 						{ ...AUTOMATED_EMBEDDING_ACCOUNTING },
-						...Array.from(operations.values(), (entry) => ({ ...entry })),
+						...Array.from(operations.values(), withUsageCompleteness),
 					],
 				}
 			},
@@ -217,33 +252,38 @@ export function createOperationRunContext(params: {
 				if (!Number.isFinite(count) || count <= 0) return
 				const entry = measuredOperation(operation, metadata)
 				entry.succeeded = (entry.succeeded ?? 0) + count
-				// C-017: accumulate transport-reported tokens alongside the call
-				// count so a run snapshot answers "how many tokens" not just
-				// "how many calls". Transports without a usage block leave the
-				// fields untouched (absent = not reported, distinct from 0).
-				const inputTokens = metadata?.inputTokens
-				const outputTokens = metadata?.outputTokens
-				if (inputTokens !== undefined && Number.isFinite(inputTokens)) {
-					entry.inputTokens = (entry.inputTokens ?? 0) + inputTokens
-					tokensMeasured = true
-				}
-				if (outputTokens !== undefined && Number.isFinite(outputTokens)) {
-					entry.outputTokens = (entry.outputTokens ?? 0) + outputTokens
-					tokensMeasured = true
-				}
-				const reasoningTokens = metadata?.reasoningTokens
-				if (reasoningTokens !== undefined && Number.isFinite(reasoningTokens)) {
-					entry.reasoningTokens = (entry.reasoningTokens ?? 0) + reasoningTokens
-					tokensMeasured = true
-				}
+				recordUsage(entry, metadata, count)
 			},
 			recordFailure(operation, metadata) {
 				const count = metadata?.count ?? 1
 				if (!Number.isFinite(count) || count <= 0) return
 				const entry = measuredOperation(operation, metadata)
 				entry.failed = (entry.failed ?? 0) + count
+				recordUsage(entry, metadata, count)
 			},
 		},
+	}
+}
+
+// Every ended call without a recorded usage block counts as missing, including
+// calls restored from a checkpoint written before usage was counted.
+function withUsageCompleteness(
+	entry: BenchmarkOperationAccounting,
+): BenchmarkOperationAccounting {
+	const {
+		callsWithUsage = 0,
+		callsMissingUsage: _derived,
+		usageComplete: _alsoDerived,
+		...rest
+	} = entry
+	const ended = (rest.succeeded ?? 0) + (rest.failed ?? 0)
+	if (rest.observability !== "measured" || ended === 0) return rest
+	const callsMissingUsage = Math.max(0, ended - callsWithUsage)
+	return {
+		...rest,
+		callsWithUsage,
+		callsMissingUsage,
+		usageComplete: callsMissingUsage === 0,
 	}
 }
 

@@ -1774,6 +1774,15 @@ export type BenchmarkOperationAccounting = {
 	 * Absent when the gateway does not report reasoning spend.
 	 */
 	reasoningTokens?: number | null
+	/**
+	 * Measured calls that ended (succeeded or failed) with and without both
+	 * input and output token counts. The token sums cover only reported
+	 * usage, so `usageComplete` is false whenever any ended call lacked it.
+	 * Absent until a measured call ends.
+	 */
+	callsWithUsage?: number
+	callsMissingUsage?: number
+	usageComplete?: boolean
 }
 
 export type BenchmarkCostAccounting = {

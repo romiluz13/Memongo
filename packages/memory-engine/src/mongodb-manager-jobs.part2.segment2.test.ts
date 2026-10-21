@@ -725,6 +725,9 @@ describe("MongoDBMemoryManager background extraction", () => {
 				failed: 1,
 				provider: "mock-provider",
 				model: "derived-model",
+				callsWithUsage: 0,
+				callsMissingUsage: 1,
+				usageComplete: false,
 			})
 		} finally {
 			providerSpy.mockRestore()

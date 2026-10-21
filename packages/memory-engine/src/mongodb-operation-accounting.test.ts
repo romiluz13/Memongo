@@ -385,6 +385,112 @@ describe("operation run accounting", () => {
 		expect(enrichment).not.toHaveProperty("outputTokens")
 	})
 
+	describe("usage completeness", () => {
+		const gateway = { provider: "gateway", model: "glm-5.3" }
+		const entryOf = (context: ReturnType<typeof createOperationRunContext>) =>
+			context.accounting
+				.snapshot()
+				.operations.find(
+					(entry) =>
+						entry.operation === "answer-generation" &&
+						entry.provider === "gateway",
+				)
+
+		it("marks the usage sum complete when every call reported usage", () => {
+			const context = createOperationRunContext({
+				runId: "run-usage-present",
+				configuration: RUN_CONFIGURATION,
+			})
+			for (const tokens of [10, 20]) {
+				context.accounting.recordAttempt("answer-generation", gateway)
+				context.accounting.recordSuccess("answer-generation", {
+					...gateway,
+					inputTokens: tokens,
+					outputTokens: 1,
+				})
+			}
+			expect(entryOf(context)).toMatchObject({
+				succeeded: 2,
+				inputTokens: 30,
+				outputTokens: 2,
+				callsWithUsage: 2,
+				callsMissingUsage: 0,
+				usageComplete: true,
+			})
+		})
+
+		it("counts every call without usage, failures included, and leaves token sums absent", () => {
+			const context = createOperationRunContext({
+				runId: "run-usage-absent",
+				configuration: RUN_CONFIGURATION,
+			})
+			context.accounting.recordSuccess("answer-generation", gateway)
+			context.accounting.recordFailure("answer-generation", gateway)
+			const entry = entryOf(context)
+			expect(entry).toMatchObject({
+				succeeded: 1,
+				failed: 1,
+				callsWithUsage: 0,
+				callsMissingUsage: 2,
+				usageComplete: false,
+			})
+			expect(entry).not.toHaveProperty("inputTokens")
+			const notRun = context.accounting
+				.snapshot()
+				.operations.find((e) => e.operation === "rerank")
+			expect(notRun).not.toHaveProperty("usageComplete")
+			expect(notRun).not.toHaveProperty("callsMissingUsage")
+		})
+
+		it("records usage once per call on success or failure, marks a mixed sum incomplete, and keeps the counters across resume", () => {
+			const context = createOperationRunContext({
+				runId: "run-usage-mixed",
+				configuration: RUN_CONFIGURATION,
+			})
+			context.accounting.recordSuccess("answer-generation", {
+				...gateway,
+				inputTokens: 100,
+				outputTokens: 10,
+			})
+			context.accounting.recordSuccess("answer-generation", gateway)
+			context.accounting.recordFailure("answer-generation", {
+				...gateway,
+				inputTokens: 7,
+				outputTokens: 512,
+			})
+			context.accounting.recordSuccess("answer-generation", {
+				...gateway,
+				inputTokens: Number.NaN,
+				outputTokens: 3,
+			})
+			expect(entryOf(context)).toMatchObject({
+				succeeded: 3,
+				failed: 1,
+				inputTokens: 107,
+				outputTokens: 525,
+				callsWithUsage: 2,
+				callsMissingUsage: 2,
+				usageComplete: false,
+			})
+
+			const resumed = createOperationRunContext({
+				runId: "run-usage-mixed",
+				configuration: RUN_CONFIGURATION,
+				initialAccounting: context.accounting.snapshot(),
+			})
+			resumed.accounting.recordSuccess("answer-generation", {
+				...gateway,
+				inputTokens: 1,
+				outputTokens: 1,
+			})
+			expect(entryOf(resumed)).toMatchObject({
+				callsWithUsage: 3,
+				callsMissingUsage: 2,
+				usageComplete: false,
+			})
+		})
+	})
+
 	it.each([
 		Number.NaN,
 		Number.POSITIVE_INFINITY,

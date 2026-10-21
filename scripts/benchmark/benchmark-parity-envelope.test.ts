@@ -498,6 +498,9 @@ describe("createBenchmarkRunContext", () => {
 					failed: 1,
 					provider: "voyage",
 					model: "rerank-2.5",
+					callsWithUsage: 0,
+					callsMissingUsage: 1,
+					usageComplete: false,
 				},
 				{
 					operation: "answer-generation",
@@ -518,6 +521,9 @@ describe("createBenchmarkRunContext", () => {
 					failed: 0,
 					provider: "openai-compatible",
 					model: "judge-model",
+					callsWithUsage: 0,
+					callsMissingUsage: 1,
+					usageComplete: false,
 				},
 				{
 					operation: "rerank",
@@ -603,6 +609,9 @@ describe("instrumentBenchmarkProvider", () => {
 			failed: 1,
 			provider: "mock-provider",
 			model: "derived-model",
+			callsWithUsage: 0,
+			callsMissingUsage: 1,
+			usageComplete: false,
 		})
 	})
 })
