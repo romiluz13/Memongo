@@ -17,8 +17,17 @@
 
 import type { Db, Document } from "mongodb"
 import type { MemoryScope } from "@memongo/lib"
-import { EVENT_RESULT_PROJECTION } from "./mongodb-event-rank-fusion.js"
+import type { ResolvedMongoDBConfig } from "./backend-config.js"
+import {
+	EVENT_RESULT_PROJECTION,
+	runEventRankFusion,
+} from "./mongodb-event-rank-fusion.js"
+import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { eventsCollection } from "./mongodb-schema.js"
+import {
+	searchWorkDenialReason,
+	tryConsumeSearchWork,
+} from "./mongodb-search-budget.js"
 import {
 	buildSearchFilterEquals,
 	mapEventSearchDocToResult,
@@ -42,12 +51,21 @@ export type SessionNamespace = {
 	scopeRef: string
 }
 
-export type SessionScopedPolicy = {
-	kind: "temporal-terms"
-	terms: string[]
-	/** Lower bound of the Search candidate limit. */
-	candidateLimit: number
-}
+export type SessionScopedPolicy =
+	| {
+			kind: "temporal-terms"
+			terms: string[]
+			/** Lower bound of the Search candidate limit. */
+			candidateLimit: number
+	  }
+	| {
+			kind: "fused"
+			query: string
+			numCandidates: number
+			capabilities: DetectedCapabilities
+			embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
+			queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
+	  }
 
 export type SessionScopedTurn = {
 	result: MemorySearchResult
@@ -55,6 +73,9 @@ export type SessionScopedTurn = {
 	/** 1-based position of the turn in its session's pick. */
 	inSessionRank: number
 }
+
+/** Fused-input candidates per turn kept, so each input can fill every session. */
+const FUSED_CANDIDATES_PER_KEPT_TURN = 3
 
 export async function selectSessionScopedTurns(params: {
 	db: Db
@@ -77,7 +98,9 @@ export async function selectSessionScopedTurns(params: {
 		return []
 	}
 	const scoped = { ...params, sessionIds }
-	return selectByTemporalTerms(scoped, params.policy)
+	return params.policy.kind === "temporal-terms"
+		? selectByTemporalTerms(scoped, params.policy)
+		: selectByFusedRank(scoped, params.policy)
 }
 
 type ScopedParams = Parameters<typeof selectSessionScopedTurns>[0]
@@ -237,6 +260,69 @@ async function selectByTemporalTerms(
 			inSessionRank += 1
 			selected.push({ result, sessionId, inSessionRank })
 		}
+	}
+	return selected
+}
+
+async function selectByFusedRank(
+	params: ScopedParams,
+	policy: Extract<SessionScopedPolicy, { kind: "fused" }>,
+): Promise<SessionScopedTurn[]> {
+	const { sessionIds } = params
+	const { capabilities } = policy
+	// One aggregate, one outcome (M2 decision 5): a missing input is named
+	// and the selector runs nothing; neither input runs alone.
+	const absent =
+		!capabilities.vectorSearch || policy.embeddingMode !== "automated"
+			? "turn-vector"
+			: !capabilities.textSearch
+				? "turn-text"
+				: !capabilities.rankFusion
+					? "rank-fusion"
+					: null
+	if (absent) {
+		params.onTierOutcome?.({
+			stage: absent,
+			outcome: "not-applicable",
+			reason: "capability-absent",
+		})
+		return []
+	}
+	const { searchFilters, canonicalFilter } = sessionScopedEventFilters({
+		namespace: params.namespace,
+		sessionIds,
+		asOf: params.asOf,
+	})
+	const inputLimit =
+		sessionIds.length * params.perSession * FUSED_CANDIDATES_PER_KEPT_TURN
+	const fused = await runEventRankFusion({
+		db: params.db,
+		prefix: params.prefix,
+		query: policy.query,
+		maxResults: inputLimit,
+		numCandidates: Math.max(policy.numCandidates, inputLimit),
+		capabilities,
+		embeddingMode: policy.embeddingMode,
+		queryEmbeddingModel: policy.queryEmbeddingModel,
+		canonicalFilter,
+		textFilters: searchFilters,
+		lifecycleMatch: buildEventLifecycleClause({ asOf: params.asOf }),
+		consumeWork: tryConsumeSearchWork,
+		denialReason: searchWorkDenialReason,
+		onTierOutcome: params.onTierOutcome,
+	})
+	const bySession = groupBySession(sessionIds, fused, (r) => r.sessionId)
+	const selected: SessionScopedTurn[] = []
+	for (const sessionId of sessionIds) {
+		const ranked = (bySession.get(sessionId) ?? []).toSorted(
+			(left, right) =>
+				right.score - left.score ||
+				timeOf(left.timestamp) - timeOf(right.timestamp) ||
+				String(left.canonicalId).localeCompare(String(right.canonicalId)),
+		)
+		ranked.slice(0, params.perSession).forEach((result, index) => {
+			selected.push({ result, sessionId, inSessionRank: index + 1 })
+		})
 	}
 	return selected
 }
