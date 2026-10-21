@@ -5,6 +5,8 @@ import type {
 } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import type {
 	BenchmarkAnswerAttempt,
+	BenchmarkAnswerFinishReason,
+	BenchmarkProviderCallStatus,
 	BenchmarkCaseContextDiagnostics,
 	BenchmarkE2eQaEnvelope,
 	MemoryResultRole,
@@ -19,8 +21,9 @@ import {
 	renderDatedQuestionLine,
 } from "./benchmark/dated-answer-context.js"
 import {
+	type ClassifiedVerdict,
 	classifyAnswerResponse,
-	stripFences,
+	classifyJudgeResponse,
 	TRANSPORT_FAILURE_ATTEMPT,
 } from "./mongodb-e2e-qa-answer-attempt.js"
 
@@ -69,18 +72,34 @@ type E2eQaProviderOperation =
 	| "answer-judge"
 	| "decoy-judge"
 type ProviderCallOutcome = "attempted" | "succeeded" | "failed"
+/** Fixed outcome of an ended call; never response or error text. */
+export type E2eQaCallResult = {
+	status: BenchmarkProviderCallStatus
+	finishReason?: BenchmarkAnswerFinishReason
+}
+type ProviderCallObserver = (
+	outcome: ProviderCallOutcome,
+	usage?: EnrichmentChatUsage,
+	call?: E2eQaCallResult,
+) => void
+
+function callResult(
+	status: BenchmarkProviderCallStatus,
+	finishReason: BenchmarkAnswerFinishReason | undefined,
+): E2eQaCallResult {
+	return finishReason === undefined ? { status } : { status, finishReason }
+}
 
 // Observer errors are swallowed on purpose: a broken observer must never
 // fail (or retry) a provider call that actually succeeded or failed.
 function recordProviderCall(
-	observer:
-		| ((outcome: ProviderCallOutcome, usage?: EnrichmentChatUsage) => void)
-		| undefined,
+	observer: ProviderCallObserver | undefined,
 	outcome: ProviderCallOutcome,
 	usage?: EnrichmentChatUsage,
+	call?: E2eQaCallResult,
 ): void {
 	try {
-		observer?.(outcome, usage)
+		observer?.(outcome, usage, call)
 	} catch (error) {
 		log.warn("E2E QA provider-call observer failed", { error })
 	}
@@ -114,10 +133,7 @@ export async function generateAnswer(params: {
 	}
 	onFailure?: (error: Error) => void
 	onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
-	onProviderCall?: (
-		outcome: ProviderCallOutcome,
-		usage?: EnrichmentChatUsage,
-	) => void
+	onProviderCall?: ProviderCallObserver
 }): Promise<string> {
 	const passages = params.contextPassages.slice(0, MAX_CONTEXT_PASSAGES)
 	const context = params.dated
@@ -153,14 +169,21 @@ export async function generateAnswer(params: {
 			maxTokens: ANSWER_MAX_TOKENS,
 		})
 	} catch {
-		recordProviderCall(params.onProviderCall, "failed")
+		recordProviderCall(params.onProviderCall, "failed", undefined, {
+			status: TRANSPORT_FAILURE_ATTEMPT.status,
+		})
 		return answerFailure(params, { ...TRANSPORT_FAILURE_ATTEMPT })
 	}
-	// The transport succeeded: record success — with any usage it reported —
-	// BEFORE classifying the body, so a malformed response neither loses billed
+	// The transport succeeded: record success with any usage it reported and
+	// the fixed classification, so a malformed response neither loses billed
 	// usage nor double-counts as a transport failure.
-	recordProviderCall(params.onProviderCall, "succeeded", response.usage)
 	const { attempt, answer } = classifyAnswerResponse(response)
+	recordProviderCall(
+		params.onProviderCall,
+		"succeeded",
+		response.usage,
+		callResult(attempt.status, attempt.finishReason),
+	)
 	if (answer === undefined) return answerFailure(params, attempt)
 	params.onAttempt?.(attempt)
 	return answer
@@ -192,10 +215,7 @@ export async function judgeAnswer(params: {
 	goldAnswer: string
 	candidateAnswer: string
 	onFailure?: (error: Error) => void
-	onProviderCall?: (
-		outcome: ProviderCallOutcome,
-		usage?: EnrichmentChatUsage,
-	) => void
+	onProviderCall?: ProviderCallObserver
 }): Promise<{ correct: boolean; rationale: string }> {
 	const user = [
 		`QUESTION: ${params.question}`,
@@ -216,38 +236,40 @@ export async function judgeAnswer(params: {
 			responseFormat: { type: "json_object" },
 			maxTokens: JUDGE_MAX_TOKENS,
 		})
-	} catch (err) {
-		recordProviderCall(params.onProviderCall, "failed")
-		const error = err instanceof Error ? err : new Error(String(err))
-		params.onFailure?.(error)
-		log.warn("answer judging failed", {
-			error: error.message,
+	} catch {
+		recordProviderCall(params.onProviderCall, "failed", undefined, {
+			status: "transport-failure",
 		})
-		return { correct: false, rationale: "judge-error" }
+		return judgeFailure(params, { status: "transport-failure" })
 	}
-	// Transport success (with reported usage) is recorded before parsing, so an
-	// unparseable verdict keeps billed usage and is not re-counted as a
+	// Transport success is recorded with its usage and fixed classification,
+	// so an unparseable verdict keeps billed usage and is not re-counted as a
 	// transport failure; it degrades to INCORRECT below, never a silent pass.
-	recordProviderCall(params.onProviderCall, "succeeded", response.usage)
-	try {
-		const parsed = JSON.parse(stripFences(response.content)) as {
-			correct?: unknown
-			rationale?: unknown
-		}
-		return {
-			// An unparseable/ambiguous verdict is never a silent pass.
-			correct: parsed.correct === true,
-			rationale:
-				typeof parsed.rationale === "string" ? parsed.rationale.trim() : "",
-		}
-	} catch (err) {
-		const error = err instanceof Error ? err : new Error(String(err))
-		params.onFailure?.(error)
-		log.warn("answer judging returned unparseable output", {
-			error: error.message,
-		})
-		return { correct: false, rationale: "judge-error" }
-	}
+	const judged = classifyJudgeResponse(response)
+	recordProviderCall(
+		params.onProviderCall,
+		"succeeded",
+		response.usage,
+		callResult(judged.status, judged.evidence?.finishReason),
+	)
+	return judged.verdict ?? judgeFailure(params, judged)
+}
+
+// Only the fixed status is reported: provider error text and parser messages
+// can quote the response body.
+function judgeFailure(
+	params: { onFailure?: (error: Error) => void },
+	judged: ClassifiedVerdict,
+): { correct: boolean; rationale: string } {
+	params.onFailure?.(new Error(judged.status))
+	log.warn("answer judging failed", {
+		status: judged.status,
+		...(judged.evidence?.shape ? { shape: judged.evidence.shape } : {}),
+		...(judged.evidence?.finishReason
+			? { finishReason: judged.evidence.finishReason }
+			: {}),
+	})
+	return { correct: false, rationale: "judge-error" }
 }
 
 export type E2eQaCase = {
@@ -335,6 +357,7 @@ export async function runE2eQa(params: {
 		operation: E2eQaProviderOperation,
 		outcome: ProviderCallOutcome,
 		usage?: EnrichmentChatUsage,
+		call?: E2eQaCallResult,
 	) => void
 }): Promise<BenchmarkE2eQaEnvelope> {
 	const { provider, model, cases } = params
@@ -401,8 +424,8 @@ export async function runE2eQa(params: {
 						},
 					}
 				: {}),
-			onProviderCall: (outcome, usage) =>
-				params.onProviderCall?.("answer-generation", outcome, usage),
+			onProviderCall: (outcome, usage, call) =>
+				params.onProviderCall?.("answer-generation", outcome, usage, call),
 			onAttempt: (attempt) => {
 				answerAttempt = attempt
 			},
@@ -443,8 +466,8 @@ export async function runE2eQa(params: {
 				question: testCase.question,
 				goldAnswer: testCase.goldAnswer,
 				candidateAnswer: candidate,
-				onProviderCall: (outcome, usage) =>
-					params.onProviderCall?.("answer-judge", outcome, usage),
+				onProviderCall: (outcome, usage, call) =>
+					params.onProviderCall?.("answer-judge", outcome, usage, call),
 				onFailure: (error) => {
 					caseError = `answer-judge: ${error.message}`
 				},
@@ -465,8 +488,8 @@ export async function runE2eQa(params: {
 				question: testCase.question,
 				goldAnswer: testCase.goldAnswer,
 				candidateAnswer: decoy,
-				onProviderCall: (outcome, usage) =>
-					params.onProviderCall?.("decoy-judge", outcome, usage),
+				onProviderCall: (outcome, usage, call) =>
+					params.onProviderCall?.("decoy-judge", outcome, usage, call),
 				onFailure: (error) => {
 					caseError = `decoy-judge: ${error.message}`
 				},

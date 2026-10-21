@@ -293,15 +293,17 @@ export async function runBenchmarkJudgedAnswers(params: {
 		...(params.protocol ? { protocol: params.protocol } : {}),
 		...(params.accounting
 			? {
-					onProviderCall: (operation, outcome, usage) => {
+					onProviderCall: (operation, outcome, usage, call) => {
 						// Per-role attribution: answer-generation bills the answer
 						// model; answer-judge/decoy-judge bill the judge model. Usage
 						// reported by the transport is forwarded unchanged, and a
-						// missing usage stays missing (never zeroed).
+						// missing usage stays missing (never zeroed). The fixed call
+						// outcome feeds the per-operation status counters.
 						const metadata = {
 							provider: provider?.name,
 							model: operation === "answer-generation" ? model : judgeModel,
 							...(usage ?? {}),
+							...(call ?? {}),
 						}
 						if (outcome === "attempted") {
 							params.accounting?.recordAttempt(operation, metadata)

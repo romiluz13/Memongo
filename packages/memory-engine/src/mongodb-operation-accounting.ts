@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import type {
+	BenchmarkAnswerFinishReason,
 	BenchmarkCostAccounting,
 	BenchmarkOperationAccounting,
 	BenchmarkOperationName,
+	BenchmarkProviderCallStatus,
 } from "./types.js"
 
 /**
@@ -44,6 +46,10 @@ export type OperationMutation = {
 	 * when the gateway does not report reasoning spend.
 	 */
 	reasoningTokens?: number
+	/** Fixed outcome of the ended calls, counted per status. */
+	status?: BenchmarkProviderCallStatus
+	/** Allowlisted finish reason of the ended calls, counted per value. */
+	finishReason?: BenchmarkAnswerFinishReason
 }
 
 export type OperationAccountingEffect = {
@@ -151,7 +157,7 @@ export function createOperationRunContext(params: {
 		if (entry.provider || entry.model) {
 			operations.delete(operationKey(entry.operation))
 		}
-		operations.set(key, { ...entry })
+		operations.set(key, copyOperationEntry(entry))
 	}
 	const measuredOperation = (
 		operation: Exclude<BenchmarkOperationName, "embedding">,
@@ -195,6 +201,17 @@ export function createOperationRunContext(params: {
 		metadata: OperationMutation | undefined,
 		count: number,
 	) => {
+		if (metadata?.status !== undefined) {
+			const counts = entry.statusCounts ?? {}
+			counts[metadata.status] = (counts[metadata.status] ?? 0) + count
+			entry.statusCounts = counts
+		}
+		if (metadata?.finishReason !== undefined) {
+			const counts = entry.finishReasonCounts ?? {}
+			counts[metadata.finishReason] =
+				(counts[metadata.finishReason] ?? 0) + count
+			entry.finishReasonCounts = counts
+		}
 		// C-017: accumulate transport-reported tokens alongside the call
 		// count so a run snapshot answers "how many tokens" not just
 		// "how many calls". Transports without a usage block leave the
@@ -237,7 +254,9 @@ export function createOperationRunContext(params: {
 						: "provider token usage and prices are not instrumented",
 					operations: [
 						{ ...AUTOMATED_EMBEDDING_ACCOUNTING },
-						...Array.from(operations.values(), withUsageCompleteness),
+						...Array.from(operations.values(), (entry) =>
+							withUsageCompleteness(copyOperationEntry(entry)),
+						),
 					],
 				}
 			},
@@ -262,6 +281,20 @@ export function createOperationRunContext(params: {
 				recordUsage(entry, metadata, count)
 			},
 		},
+	}
+}
+
+// The counter maps are the only nested values; a snapshot or a restored
+// checkpoint must not share them with the live entry.
+function copyOperationEntry(
+	entry: BenchmarkOperationAccounting,
+): BenchmarkOperationAccounting {
+	return {
+		...entry,
+		...(entry.statusCounts ? { statusCounts: { ...entry.statusCounts } } : {}),
+		...(entry.finishReasonCounts
+			? { finishReasonCounts: { ...entry.finishReasonCounts } }
+			: {}),
 	}
 }
 

@@ -210,6 +210,19 @@ QUESTION (asked on 2031/02/14 (Fri) 09:30): Where did the heron nest?
 Return only {"answer":"..."}.
 ```
 
+In both custom protocols every answer, judge and decoy-judge call ends in one
+fixed status, decided by the first layer that fails: transport, envelope, then
+content. A token-budget stop (`length` shape, or finish reason `length` or
+`max_tokens`) whose content does not parse is `truncated`, never
+`invalid-json`. Finish reasons are lowercased and kept when allowlisted,
+Gemini-native values such as `safety`, `recitation` and `other` included; any
+other value is recorded as `unlisted`. The answer attempt also carries the
+provider envelope's `responseId` and `responseModel` when they pass a bounded
+charset check, and `droppedEnvelopeFields` names any that did not. Cost
+accounting counts ended calls per operation in `statusCounts` and
+`finishReasonCounts`. Logs and case errors carry only these fixed values, never
+response or error text.
+
 The run configuration records the raw value as
 `env.MEMONGO_BENCHMARK_QA_PROTOCOL`, so custom-v1 and custom-v2 runs have
 different configuration hashes and never resume each other's checkpoints.
