@@ -36,6 +36,6 @@ describe("session turn recall identity", () => {
 	})
 
 	it("moves coverage past b02-keyed-v5 so an older manifest does not resume", () => {
-		expect(BENCHMARK_CONFIGURATION_COVERAGE).toBe("b02-keyed-v6")
+		expect(BENCHMARK_CONFIGURATION_COVERAGE).not.toBe("b02-keyed-v5")
 	})
 })

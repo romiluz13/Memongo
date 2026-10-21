@@ -59,6 +59,10 @@ import {
 	isSessionTurnRecallEnabled,
 } from "../../packages/memory-engine/src/mongodb-session-turn-recall.js"
 import {
+	READER_BUDGET_ESTIMATED_TOKENS,
+	READER_BUDGET_TOKENIZER,
+} from "./reader-budget.js"
+import {
 	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
 	benchmarkConvergenceFilter,
 	benchmarkSearchEqualsFilters,
@@ -284,6 +288,8 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			sessionTurnRecallSeedResults: SESSION_TURN_RECALL_SEED_RESULTS,
 			sessionTurnRecallSeedSessions: SESSION_TURN_RECALL_SEED_SESSIONS,
 			sessionTurnRecallTurnsPerSession: SESSION_TURN_RECALL_TURNS_PER_SESSION,
+			readerBudgetEstimatedTokens: READER_BUDGET_ESTIMATED_TOKENS,
+			readerBudgetTokenizer: READER_BUDGET_TOKENIZER,
 		}
 		for (const name of BENCHMARK_MONGO_CLIENT_SETTING_NAMES) {
 			settings[`configuredMongoClient.${name}`] = mongoCfg[name] ?? null

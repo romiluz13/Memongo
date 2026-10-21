@@ -68,7 +68,7 @@ describe("QA protocol resume identity", () => {
 		expect(
 			hasCompleteConfigurationCoverage({
 				...v2.configuration.settings,
-				"env.MEMONGO_BENCHMARK_QA_PROTOCOL": "custom-v3",
+				"env.MEMONGO_BENCHMARK_QA_PROTOCOL": "custom-v4",
 			}),
 		).toBe(false)
 		expect(v2.configurationHash).not.toBe(v1.configurationHash)

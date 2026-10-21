@@ -12,7 +12,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v6"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v7"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -190,6 +190,8 @@ const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	sessionTurnRecallSeedResults: scalar,
 	sessionTurnRecallSeedSessions: scalar,
 	sessionTurnRecallTurnsPerSession: scalar,
+	readerBudgetEstimatedTokens: scalar,
+	readerBudgetTokenizer: scalar,
 	answerProviderSource: oneOf(["dedicated", "enrichment-fallback"]),
 }
 
@@ -199,6 +201,7 @@ const ENV_CONTRACTS: Partial<Record<string, Contract>> = {
 		"custom-judge",
 		"custom-v1",
 		"custom-v2",
+		"custom-v3",
 	]),
 	MEMONGO_BENCHMARK_JUDGE_AUTH_STYLE: oneOf(JUDGE_AUTH_STYLES),
 	MEMONGO_BENCHMARK_JUDGE_TOKEN_PARAM: oneOf(JUDGE_TOKEN_PARAMS),

@@ -241,13 +241,24 @@ describe("benchmarkOfficialFullRunError (pure pre-ingest gate)", () => {
 		)
 	})
 
+	it("refuses an explicit custom-v3 full500 run, naming custom-v3", () => {
+		const error = benchmarkOfficialFullRunError(
+			{ ...base, MEMONGO_BENCHMARK_QA_PROTOCOL: "custom-v3" },
+			{ checkpointDisabled: false },
+		)
+		expect(error).toBe(
+			"full500 publishable runs require MEMONGO_BENCHMARK_QA_PROTOCOL=official; " +
+				"custom-v3 judged answers are not the official protocol",
+		)
+	})
+
 	it("refuses an unknown protocol value with the resolver's message", () => {
 		const error = benchmarkOfficialFullRunError(
 			{ ...base, MEMONGO_BENCHMARK_QA_PROTOCOL: "turbo" },
 			{ checkpointDisabled: false },
 		)
 		expect(error).toContain(
-			'must be one of "custom-v1", "custom-v2", "official", "custom-judge", got "turbo"',
+			'must be one of "custom-v1", "custom-v2", "custom-v3", "official", "custom-judge", got "turbo"',
 		)
 	})
 

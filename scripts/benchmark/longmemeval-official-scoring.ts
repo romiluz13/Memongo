@@ -83,6 +83,7 @@ import type {
 export type BenchmarkQaProtocol =
 	| "custom-v1"
 	| "custom-v2"
+	| "custom-v3"
 	| "official"
 	| "custom-judge"
 
@@ -90,7 +91,8 @@ export type BenchmarkQaProtocol =
  * Resolve the QA protocol from env. Only the exact values "official" and
  * "custom-judge" opt into a durable-protocol run; undefined and "custom-v1"
  * keep the legacy harness, "custom-v2" runs the legacy harness with dated,
- * role-labeled passages, and anything else fails preflight before any paid
+ * role-labeled passages, "custom-v3" runs it with budgeted round units in
+ * official session form, and anything else fails preflight before any paid
  * work.
  */
 export function resolveBenchmarkQaProtocol(
@@ -102,13 +104,14 @@ export function resolveBenchmarkQaProtocol(
 	}
 	if (
 		value === "custom-v2" ||
+		value === "custom-v3" ||
 		value === "official" ||
 		value === "custom-judge"
 	) {
 		return value
 	}
 	throw new Error(
-		`MEMONGO_BENCHMARK_QA_PROTOCOL must be one of "custom-v1", "custom-v2", "official", "custom-judge", got ${JSON.stringify(value)}`,
+		`MEMONGO_BENCHMARK_QA_PROTOCOL must be one of "custom-v1", "custom-v2", "custom-v3", "official", "custom-judge", got ${JSON.stringify(value)}`,
 	)
 }
 
@@ -520,14 +523,18 @@ export async function prepareOfficialQa(params: {
 	// The manager dispatches here only after resolving "official" or
 	// "custom-judge" from this same env, so production never arrives with the
 	// env unset; direct callers that leave it unset get the historical
-	// official default. An explicit "custom-v1" or "custom-v2" (or unknown)
+	// official default. An explicit "custom-v1", "custom-v2" or "custom-v3" (or unknown)
 	// value is a misrouted call and fails before any paid work.
 	const protocolValue = params.env.MEMONGO_BENCHMARK_QA_PROTOCOL
 	let protocol: Extract<BenchmarkQaProtocol, "official" | "custom-judge"> =
 		"official"
 	if (protocolValue !== undefined) {
 		const resolved = resolveBenchmarkQaProtocol(params.env)
-		if (resolved === "custom-v1" || resolved === "custom-v2") {
+		if (
+			resolved === "custom-v1" ||
+			resolved === "custom-v2" ||
+			resolved === "custom-v3"
+		) {
 			throw new Error(
 				`MEMONGO_BENCHMARK_QA_PROTOCOL=${resolved} does not use the durable scoring path`,
 			)
