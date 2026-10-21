@@ -1859,6 +1859,12 @@ export type BenchmarkCostAccounting = {
 	totalCost: null
 	unavailableReason: string
 	operations: BenchmarkOperationAccounting[]
+	/**
+	 * Paired-arms runs only: the operations pool the calls of every arm named
+	 * here, so their totals cover all arms, not the baseline arm. Each arm's
+	 * own answer and judge tokens are in the paired report.
+	 */
+	pooledArms?: string[]
 }
 
 /** Diagnostics truth value: `"unknown"` propagates and is never read as false. */

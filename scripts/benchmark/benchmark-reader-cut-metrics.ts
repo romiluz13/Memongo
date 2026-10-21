@@ -56,12 +56,14 @@ function summarize(results: CaseResult[]): MemoryBenchmarkReaderCutMetrics {
  * matching `questionTypeBreakdown` row. Question types use the breakdown's
  * key (trimmed, `untyped` when blank). No case results: inputs unchanged.
  */
-export function attachReaderCutMetrics(params: {
-	e2eQa: BenchmarkE2eQaEnvelope | undefined
+export function attachReaderCutMetrics<
+	Envelope extends BenchmarkE2eQaEnvelope | undefined,
+>(params: {
+	e2eQa: Envelope
 	breakdown: MemoryBenchmarkQuestionTypeMetrics[]
 	questionTypeByCaseId: Map<string, string | undefined>
 }): {
-	e2eQa: BenchmarkE2eQaEnvelope | undefined
+	e2eQa: Envelope
 	breakdown: MemoryBenchmarkQuestionTypeMetrics[]
 } {
 	const caseResults = params.e2eQa?.caseResults ?? []

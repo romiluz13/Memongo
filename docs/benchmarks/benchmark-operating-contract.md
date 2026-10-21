@@ -396,6 +396,11 @@ only when every arm is in its checkpoint entry, and re-ingests any other.
   discordant pairs.
 - `perQuestion[]`: each case id with every arm's verdict.
 
+The run's operation accounting (`benchmarkReport.cost`) pools every arm's
+calls, so on a paired run it carries `pooledArms` with every arm's name: its
+totals cover all arms, not the baseline arm. Each arm's own answer and judge
+tokens are `pairedArms.arms[].tokens`.
+
 A verdict is `correct`, `incorrect` or `missing`. An answer or judge call
 that fails after transport (invalid or truncated JSON, for example) counts as
 incorrect and also in `parseFailures`. A retrieval failure or a transport
@@ -550,7 +555,7 @@ run cannot verify. Coverage (`b02-keyed-v8`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, the configured MongoDB connection inputs described below, the
 extraction-job drain stall window (`MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS`, raw
-and resolved; unset or blank resolves to 600000 ms, and a set value that is not
+and resolved; unset resolves to 600000 ms, and a set value that is blank or not
 a positive, finite number of milliseconds fails the run naming the variable and
 the rule, without echoing the value), and session turn recall (`MEMONGO_SESSION_TURN_RECALL` raw,
 `effectiveSessionTurnRecall`, and its frozen seed-result, seed-session and

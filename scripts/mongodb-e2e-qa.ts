@@ -205,7 +205,7 @@ export async function runE2eQa(params: {
 		usage?: EnrichmentChatUsage,
 		call?: E2eQaCallResult,
 	) => void
-}): Promise<BenchmarkE2eQaEnvelope> {
+}): Promise<E2eQaEnvelope> {
 	const { provider, model, cases } = params
 	const decoyPool = params.decoyPool ?? cases
 	const decoyIndex = (testCase: E2eQaCase, index: number) =>
@@ -251,23 +251,17 @@ export async function runE2eQa(params: {
 		}
 	}
 
-	let correctCount = 0
 	let decoyProbes = 0
 	let decoyPasses = 0
-	let totalLatency = 0
-	let completedCases = 0
-	let failedCases = 0
 	let answerGenerationAttempts = 0
 	let answerJudgeAttempts = 0
 	let decoyJudgeAttempts = 0
 	const caseResults: BenchmarkE2eQaEnvelope["caseResults"] = []
-	const budgetRecords: ReaderBudgetCaseRecord[] = []
 
 	for (let i = 0; i < cases.length; i++) {
 		const testCase = cases[i]
 		const startedAt = Date.now()
 		if (testCase.upstreamFailure) {
-			failedCases += 1
 			caseResults.push({
 				caseId: testCase.caseId,
 				candidateAnswer: "",
@@ -324,7 +318,6 @@ export async function runE2eQa(params: {
 		const readerBudget = reader
 			? readerBudgetCaseRecord(reader, answerUsage, diagnostics)
 			: undefined
-		if (readerBudget) budgetRecords.push(readerBudget)
 		const budgetRecord = readerBudget ? { readerBudget } : {}
 
 		if (testCase.abstention) {
@@ -332,11 +325,7 @@ export async function runE2eQa(params: {
 			// gold fact — grade by refusal. No decoy probe (there is no wrong fact
 			// to plant against a "no answer" gold).
 			const correct = !caseError && isAbstaining(candidate)
-			if (correct) correctCount += 1
 			const latencyMs = Date.now() - startedAt
-			totalLatency += latencyMs
-			if (caseError) failedCases += 1
-			else completedCases += 1
 			caseResults.push({
 				caseId: testCase.caseId,
 				candidateAnswer: candidate,
@@ -367,7 +356,6 @@ export async function runE2eQa(params: {
 				},
 			})
 			correct = !caseError && verdict.correct
-			if (correct) correctCount += 1
 		}
 
 		// Calibration probe: a genuinely-wrong decoy should be judged incorrect.
@@ -394,9 +382,6 @@ export async function runE2eQa(params: {
 			}
 		}
 		const latencyMs = Date.now() - startedAt
-		totalLatency += latencyMs
-		if (caseError) failedCases += 1
-		else completedCases += 1
 		caseResults.push({
 			caseId: testCase.caseId,
 			candidateAnswer: candidate,
@@ -410,23 +395,21 @@ export async function runE2eQa(params: {
 		})
 	}
 
+	const measured = measureE2eQaCases({
+		caseResults,
+		decoyProbes: { probes: decoyProbes, passes: decoyPasses },
+		protocol: params.protocol,
+	})
 	const envelope: E2eQaEnvelope = {
 		answerModel,
 		judge: judgeModel,
 		judgeVersion,
 		// Failures remain attempted and deflate accuracy. The empty set returned
 		// above retains explicit unavailable semantics.
-		accuracy: correctCount / cases.length,
-		latencyMs: totalLatency / cases.length,
-		// Null (not 0) when no viable decoy could be constructed — an unmeasured
-		// probe must not read as a perfectly-calibrated judge.
-		judgeFalsePositiveRate: decoyProbes > 0 ? decoyPasses / decoyProbes : null,
-		cases: {
-			eligible: cases.length,
-			attempted: cases.length,
-			completed: completedCases,
-			failed: failedCases,
-		},
+		accuracy: measured.accuracy,
+		latencyMs: measured.latencyMs,
+		judgeFalsePositiveRate: measured.judgeFalsePositiveRate,
+		cases: measured.cases,
 		attempts: {
 			answerGeneration: answerGenerationAttempts,
 			answerJudge: answerJudgeAttempts,
@@ -436,15 +419,65 @@ export async function runE2eQa(params: {
 		...(params.decoyPool
 			? { decoyProbes: { probes: decoyProbes, passes: decoyPasses } }
 			: {}),
-		...(budgeted
-			? {
-					readerBudgetCalibration: readerBudgetCalibration(
-						budgetRecords,
-						READER_BUDGET_ESTIMATED_TOKENS,
-					),
-					readerPositionTerciles: readerPositionTerciles(caseResults),
-				}
-			: {}),
+		...measured.reader,
 	}
 	return envelope
+}
+
+/**
+ * What an envelope reports about a set of judged case results: accuracy and
+ * mean latency over every case (a failure stays attempted and deflates
+ * accuracy), the decoy false-positive rate, case counts and, under
+ * custom-v3, the reader budget records.
+ */
+export function measureE2eQaCases(params: {
+	caseResults: BenchmarkE2eQaEnvelope["caseResults"]
+	decoyProbes: { probes: number; passes: number }
+	protocol: E2eQaProtocol | undefined
+}): Pick<
+	E2eQaEnvelope,
+	"accuracy" | "latencyMs" | "judgeFalsePositiveRate" | "cases"
+> & {
+	reader: Pick<
+		E2eQaEnvelope,
+		"readerBudgetCalibration" | "readerPositionTerciles"
+	>
+} {
+	const { caseResults, decoyProbes } = params
+	const total = caseResults.length
+	const failed = caseResults.filter((result) => result.error).length
+	return {
+		accuracy:
+			total > 0
+				? caseResults.filter((result) => result.correct).length / total
+				: null,
+		latencyMs:
+			total > 0
+				? caseResults.reduce((sum, result) => sum + result.latencyMs, 0) / total
+				: null,
+		// Null (not 0) when no viable decoy could be constructed — an unmeasured
+		// probe must not read as a perfectly-calibrated judge.
+		judgeFalsePositiveRate:
+			decoyProbes.probes > 0 ? decoyProbes.passes / decoyProbes.probes : null,
+		cases: {
+			eligible: total,
+			attempted: total,
+			completed: total - failed,
+			failed,
+		},
+		reader:
+			params.protocol === "custom-v3"
+				? {
+						readerBudgetCalibration: readerBudgetCalibration(
+							caseResults.flatMap((result) =>
+								result.readerBudget
+									? [result.readerBudget as ReaderBudgetCaseRecord]
+									: [],
+							),
+							READER_BUDGET_ESTIMATED_TOKENS,
+						),
+						readerPositionTerciles: readerPositionTerciles(caseResults),
+					}
+				: {},
+	}
 }

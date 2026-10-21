@@ -38,10 +38,11 @@ export const JOB_DRAIN_STALL_DEFAULT_MS = 600_000
 
 /** The value is never echoed: the error names the variable and the rule. */
 export function resolveJobDrainStallMs(): number {
-	const value = process.env.MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS?.trim()
-	if (!value) return JOB_DRAIN_STALL_DEFAULT_MS
+	const raw = process.env.MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS
+	if (raw === undefined) return JOB_DRAIN_STALL_DEFAULT_MS
+	const value = raw.trim()
 	const stallMs = Number(value)
-	if (!Number.isFinite(stallMs) || stallMs <= 0) {
+	if (value === "" || !Number.isFinite(stallMs) || stallMs <= 0) {
 		throw new Error(
 			"MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS must be a positive, finite number of milliseconds when set; unset it to use the default",
 		)

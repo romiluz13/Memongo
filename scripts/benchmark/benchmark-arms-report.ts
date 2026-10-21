@@ -124,7 +124,11 @@ export function buildPairedArmsReport(params: {
 			tokens: entry.tokens,
 		}
 	})
-	const baselineName = params.arms[0]?.arm.name ?? ""
+	const baseline = params.arms[0]
+	if (!baseline) {
+		throw new Error("paired report needs a baseline arm; got no arms")
+	}
+	const baselineName = baseline.arm.name
 	const baselineRows = classified[0] ?? []
 	const comparisons = params.arms.slice(1).map((entry, offset) => {
 		const rows = classified[offset + 1] ?? []

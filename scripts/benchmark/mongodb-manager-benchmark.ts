@@ -84,11 +84,7 @@ import {
 	type BenchmarkJudgedAnswerMaterial,
 	type JudgedAnswerSetup,
 } from "./benchmark-answer-quality.js"
-import {
-	benchmarkArmConfiguration,
-	resolveBenchmarkArms,
-	type BenchmarkArm,
-} from "./benchmark-arms.js"
+import { resolveBenchmarkArms, type BenchmarkArm } from "./benchmark-arms.js"
 import {
 	armsDecoyPool,
 	assertArmsRunnable,
@@ -97,6 +93,7 @@ import {
 	createArmRuns,
 	judgeableCaseIds,
 	restoreCheckpointArms,
+	scenarioCheckpointArms,
 	runArmScenarioQa,
 	type BenchmarkArmScenarioQa,
 	type BenchmarkCheckpointArm,
@@ -324,7 +321,12 @@ export function attachBenchmarkOperationsReport(
 						reranker: parity.reranker,
 						storage: parity.storage,
 						latency: parity.latency,
-						cost: parity.cost,
+						cost: result.pairedArms
+							? {
+									...parity.cost,
+									pooledArms: result.pairedArms.arms.map((arm) => arm.name),
+								}
+							: parity.cost,
 					}
 				: {}),
 		}),
@@ -915,14 +917,17 @@ export class MongoDBManagerBenchmarkOps {
 
 		const measurementPasses = resolveBenchmarkMeasurementPasses()
 		const armRuns = params.arms
-			? createArmRuns(params.arms, measurementPasses)
+			? createArmRuns(
+					params.arms,
+					measurementPasses,
+					params.runContext.configuration,
+				)
 			: undefined
 		let armsSetup: JudgedAnswerSetup | undefined
 		if (armRuns) {
 			assertArmsRunnable({
 				datasetKind: params.dataset.datasetKind,
 				retrievalLane: params.retrievalLane,
-				qaProtocol: resolveBenchmarkQaProtocol(process.env),
 				queryDecomposition:
 					params.executionProfile !== "shipped" &&
 					resolveDecompositionMode(
@@ -1031,7 +1036,7 @@ export class MongoDBManagerBenchmarkOps {
 			}
 			if (armRuns) {
 				// The baseline arm's passes are executionsByPass.
-				restoreCheckpointArms(armRuns, checkpointScenario.arms ?? [])
+				restoreCheckpointArms(armRuns, checkpointScenario.arms)
 			} else {
 				for (let pass = 0; pass < measurementPasses; pass++) {
 					executionsByPass[pass]!.push(
@@ -1203,7 +1208,7 @@ export class MongoDBManagerBenchmarkOps {
 				run.executionsByPass.map((passExecutions) => passExecutions.length),
 			)
 			const scenarioArmQa: BenchmarkArmScenarioQa[] = []
-			let scenarioCheckpointArms: BenchmarkCheckpointArm[] | undefined
+			let checkpointArms: BenchmarkCheckpointArm[] | undefined
 			const scenarioIngestTotals = {
 				conversationsIngested: 0,
 				turnsIngested: 0,
@@ -2133,15 +2138,13 @@ export class MongoDBManagerBenchmarkOps {
 					}
 				}
 				if (armRuns && params.arms) {
-					scenarioCheckpointArms = armRuns.map((run, armIndex) => ({
-						name: run.arm.name,
-						executionsByPass: run.executionsByPass.map((passExecutions, pass) =>
-							passExecutions.slice(armExecutionOffsets?.[armIndex]?.[pass]),
-						),
-						qa: scenarioArmQa[armIndex] as BenchmarkArmScenarioQa,
-					}))
+					checkpointArms = scenarioCheckpointArms({
+						runs: armRuns,
+						offsets: armExecutionOffsets,
+						qa: scenarioArmQa,
+					})
 					armsScenarioComplete = checkpointArmsComplete(
-						scenarioCheckpointArms,
+						checkpointArms,
 						params.arms,
 						judgeableCaseIds(scenario),
 						measurementPasses,
@@ -2265,7 +2268,7 @@ export class MongoDBManagerBenchmarkOps {
 						? { storageFailure: scenarioStorageFailure }
 						: {}),
 					...(scenarioCleanup ? { cleanup: scenarioCleanup } : {}),
-					...(scenarioCheckpointArms ? { arms: scenarioCheckpointArms } : {}),
+					...(checkpointArms ? { arms: checkpointArms } : {}),
 				}
 				completedCheckpointScenarios.push(checkpointScenario)
 				completedCheckpointScenarios.sort(
@@ -2359,13 +2362,6 @@ export class MongoDBManagerBenchmarkOps {
 		const armResults = armRuns
 			? buildArmResults({
 					runs: armRuns,
-					configurationHashes: armRuns.map(
-						(run) =>
-							benchmarkArmConfiguration(
-								params.runContext.configuration,
-								run.arm,
-							).configurationHash,
-					),
 					scenarios,
 					ingest,
 					summarize: summarizeExecutions,

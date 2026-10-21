@@ -202,11 +202,16 @@ describe("job drain stall setting", () => {
 		else process.env[name] = saved
 	})
 
-	it("uses the 600000ms default when unset or blank", () => {
+	it("uses the 600000ms default when unset", () => {
 		delete process.env[name]
 		expect(resolveJobDrainStallMs()).toBe(600_000)
-		process.env[name] = "  "
-		expect(resolveJobDrainStallMs()).toBe(600_000)
+	})
+
+	it.each(["", "  "])("throws on a set but blank value %j", (raw) => {
+		process.env[name] = raw
+		expect(() => resolveJobDrainStallMs()).toThrow(
+			"MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS must be a positive, finite number of milliseconds when set; unset it to use the default",
+		)
 	})
 
 	it("uses a set positive value", () => {

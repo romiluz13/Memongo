@@ -12,13 +12,9 @@ import type {
 import {
 	type E2eQaDecoyCandidate,
 	type E2eQaEnvelope,
+	measureE2eQaCases,
 	runE2eQa,
 } from "../mongodb-e2e-qa.js"
-import {
-	type ReaderBudgetCaseRecord,
-	readerBudgetCalibration,
-	readerPositionTerciles,
-} from "../mongodb-e2e-qa-reader-budget.js"
 import {
 	type BenchmarkIngestFailureCounts,
 	type BenchmarkJudgedAnswerMaterial,
@@ -36,7 +32,11 @@ import {
 	armCaseVerdict,
 	buildPairedArmsReport,
 } from "./benchmark-arms-report.js"
-import type { BenchmarkArm } from "./benchmark-arms.js"
+import type { OperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
+import {
+	type BenchmarkArm,
+	benchmarkArmConfiguration,
+} from "./benchmark-arms.js"
 import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
 import { attachReaderCutMetrics } from "./benchmark-reader-cut-metrics.js"
 import {
@@ -45,7 +45,6 @@ import {
 	buildCaseDiagnostics,
 	buildMissLedger,
 } from "./mongodb-benchmark-runner.js"
-import { READER_BUDGET_ESTIMATED_TOKENS } from "./reader-budget.js"
 
 /** One arm's answer and judge outcome for one scenario. */
 export type BenchmarkArmScenarioQa = {
@@ -54,7 +53,8 @@ export type BenchmarkArmScenarioQa = {
 	judgeVersion: string | null
 	caseResults: ArmCaseResult[]
 	attempts: BenchmarkE2eQaEnvelope["attempts"]
-	decoyProbes: { probes: number; passes: number }
+	/** Null when the scenario had no judged question, so no judge ran. */
+	decoyProbes: { probes: number; passes: number } | null
 	tokens: ArmTokenTotals
 }
 
@@ -67,6 +67,7 @@ export type BenchmarkCheckpointArm = {
 
 export type BenchmarkArmRun = {
 	arm: BenchmarkArm
+	configurationHash: string
 	executionsByPass: BenchmarkCaseExecution[][]
 	materialByCaseId: Map<string, BenchmarkJudgedAnswerMaterial>
 	qa: BenchmarkArmScenarioQa[]
@@ -106,9 +107,12 @@ export type PairedArmsRunReport = PairedArmsReport & {
 export function createArmRuns(
 	arms: readonly BenchmarkArm[],
 	measurementPasses: number,
+	configuration: OperationRunConfiguration,
 ): BenchmarkArmRun[] {
 	return arms.map((arm) => ({
 		arm,
+		configurationHash: benchmarkArmConfiguration(configuration, arm)
+			.configurationHash,
 		executionsByPass: Array.from({ length: measurementPasses }, () => []),
 		materialByCaseId: new Map(),
 		qa: [],
@@ -119,7 +123,6 @@ export function createArmRuns(
 export function assertArmsRunnable(params: {
 	datasetKind: string | undefined
 	retrievalLane: string | undefined
-	qaProtocol: string
 	queryDecomposition: boolean
 	scenarios: readonly MemoryBenchmarkScenario[]
 }): void {
@@ -131,14 +134,6 @@ export function assertArmsRunnable(params: {
 	if (params.retrievalLane === "raw-session") {
 		throw new Error(
 			"paired arms require the native retrieval lane: raw-session searches do not take an arm's turn recall mode",
-		)
-	}
-	if (
-		params.qaProtocol === "official" ||
-		params.qaProtocol === "custom-judge"
-	) {
-		throw new Error(
-			`paired arms cannot run under MEMONGO_BENCHMARK_QA_PROTOCOL=${params.qaProtocol}`,
 		)
 	}
 	if (params.queryDecomposition) {
@@ -198,17 +193,14 @@ export async function runArmScenarioQa(params: {
 	materials: readonly BenchmarkJudgedAnswerMaterial[]
 	decoyPool: readonly E2eQaDecoyCandidate[]
 	setup: JudgedAnswerSetup
-	accounting?: BenchmarkRunAccounting
+	accounting: BenchmarkRunAccounting
 }): Promise<BenchmarkArmScenarioQa> {
 	const { cases } = buildJudgedAnswerCases(
 		new Map(params.materials.map((material) => [material.caseId, material])),
 	)
 	const tokens: ArmTokenTotals = { answer: emptyTotals(), judge: emptyTotals() }
-	const account = params.accounting
-		? judgedAnswerCallObserver(params.setup, params.accounting)
-		: undefined
-	// runE2eQa returns its scripts-side envelope; decoyProbes is set with a pool.
-	const envelope = (await runE2eQa({
+	const account = judgedAnswerCallObserver(params.setup, params.accounting)
+	const envelope = await runE2eQa({
 		provider: params.setup.provider,
 		model: params.setup.model,
 		answerModel: params.setup.model,
@@ -227,16 +219,25 @@ export async function runArmScenarioQa(params: {
 					totals.callsWithoutUsage += 1
 				}
 			}
-			account?.(operation, outcome, usage, call)
+			account(operation, outcome, usage, call)
 		},
-	})) as E2eQaEnvelope
+	})
+	let decoyProbes: BenchmarkArmScenarioQa["decoyProbes"] = null
+	if (cases.length > 0) {
+		if (!envelope.decoyProbes) {
+			throw new Error(
+				`paired arms: arm ${params.arm.name} judged ${cases.length} questions with a decoy pool but reported no decoy probes`,
+			)
+		}
+		decoyProbes = envelope.decoyProbes
+	}
 	return {
 		answerModel: envelope.answerModel,
 		judge: envelope.judge,
 		judgeVersion: envelope.judgeVersion,
 		caseResults: envelope.caseResults,
 		attempts: envelope.attempts,
-		decoyProbes: envelope.decoyProbes ?? { probes: 0, passes: 0 },
+		decoyProbes,
 		tokens,
 	}
 }
@@ -278,14 +279,60 @@ export function checkpointArmsComplete(
 
 export function restoreCheckpointArms(
 	runs: readonly BenchmarkArmRun[],
-	recorded: readonly BenchmarkCheckpointArm[],
+	recorded: readonly BenchmarkCheckpointArm[] | undefined,
 ): void {
 	runs.forEach((run, index) => {
-		const entry = recorded[index] as BenchmarkCheckpointArm
-		entry.executionsByPass.forEach((executions, pass) => {
-			run.executionsByPass[pass]?.push(...executions)
+		const entry = recorded?.[index]
+		if (entry?.name !== run.arm.name) {
+			throw new Error(
+				`benchmark checkpoint has no entry for arm ${run.arm.name}`,
+			)
+		}
+		if (entry.executionsByPass.length !== run.executionsByPass.length) {
+			throw new Error(
+				`benchmark checkpoint arm ${run.arm.name} holds ${entry.executionsByPass.length} measurement passes; the run takes ${run.executionsByPass.length}`,
+			)
+		}
+		run.executionsByPass.forEach((executions, pass) => {
+			executions.push(
+				...(entry.executionsByPass[pass] as BenchmarkCaseExecution[]),
+			)
 		})
 		run.qa.push(entry.qa)
+	})
+}
+
+/**
+ * The scenario's share of every arm for the checkpoint: the executions each
+ * arm added since `offsets` was taken, and its answers. Every arm must have
+ * answered the scenario.
+ */
+export function scenarioCheckpointArms(params: {
+	runs: readonly BenchmarkArmRun[]
+	/** Per arm, each pass's execution count when the scenario began. */
+	offsets: readonly (readonly number[])[] | undefined
+	qa: readonly BenchmarkArmScenarioQa[]
+}): BenchmarkCheckpointArm[] {
+	return params.runs.map((run, index) => {
+		const offsets = params.offsets?.[index]
+		if (offsets?.length !== run.executionsByPass.length) {
+			throw new Error(
+				`paired arms: arm ${run.arm.name} has no execution offsets for this scenario`,
+			)
+		}
+		const qa = params.qa[index]
+		if (!qa) {
+			throw new Error(
+				`paired arms: arm ${run.arm.name} has no answers for this scenario`,
+			)
+		}
+		return {
+			name: run.arm.name,
+			executionsByPass: run.executionsByPass.map((executions, pass) =>
+				executions.slice(offsets[pass]),
+			),
+			qa,
+		}
 	})
 }
 
@@ -315,15 +362,29 @@ export function summarizeArmQa(params: {
 }): E2eQaEnvelope {
 	const caseResults = params.records.flatMap((record) => record.caseResults)
 	const named = params.records.find((record) => record.answerModel !== null)
-	const probes = params.records.reduce(
-		(sum, record) => sum + record.decoyProbes.probes,
-		0,
+	const attempts = params.records.reduce(
+		(sum, record) => ({
+			answerGeneration: sum.answerGeneration + record.attempts.answerGeneration,
+			answerJudge: sum.answerJudge + record.attempts.answerJudge,
+			decoyJudge: sum.decoyJudge + record.attempts.decoyJudge,
+		}),
+		{ answerGeneration: 0, answerJudge: 0, decoyJudge: 0 },
 	)
-	const passes = params.records.reduce(
-		(sum, record) => sum + record.decoyProbes.passes,
-		0,
-	)
-	const failed = caseResults.filter((result) => result.error).length
+	// A scenario without a judged question ran no probe and adds none.
+	const decoyProbes = params.records
+		.flatMap((record) => (record.decoyProbes ? [record.decoyProbes] : []))
+		.reduce(
+			(sum, probed) => ({
+				probes: sum.probes + probed.probes,
+				passes: sum.passes + probed.passes,
+			}),
+			{ probes: 0, passes: 0 },
+		)
+	const measured = measureE2eQaCases({
+		caseResults,
+		decoyProbes,
+		protocol: params.arm.protocol,
+	})
 	const ingestFailures = describeIngestFailures(params.ingest)
 	const unavailable = [
 		...(caseResults.length === 0 ? ["no judged questions"] : []),
@@ -337,61 +398,22 @@ export function summarizeArmQa(params: {
 		answerModel: named?.answerModel ?? null,
 		judge: named?.judge ?? null,
 		judgeVersion: named?.judgeVersion ?? null,
-		accuracy:
-			unavailable.length > 0
-				? null
-				: caseResults.filter((result) => result.correct).length /
-					caseResults.length,
-		latencyMs:
-			caseResults.length > 0
-				? caseResults.reduce((sum, result) => sum + result.latencyMs, 0) /
-					caseResults.length
-				: null,
-		judgeFalsePositiveRate: probes > 0 ? passes / probes : null,
-		cases: {
-			eligible: caseResults.length,
-			attempted: caseResults.length,
-			completed: caseResults.length - failed,
-			failed,
-		},
-		attempts: {
-			answerGeneration: params.records.reduce(
-				(sum, record) => sum + record.attempts.answerGeneration,
-				0,
-			),
-			answerJudge: params.records.reduce(
-				(sum, record) => sum + record.attempts.answerJudge,
-				0,
-			),
-			decoyJudge: params.records.reduce(
-				(sum, record) => sum + record.attempts.decoyJudge,
-				0,
-			),
-		},
+		accuracy: unavailable.length > 0 ? null : measured.accuracy,
+		latencyMs: measured.latencyMs,
+		judgeFalsePositiveRate: measured.judgeFalsePositiveRate,
+		cases: measured.cases,
+		attempts,
 		caseResults,
 		...(unavailable.length > 0
 			? { unavailableReason: unavailable.join("; ") }
 			: {}),
-		...(params.arm.protocol === "custom-v3"
-			? {
-					readerBudgetCalibration: readerBudgetCalibration(
-						caseResults.flatMap((result) =>
-							result.readerBudget
-								? [result.readerBudget as ReaderBudgetCaseRecord]
-								: [],
-						),
-						READER_BUDGET_ESTIMATED_TOKENS,
-					),
-					readerPositionTerciles: readerPositionTerciles(caseResults),
-				}
-			: {}),
+		...measured.reader,
 	}
 }
 
 /** Every arm's metrics, ledgers and answers, and the paired report. */
 export function buildArmResults(params: {
 	runs: readonly BenchmarkArmRun[]
-	configurationHashes: readonly string[]
 	scenarios: readonly MemoryBenchmarkScenario[]
 	ingest: BenchmarkIngestFailureCounts
 	summarize: (executions: BenchmarkCaseExecution[]) => BenchmarkSummary
@@ -407,7 +429,7 @@ export function buildArmResults(params: {
 			evaluation.questionType,
 		]),
 	)
-	const arms = params.runs.map((run, index): BenchmarkArmResult => {
+	const arms = params.runs.map((run): BenchmarkArmResult => {
 		const executions = run.executionsByPass[0] ?? []
 		const summary = params.summarize(executions)
 		const readerCut = attachReaderCutMetrics({
@@ -419,7 +441,7 @@ export function buildArmResults(params: {
 			breakdown: summary.questionTypeBreakdown,
 			questionTypeByCaseId,
 		})
-		const e2eQa = readerCut.e2eQa as E2eQaEnvelope
+		const e2eQa = readerCut.e2eQa
 		const officialMetrics = mergeLongMemEvalAnswerQuality({
 			officialMetrics: summary.officialMetrics,
 			e2eQa,
@@ -428,7 +450,7 @@ export function buildArmResults(params: {
 			name: run.arm.name,
 			protocol: run.arm.protocol,
 			sessionTurnRecall: run.arm.sessionTurnRecall,
-			configurationHash: params.configurationHashes[index] ?? "",
+			configurationHash: run.configurationHash,
 			result: {
 				cases: summary.cases,
 				scoredCases: summary.scoredCases,
@@ -460,9 +482,9 @@ export function buildArmResults(params: {
 		pairedArms: {
 			...buildPairedArmsReport({
 				caseIds: evaluations.map((evaluation) => evaluation.caseId),
-				arms: params.runs.map((run, index) => ({
+				arms: params.runs.map((run) => ({
 					arm: run.arm,
-					configurationHash: params.configurationHashes[index] ?? "",
+					configurationHash: run.configurationHash,
 					caseResults: run.qa.flatMap((record) => record.caseResults),
 					tokens: sumTokens(run.qa),
 				})),

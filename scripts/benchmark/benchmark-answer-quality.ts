@@ -26,7 +26,11 @@ import type { Pass0ContextDiagnostics } from "./benchmark-context-diagnostics.js
 import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
 import type { EnrichmentProvider } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import type { ReaderUnit } from "./reader-budget.js"
-import type { E2eQaCase, E2eQaProtocol } from "../mongodb-e2e-qa.js"
+import type {
+	E2eQaCase,
+	E2eQaEnvelope,
+	E2eQaProtocol,
+} from "../mongodb-e2e-qa.js"
 import { runE2eQa } from "../mongodb-e2e-qa.js"
 import type {
 	BenchmarkE2eQaEnvelope,
@@ -71,7 +75,7 @@ export type BenchmarkJudgedAnswerMaterial = {
 export function buildUnavailableE2eQaEnvelope(params: {
 	reason: string
 	eligibleCases: number
-}): BenchmarkE2eQaEnvelope {
+}): E2eQaEnvelope {
 	return {
 		answerModel: null,
 		judge: null,

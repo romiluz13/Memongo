@@ -184,3 +184,11 @@ describe("exact McNemar on the paired counts", () => {
 		expect(report.comparisons[0]?.mcnemar.discordant).toBe(8)
 	})
 })
+
+describe("paired report baseline", () => {
+	it("throws when no arm is given, so no baseline exists", () => {
+		expect(() => buildPairedArmsReport({ caseIds: ["q1"], arms: [] })).toThrow(
+			"paired report needs a baseline arm; got no arms",
+		)
+	})
+})

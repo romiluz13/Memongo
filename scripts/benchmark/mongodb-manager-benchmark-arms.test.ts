@@ -1,9 +1,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { parseBenchmarkArms } from "./benchmark-arms.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
+import { projectBenchmarkParityFields } from "./mongodb-benchmark-runner.js"
+import { attachBenchmarkOperationsReport } from "./mongodb-manager-benchmark.js"
 import {
 	armsRunContext,
 	runArmsFixture,
@@ -221,6 +224,35 @@ describe("paired benchmark arms", () => {
 			answer: { inputTokens: 200, outputTokens: 10, callsWithoutUsage: 0 },
 			judge: { inputTokens: 200, outputTokens: 12, callsWithoutUsage: 0 },
 		})
+	})
+
+	it("labels the run's operation accounting as pooling every arm's calls", async () => {
+		const runContext = armsRunContext(ARMS)
+		const { outcome } = await runArmsFixture({
+			arms: parseBenchmarkArms(ARMS),
+			log: probe.state.log,
+			runContext,
+		})
+		const parity = await projectBenchmarkParityFields({
+			db: {
+				command: async () => {
+					throw new Error("no cluster offline")
+				},
+			},
+			collectionName: "test_events",
+			datasetPath: fileURLToPath(import.meta.url),
+			mongoEmbeddingConfig: { numDimensions: 8, quantization: "none" },
+			latencySamples: [1],
+			cost: runContext.accounting.snapshot(),
+			runContext,
+		})
+		const cost = attachBenchmarkOperationsReport(outcome.result, parity)
+			.benchmarkReport?.cost
+		expect(cost?.pooledArms).toEqual(["a", "b", "c"])
+		const answerCalls = cost?.operations.find(
+			(entry) => entry.operation === "answer-generation",
+		)
+		expect(answerCalls?.succeeded).toBe(6)
 	})
 
 	it("refuses arms on the raw-session lane and on a dataset without judged answers before any work", async () => {
