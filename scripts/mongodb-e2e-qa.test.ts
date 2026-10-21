@@ -35,7 +35,10 @@ describe("generateAnswer", () => {
 			provider,
 			model: "m",
 			question: "Where does the user live?",
-			contextPassages: ["The user lives in Berlin."],
+			content: {
+				kind: "passages",
+				contextPassages: ["The user lives in Berlin."],
+			},
 		})
 		expect(answer).toBe("Berlin")
 	})
@@ -46,7 +49,7 @@ describe("generateAnswer", () => {
 			provider,
 			model: "m",
 			question: "Q",
-			contextPassages: [],
+			content: { kind: "passages", contextPassages: [] },
 		})
 		expect(answer).toBe("")
 	})
@@ -63,7 +66,7 @@ describe("generateAnswer", () => {
 			provider,
 			model: "m",
 			question: "Q",
-			contextPassages: ["p"],
+			content: { kind: "passages", contextPassages: ["p"] },
 			onProviderCall: (outcome, reported) =>
 				calls.push({ outcome, usage: reported }),
 			onFailure: (error) => failures.push(error),
@@ -91,7 +94,7 @@ describe("generateAnswer", () => {
 			provider,
 			model: "m",
 			question: "Q",
-			contextPassages: ["p"],
+			content: { kind: "passages", contextPassages: ["p"] },
 			onProviderCall: (outcome, reported) =>
 				calls.push({ outcome, usage: reported }),
 			onFailure: (error) => failures.push(error),
@@ -113,7 +116,7 @@ describe("generateAnswer", () => {
 			provider,
 			model: "m",
 			question: "Where?",
-			contextPassages: ["Berlin"],
+			content: { kind: "passages", contextPassages: ["Berlin"] },
 			onProviderCall: () => {
 				if (throwOnce) {
 					throwOnce = false

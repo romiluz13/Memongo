@@ -342,7 +342,7 @@ async function builtReaderPrompts(
 			>[0]["provider"],
 			model: "capture",
 			question: testCase.question,
-			contextPassages: testCase.contextPassages,
+			content: { kind: "passages", contextPassages: testCase.contextPassages },
 		})
 	for (const material of materialByCaseId.values())
 		prompts.push(

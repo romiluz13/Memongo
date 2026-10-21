@@ -7,13 +7,13 @@ import type {
 	BenchmarkAnswerAttempt,
 	BenchmarkCaseContextDiagnostics,
 	BenchmarkE2eQaEnvelope,
-	MemoryResultRole,
 } from "../packages/memory-engine/src/types.js"
 import {
 	buildCaseContextDiagnostics,
 	describeDiagnosticsFailure,
 	type Pass0ContextDiagnostics,
 } from "./benchmark/benchmark-context-diagnostics.js"
+import type { DatedAnswerPassages } from "./benchmark/dated-answer-context.js"
 import {
 	buildReaderContext,
 	READER_BUDGET_ESTIMATED_TOKENS,
@@ -21,6 +21,7 @@ import {
 	type ReaderUnit,
 } from "./benchmark/reader-budget.js"
 import {
+	type AnswerContent,
 	type E2eQaCallResult,
 	type E2eQaProviderOperation,
 	generateAnswer,
@@ -91,15 +92,12 @@ export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
 	readerPositionTerciles?: ReaderPositionTerciles
 }
 
-export type E2eQaCase = {
+/** Passage dates and roles render only under custom-v2; the question date under custom-v2 and custom-v3. */
+export type E2eQaCase = DatedAnswerPassages & {
 	caseId: string
 	question: string
 	goldAnswer: string
-	contextPassages: string[]
-	/** Index-aligned with contextPassages; rendered only under custom-v2. */
 	questionDate?: string
-	passageDates?: string[][]
-	passageRoles?: Array<MemoryResultRole | undefined>
 	/** custom-v3 only: every candidate unit, before admission. */
 	readerUnits?: ReaderUnit[]
 	abstention?: boolean
@@ -264,21 +262,22 @@ export async function runE2eQa(params: {
 				})
 			: undefined
 		const answerUsage: AnswerCallUsage = { inputTokens: null }
+		const content: AnswerContent = reader
+			? { kind: "reader", userContent: reader.userContent }
+			: dated
+				? {
+						kind: "dated-passages",
+						questionDate: testCase.questionDate,
+						contextPassages: testCase.contextPassages,
+						passageDates: testCase.passageDates,
+						passageRoles: testCase.passageRoles,
+					}
+				: { kind: "passages", contextPassages: testCase.contextPassages }
 		const candidate = await generateAnswer({
 			provider,
 			model: answerModel,
 			question: testCase.question,
-			contextPassages: testCase.contextPassages,
-			...(dated
-				? {
-						dated: {
-							questionDate: testCase.questionDate,
-							passageDates: testCase.passageDates,
-							passageRoles: testCase.passageRoles,
-						},
-					}
-				: {}),
-			...(reader ? { readerContent: reader.userContent } : {}),
+			content,
 			onProviderCall: (outcome, usage, call) => {
 				if (outcome !== "attempted") {
 					answerUsage.inputTokens = usage ? usage.inputTokens : null
