@@ -7,12 +7,17 @@ import type {
 	BenchmarkAnswerAttempt,
 	BenchmarkCaseContextDiagnostics,
 	BenchmarkE2eQaEnvelope,
+	MemoryResultRole,
 } from "../packages/memory-engine/src/types.js"
 import {
 	buildCaseContextDiagnostics,
 	describeDiagnosticsFailure,
 	type Pass0ContextDiagnostics,
 } from "./benchmark/benchmark-context-diagnostics.js"
+import {
+	renderDatedPassageLines,
+	renderDatedQuestionLine,
+} from "./benchmark/dated-answer-context.js"
 import {
 	classifyAnswerResponse,
 	stripFences,
@@ -44,6 +49,16 @@ const log = createSubsystemLogger("memory:mongodb:e2e-qa")
 
 // Bump when the answer/judge prompts change so runs remain comparable.
 export const E2E_QA_JUDGE_VERSION = "v1"
+// custom-v2 changes only the answer user content (question and passage
+// dates, passage roles); it is recorded under its own version.
+const E2E_QA_DATED_JUDGE_VERSION = "v2"
+
+/**
+ * The QA protocols this harness runs. custom-v2 is custom-v1 with the
+ * question date and each passage's date(s) and role in the answer request,
+ * passages kept in rank order.
+ */
+export type E2eQaProtocol = "custom-v1" | "custom-v2"
 
 const ANSWER_MAX_TOKENS = 512
 const JUDGE_MAX_TOKENS = 512
@@ -91,6 +106,12 @@ export async function generateAnswer(params: {
 	model: string
 	question: string
 	contextPassages: string[]
+	/** custom-v2 only: index-aligned with contextPassages. */
+	dated?: {
+		questionDate?: string
+		passageDates?: string[][]
+		passageRoles?: Array<MemoryResultRole | undefined>
+	}
 	onFailure?: (error: Error) => void
 	onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
 	onProviderCall?: (
@@ -98,12 +119,21 @@ export async function generateAnswer(params: {
 		usage?: EnrichmentChatUsage,
 	) => void
 }): Promise<string> {
-	const context = params.contextPassages
-		.slice(0, MAX_CONTEXT_PASSAGES)
-		.map((p, i) => `[${i + 1}] ${p}`)
-		.join("\n")
+	const passages = params.contextPassages.slice(0, MAX_CONTEXT_PASSAGES)
+	const context = params.dated
+		? renderDatedPassageLines(
+				{
+					contextPassages: params.contextPassages,
+					passageDates: params.dated.passageDates,
+					passageRoles: params.dated.passageRoles,
+				},
+				passages.map((_, index) => index),
+			).join("\n")
+		: passages.map((p, i) => `[${i + 1}] ${p}`).join("\n")
 	const user = [
-		`QUESTION: ${params.question}`,
+		params.dated
+			? renderDatedQuestionLine(params.question, params.dated.questionDate)
+			: `QUESTION: ${params.question}`,
 		"<context>",
 		context,
 		"</context>",
@@ -225,6 +255,10 @@ export type E2eQaCase = {
 	question: string
 	goldAnswer: string
 	contextPassages: string[]
+	/** Index-aligned with contextPassages; rendered only under custom-v2. */
+	questionDate?: string
+	passageDates?: string[][]
+	passageRoles?: Array<MemoryResultRole | undefined>
 	abstention?: boolean
 	upstreamFailure?: string
 	diagnostics?: Pass0ContextDiagnostics
@@ -294,6 +328,8 @@ export async function runE2eQa(params: {
 	answerModel?: string
 	judgeModel?: string
 	cases: E2eQaCase[]
+	/** Absent runs custom-v1. */
+	protocol?: E2eQaProtocol
 	judgeVersion?: string
 	onProviderCall?: (
 		operation: E2eQaProviderOperation,
@@ -304,7 +340,10 @@ export async function runE2eQa(params: {
 	const { provider, model, cases } = params
 	const answerModel = params.answerModel ?? model
 	const judgeModel = params.judgeModel ?? model
-	const judgeVersion = params.judgeVersion ?? E2E_QA_JUDGE_VERSION
+	const dated = params.protocol === "custom-v2"
+	const judgeVersion =
+		params.judgeVersion ??
+		(dated ? E2E_QA_DATED_JUDGE_VERSION : E2E_QA_JUDGE_VERSION)
 	if (cases.length === 0) {
 		return {
 			answerModel: null,
@@ -353,6 +392,15 @@ export async function runE2eQa(params: {
 			model: answerModel,
 			question: testCase.question,
 			contextPassages: testCase.contextPassages,
+			...(dated
+				? {
+						dated: {
+							questionDate: testCase.questionDate,
+							passageDates: testCase.passageDates,
+							passageRoles: testCase.passageRoles,
+						},
+					}
+				: {}),
 			onProviderCall: (outcome, usage) =>
 				params.onProviderCall?.("answer-generation", outcome, usage),
 			onAttempt: (attempt) => {

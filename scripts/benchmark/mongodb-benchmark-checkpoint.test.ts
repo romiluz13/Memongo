@@ -4,6 +4,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { hashOperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
+import { hasCompleteConfigurationCoverage } from "./benchmark-run-configuration-schema.js"
 import {
 	readBenchmarkCheckpoint,
 	writeBenchmarkCheckpointAtomic,
@@ -49,6 +50,59 @@ function checkpoint(): BenchmarkCheckpoint {
 		updatedAt: "2026-08-12T12:00:00.000Z",
 	}
 }
+
+describe("QA protocol resume identity", () => {
+	it("records custom-v2 as covered and never resumes it as custom-v1", async () => {
+		const v1 = producedRunConfiguration({
+			MEMONGO_BENCHMARK_QA_PROTOCOL: "custom-v1",
+		})
+		const v2 = producedRunConfiguration({
+			MEMONGO_BENCHMARK_QA_PROTOCOL: "custom-v2",
+		})
+		expect(v2.configuration.settings["env.MEMONGO_BENCHMARK_QA_PROTOCOL"]).toBe(
+			"custom-v2",
+		)
+		expect(hasCompleteConfigurationCoverage(v2.configuration.settings)).toBe(
+			true,
+		)
+		expect(
+			hasCompleteConfigurationCoverage({
+				...v2.configuration.settings,
+				"env.MEMONGO_BENCHMARK_QA_PROTOCOL": "custom-v3",
+			}),
+		).toBe(false)
+		expect(v2.configurationHash).not.toBe(v1.configurationHash)
+
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-checkpoint-"))
+		const checkpointPath = path.join(dir, "release.json")
+		try {
+			await writeBenchmarkCheckpointAtomic(checkpointPath, {
+				...checkpoint(),
+				configurationHash: v2.configurationHash,
+				configuration: structuredClone(v2.configuration),
+			})
+			const expected = {
+				datasetSha256: "a".repeat(64),
+				executableDigest: "d".repeat(64),
+				scenarioIds: ["scenario-1", "scenario-2"],
+			}
+			await expect(
+				readBenchmarkCheckpoint(checkpointPath, {
+					...expected,
+					configurationHash: v2.configurationHash,
+				}),
+			).resolves.toMatchObject({ runId: "run-1" })
+			await expect(
+				readBenchmarkCheckpoint(checkpointPath, {
+					...expected,
+					configurationHash: v1.configurationHash,
+				}),
+			).rejects.toThrow("configuration hash does not match")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})
 
 describe("benchmark scenario checkpoint", () => {
 	it("writes atomically and restores only an identical run configuration", async () => {

@@ -993,9 +993,9 @@ export class MongoDBManagerBenchmarkOps {
 		// Slice B: durable QA protocol preflight — separate judge provider,
 		// dated answer prompts, anscheck-verified hypotheses persisted to a
 		// sidecar beside the checkpoint. Only the exact env values "official"
-		// and "custom-judge" opt in; every other value keeps the legacy
-		// custom-v1 harness or fails here, before any scenario or provider
-		// work is paid for. Custom-judge runs dispatch through the SAME
+		// and "custom-judge" opt in; "custom-v1" (or unset) and "custom-v2"
+		// keep the legacy harness, and any other value fails here, before any
+		// scenario or provider work is paid for. Custom-judge runs dispatch through the SAME
 		// durable scoring path as official runs (preflight, per-scenario
 		// scoring, checkpoint gating, summary); only the judge provenance
 		// differs.
@@ -1871,7 +1871,8 @@ export class MongoDBManagerBenchmarkOps {
 											: undefined,
 									passageDates: passagesWithDates.map((entry) => entry.dates),
 									passageRoles: passagesWithDates.map((entry) => entry.role),
-									...(benchmarkQaProtocol === "custom-v1"
+									...(benchmarkQaProtocol === "custom-v1" ||
+									benchmarkQaProtocol === "custom-v2"
 										? captureContextDiagnostics(evaluation.caseId, () =>
 												buildPass0ContextDiagnostics({
 													results,
@@ -2207,11 +2208,15 @@ export class MongoDBManagerBenchmarkOps {
 				ingest,
 			})
 			e2eQa = officialSummary.envelope
-		} else {
+		} else if (
+			benchmarkQaProtocol === "custom-v1" ||
+			benchmarkQaProtocol === "custom-v2"
+		) {
 			e2eQa = await runBenchmarkJudgedAnswers({
 				datasetKind: params.dataset.datasetKind,
 				materialByCaseId: e2eQaMaterialByCaseId,
 				resumedFromCheckpoint: restoredCheckpointScenarioCount > 0,
+				protocol: benchmarkQaProtocol,
 				ingest,
 				accounting: params.runContext?.accounting,
 			})

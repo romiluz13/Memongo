@@ -24,7 +24,7 @@ import {
 } from "./benchmark-answer-provider.js"
 import type { Pass0ContextDiagnostics } from "./benchmark-context-diagnostics.js"
 import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
-import type { E2eQaCase } from "../mongodb-e2e-qa.js"
+import type { E2eQaCase, E2eQaProtocol } from "../mongodb-e2e-qa.js"
 import { runE2eQa } from "../mongodb-e2e-qa.js"
 import type {
 	BenchmarkE2eQaEnvelope,
@@ -40,13 +40,12 @@ const log = createSubsystemLogger("benchmark:answer-quality")
  * `contextPassages` are the snippets of the pass-0 search results; the gold
  * answer and abstention flag come from the dataset's evaluation metadata.
  *
- * Official-mode fields (populated when the benchmark runs with
- * MEMONGO_BENCHMARK_QA_PROTOCOL=official): `questionType` routes the judge
- * template, `questionDate` and `passageDates` (index-aligned with
- * `contextPassages`, `[]` when a passage has no resolved session dates) feed
- * the dated answer prompt, and `passageRoles` (index-aligned, `undefined`
- * when the source lane has no turn-level authorship) labels each passage
- * with its speaking role so the prompt can render User:/Assistant:.
+ * `questionType` routes the official judge template. `questionDate` and
+ * `passageDates` (index-aligned with `contextPassages`, `[]` when a passage
+ * has no resolved session dates) feed the dated answer prompt of the
+ * official and custom-v2 protocols, and `passageRoles` (index-aligned,
+ * `undefined` when the source lane has no turn-level authorship) labels each
+ * passage with its speaking role so the prompt can render User:/Assistant:.
  */
 export type BenchmarkJudgedAnswerMaterial = {
 	caseId: string
@@ -176,6 +175,11 @@ export function buildJudgedAnswerCases(
 			question: material.question,
 			goldAnswer: material.goldAnswer,
 			contextPassages: material.contextPassages,
+			...(material.questionDate !== undefined
+				? { questionDate: material.questionDate }
+				: {}),
+			...(material.passageDates ? { passageDates: material.passageDates } : {}),
+			...(material.passageRoles ? { passageRoles: material.passageRoles } : {}),
 			...(material.abstention ? { abstention: true } : {}),
 			...(material.upstreamFailure
 				? { upstreamFailure: material.upstreamFailure }
@@ -201,6 +205,8 @@ export async function runBenchmarkJudgedAnswers(params: {
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
 	materialByCaseId: Map<string, BenchmarkJudgedAnswerMaterial>
 	resumedFromCheckpoint: boolean
+	/** Absent runs custom-v1. */
+	protocol?: E2eQaProtocol
 	/** B08:C06: run-level ingest failures, checkpoint-restored scenarios included. */
 	ingest?: BenchmarkIngestFailureCounts
 	accounting?: BenchmarkRunAccounting
@@ -284,6 +290,7 @@ export async function runBenchmarkJudgedAnswers(params: {
 		answerModel: model,
 		judgeModel,
 		cases,
+		...(params.protocol ? { protocol: params.protocol } : {}),
 		...(params.accounting
 			? {
 					onProviderCall: (operation, outcome, usage) => {

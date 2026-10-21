@@ -110,6 +110,31 @@ describe("buildJudgedAnswerCases", () => {
 		expect(cases[1]?.upstreamFailure).toBe("search timed out")
 	})
 
+	it("carries the question date and index-aligned passage dates and roles", () => {
+		const material = new Map<string, BenchmarkJudgedAnswerMaterial>([
+			[
+				"case-1",
+				{
+					caseId: "case-1",
+					question: "where did the heron nest?",
+					goldAnswer: "Quillmarsh",
+					abstention: false,
+					contextPassages: ["heron alpha", "heron beta"],
+					questionDate: "2031/02/14 (Fri) 09:30",
+					passageDates: [["2031/01/20 (Mon) 10:00"], []],
+					passageRoles: [undefined, "assistant"],
+				},
+			],
+		])
+		const { cases } = buildJudgedAnswerCases(material)
+		expect(cases[0]).toMatchObject({
+			contextPassages: ["heron alpha", "heron beta"],
+			questionDate: "2031/02/14 (Fri) 09:30",
+			passageDates: [["2031/01/20 (Mon) 10:00"], []],
+			passageRoles: [undefined, "assistant"],
+		})
+	})
+
 	it("carries a diagnostics error through even when its text is empty", () => {
 		const material = new Map<string, BenchmarkJudgedAnswerMaterial>([
 			[
@@ -359,6 +384,23 @@ describe("runBenchmarkJudgedAnswers", () => {
 			} else {
 				process.env[key] = saved[key]
 			}
+		}
+	})
+
+	it("runs the QA harness under the requested custom protocol", async () => {
+		process.env.MEMONGO_ENRICHMENT_API_KEY = "test-key"
+		process.env.MEMONGO_ENRICHMENT_BASE_URL = "https://bench.example.invalid"
+		process.env.MEMONGO_ENRICHMENT_MODEL = "answer-model"
+		process.env.MEMONGO_BENCHMARK_JUDGE_MODEL = "judge-model"
+		for (const protocol of ["custom-v1", "custom-v2"] as const) {
+			vi.mocked(runE2eQa).mockClear()
+			await runBenchmarkJudgedAnswers({
+				datasetKind: "longmemeval",
+				materialByCaseId: oneAnswerMaterial(),
+				resumedFromCheckpoint: false,
+				protocol,
+			})
+			expect(vi.mocked(runE2eQa).mock.calls[0]?.[0]?.protocol).toBe(protocol)
 		}
 	})
 

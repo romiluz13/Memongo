@@ -193,6 +193,7 @@ const ENV_CONTRACTS: Partial<Record<string, Contract>> = {
 		"official",
 		"custom-judge",
 		"custom-v1",
+		"custom-v2",
 	]),
 	MEMONGO_BENCHMARK_JUDGE_AUTH_STYLE: oneOf(JUDGE_AUTH_STYLES),
 	MEMONGO_BENCHMARK_JUDGE_TOKEN_PARAM: oneOf(JUDGE_TOKEN_PARAMS),

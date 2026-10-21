@@ -15,11 +15,12 @@ import {
 	benchmarkAnswerModelName,
 	resolveBenchmarkAnswerProvider,
 } from "./benchmark-answer-provider.js"
-import type {
-	BenchmarkE2eQaEnvelope,
-	MemoryResultRole,
-} from "../../packages/memory-engine/src/types.js"
+import type { BenchmarkE2eQaEnvelope } from "../../packages/memory-engine/src/types.js"
 import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark-quality-contracts.js"
+import {
+	renderDatedPassageLines,
+	renderDatedQuestionLine,
+} from "./dated-answer-context.js"
 import {
 	type BenchmarkJudgedAnswerMaterial,
 	describeIngestFailures,
@@ -79,13 +80,18 @@ import type {
 // Protocol and provider resolution
 // ---------------------------------------------------------------------------
 
-export type BenchmarkQaProtocol = "custom-v1" | "official" | "custom-judge"
+export type BenchmarkQaProtocol =
+	| "custom-v1"
+	| "custom-v2"
+	| "official"
+	| "custom-judge"
 
 /**
  * Resolve the QA protocol from env. Only the exact values "official" and
  * "custom-judge" opt into a durable-protocol run; undefined and "custom-v1"
- * keep the legacy harness, and anything else fails preflight before any
- * paid work.
+ * keep the legacy harness, "custom-v2" runs the legacy harness with dated,
+ * role-labeled passages, and anything else fails preflight before any paid
+ * work.
  */
 export function resolveBenchmarkQaProtocol(
 	env: Record<string, string | undefined>,
@@ -94,11 +100,15 @@ export function resolveBenchmarkQaProtocol(
 	if (value === undefined || value === "custom-v1") {
 		return "custom-v1"
 	}
-	if (value === "official" || value === "custom-judge") {
+	if (
+		value === "custom-v2" ||
+		value === "official" ||
+		value === "custom-judge"
+	) {
 		return value
 	}
 	throw new Error(
-		`MEMONGO_BENCHMARK_QA_PROTOCOL must be "official" or "custom-v1", got ${JSON.stringify(value)}`,
+		`MEMONGO_BENCHMARK_QA_PROTOCOL must be one of "custom-v1", "custom-v2", "official", "custom-judge", got ${JSON.stringify(value)}`,
 	)
 }
 
@@ -216,13 +226,6 @@ export const OFFICIAL_ANSWER_TRANSPORT_RETRIES = 2
  */
 export const OFFICIAL_JUDGE_CONTENT_RETRIES = 1
 
-const OFFICIAL_DATED_ANSWER_ROLE_LABELS: Record<MemoryResultRole, string> = {
-	user: "User",
-	assistant: "Assistant",
-	system: "System",
-	tool: "Tool",
-}
-
 const OFFICIAL_DATED_ANSWER_SYSTEM_PROMPT = [
 	"You answer questions about a user from stored memory passages.",
 	"Work in two steps. First take notes: for each passage that bears on the question, record the passage number, the relevant fact, and the session date(s) that passage carries. Then reason over your notes in order and answer.",
@@ -263,19 +266,6 @@ function chronologicalPassageIndices(
 }
 
 /**
- * B9-2: chunk text already carries its role label ("User: ..." from the
- * event renderer), so a second label from this prompt builder would read
- * "User: User: ...". The prompt only adds its own label when the passage
- * text does not already start with it.
- */
-function passageAlreadyCarriesRoleLabel(
-	passage: string,
-	label: string,
-): boolean {
-	return passage.startsWith(`${label}:`) || passage.startsWith(`${label} :`)
-}
-
-/**
  * Build the dated answer user content: the question (with its ask date when
  * known), the pass-0 context passages sorted chronologically by session date
  * and labeled with their date(s) and speaking role, and the JSON-only
@@ -292,32 +282,11 @@ export function buildOfficialDatedAnswerUserContent(
 	>,
 ): string {
 	const lines: string[] = []
-	if (material.questionDate) {
-		lines.push(
-			`QUESTION (asked on ${material.questionDate}): ${material.question}`,
-		)
-	} else {
-		lines.push(`QUESTION: ${material.question}`)
-	}
+	lines.push(renderDatedQuestionLine(material.question, material.questionDate))
 	lines.push("<context>")
-	chronologicalPassageIndices(material).forEach((index, position) => {
-		const passage = material.contextPassages[index]
-		if (passage === undefined) return
-		const dates = material.passageDates?.[index] ?? []
-		const role = material.passageRoles?.[index]
-		const label =
-			role !== undefined
-				? (OFFICIAL_DATED_ANSWER_ROLE_LABELS[role] ?? role)
-				: undefined
-		const datePrefix = dates.length > 0 ? ` [${dates.join("; ")}]` : ""
-		// B9-2: only add the role label when the passage text does not
-		// already start with the same label.
-		const rolePrefix =
-			label !== undefined && !passageAlreadyCarriesRoleLabel(passage, label)
-				? ` ${label}:`
-				: ""
-		lines.push(`[${position + 1}]${datePrefix}${rolePrefix} ${passage}`)
-	})
+	lines.push(
+		...renderDatedPassageLines(material, chronologicalPassageIndices(material)),
+	)
 	lines.push("</context>")
 	lines.push(
 		'Return only {"notes":[{"passage":<number>,"relevant_fact":"...","date":"..."}],"reasoning":"...","answer":"..."}.',
@@ -551,14 +520,14 @@ export async function prepareOfficialQa(params: {
 	// The manager dispatches here only after resolving "official" or
 	// "custom-judge" from this same env, so production never arrives with the
 	// env unset; direct callers that leave it unset get the historical
-	// official default. An explicit "custom-v1" (or unknown) value is a
-	// misrouted call and fails before any paid work.
+	// official default. An explicit "custom-v1" or "custom-v2" (or unknown)
+	// value is a misrouted call and fails before any paid work.
 	const protocolValue = params.env.MEMONGO_BENCHMARK_QA_PROTOCOL
 	let protocol: Extract<BenchmarkQaProtocol, "official" | "custom-judge"> =
 		"official"
 	if (protocolValue !== undefined) {
 		const resolved = resolveBenchmarkQaProtocol(params.env)
-		if (resolved === "custom-v1") {
+		if (resolved === "custom-v1" || resolved === "custom-v2") {
 			throw new Error(
 				`MEMONGO_BENCHMARK_QA_PROTOCOL=${resolved} does not use the durable scoring path`,
 			)

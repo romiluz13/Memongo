@@ -154,7 +154,7 @@ export function benchmarkOfficialFullRunError(
 	if (protocol !== "official") {
 		return (
 			"full500 publishable runs require MEMONGO_BENCHMARK_QA_PROTOCOL=official; " +
-			"custom-v1 judged answers are not the official protocol"
+			`${protocol} judged answers are not the official protocol`
 		)
 	}
 	if (options.checkpointDisabled) {

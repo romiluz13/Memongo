@@ -693,6 +693,39 @@ describe("resolveBenchmarkQaProtocol", () => {
 			resolveBenchmarkQaProtocol({ MEMONGO_BENCHMARK_QA_PROTOCOL: "banana" }),
 		).toThrow(/MEMONGO_BENCHMARK_QA_PROTOCOL/)
 	})
+
+	it("opts into custom-v2 only with the exact value", () => {
+		expect(
+			resolveBenchmarkQaProtocol({
+				MEMONGO_BENCHMARK_QA_PROTOCOL: "custom-v2",
+			}),
+		).toBe("custom-v2")
+		for (const value of ["custom-v2 ", "Custom-v2", "v2", "custom-v3"]) {
+			expect(() =>
+				resolveBenchmarkQaProtocol({ MEMONGO_BENCHMARK_QA_PROTOCOL: value }),
+			).toThrow(
+				`MEMONGO_BENCHMARK_QA_PROTOCOL must be one of "custom-v1", "custom-v2", "official", "custom-judge", got ${JSON.stringify(value)}`,
+			)
+		}
+	})
+
+	it("keeps custom-v2 off the durable scoring path", async () => {
+		await expect(
+			prepareOfficialQa({
+				env: { ...BASE_ENV, MEMONGO_BENCHMARK_QA_PROTOCOL: "custom-v2" },
+				checkpointPath: path.join(os.tmpdir(), "never-written.json"),
+				runId: "run-1",
+				configurationHash: "b".repeat(64),
+				datasetSha256: "a".repeat(64),
+				resolveProviders: () => ({
+					answer: answerProvider(),
+					judge: judgeProvider(),
+				}),
+			}),
+		).rejects.toThrow(
+			"MEMONGO_BENCHMARK_QA_PROTOCOL=custom-v2 does not use the durable scoring path",
+		)
+	})
 })
 
 describe("resolveBenchmarkOfficialJudgeProvider", () => {
