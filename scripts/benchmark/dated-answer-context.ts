@@ -59,8 +59,6 @@ export function renderDatedPassageLines(
 		const label =
 			role !== undefined ? (DATED_ANSWER_ROLE_LABELS[role] ?? role) : undefined
 		const datePrefix = dates.length > 0 ? ` [${dates.join("; ")}]` : ""
-		// B9-2: only add the role label when the passage text does not
-		// already start with the same label.
 		const rolePrefix =
 			label !== undefined && !passageAlreadyCarriesRoleLabel(passage, label)
 				? ` ${label}:`

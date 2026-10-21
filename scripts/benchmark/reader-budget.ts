@@ -4,7 +4,7 @@ import o200kBase from "js-tiktoken/ranks/o200k_base"
 import type { RoundPartnerMissingReason } from "./round-units.js"
 
 /**
- * D: the custom-v3 reader budget. Token counts are a labelled estimate
+ * D: the custom-v3 reader budget. Token counts are a labeled estimate
  * from an offline o200k_base encoder, not the answer provider's tokenizer;
  * each run calibrates them against the provider-reported input tokens.
  */

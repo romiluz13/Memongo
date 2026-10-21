@@ -233,7 +233,7 @@ system prompt, judge prompt and flow, 512-token answer budget and
 - **Budget.** 16,000 estimated tokens of the whole serialized user content,
   session headers, question lines and return line included. Tokens are counted
   with `js-tiktoken` 1.0.21 `o200k_base`, which is not the answer provider's
-  tokenizer, so every count is a labelled estimate (`estimatedContextTokens`).
+  tokenizer, so every count is a labeled estimate (`estimatedContextTokens`).
 - **Admission, by relevance, never by date.** Duplicates drop first (same unit
   id or same text SHA-256; the better-ranked copy stays). Then a breadth pass
   takes each session's best unit, sessions in the order of that unit's rank,
