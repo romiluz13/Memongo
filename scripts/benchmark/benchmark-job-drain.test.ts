@@ -4,6 +4,8 @@ import {
 	awaitBenchmarkJobsDrained,
 	sleepUnlessAborted,
 } from "./benchmark-job-drain.js"
+import { hasCompleteConfigurationCoverage } from "./benchmark-run-configuration-schema.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
 
 const never = <T>() => new Promise<T>(() => {})
 
@@ -156,5 +158,39 @@ describe("awaitBenchmarkJobsDrained", () => {
 		expect(rejection(await outcome(drain(), 60_000))).toMatch(
 			/agent-q4: extraction job initial count did not return within 20000ms/,
 		)
+	})
+})
+
+describe("job drain stall identity", () => {
+	it("records the raw stall setting and its resolved default", () => {
+		const unset = producedRunConfiguration()
+		expect(
+			unset.configuration.settings["env.MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS"],
+		).toBeNull()
+		expect(unset.configuration.settings.effectiveJobDrainStallMs).toBe(600_000)
+		expect(hasCompleteConfigurationCoverage(unset.configuration.settings)).toBe(
+			true,
+		)
+
+		const configured = producedRunConfiguration({
+			MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS: "90000",
+		})
+		expect(
+			configured.configuration.settings[
+				"env.MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS"
+			],
+		).toBe("90000")
+		expect(configured.configuration.settings.effectiveJobDrainStallMs).toBe(
+			90_000,
+		)
+		expect(configured.configurationHash).not.toBe(unset.configurationHash)
+
+		const invalid = producedRunConfiguration({
+			MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS: "0",
+		})
+		expect(invalid.configuration.settings.effectiveJobDrainStallMs).toBe(
+			600_000,
+		)
+		expect(invalid.configurationHash).not.toBe(unset.configurationHash)
 	})
 })

@@ -273,6 +273,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
 				300_000,
 			),
+			effectiveJobDrainStallMs: resolveJobDrainStallMs(),
 		}
 		for (const name of BENCHMARK_MONGO_CLIENT_SETTING_NAMES) {
 			settings[`configuredMongoClient.${name}`] = mongoCfg[name] ?? null

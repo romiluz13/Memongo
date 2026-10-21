@@ -296,9 +296,11 @@ QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage (`b02-keyed-v4`) includes the judge model, auth
+run cannot verify. Coverage (`b02-keyed-v5`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
-credential, and the configured MongoDB connection inputs described below.
+credential, the configured MongoDB connection inputs described below, and the
+extraction-job drain stall window (`MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS`, raw
+and resolved), so a `b02-keyed-v4` manifest does not resume.
 Checkpoints without a valid manifest, including every earlier run, every
 `b02-keyed-v1` run without connection inputs and every `b02-judge-v1` run with
 plain sha256 fingerprints, stay descriptive and are refused for resume: equal hashes alone once missed a
