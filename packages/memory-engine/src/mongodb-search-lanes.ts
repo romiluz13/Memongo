@@ -20,6 +20,11 @@ import {
 } from "./mongodb-search-budget.js"
 import type { MemorySearchResult } from "./types.js"
 import {
+	EVENT_RESULT_PROJECTION,
+	runEventRankFusion,
+} from "./mongodb-event-rank-fusion.js"
+import { selectSessionScopedTurns } from "./mongodb-session-scoped-selector.js"
+import {
 	buildSearchFilterEquals,
 	deduplicateSearchResults,
 	mapEventSearchDocToResult,
@@ -33,7 +38,6 @@ import {
 	isTemporalCoverageQuery,
 	orderTemporalCoverageBySession,
 	orderTemporalCoverageByTimeBucket,
-	scoreTemporalCoverageSessionEvent,
 } from "./mongodb-search-temporal.js"
 import type { CanonicalEvent } from "./mongodb-events.js"
 import {
@@ -42,149 +46,9 @@ import {
 } from "./mongodb-search.js"
 import { buildEventLifecycleClause } from "./mongodb-temporal.js"
 import {
-	type SearchBudgetReason,
-	SearchBudgetDeniedError,
 	type SearchTierOutcomeSink,
 	toTypedSearchError,
 } from "./search-outcomes.js"
-
-/**
- * M2 decision 5: the turn-precision and conversation-evidence event lanes
- * are one native `$rankFusion` aggregate on events, vector and text inputs.
- * The weights are the former JavaScript RRF's equal weights, and the
- * server's fixed rank constant 60 is that RRF's k (mongodb-hybrid.ts
- * rrfScore), so the fusion policy is unchanged. One aggregate means one
- * outcome: a failure or a denial fails the lane, and no branch survives
- * alone. https://www.mongodb.com/docs/manual/reference/operator/aggregation/rankFusion/
- */
-const EVENT_FUSION_WEIGHTS = { vector: 1, text: 1 } as const
-
-/** One fused aggregate plus the embed of its autoEmbed vector input. */
-const EVENT_FUSION_COST = { aggregations: 1, embeds: 1 } as const
-
-const EVENT_RESULT_PROJECTION: Document = {
-	_id: 0,
-	eventId: 1,
-	body: 1,
-	role: 1,
-	sessionId: 1,
-	timestamp: 1,
-	scope: 1,
-	scopeRef: 1,
-	accessCount: 1,
-}
-
-async function runEventRankFusion(params: {
-	db: Db
-	prefix: string
-	query: string
-	maxResults: number
-	numCandidates: number
-	capabilities: DetectedCapabilities
-	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
-	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
-	/** The canonical identity/time predicate: the vector prefilter and the post-stage revalidation of both inputs. */
-	canonicalFilter: Document
-	textFilters: Document[]
-	textShould?: Document[]
-	lifecycleMatch: Document
-	consumeWork: (cost: typeof EVENT_FUSION_COST) => boolean
-	denialReason: (cost: typeof EVENT_FUSION_COST) => SearchBudgetReason
-	onTierOutcome?: SearchTierOutcomeSink
-}): Promise<MemorySearchResult[]> {
-	if (
-		!params.capabilities.vectorSearch ||
-		!params.capabilities.textSearch ||
-		!params.capabilities.rankFusion ||
-		params.embeddingMode !== "automated"
-	) {
-		params.onTierOutcome?.({
-			stage: "rank-fusion",
-			outcome: "not-applicable",
-			reason: "capability-absent",
-		})
-		return []
-	}
-	// P3.2 / decision 18: the inline $vectorSearch input bypasses
-	// buildVectorSearchStage, so the fused aggregate and its embed are
-	// charged here as one pair; a refusal runs nothing.
-	if (!params.consumeWork(EVENT_FUSION_COST)) {
-		throw new SearchBudgetDeniedError({
-			stage: "rank-fusion",
-			reason: params.denialReason(EVENT_FUSION_COST),
-		})
-	}
-	// Both inputs carry the same identity, time and lifecycle predicate
-	// before their bounds: the Search stages read the indexed copy, which can
-	// lag an owner/scope/session mutation, a retraction or an expiry, so the
-	// hydrated document is re-checked inside each input.
-	const pipeline: Document[] = [
-		{
-			$rankFusion: {
-				input: {
-					pipelines: {
-						vector: [
-							{
-								$vectorSearch: {
-									index: `${params.prefix}events_vector`,
-									path: "body",
-									query: { text: params.query },
-									model: params.queryEmbeddingModel,
-									filter: params.canonicalFilter,
-									numCandidates: params.numCandidates,
-									limit: params.maxResults,
-									returnStoredSource: false,
-								},
-							},
-							...freshnessRevalidationStages(params.canonicalFilter),
-							{ $match: params.lifecycleMatch },
-						],
-						text: [
-							{
-								$search: {
-									index: `${params.prefix}events_text`,
-									compound: {
-										filter: params.textFilters,
-										must: [{ text: { query: params.query, path: "body" } }],
-										...(params.textShould && params.textShould.length > 0
-											? { should: params.textShould }
-											: {}),
-									},
-								},
-							},
-							...freshnessRevalidationStages(params.canonicalFilter),
-							{ $match: params.lifecycleMatch },
-							{ $limit: params.maxResults },
-						],
-					},
-				},
-				combination: { weights: EVENT_FUSION_WEIGHTS },
-			},
-		},
-		// Each input is bounded at maxResults, so the fused set holds at most
-		// twice that; the lane's composition below trims to maxResults.
-		{ $limit: params.maxResults * 2 },
-		{ $project: { ...EVENT_RESULT_PROJECTION, score: { $meta: "score" } } },
-	]
-	let docs: Document[]
-	try {
-		docs = await eventsCollection(params.db, params.prefix)
-			// P3.8: user-driven Search pipelines carry a maxTimeMS ceiling.
-			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
-			.toArray()
-	} catch (err) {
-		throw toTypedSearchError(err, "rank-fusion")
-	}
-	params.onTierOutcome?.({
-		stage: "rank-fusion",
-		outcome: docs.length > 0 ? "ok" : "ok-empty",
-		...(docs.length > 0 ? {} : { reason: "zero-hits" as const }),
-		resultCount: docs.length,
-	})
-	return docs
-		.map((doc) => mapEventSearchDocToResult(doc, "turn-fusion"))
-		.filter((result): result is MemorySearchResult => Boolean(result))
-}
 
 async function expandTemporalCoverageSessionEvents(params: {
 	db: Db
@@ -199,145 +63,33 @@ async function expandTemporalCoverageSessionEvents(params: {
 	maxEvents: number
 	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<MemorySearchResult[]> {
-	const sessionIds = [...new Set(params.sessionIds)].filter(Boolean)
-	if (sessionIds.length === 0) {
-		params.onTierOutcome?.({
-			stage: "plan",
-			outcome: "not-applicable",
-			reason: "no-candidates",
-		})
-		return []
-	}
-	// M2 (G1-28): the hit sessions' user turns are selected through $search
-	// with the session ids in compound.filter. The lane's terms are an
-	// optional `should`, so a session opener without a term match stays a
-	// candidate while term-bearing turns rank first under the bound. The
-	// indexed copy can lag an owner/scope/session mutation, a retraction or
-	// an expiry, so the hydrated document is re-checked post-stage.
-	const canonicalFilter: Document = {
-		agentId: params.agentId,
-		scope: params.scope,
-		scopeRef: params.scopeRef,
-		sessionId: { $in: sessionIds },
-		role: "user",
-		timestamp: { $lte: params.questionDate },
-	}
-	const pipeline: Document[] = [
-		{
-			$search: {
-				index: `${params.prefix}events_text`,
-				compound: {
-					filter: [
-						buildSearchFilterEquals("agentId", params.agentId),
-						buildSearchFilterEquals("scope", params.scope),
-						buildSearchFilterEquals("scopeRef", params.scopeRef),
-						buildSearchFilterEquals("sessionId", sessionIds),
-						buildSearchFilterEquals("role", "user"),
-						{ range: { path: "timestamp", lte: params.questionDate } },
-					].filter((value): value is Document => Boolean(value)),
-					should: [{ text: { query: params.terms, path: "body" } }],
-				},
-			},
+	const picked = await selectSessionScopedTurns({
+		db: params.db,
+		prefix: params.prefix,
+		namespace: {
+			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
 		},
-		...freshnessRevalidationStages(canonicalFilter),
-		{ $match: buildEventLifecycleClause({ asOf: params.questionDate }) },
-		{ $limit: Math.max(params.maxEvents * 4, sessionIds.length * 6) },
-		{ $project: EVENT_RESULT_PROJECTION },
-	]
-	let searched: Document[]
-	try {
-		searched = await runSearchAggregateWithRetry(
-			eventsCollection(params.db, params.prefix),
-			pipeline,
-			{ stage: "atlas-search" },
-		)
-	} catch (err) {
-		throw toTypedSearchError(err, "atlas-search")
-	}
-	params.onTierOutcome?.({
-		stage: "atlas-search",
-		outcome: searched.length > 0 ? "ok" : "ok-empty",
-		...(searched.length > 0 ? {} : { reason: "zero-hits" as const }),
-		resultCount: searched.length,
+		sessionIds: params.sessionIds,
+		asOf: params.questionDate,
+		perSession: params.maxPerSession,
+		policy: {
+			kind: "temporal-terms",
+			terms: params.terms,
+			candidateLimit: params.maxEvents * 4,
+		},
+		onTierOutcome: params.onTierOutcome,
 	})
-	// The per-session pick below reads each session's turns in time order,
-	// whatever order Search returned them in.
-	const docs = searched.toSorted((left, right) => {
-		const byTime =
-			(left.timestamp instanceof Date ? left.timestamp.getTime() : 0) -
-			(right.timestamp instanceof Date ? right.timestamp.getTime() : 0)
-		return byTime !== 0
-			? byTime
-			: String(left.eventId).localeCompare(String(right.eventId))
-	})
-	const bySession = new Map<string, Document[]>()
-	for (const doc of docs) {
-		if (
-			typeof doc.sessionId !== "string" ||
-			!sessionIds.includes(doc.sessionId)
-		) {
-			continue
-		}
-		const bucket = bySession.get(doc.sessionId)
-		if (bucket) {
-			bucket.push(doc)
-		} else {
-			bySession.set(doc.sessionId, [doc])
-		}
-	}
-
-	const selected: MemorySearchResult[] = []
-	for (const sessionId of sessionIds) {
-		const sessionDocs = bySession.get(sessionId) ?? []
-		if (sessionDocs.length === 0) continue
-		const scored = sessionDocs
-			.map((doc, index) => ({
-				doc,
-				index,
-				score: scoreTemporalCoverageSessionEvent(
-					typeof doc.body === "string" ? doc.body : "",
-					params.terms,
-					doc.timestamp instanceof Date ? doc.timestamp : undefined,
-					params.questionDate,
-				),
-			}))
-			.toSorted((left, right) => {
-				const scoreDelta = right.score - left.score
-				return Math.abs(scoreDelta) > 0.000001
-					? scoreDelta
-					: left.index - right.index
-			})
-		const picked = new Map<Document, number>()
-		picked.set(
-			sessionDocs[0],
-			scoreTemporalCoverageSessionEvent(
-				typeof sessionDocs[0].body === "string" ? sessionDocs[0].body : "",
-				params.terms,
-				sessionDocs[0].timestamp instanceof Date
-					? sessionDocs[0].timestamp
-					: undefined,
-				params.questionDate,
-			),
-		)
-		for (const entry of scored) {
-			picked.set(entry.doc, entry.score)
-			if (picked.size >= params.maxPerSession) break
-		}
-		for (const [doc, score] of picked) {
-			const result = mapEventSearchDocToResult({ ...doc, score }, "turn-text")
-			if (!result) continue
-			selected.push({
-				...result,
-				provenance: {
-					...(result.provenance ?? {}),
-					lane: "temporal-session-expansion",
-					temporalCoverage: true,
-					temporalSessionExpansion: true,
-				},
-			})
-		}
-	}
-
+	const selected = picked.map(({ result }) => ({
+		...result,
+		provenance: {
+			...(result.provenance ?? {}),
+			lane: "temporal-session-expansion",
+			temporalCoverage: true,
+			temporalSessionExpansion: true,
+		},
+	}))
 	return orderTemporalCoverageByTimeBucket(
 		orderTemporalCoverageBySession(selected),
 	).slice(0, params.maxEvents)
