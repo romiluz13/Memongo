@@ -412,6 +412,7 @@ const LANE_COLLECTIONS: Partial<Record<SearchLane, readonly string[]>> = {
 	"conversation-evidence": ["events", "chunks"],
 	"temporal-coverage": ["events", "chunks"],
 	"turn-precision": ["events", "chunks"],
+	"session-turn-recall": ["events"],
 }
 
 /**

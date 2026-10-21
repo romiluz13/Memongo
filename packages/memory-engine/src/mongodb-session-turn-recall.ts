@@ -11,7 +11,6 @@ import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { searchResultIdentityKey } from "./mongodb-search-ranking.js"
 import {
 	type SessionNamespace,
-	type SessionScopedTurn,
 	selectSessionScopedTurns,
 } from "./mongodb-session-scoped-selector.js"
 import type { SearchTierOutcomeSink } from "./search-outcomes.js"
@@ -33,9 +32,10 @@ export function isSessionTurnRecallEnabled(): boolean {
 /**
  * Stage 2: seeds are the distinct sessions of the first R stage-1 results,
  * up to S, in rank order. One session-scoped fused query (namespace and
- * seeds on both inputs) keeps the top T turns per seed. Each recalled turn
- * goes right after its session's best stage-1 result, unless its canonical
- * id or its text is already present. Stage-1 results keep their order.
+ * seeds on both inputs) keeps the top T turns per seed. Returns only the
+ * recalled turns whose canonical id and text are not already present, with
+ * their lane, seed rank and in-session rank; `insertRecalledTurns` places
+ * them.
  */
 export async function recallSessionTurns(params: {
 	db: Db
@@ -52,7 +52,7 @@ export async function recallSessionTurns(params: {
 	onTierOutcome?: SearchTierOutcomeSink
 }): Promise<MemorySearchResult[]> {
 	const seeds = selectSeedSessions(params.results)
-	const recalled = await selectSessionScopedTurns({
+	const picked = await selectSessionScopedTurns({
 		db: params.db,
 		prefix: params.prefix,
 		namespace: params.namespace,
@@ -69,7 +69,55 @@ export async function recallSessionTurns(params: {
 		},
 		onTierOutcome: params.onTierOutcome,
 	})
-	return mergeRecalledTurns(params.results, recalled, seeds)
+	const seenIds = new Set(params.results.map(searchResultIdentityKey))
+	const seenTexts = new Set(params.results.map(textDigest))
+	const recalled: MemorySearchResult[] = []
+	for (const { result, sessionId, inSessionRank } of picked) {
+		const id = searchResultIdentityKey(result)
+		const digest = textDigest(result)
+		if (seenIds.has(id) || seenTexts.has(digest)) continue
+		seenIds.add(id)
+		seenTexts.add(digest)
+		recalled.push({
+			...result,
+			sessionId,
+			provenance: {
+				...(result.provenance ?? {}),
+				lane: "session-turn-recall",
+				sessionTurnRecall: true,
+				seedRank: seeds.indexOf(sessionId) + 1,
+				inSessionRank,
+				fusedScore: result.score,
+			},
+		})
+	}
+	return recalled
+}
+
+/**
+ * Each recalled turn goes right after the first (best) stage-1 result of its
+ * session, in recall order, and takes that result's score so the final
+ * order-preserving normalization keeps it in place. Stage-1 order is kept.
+ */
+export function insertRecalledTurns(
+	results: MemorySearchResult[],
+	recalled: MemorySearchResult[],
+): MemorySearchResult[] {
+	const bySession = new Map<string, MemorySearchResult[]>()
+	for (const turn of recalled) {
+		const sessionId = turn.sessionId as string
+		bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), turn])
+	}
+	const merged: MemorySearchResult[] = []
+	for (const result of results) {
+		merged.push(result)
+		const sessionId = result.sessionId?.trim()
+		const turns = sessionId ? bySession.get(sessionId) : undefined
+		if (!sessionId || !turns) continue
+		merged.push(...turns.map((turn) => ({ ...turn, score: result.score })))
+		bySession.delete(sessionId)
+	}
+	return merged
 }
 
 function selectSeedSessions(results: MemorySearchResult[]): string[] {
@@ -87,46 +135,4 @@ function textDigest(result: MemorySearchResult): string {
 	return createHash("sha256")
 		.update(result.text ?? result.snippet, "utf8")
 		.digest("hex")
-}
-
-function mergeRecalledTurns(
-	results: MemorySearchResult[],
-	recalled: SessionScopedTurn[],
-	seeds: string[],
-): MemorySearchResult[] {
-	const seenIds = new Set(results.map(searchResultIdentityKey))
-	const seenTexts = new Set(results.map(textDigest))
-	const bySession = new Map<string, MemorySearchResult[]>()
-	for (const { result, sessionId, inSessionRank } of recalled) {
-		const id = searchResultIdentityKey(result)
-		const digest = textDigest(result)
-		if (seenIds.has(id) || seenTexts.has(digest)) continue
-		seenIds.add(id)
-		seenTexts.add(digest)
-		const bucket = bySession.get(sessionId) ?? []
-		bucket.push({
-			...result,
-			provenance: {
-				...(result.provenance ?? {}),
-				lane: "session-turn-recall",
-				sessionTurnRecall: true,
-				seedRank: seeds.indexOf(sessionId) + 1,
-				inSessionRank,
-				fusedScore: result.score,
-			},
-		})
-		bySession.set(sessionId, bucket)
-	}
-	const merged: MemorySearchResult[] = []
-	for (const result of results) {
-		merged.push(result)
-		const sessionId = result.sessionId?.trim()
-		const turns = sessionId ? bySession.get(sessionId) : undefined
-		if (!sessionId || !turns) continue
-		// The best stage-1 result of a session is its first; its score is
-		// the recalled turns' place in the final, order-preserving scale.
-		merged.push(...turns.map((turn) => ({ ...turn, score: result.score })))
-		bySession.delete(sessionId)
-	}
-	return merged
 }

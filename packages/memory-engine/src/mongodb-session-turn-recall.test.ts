@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 import {
 	SESSION_TURN_RECALL_SEED_SESSIONS,
+	insertRecalledTurns,
 	recallSessionTurns,
 } from "./mongodb-session-turn-recall.js"
 import { SearchLaneError, type SearchTierOutcome } from "./search-outcomes.js"
@@ -77,7 +78,7 @@ async function recall(
 	overrides: Partial<Parameters<typeof recallSessionTurns>[0]> = {},
 ) {
 	const rows: SearchTierOutcome[] = []
-	const merged = await recallSessionTurns({
+	const recalled = await recallSessionTurns({
 		db,
 		prefix: "mem_",
 		query: "when does the greenhouse lease renew",
@@ -91,7 +92,11 @@ async function recall(
 		onTierOutcome: (row) => rows.push(row),
 		...overrides,
 	})
-	return { merged, rows }
+	return {
+		merged: insertRecalledTurns(overrides.results ?? results, recalled),
+		recalled,
+		rows,
+	}
 }
 
 const vectorFilterOf = (pipeline: Document[]) =>

@@ -143,6 +143,11 @@ import {
 	stripSessionSummaryTurnProvenance,
 } from "./mongodb-search-ranking.js"
 import {
+	insertRecalledTurns,
+	isSessionTurnRecallEnabled,
+	recallSessionTurns,
+} from "./mongodb-session-turn-recall.js"
+import {
 	isConversationEvidenceQuery,
 	orderTimelineAfterSourceEvidence,
 } from "./mongodb-search-temporal.js"
@@ -2374,7 +2379,30 @@ async function searchV2WithBudget(
 		})
 		latencyByPath["phase:lane-controls"] = Date.now() - laneControlsStartedAt
 
-		const finalResults = laneControlled.results
+		// C-1 stage 2, opt-in: unset, no query runs and no row is recorded.
+		const recalledTurns = isSessionTurnRecallEnabled()
+			? await timeLane("phase:session-turn-recall", () =>
+					runLane("session-turn-recall", (onTierOutcome) =>
+						recallSessionTurns({
+							onTierOutcome,
+							db,
+							prefix,
+							query: searchQuery,
+							questionDate: context.searchOptions?.questionDate,
+							namespace: { agentId, scope, scopeRef: agentScopeRef },
+							results: laneControlled.results,
+							numCandidates,
+							capabilities,
+							embeddingMode,
+							queryEmbeddingModel,
+						}),
+					),
+				)
+			: []
+		const finalResults =
+			recalledTurns.length > 0
+				? insertRecalledTurns(laneControlled.results, recalledTurns)
+				: laneControlled.results
 		const laneControlSummary = laneControlled.summary
 
 		// Ranking boosts run after lane normalization and can compound above 1.
