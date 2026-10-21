@@ -290,6 +290,8 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			sessionTurnRecallTurnsPerSession: SESSION_TURN_RECALL_TURNS_PER_SESSION,
 			readerBudgetEstimatedTokens: READER_BUDGET_ESTIMATED_TOKENS,
 			readerBudgetTokenizer: READER_BUDGET_TOKENIZER,
+			benchmarkArm: null,
+			benchmarkArmQaProtocol: null,
 		}
 		for (const name of BENCHMARK_MONGO_CLIENT_SETTING_NAMES) {
 			settings[`configuredMongoClient.${name}`] = mongoCfg[name] ?? null

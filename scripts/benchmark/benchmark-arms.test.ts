@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest"
 import {
 	BENCHMARK_ARMS_ENV,
+	benchmarkArmConfiguration,
 	benchmarkArmsRunError,
 	parseBenchmarkArms,
 	resolveBenchmarkArms,
 } from "./benchmark-arms.js"
+import {
+	BENCHMARK_CONFIGURATION_COVERAGE,
+	hasCompleteConfigurationCoverage,
+} from "./benchmark-run-configuration-schema.js"
+import { producedRunConfiguration } from "./benchmark-run-configuration.fixture.js"
 
 const FOUR_ARMS = "v1=custom-v1,v2=custom-v2,v3=custom-v3,v3r=custom-v3+recall"
 
@@ -117,5 +123,54 @@ describe("benchmarkArmsRunError", () => {
 				{ publishable: false },
 			),
 		).toBe("a paired run needs at least two arms; got 1")
+	})
+})
+
+describe("arm configuration identity", () => {
+	it("records the arms setting and no arm on the run identity", () => {
+		const unset = producedRunConfiguration().configuration.settings
+		expect(unset[`env.${BENCHMARK_ARMS_ENV}`]).toBeNull()
+		expect(unset.benchmarkArm).toBeNull()
+		expect(unset.benchmarkArmQaProtocol).toBeNull()
+		expect(hasCompleteConfigurationCoverage(unset)).toBe(true)
+		const run = producedRunConfiguration({ [BENCHMARK_ARMS_ENV]: FOUR_ARMS })
+		expect(run.configuration.settings[`env.${BENCHMARK_ARMS_ENV}`]).toBe(
+			FOUR_ARMS,
+		)
+		expect(hasCompleteConfigurationCoverage(run.configuration.settings)).toBe(
+			true,
+		)
+	})
+
+	it("gives each arm its own covered identity naming its protocol and recall", () => {
+		const run = producedRunConfiguration({ [BENCHMARK_ARMS_ENV]: FOUR_ARMS })
+		const identities = parseBenchmarkArms(FOUR_ARMS).map((arm) =>
+			benchmarkArmConfiguration(run.configuration, arm),
+		)
+		const hashes = new Set([
+			run.configurationHash,
+			...identities.map((identity) => identity.configurationHash),
+		])
+		expect(hashes.size).toBe(5)
+		for (const identity of identities) {
+			expect(
+				hasCompleteConfigurationCoverage(identity.configuration.settings),
+			).toBe(true)
+		}
+		expect(identities[3]?.configuration.settings).toMatchObject({
+			benchmarkArm: "v3r",
+			benchmarkArmQaProtocol: "custom-v3",
+			effectiveSessionTurnRecall: true,
+		})
+		expect(identities[0]?.configuration.settings).toMatchObject({
+			benchmarkArm: "v1",
+			benchmarkArmQaProtocol: "custom-v1",
+			effectiveSessionTurnRecall: false,
+		})
+		expect(run.configuration.settings.benchmarkArm).toBeNull()
+	})
+
+	it("moves coverage past b02-keyed-v7 so an older manifest does not resume", () => {
+		expect(BENCHMARK_CONFIGURATION_COVERAGE).toBe("b02-keyed-v8")
 	})
 })

@@ -8,6 +8,10 @@
  * the first arm is the paired report's baseline. Example:
  *   v1=custom-v1,v2=custom-v2,v3=custom-v3,v3r=custom-v3+recall
  */
+import {
+	type OperationRunConfiguration,
+	hashOperationRunConfiguration,
+} from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import type { E2eQaProtocol } from "../mongodb-e2e-qa.js"
 
 export const BENCHMARK_ARMS_ENV = "MEMONGO_BENCHMARK_ARMS"
@@ -122,4 +126,27 @@ export function benchmarkArmsRunError(
 		return `${BENCHMARK_ARMS_ENV} cannot run on the publishable full500 run: use --questions or --sample`
 	}
 	return null
+}
+
+/**
+ * The arm's own configuration identity: the run's, naming the arm and its
+ * QA protocol, with the turn recall mode the arm's searches use.
+ */
+export function benchmarkArmConfiguration(
+	run: OperationRunConfiguration,
+	arm: BenchmarkArm,
+): { configuration: OperationRunConfiguration; configurationHash: string } {
+	const configuration: OperationRunConfiguration = {
+		...run,
+		settings: {
+			...run.settings,
+			benchmarkArm: arm.name,
+			benchmarkArmQaProtocol: arm.protocol,
+			effectiveSessionTurnRecall: arm.sessionTurnRecall,
+		},
+	}
+	return {
+		configuration,
+		configurationHash: hashOperationRunConfiguration(configuration),
+	}
 }

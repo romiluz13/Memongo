@@ -32,6 +32,6 @@ describe("reader budget identity", () => {
 	})
 
 	it("moves coverage past b02-keyed-v6 so an older manifest does not resume", () => {
-		expect(BENCHMARK_CONFIGURATION_COVERAGE).toBe("b02-keyed-v7")
+		expect(BENCHMARK_CONFIGURATION_COVERAGE).not.toBe("b02-keyed-v6")
 	})
 })

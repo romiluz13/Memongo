@@ -12,7 +12,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v7"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v8"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -23,6 +23,7 @@ export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
 	"MEMONGO_BENCHMARK_ANSWER_MODEL",
 	"MEMONGO_BENCHMARK_ANSWER_PROVIDER",
 	"MEMONGO_BENCHMARK_ANSWER_TOKEN_PARAM",
+	"MEMONGO_BENCHMARK_ARMS",
 	"MEMONGO_BENCHMARK_STRICT",
 	"MEMONGO_BENCHMARK_DERIVED_WORK_MODE",
 	"MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS",
@@ -192,6 +193,11 @@ const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	sessionTurnRecallTurnsPerSession: scalar,
 	readerBudgetEstimatedTokens: scalar,
 	readerBudgetTokenizer: scalar,
+	// Null on a run; an arm's identity names the arm and its QA protocol.
+	benchmarkArm: nullable(trimmedText),
+	benchmarkArmQaProtocol: nullable(
+		oneOf(["custom-v1", "custom-v2", "custom-v3"]),
+	),
 	answerProviderSource: oneOf(["dedicated", "enrichment-fallback"]),
 }
 
