@@ -604,6 +604,63 @@ describe("runBenchmarkJudgedAnswers", () => {
 		])
 	})
 
+	it("forwards each call's fixed outcome into the accounting per role (B5)", async () => {
+		process.env.MEMONGO_ENRICHMENT_API_KEY = "test-key"
+		process.env.MEMONGO_ENRICHMENT_BASE_URL = "https://bench.example.invalid"
+		process.env.MEMONGO_ENRICHMENT_MODEL = "answer-model"
+		process.env.MEMONGO_BENCHMARK_JUDGE_MODEL = "judge-model"
+		const recorded: Array<{ operation: string; metadata: unknown }> = []
+		const record = (operation: string, metadata?: Record<string, unknown>) =>
+			recorded.push({ operation, metadata: { ...metadata } })
+		const accounting = {
+			snapshot: () => {
+				throw new Error("not used in this test")
+			},
+			recordAttempt: () => {},
+			recordSuccess: record,
+			recordFailure: record,
+		} as unknown as BenchmarkRunAccounting
+		vi.mocked(runE2eQa).mockImplementationOnce(async (qaParams) => {
+			qaParams.onProviderCall?.("answer-generation", "succeeded", undefined, {
+				status: "truncated",
+				finishReason: "length",
+			})
+			qaParams.onProviderCall?.("decoy-judge", "failed", undefined, {
+				status: "transport-failure",
+			})
+			return buildUnavailableE2eQaEnvelope({
+				reason: "stubbed",
+				eligibleCases: 1,
+			})
+		})
+		await runBenchmarkJudgedAnswers({
+			datasetKind: "longmemeval",
+			materialByCaseId: oneAnswerMaterial(),
+			resumedFromCheckpoint: false,
+			accounting,
+		})
+		const providerName = vi.mocked(runE2eQa).mock.calls[0]?.[0]?.provider.name
+		expect(recorded).toEqual([
+			{
+				operation: "answer-generation",
+				metadata: {
+					provider: providerName,
+					model: "answer-model",
+					status: "truncated",
+					finishReason: "length",
+				},
+			},
+			{
+				operation: "decoy-judge",
+				metadata: {
+					provider: providerName,
+					model: "judge-model",
+					status: "transport-failure",
+				},
+			},
+		])
+	})
+
 	it.each([
 		[
 			"failedTurns",

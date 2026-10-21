@@ -1842,7 +1842,17 @@ export type BenchmarkOperationAccounting = {
 	callsWithUsage?: number
 	callsMissingUsage?: number
 	usageComplete?: boolean
+	/**
+	 * Ended calls by fixed outcome status and by allowlisted finish reason,
+	 * present once a call reported one (benchmark answer and judge calls).
+	 */
+	statusCounts?: Partial<Record<BenchmarkProviderCallStatus, number>>
+	finishReasonCounts?: Partial<Record<BenchmarkAnswerFinishReason, number>>
 }
+
+export type BenchmarkProviderCallStatus =
+	| BenchmarkAnswerAttemptStatus
+	| BenchmarkJudgeAttemptStatus
 
 export type BenchmarkCostAccounting = {
 	currency: null
@@ -1967,11 +1977,30 @@ export type BenchmarkAnswerAttemptStatus =
 	| "malformed-message"
 	| "malformed-body"
 	| "empty-body"
+	| "truncated"
 	| "invalid-json"
 	| "missing-answer"
 	| "wrong-answer-type"
 	| "empty-answer"
 	| "answer"
+
+/**
+ * Fixed classification of one answer-judge or decoy-judge call, layered like
+ * the answer attempt. Only `verdict` and `missing-verdict` score; a
+ * missing verdict scores incorrect, as before.
+ */
+export type BenchmarkJudgeAttemptStatus =
+	| "transport-failure"
+	| "refusal"
+	| "content-filter"
+	| "missing-choices"
+	| "malformed-message"
+	| "malformed-body"
+	| "empty-body"
+	| "truncated"
+	| "invalid-json"
+	| "missing-verdict"
+	| "verdict"
 
 export type BenchmarkAnswerFinishReason =
 	| "stop"
@@ -1981,17 +2010,33 @@ export type BenchmarkAnswerFinishReason =
 	| "function_call"
 	| "max_tokens"
 	| "end_turn"
+	// Gemini-native values, lowercased.
+	| "safety"
+	| "recitation"
+	| "language"
 	| "other"
+	| "blocklist"
+	| "prohibited_content"
+	| "spii"
+	| "malformed_function_call"
+	| "malformed_response"
+	| "unexpected_tool_call"
+	/** Any value outside this allowlist. */
+	| "unlisted"
 
 export type BenchmarkAnswerAttempt = {
 	layer: "transport" | "envelope" | "content"
 	status: BenchmarkAnswerAttemptStatus
 	/** Envelope shape from the provider; `unvalidated` when it reported none. */
 	shape?: EnrichmentResponseShape | "unvalidated"
-	/** Allowlisted stop signal; any other reported value is `other`. */
+	/** Lowercased, allowlisted stop signal; any other value is `unlisted`. */
 	finishReason?: BenchmarkAnswerFinishReason
 	contentBytes?: number
 	contentSha256?: string
+	/** Provider envelope identity, for reproducing the call. */
+	responseId?: string
+	responseModel?: string
+	droppedEnvelopeFields?: Array<"id" | "model">
 }
 
 /** Gate-5 extension. Populated by Task 5.E2E / Task 5.adv; null at Phase 1. */
