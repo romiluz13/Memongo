@@ -8,6 +8,7 @@ import { testOperationRunContext } from "../../packages/memory-engine/src/test-h
 import type { BenchmarkAdapterDiagnostics } from "./benchmark-adapter-diagnostics.js"
 import { readB2RunIdentity } from "./b2-join-eligibility.js"
 import {
+	buildUnavailableE2eQaEnvelope,
 	describeIngestFailures,
 	runBenchmarkJudgedAnswers,
 } from "./benchmark-answer-quality.js"
@@ -559,6 +560,34 @@ describe("B08 measurement evidence through the real scenario loop", () => {
 		const clean = await harness({})
 		await clean.run()
 		expect(qaIngest()).toMatchObject({ failedTurns: 0, failedLines: 0 })
+	})
+})
+
+describe("C-5 reader-cut metrics reach the judged-answer envelope", () => {
+	it("computes them from the judged case results of a custom-v1 run", async () => {
+		vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", "custom-v1")
+		vi.mocked(runBenchmarkJudgedAnswers).mockResolvedValueOnce({
+			...buildUnavailableE2eQaEnvelope({ reason: "fixture", eligibleCases: 1 }),
+			caseResults: [
+				{
+					caseId: "case-1",
+					candidateAnswer: "I don't know",
+					correct: false,
+					abstention: false,
+					latencyMs: 1,
+				},
+			],
+		})
+		const h = await harness({})
+		const { e2eQa } = await h.run()
+		expect(e2eQa?.readerCut?.overall.abstention).toMatchObject({
+			answerableCases: 1,
+			falseAbstentions: 1,
+			falseAbstentionRate: 1,
+		})
+		expect(
+			e2eQa?.readerCut?.byQuestionType.map((row) => row.questionType),
+		).toEqual(["untyped"])
 	})
 })
 

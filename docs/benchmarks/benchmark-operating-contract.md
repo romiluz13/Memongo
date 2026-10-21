@@ -219,6 +219,18 @@ Neither custom protocol writes a prediction sidecar, so `b2-join.ts` cannot
 compare them, and neither is the official protocol: a full500 publishable run
 refuses both.
 
+### Reader-cut metrics (custom-v1, custom-v2)
+
+A custom-protocol run adds `e2eQa.readerCut` (pooled and per question type) and
+a `readerCut` block on each matching `questionTypeBreakdown` row. Gold-turn
+recall is the share of marked gold turns whose sent status is `present` under
+`containment-v2`, pooled over the cases whose gold diagnostics apply; `unknown`
+counts as not present and is reported beside it. Abstention validity excludes
+failed cases: correct abstentions over abstention cases, and answers the
+harness's abstention rule classifies as abstaining over answerable cases. A
+rate without a denominator is `null`. Both are computed from the case results
+after the run and never feed retrieval or selection.
+
 ## Private QA diagnostic capture
 
 For a fresh official or custom-judge QA run, set

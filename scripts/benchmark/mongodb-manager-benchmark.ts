@@ -1,3 +1,4 @@
+import { attachReaderCutMetrics } from "./benchmark-reader-cut-metrics.js"
 import {
 	BenchmarkInputRejectedError,
 	type BenchmarkAdmittedDataset,
@@ -2182,6 +2183,7 @@ export class MongoDBManagerBenchmarkOps {
 		// protocol. The merge into officialMetrics happens in
 		// attachBenchmarkOperationsReport.
 		let e2eQa: BenchmarkE2eQaEnvelope | undefined
+		let questionTypeBreakdown = summary.questionTypeBreakdown
 		if (officialQaContext) {
 			// Covered = every scenario that either completed in this run or was
 			// restored from the checkpoint; official preflight guarantees a
@@ -2212,14 +2214,26 @@ export class MongoDBManagerBenchmarkOps {
 			benchmarkQaProtocol === "custom-v1" ||
 			benchmarkQaProtocol === "custom-v2"
 		) {
-			e2eQa = await runBenchmarkJudgedAnswers({
-				datasetKind: params.dataset.datasetKind,
-				materialByCaseId: e2eQaMaterialByCaseId,
-				resumedFromCheckpoint: restoredCheckpointScenarioCount > 0,
-				protocol: benchmarkQaProtocol,
-				ingest,
-				accounting: params.runContext?.accounting,
+			// C-5: reader-cut metrics come from the judged case results only.
+			const readerCut = attachReaderCutMetrics({
+				e2eQa: await runBenchmarkJudgedAnswers({
+					datasetKind: params.dataset.datasetKind,
+					materialByCaseId: e2eQaMaterialByCaseId,
+					resumedFromCheckpoint: restoredCheckpointScenarioCount > 0,
+					protocol: benchmarkQaProtocol,
+					ingest,
+					accounting: params.runContext?.accounting,
+				}),
+				breakdown: questionTypeBreakdown,
+				questionTypeByCaseId: new Map(
+					[...e2eQaMaterialByCaseId].map(([caseId, material]) => [
+						caseId,
+						material.questionType,
+					]),
+				),
 			})
+			e2eQa = readerCut.e2eQa
+			questionTypeBreakdown = readerCut.breakdown
 		}
 		// Explicitly pick only the fields defined in RelevanceBenchmarkResult
 		// to prevent any runtime-leaked properties from inflating the response
@@ -2249,7 +2263,7 @@ export class MongoDBManagerBenchmarkOps {
 				rAt5: summary.rAt5,
 				rAt10: summary.rAt10,
 				ndcgAt10: summary.ndcgAt10,
-				questionTypeBreakdown: summary.questionTypeBreakdown,
+				questionTypeBreakdown,
 				...(summary.officialMetrics
 					? { officialMetrics: summary.officialMetrics }
 					: {}),

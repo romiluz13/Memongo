@@ -1238,6 +1238,36 @@ export type MemoryBenchmarkQuestionTypeMetrics = {
 	rAt5: number
 	rAt10: number
 	ndcgAt10: number
+	/** C-5: present only when the run measured judged answers. */
+	readerCut?: MemoryBenchmarkReaderCutMetrics
+}
+
+/**
+ * C-5 acceptance metrics, computed from case results after the run and never
+ * fed back into selection. Gold-turn recall pools every marked turn of the
+ * cases whose gold diagnostics apply: `present` over `marked`, with `unknown`
+ * counted as not present. Abstention validity excludes failed cases: correct
+ * abstentions over abstention cases, and answers that abstain over answerable
+ * cases. A rate with no denominator is null.
+ */
+export type MemoryBenchmarkReaderCutMetrics = {
+	goldTurns: {
+		cases: number
+		marked: number
+		present: number
+		absent: number
+		unknown: number
+		recall: number | null
+	}
+	abstention: {
+		abstentionCases: number
+		correctAbstentions: number
+		correctAbstentionRate: number | null
+		answerableCases: number
+		falseAbstentions: number
+		falseAbstentionRate: number | null
+		failedCases: number
+	}
 }
 
 export type MemoryBenchmarkOfficialRetrievalMetrics = {
@@ -1966,6 +1996,14 @@ export type BenchmarkE2eQaEnvelope = {
 		} & BenchmarkCaseContextDiagnostics
 	>
 	unavailableReason?: string
+	/** C-5: reader-cut metrics over the case results, pooled and per category. */
+	readerCut?: {
+		goldTurnMatchRule: string
+		overall: MemoryBenchmarkReaderCutMetrics
+		byQuestionType: Array<
+			{ questionType: string } & MemoryBenchmarkReaderCutMetrics
+		>
+	}
 	/**
 	 * Slice B: official QA protocol summary (separate judge provider, dated
 	 * answer prompts, anscheck-verified hypotheses). Absent means the run
