@@ -12,6 +12,7 @@
 	"dependencies": {
 		"@memongo/client": "workspace:*",
 		"@memongo/memory-bridge": "workspace:*",
+		"js-tiktoken": "1.0.21",
 		"mongodb": "^7.7.0"
 	},
 	"devDependencies": {
