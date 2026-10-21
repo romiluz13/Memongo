@@ -112,6 +112,12 @@ export type EnrichmentResponseMeta = {
 	finishReason?: string
 	/** True when the provider explicitly refused the request. */
 	refusal?: boolean
+	/** Envelope `id`, kept only when it passes the bounded charset check. */
+	responseId?: string
+	/** Envelope `model`, kept only when it passes the bounded charset check. */
+	responseModel?: string
+	/** Envelope identity fields present but dropped by that check. */
+	droppedEnvelopeFields?: Array<"id" | "model">
 }
 
 export type EnrichmentChatResponse = {
@@ -353,6 +359,38 @@ function classifyOpenAiCompatibleResponse(json: {
 	}
 }
 
+// Identity values go into benchmark records, so only short tokens from a
+// fixed charset survive; anything else could carry response text.
+const ENVELOPE_IDENTITY_PATTERN = /^[A-Za-z0-9._:/@+-]{1,128}$/
+
+function envelopeIdentity(json: {
+	id?: unknown
+	model?: unknown
+}): Pick<
+	EnrichmentResponseMeta,
+	"responseId" | "responseModel" | "droppedEnvelopeFields"
+> {
+	const identity: Pick<
+		EnrichmentResponseMeta,
+		"responseId" | "responseModel" | "droppedEnvelopeFields"
+	> = {}
+	const dropped: Array<"id" | "model"> = []
+	for (const [field, value] of [
+		["id", json.id],
+		["model", json.model],
+	] as const) {
+		if (value === undefined || value === null) continue
+		if (typeof value === "string" && ENVELOPE_IDENTITY_PATTERN.test(value)) {
+			if (field === "id") identity.responseId = value
+			else identity.responseModel = value
+		} else {
+			dropped.push(field)
+		}
+	}
+	if (dropped.length > 0) identity.droppedEnvelopeFields = dropped
+	return identity
+}
+
 function resolveAuthStyle(
 	value: string | undefined,
 	defaultValue: EnrichmentAuthStyle,
@@ -509,6 +547,8 @@ export function createHttpProvider(
 				}
 
 				let json: {
+					id?: unknown
+					model?: unknown
 					choices?: Array<{
 						message?: { content?: string; refusal?: string }
 						finish_reason?: unknown
@@ -538,6 +578,10 @@ export function createHttpProvider(
 				}
 				const classified = classifyOpenAiCompatibleResponse(json)
 				const content = classified.content
+				const responseMeta: EnrichmentResponseMeta = {
+					...classified.responseMeta,
+					...envelopeIdentity(json),
+				}
 				// C-017: keep the transport's usage block so spend accounting can
 				// record tokens per call. Numbers are validated — a gateway that
 				// reports non-finite counts must not poison the ledger.
@@ -564,8 +608,8 @@ export function createHttpProvider(
 							}
 						: undefined
 				return usage
-					? { content, usage, responseMeta: classified.responseMeta }
-					: { content, responseMeta: classified.responseMeta }
+					? { content, usage, responseMeta }
+					: { content, responseMeta }
 			} catch (err) {
 				throw providerFailure(err, timeoutMs)
 			} finally {
