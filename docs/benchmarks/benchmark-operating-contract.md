@@ -444,7 +444,9 @@ run cannot verify. Coverage (`b02-keyed-v7`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, the configured MongoDB connection inputs described below, the
 extraction-job drain stall window (`MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS`, raw
-and resolved), and session turn recall (`MEMONGO_SESSION_TURN_RECALL` raw,
+and resolved; unset or blank resolves to 600000 ms, and a set value that is not
+a positive, finite number of milliseconds fails the run naming the variable and
+the rule, without echoing the value), and session turn recall (`MEMONGO_SESSION_TURN_RECALL` raw,
 `effectiveSessionTurnRecall`, and its frozen seed-result, seed-session and
 turns-per-session bounds), and the custom-v3 reader budget
 (`readerBudgetEstimatedTokens`, `readerBudgetTokenizer`), so a `b02-keyed-v6`
