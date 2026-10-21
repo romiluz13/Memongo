@@ -69,3 +69,18 @@ export function renderDatedPassageLines(
 	})
 	return lines
 }
+
+/**
+ * One turn's text with its speaking-role label, under the B9-2 rule: the
+ * label is added only when the text does not already start with it.
+ */
+export function roleLabeledText(
+	text: string,
+	role: MemoryResultRole | undefined,
+): string {
+	if (role === undefined) return text
+	const label = DATED_ANSWER_ROLE_LABELS[role] ?? role
+	return passageAlreadyCarriesRoleLabel(text, label)
+		? text
+		: `${label}: ${text}`
+}
