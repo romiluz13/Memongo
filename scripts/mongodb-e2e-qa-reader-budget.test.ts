@@ -160,12 +160,14 @@ describe("custom-v3 per-case record", () => {
 			],
 			[{ inputTokens: 171, outputTokens: 9 }],
 		)
+		const system = answers[0]?.messages[0]?.content ?? ""
 		const sent = answers[0]?.messages[1]?.content ?? ""
 		expect(sent).not.toContain("Reed warblers")
 		expect(envelope.caseResults[0]?.readerBudget).toEqual({
 			tokenizer: "js-tiktoken@1.0.21/o200k_base",
 			budgetEstimatedTokens: 16_000,
 			estimatedContextTokens: estimateTokens(sent),
+			estimatedRequestTokens: estimateTokens(system) + estimateTokens(sent),
 			budgetExceededByFirstUnit: false,
 			units: { candidates: 4, admitted: 2, deduplicated: 1, skipped: 1 },
 			skippedRanks: [3],
@@ -322,7 +324,12 @@ describe("custom-v3 per-run calibration", () => {
 			readerUnits: [HERON_UNITS[1] as ReaderUnit],
 		})
 
-	it("divides provider input tokens by estimated tokens over calls with usage", async () => {
+	const userTokens = (call: Call | undefined) =>
+		estimateTokens(call?.messages[1]?.content ?? "")
+	const requestTokens = (call: Call | undefined) =>
+		estimateTokens(call?.messages[0]?.content ?? "") + userTokens(call)
+
+	it("divides provider input tokens by the estimated system plus user tokens over calls with usage", async () => {
 		const { answers, envelope } = await run(
 			[heronCase(), second()],
 			[
@@ -330,10 +337,9 @@ describe("custom-v3 per-run calibration", () => {
 				{ inputTokens: 120, outputTokens: 5 },
 			],
 		)
-		const estimated = answers.map((call) =>
-			estimateTokens(call.messages[1]?.content ?? ""),
-		)
-		const total = (estimated[0] as number) + (estimated[1] as number)
+		const context = userTokens(answers[0]) + userTokens(answers[1])
+		const request = requestTokens(answers[0]) + requestTokens(answers[1])
+		expect(request).toBeGreaterThan(context)
 		expect(envelope.readerBudgetCalibration).toEqual({
 			tokenizer: "js-tiktoken@1.0.21/o200k_base",
 			budgetEstimatedTokens: 16_000,
@@ -341,8 +347,9 @@ describe("custom-v3 per-run calibration", () => {
 			callsWithUsage: 2,
 			callsMissingUsage: 0,
 			providerInputTokens: 420,
-			estimatedContextTokens: total,
-			ratio: 420 / total,
+			estimatedContextTokens: context,
+			estimatedRequestTokens: request,
+			ratio: 420 / request,
 			complete: true,
 		})
 	})
@@ -352,14 +359,14 @@ describe("custom-v3 per-run calibration", () => {
 			[heronCase(), second()],
 			[{ inputTokens: 300, outputTokens: 5 }, undefined],
 		)
-		const first = estimateTokens(answers[0]?.messages[1]?.content ?? "")
 		expect(envelope.readerBudgetCalibration).toMatchObject({
 			answerCalls: 2,
 			callsWithUsage: 1,
 			callsMissingUsage: 1,
 			providerInputTokens: 300,
-			estimatedContextTokens: first,
-			ratio: 300 / first,
+			estimatedContextTokens: userTokens(answers[0]),
+			estimatedRequestTokens: requestTokens(answers[0]),
+			ratio: 300 / requestTokens(answers[0]),
 			complete: false,
 		})
 	})

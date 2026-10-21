@@ -31,6 +31,8 @@ import {
 import {
 	type AnswerCallUsage,
 	buildReaderCaseDiagnostics,
+	type ReaderBudgetCalibration,
+	type ReaderBudgetCaseRecord,
 	readerBudgetCalibration,
 	readerBudgetCaseRecord,
 } from "./mongodb-e2e-qa-reader-budget.js"
@@ -80,6 +82,11 @@ const E2E_QA_READER_BUDGET_JUDGE_VERSION = "v3"
  * reader token budget and renders them as official dated sessions.
  */
 export type E2eQaProtocol = "custom-v1" | "custom-v2" | "custom-v3"
+
+/** custom-v3 adds the harness-side reader budget records to the envelope. */
+export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
+	readerBudgetCalibration?: ReaderBudgetCalibration
+}
 
 export type E2eQaCase = {
 	caseId: string
@@ -225,6 +232,7 @@ export async function runE2eQa(params: {
 	let answerJudgeAttempts = 0
 	let decoyJudgeAttempts = 0
 	const caseResults: BenchmarkE2eQaEnvelope["caseResults"] = []
+	const budgetRecords: ReaderBudgetCaseRecord[] = []
 
 	for (let i = 0; i < cases.length; i++) {
 		const testCase = cases[i]
@@ -283,15 +291,11 @@ export async function runE2eQa(params: {
 		})
 
 		const diagnostics = caseDiagnostics(testCase, reader)
-		const budgetRecord = reader
-			? {
-					readerBudget: readerBudgetCaseRecord(
-						reader,
-						answerUsage,
-						diagnostics,
-					),
-				}
-			: {}
+		const readerBudget = reader
+			? readerBudgetCaseRecord(reader, answerUsage, diagnostics)
+			: undefined
+		if (readerBudget) budgetRecords.push(readerBudget)
+		const budgetRecord = readerBudget ? { readerBudget } : {}
 
 		if (testCase.abstention) {
 			// Correct behavior for an abstention case is to decline, not to match a
@@ -376,7 +380,7 @@ export async function runE2eQa(params: {
 		})
 	}
 
-	return {
+	const envelope: E2eQaEnvelope = {
 		answerModel,
 		judge: judgeModel,
 		judgeVersion,
@@ -402,12 +406,11 @@ export async function runE2eQa(params: {
 		...(budgeted
 			? {
 					readerBudgetCalibration: readerBudgetCalibration(
-						caseResults.flatMap((result) =>
-							result.readerBudget ? [result.readerBudget] : [],
-						),
+						budgetRecords,
 						READER_BUDGET_ESTIMATED_TOKENS,
 					),
 				}
 			: {}),
 	}
+	return envelope
 }

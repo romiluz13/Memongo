@@ -13,6 +13,7 @@ import {
 	type ReaderContext,
 	type ReaderUnit,
 } from "./benchmark/reader-budget.js"
+import { ANSWER_SYSTEM_PROMPT } from "./mongodb-e2e-qa-calls.js"
 
 /**
  * custom-v3 (D) recording: what the reader budget admitted for a case and
@@ -23,6 +24,21 @@ import {
 
 /** Input tokens the answer call reported; null when it reported none. */
 export type AnswerCallUsage = { inputTokens: number | null }
+
+/**
+ * The budget covers the user content only (`estimatedContextTokens`); the
+ * provider counts the whole request, so calibration divides by the estimate
+ * of the system prompt plus the user content (`estimatedRequestTokens`).
+ */
+export type ReaderBudgetCaseRecord = BenchmarkReaderBudgetCaseRecord & {
+	estimatedRequestTokens: number
+}
+
+export type ReaderBudgetCalibration = BenchmarkReaderBudgetCalibration & {
+	estimatedRequestTokens: number
+}
+
+const SYSTEM_PROMPT_ESTIMATED_TOKENS = estimateTokens(ANSWER_SYSTEM_PROMPT)
 
 /**
  * Context diagnostics over the admitted units, in presentation order.
@@ -72,11 +88,13 @@ export function readerBudgetCaseRecord(
 	reader: ReaderContext,
 	usage: AnswerCallUsage,
 	diagnostics: BenchmarkCaseContextDiagnostics,
-): BenchmarkReaderBudgetCaseRecord {
+): ReaderBudgetCaseRecord {
 	return {
 		tokenizer: READER_BUDGET_TOKENIZER,
 		budgetEstimatedTokens: reader.budgetEstimatedTokens,
 		estimatedContextTokens: reader.estimatedContextTokens,
+		estimatedRequestTokens:
+			SYSTEM_PROMPT_ESTIMATED_TOKENS + reader.estimatedContextTokens,
 		budgetExceededByFirstUnit: reader.budgetExceededByFirstUnit,
 		units: reader.counts,
 		skippedRanks: reader.skippedRanks,
@@ -88,9 +106,9 @@ export function readerBudgetCaseRecord(
 
 /** Calibration over the answer calls recorded in the case results. */
 export function readerBudgetCalibration(
-	records: readonly BenchmarkReaderBudgetCaseRecord[],
+	records: readonly ReaderBudgetCaseRecord[],
 	budgetEstimatedTokens: number,
-): BenchmarkReaderBudgetCalibration {
+): ReaderBudgetCalibration {
 	const reported = records.filter((record) => record.providerUsageReported)
 	const providerInputTokens = reported.reduce(
 		(sum, record) => sum + (record.providerInputTokens as number),
@@ -98,6 +116,10 @@ export function readerBudgetCalibration(
 	)
 	const estimatedContextTokens = reported.reduce(
 		(sum, record) => sum + record.estimatedContextTokens,
+		0,
+	)
+	const estimatedRequestTokens = reported.reduce(
+		(sum, record) => sum + record.estimatedRequestTokens,
 		0,
 	)
 	return {
@@ -108,9 +130,10 @@ export function readerBudgetCalibration(
 		callsMissingUsage: records.length - reported.length,
 		providerInputTokens,
 		estimatedContextTokens,
+		estimatedRequestTokens,
 		ratio:
-			estimatedContextTokens > 0
-				? providerInputTokens / estimatedContextTokens
+			estimatedRequestTokens > 0
+				? providerInputTokens / estimatedRequestTokens
 				: null,
 		complete: reported.length === records.length,
 	}

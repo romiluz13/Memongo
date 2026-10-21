@@ -271,7 +271,9 @@ Return only {"answer":"..."}.
 ```
 
 Each custom-v3 case result carries `readerBudget`: the tokenizer and budget,
-`estimatedContextTokens`, `budgetExceededByFirstUnit`, candidate, admitted,
+two estimates with that tokenizer (`estimatedContextTokens`, the serialized
+user content the budget applies to, and `estimatedRequestTokens`, the system
+prompt plus that user content), `budgetExceededByFirstUnit`, candidate, admitted,
 deduplicated and skipped unit counts, the stage-1 ranks of skipped units, the
 answer call's provider-reported input tokens (`null` with
 `providerUsageReported: false` when usage is missing, never zero), and for each
@@ -279,10 +281,11 @@ gold turn present in the context its position as a percentile of the estimated
 context tokens, measured at the start of the first admitted unit that holds
 or maps to it. Context diagnostics describe the admitted units in presentation
 order. The envelope's `readerBudgetCalibration` divides the summed provider
-input tokens by the summed estimated tokens over answer calls that reported
-usage, and is `complete: false` when any answer call lacked usage. Provider
-input tokens also count the system prompt and chat framing, so the ratio
-carries that overhead. A custom-v3 case without reader units is refused before
+input tokens by the summed `estimatedRequestTokens` over answer calls that
+reported usage, and is `complete: false` when any answer call lacked usage.
+Both estimate sums are recorded. Because the request estimate counts the
+system prompt too, the ratio measures tokenizer error plus the provider's chat
+framing only, not the system prompt the budget leaves out. A custom-v3 case without reader units is refused before
 any provider call. Gold is read only by these diagnostics, after the request is
 built; nothing selects by it.
 
