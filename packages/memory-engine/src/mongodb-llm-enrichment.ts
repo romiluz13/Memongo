@@ -57,12 +57,15 @@ type EnrichmentTransportOptions = {
  * absent when the transport does not report usage — spend accounting then
  * degrades to call counts instead of tokens. `reasoningTokens` is surfaced
  * when the gateway reports it (OpenAI completion_tokens_details) so budget
- * decisions (finish_reason=length) are evidence-driven.
+ * decisions (finish_reason=length) are evidence-driven. `totalTokens` is the
+ * gateway's own total_tokens when reported: a thinking model can bill thought
+ * tokens that appear there but not in completion_tokens.
  */
 export type EnrichmentChatUsage = {
 	inputTokens: number
 	outputTokens: number
 	reasoningTokens?: number
+	totalTokens?: number
 }
 
 /**
@@ -557,6 +560,7 @@ export function createHttpProvider(
 						prompt_tokens?: number
 						completion_tokens?: number
 						completion_tokens_details?: { reasoning_tokens?: number }
+						total_tokens?: number
 					}
 				}
 				try {
@@ -604,6 +608,10 @@ export function createHttpProvider(
 											reasoningTokens:
 												json.usage.completion_tokens_details.reasoning_tokens,
 										}
+									: {}),
+								...(typeof json.usage?.total_tokens === "number" &&
+								Number.isFinite(json.usage.total_tokens)
+									? { totalTokens: json.usage.total_tokens }
 									: {}),
 							}
 						: undefined
