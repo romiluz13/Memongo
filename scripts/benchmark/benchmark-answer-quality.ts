@@ -32,7 +32,7 @@ import type {
 	E2eQaProtocol,
 } from "../mongodb-e2e-qa.js"
 import { runE2eQa } from "../mongodb-e2e-qa.js"
-import { hiddenOutputTokens } from "../mongodb-e2e-qa-calls.js"
+import { hiddenOutputTokensMetadata } from "../mongodb-e2e-qa-calls.js"
 import type {
 	BenchmarkE2eQaEnvelope,
 	MemoryBenchmarkDatasetKind,
@@ -267,17 +267,12 @@ export function judgedAnswerCallObserver(
 	accounting: BenchmarkRunAccounting,
 ): NonNullable<Parameters<typeof runE2eQa>[0]["onProviderCall"]> {
 	return (operation, outcome, usage, call) => {
-		const hidden = hiddenOutputTokens(usage)
 		const metadata = {
 			provider: setup.provider.name,
 			model: operation === "answer-generation" ? setup.model : setup.judgeModel,
 			...(usage ?? {}),
 			...(call ?? {}),
-			...(outcome === "attempted"
-				? {}
-				: hidden.hiddenOutputTokens === null
-					? { hiddenOutputTokensUnavailable: hidden.reason }
-					: { hiddenOutputTokens: hidden.hiddenOutputTokens }),
+			...(outcome === "attempted" ? {} : hiddenOutputTokensMetadata(usage)),
 		}
 		if (outcome === "attempted") {
 			accounting.recordAttempt(operation, metadata)

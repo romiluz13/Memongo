@@ -1338,6 +1338,7 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 						params.onProviderCall?.("answer-judge", "succeeded", {
 							inputTokens: 5,
 							outputTokens: 2,
+							totalTokens: 9,
 						})
 						return {
 							scenarioId: params.scenarioId,
@@ -1439,6 +1440,8 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 					succeeded: 2,
 					inputTokens: 10,
 					outputTokens: 4,
+					totalTokens: 18,
+					hiddenOutputTokens: 4,
 					provider: "synthetic-deterministic",
 					model: "synthetic-judge-model",
 				})

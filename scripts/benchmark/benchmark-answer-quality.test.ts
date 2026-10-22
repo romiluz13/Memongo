@@ -589,17 +589,26 @@ describe("runBenchmarkJudgedAnswers", () => {
 					model: "answer-model",
 					inputTokens: 11,
 					outputTokens: 7,
+					hiddenOutputTokensUnavailable: "total-tokens-not-reported",
 				},
 			},
 			{
 				kind: "success",
 				operation: "answer-judge",
-				metadata: { provider: providerName, model: "judge-model" },
+				metadata: {
+					provider: providerName,
+					model: "judge-model",
+					hiddenOutputTokensUnavailable: "usage-not-reported",
+				},
 			},
 			{
 				kind: "failure",
 				operation: "decoy-judge",
-				metadata: { provider: providerName, model: "judge-model" },
+				metadata: {
+					provider: providerName,
+					model: "judge-model",
+					hiddenOutputTokensUnavailable: "usage-not-reported",
+				},
 			},
 		])
 	})
@@ -648,6 +657,7 @@ describe("runBenchmarkJudgedAnswers", () => {
 					model: "answer-model",
 					status: "truncated",
 					finishReason: "length",
+					hiddenOutputTokensUnavailable: "usage-not-reported",
 				},
 			},
 			{
@@ -656,6 +666,7 @@ describe("runBenchmarkJudgedAnswers", () => {
 					provider: providerName,
 					model: "judge-model",
 					status: "transport-failure",
+					hiddenOutputTokensUnavailable: "usage-not-reported",
 				},
 			},
 		])

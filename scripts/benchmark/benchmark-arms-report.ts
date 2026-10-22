@@ -14,6 +14,7 @@ import type {
 	BenchmarkE2eQaEnvelope,
 	BenchmarkHiddenOutputTokensUnavailableReason,
 } from "../../packages/memory-engine/src/types.js"
+import { LENGTH_FINISH_REASONS } from "../mongodb-e2e-qa-answer-attempt.js"
 import { hiddenOutputTokens } from "../mongodb-e2e-qa-calls.js"
 import type { BenchmarkArm } from "./benchmark-arms.js"
 import { exactMcNemar } from "./paired-inference.js"
@@ -129,8 +130,6 @@ export function sumTokenTotals(values: readonly TokenTotals[]): TokenTotals {
 	}, emptyTokenTotals())
 }
 
-const LENGTH_FINISH_REASONS = new Set(["length", "max_tokens"])
-
 const NO_VERDICT_ERRORS = new Set([
 	"answer-generation: transport-failure",
 	"answer-judge: transport-failure",
@@ -190,9 +189,10 @@ export function buildPairedArmsReport(params: {
 			accuracy: verdicts > 0 ? correct / verdicts : null,
 			parseFailures: rows.filter((row) => row.parseFailure).length,
 			missingVerdicts: params.caseIds.length - verdicts,
-			lengthFinishAnswers: entry.caseResults.filter((result) =>
-				LENGTH_FINISH_REASONS.has(result.answerAttempt?.finishReason ?? ""),
-			).length,
+			lengthFinishAnswers: entry.caseResults.filter((result) => {
+				const reason = result.answerAttempt?.finishReason
+				return reason !== undefined && LENGTH_FINISH_REASONS.has(reason)
+			}).length,
 			tokens: entry.tokens,
 		}
 	})

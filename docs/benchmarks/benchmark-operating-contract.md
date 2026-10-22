@@ -359,7 +359,8 @@ is counted under one fixed reason: `usage-not-reported`,
 read as zero. The run cost operations (`benchmarkReport.cost`) sum
 `totalTokens` and `hiddenOutputTokens` per operation and count missing figures
 in `hiddenOutputTokensUnavailableCounts`, next to `inputTokens` and
-`outputTokens`. Each paired arm reports the same totals, and also
+`outputTokens`. The `official` and `custom-judge` answer and judge calls are
+counted the same way. Each paired arm reports the same totals, and also
 `lengthFinishAnswers`: its answers whose finish reason is `length` or
 `max_tokens`.
 

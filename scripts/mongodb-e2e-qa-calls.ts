@@ -68,6 +68,20 @@ export function hiddenOutputTokens(usage: EnrichmentChatUsage | undefined):
 		: { hiddenOutputTokens: null, reason: "total-below-prompt-plus-completion" }
 }
 
+/** An ended call's hidden output tokens, or its reason, as accounting metadata. */
+export function hiddenOutputTokensMetadata(
+	usage: EnrichmentChatUsage | undefined,
+):
+	| { hiddenOutputTokens: number }
+	| {
+			hiddenOutputTokensUnavailable: BenchmarkHiddenOutputTokensUnavailableReason
+	  } {
+	const hidden = hiddenOutputTokens(usage)
+	return hidden.hiddenOutputTokens === null
+		? { hiddenOutputTokensUnavailable: hidden.reason }
+		: { hiddenOutputTokens: hidden.hiddenOutputTokens }
+}
+
 function callResult(
 	status: BenchmarkProviderCallStatus,
 	finishReason: BenchmarkAnswerFinishReason | undefined,

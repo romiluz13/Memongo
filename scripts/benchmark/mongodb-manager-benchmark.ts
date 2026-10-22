@@ -1,5 +1,6 @@
 import { attachReaderCutMetrics } from "./benchmark-reader-cut-metrics.js"
 import { captureReaderUnits } from "./reader-units.js"
+import { hiddenOutputTokensMetadata } from "../mongodb-e2e-qa-calls.js"
 import {
 	BenchmarkInputRejectedError,
 	type BenchmarkAdmittedDataset,
@@ -2192,6 +2193,9 @@ export class MongoDBManagerBenchmarkOps {
 										? officialQa.answerModel
 										: officialQa.judgeModel,
 								...(usage ?? {}),
+								...(outcome === "attempted"
+									? {}
+									: hiddenOutputTokensMetadata(usage)),
 							}
 							if (outcome === "attempted") {
 								params.runContext.accounting.recordAttempt(operation, metadata)

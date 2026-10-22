@@ -57,7 +57,7 @@ const ENVELOPE_FAILURES: ReadonlyMap<EnrichmentResponseShape, EnvelopeFailure> =
 		["malformed-body", "malformed-body"],
 	])
 
-const LENGTH_FINISH_REASONS: ReadonlySet<BenchmarkAnswerFinishReason> =
+export const LENGTH_FINISH_REASONS: ReadonlySet<BenchmarkAnswerFinishReason> =
 	new Set<BenchmarkAnswerFinishReason>(["length", "max_tokens"])
 
 /** Fixed evidence from the provider envelope; never the body text. */
