@@ -1,0 +1,104 @@
+[
+	{
+		"model": "fixture-answer-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You answer the QUESTION using ONLY the provided context passages from a user's memory.\nRules:\n- Be concise and factual; answer with just the fact asked for.\n- If the context does not contain enough information to answer, return an empty answer string.\n- Do not use outside knowledge.\nReturn JSON only: {\"answer\":\"<concise answer, or empty string>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION (asked on 2031/02/14 (Fri) 09:30): Where did the heron nest?\n<context>\n[1] [2031/01/20 (Mon) 10:00] User: The heron nested by Quillmarsh pond\n</context>\nReturn only {\"answer\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Where did the heron nest?\nGOLD ANSWER: Quillmarsh\nCANDIDATE ANSWER: Lisbon\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Where did the heron nest?\nGOLD ANSWER: Quillmarsh\nCANDIDATE ANSWER: Tagus\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-answer-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You answer the QUESTION using ONLY the provided context passages from a user's memory.\nRules:\n- Be concise and factual; answer with just the fact asked for.\n- If the context does not contain enough information to answer, return an empty answer string.\n- Do not use outside knowledge.\nReturn JSON only: {\"answer\":\"<concise answer, or empty string>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION (asked on 2031/02/15 (Sat) 09:30): Which river?\n<context>\n[1] [2031/01/21 (Tue) 10:00] User: The river is the Tagus\n</context>\nReturn only {\"answer\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Which river?\nGOLD ANSWER: Tagus\nCANDIDATE ANSWER: Lisbon\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Which river?\nGOLD ANSWER: Tagus\nCANDIDATE ANSWER: Quillmarsh\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 512
+	}
+]
