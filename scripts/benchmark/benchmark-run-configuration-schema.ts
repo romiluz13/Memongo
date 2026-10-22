@@ -12,7 +12,7 @@ import {
 } from "./longmemeval-official-scoring.js"
 
 /** Hash-bound coverage marker; a manifest of another coverage never verifies. */
-export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v8"
+export const BENCHMARK_CONFIGURATION_COVERAGE = "b02-keyed-v9"
 
 /** Raw env inputs, recorded trimmed or null as `env.<KEY>`. */
 export const BENCHMARK_CONFIGURATION_ENV_KEYS = [
@@ -193,6 +193,8 @@ const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	sessionTurnRecallTurnsPerSession: scalar,
 	readerBudgetEstimatedTokens: scalar,
 	readerBudgetTokenizer: scalar,
+	customQaAnswerMaxTokens: positiveInteger,
+	customQaJudgeMaxTokens: positiveInteger,
 	// Null on a run; an arm's identity names the arm and its QA protocol.
 	benchmarkArm: nullable(trimmedText),
 	benchmarkArmQaProtocol: nullable(

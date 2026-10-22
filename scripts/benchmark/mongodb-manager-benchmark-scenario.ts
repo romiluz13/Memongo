@@ -63,6 +63,10 @@ import {
 	READER_BUDGET_TOKENIZER,
 } from "./reader-budget.js"
 import {
+	CUSTOM_QA_ANSWER_MAX_TOKENS,
+	CUSTOM_QA_JUDGE_MAX_TOKENS,
+} from "../mongodb-e2e-qa-calls.js"
+import {
 	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
 	benchmarkConvergenceFilter,
 	benchmarkSearchEqualsFilters,
@@ -290,6 +294,8 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			sessionTurnRecallTurnsPerSession: SESSION_TURN_RECALL_TURNS_PER_SESSION,
 			readerBudgetEstimatedTokens: READER_BUDGET_ESTIMATED_TOKENS,
 			readerBudgetTokenizer: READER_BUDGET_TOKENIZER,
+			customQaAnswerMaxTokens: CUSTOM_QA_ANSWER_MAX_TOKENS,
+			customQaJudgeMaxTokens: CUSTOM_QA_JUDGE_MAX_TOKENS,
 			benchmarkArm: null,
 			benchmarkArmQaProtocol: null,
 		}
