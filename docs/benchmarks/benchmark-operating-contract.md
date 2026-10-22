@@ -318,6 +318,34 @@ accounting counts ended calls per operation in `statusCounts` and
 `finishReasonCounts`. Logs and case errors carry only these fixed values, never
 response or error text.
 
+Each answer attempt also records its one provider call; the custom answer path
+never retries. `latencyMs` is the call's wall time in whole milliseconds,
+transport failures included. `usage` has three states: absent on a transport
+failure; `null` when the transport succeeded but the provider reported no valid
+usage (none at all, or a prompt or completion count missing or not finite,
+which the engine cannot tell apart); otherwise `inputTokens`, `outputTokens`,
+`reasoningTokens`, `totalTokens` and `hiddenOutputTokens`, each count `null`
+when not reported or not derivable, with `hiddenOutputTokensUnavailable` naming
+why. A missing count is never 0. This usage is a diagnostic copy; token totals
+come only from the provider-call observer. A transport failure carries
+`transportFailure`: `timeout` (the provider aborted the call), `network` (the
+fetch rejected with a TypeError), `http-status` (the server answered non-2xx,
+with the status in `httpStatus`) or `other` (DNS-guard, SSRF and redirect
+refusals and any other error). The provider maps a timeout to 408 and a network
+failure to 503 for its retry rules; those codes are never reported as
+`httpStatus`. A token-budget stop whose message carried no content string has
+`contentMissing: true`, so it is not mistaken for an empty string. Request
+settings are not repeated per call: the run configuration pins the models,
+token parameter, auth style, provider and timeout, and the answer cap,
+`json_object` and the absent temperature are source constants under
+`executableDigest`. Known gaps: in the OpenAI-compatible provider a timeout while
+the body is read is recorded as `malformed-body`, not `timeout`, and only a
+`latencyMs` near the configured timeout shows it; the Anthropic provider does
+not set `contentMissing`; prompt-level block fields wait for the Gemini block
+probe (B2), so block evidence today is the `refusal` and `content-filter` shapes
+and the allowlisted finish reasons; judge calls and the official protocol carry
+no per-call record; and the request content has no per-call digest.
+
 The run configuration records the raw value as
 `env.MEMONGO_BENCHMARK_QA_PROTOCOL`, so custom-v1, custom-v2 and custom-v3
 runs have different configuration hashes and never resume each other's

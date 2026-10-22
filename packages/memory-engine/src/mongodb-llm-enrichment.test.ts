@@ -1991,6 +1991,7 @@ describe("provider failure diagnostics never carry provider or runtime payloads"
 						"refusal",
 						"usage",
 						"name",
+						"transport",
 					].includes(key),
 			),
 		).toEqual([])
@@ -2070,6 +2071,7 @@ describe("provider failure diagnostics never carry provider or runtime payloads"
 			)
 			expect(error).toBeInstanceOf(EnrichmentHttpError)
 			expect((error as EnrichmentHttpError).statusCode).toBe(503)
+			expect((error as EnrichmentHttpError).transport).toBe("network")
 			expect((error as Error).message).toBe(
 				"LLM enrichment transport failed (TypeError)",
 			)

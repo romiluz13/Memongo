@@ -115,6 +115,8 @@ export type EnrichmentResponseMeta = {
 	finishReason?: string
 	/** True when the provider explicitly refused the request. */
 	refusal?: boolean
+	/** A length stop whose message carried no content string; content is then "". */
+	contentMissing?: true
 	/** Envelope `id`, kept only when it passes the bounded charset check. */
 	responseId?: string
 	/** Envelope `model`, kept only when it passes the bounded charset check. */
@@ -337,10 +339,15 @@ function classifyOpenAiCompatibleResponse(json: {
 		// content is preserved for diagnosis, but consumers must not treat a
 		// finish_reason=length body as a complete answer (a syntactically
 		// valid-but-truncated JSON payload cannot masquerade as ok).
-		return {
-			content: typeof message.content === "string" ? message.content : "",
-			responseMeta: { shape: "length", finishReason },
-		}
+		return typeof message.content === "string"
+			? {
+					content: message.content,
+					responseMeta: { shape: "length", finishReason },
+				}
+			: {
+					content: "",
+					responseMeta: { shape: "length", finishReason, contentMissing: true },
+				}
 	}
 	if (typeof message.content !== "string") {
 		return {
@@ -788,11 +795,13 @@ function providerFailure(err: unknown, timeoutMs: number): Error {
 		return new EnrichmentHttpError(
 			`LLM enrichment request timed out after ${timeoutMs}ms`,
 			408,
+			"timeout",
 		)
 	if (isFetchTransportError(err))
 		return new EnrichmentHttpError(
 			"LLM enrichment transport failed (TypeError)",
 			503,
+			"network",
 		)
 	return withoutRemotePayload(err, "LLM enrichment request")
 }
@@ -814,12 +823,21 @@ function discardBody(response: Response): void {
 }
 
 export class EnrichmentHttpError extends Error {
+	/**
+	 * Set only when this module mapped a timeout or a fetch TypeError to a
+	 * synthetic statusCode, so a reader can tell those from a server's status.
+	 */
+	// declare: no own key on errors that never set it.
+	declare readonly transport?: "timeout" | "network"
+
 	constructor(
 		message: string,
 		public readonly statusCode: number,
+		transport?: "timeout" | "network",
 	) {
 		super(message)
 		this.name = "EnrichmentHttpError"
+		if (transport !== undefined) this.transport = transport
 	}
 }
 

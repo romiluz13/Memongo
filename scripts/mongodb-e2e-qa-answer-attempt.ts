@@ -61,7 +61,10 @@ export const LENGTH_FINISH_REASONS: ReadonlySet<BenchmarkAnswerFinishReason> =
 	new Set<BenchmarkAnswerFinishReason>(["length", "max_tokens"])
 
 /** Fixed evidence from the provider envelope; never the body text. */
-export type EnvelopeEvidence = Omit<BenchmarkAnswerAttempt, "layer" | "status">
+export type EnvelopeEvidence = Omit<
+	BenchmarkAnswerAttempt,
+	"layer" | "status" | "latencyMs" | "usage" | "transportFailure" | "httpStatus"
+>
 
 type EnvelopeReading = {
 	evidence: EnvelopeEvidence
@@ -94,6 +97,7 @@ function readEnvelope(response: EnrichmentChatResponse): EnvelopeReading {
 		...(meta?.droppedEnvelopeFields?.length
 			? { droppedEnvelopeFields: [...meta.droppedEnvelopeFields] }
 			: {}),
+		...(meta?.contentMissing ? { contentMissing: true } : {}),
 	}
 	const lengthStop =
 		meta?.shape === "length" ||

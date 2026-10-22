@@ -17,6 +17,7 @@ type Fixture = {
 	status: string
 	shape?: string
 	finishReason?: string
+	contentMissing?: true
 	candidateAnswer: string
 	failed: boolean
 }
@@ -149,6 +150,37 @@ const FIXTURES: Fixture[] = [
 		failed: true,
 	},
 	{
+		name: "whitespace-only content at a normal stop",
+		reply: {
+			content: "",
+			responseMeta: { shape: "empty-content", finishReason: "stop" },
+		},
+		layer: "envelope",
+		status: "empty-body",
+		shape: "empty-content",
+		finishReason: "stop",
+		candidateAnswer: "",
+		failed: true,
+	},
+	{
+		name: "length with no content",
+		reply: {
+			content: "",
+			responseMeta: {
+				shape: "length",
+				finishReason: "length",
+				contentMissing: true,
+			},
+		},
+		layer: "envelope",
+		status: "truncated",
+		shape: "length",
+		finishReason: "length",
+		contentMissing: true,
+		candidateAnswer: "",
+		failed: true,
+	},
+	{
 		name: "empty body from an unvalidated provider",
 		reply: { content: "  " },
 		layer: "envelope",
@@ -271,14 +303,20 @@ describe("answer attempt status", () => {
 				...(fixture.shape ? { shape: fixture.shape } : {}),
 				...(fixture.finishReason ? { finishReason: fixture.finishReason } : {}),
 				...(content === undefined
-					? {}
+					? { transportFailure: "other" }
 					: {
 							contentBytes: Buffer.byteLength(content, "utf8"),
 							contentSha256: createHash("sha256")
 								.update(content, "utf8")
 								.digest("hex"),
+							usage: null,
 						}),
+				...(fixture.contentMissing ? { contentMissing: true } : {}),
+				latencyMs: expect.any(Number),
 			})
+			const latencyMs = result?.answerAttempt?.latencyMs
+			expect(Number.isInteger(latencyMs)).toBe(true)
+			expect(latencyMs).toBeGreaterThanOrEqual(0)
 			expect(result?.candidateAnswer).toBe(fixture.candidateAnswer)
 			expect(result?.error).toBe(
 				fixture.failed ? `answer-generation: ${fixture.status}` : undefined,

@@ -1,10 +1,12 @@
 import { createSubsystemLogger } from "@memongo/lib"
-import type {
-	EnrichmentChatUsage,
-	EnrichmentProvider,
+import {
+	type EnrichmentChatUsage,
+	EnrichmentHttpError,
+	type EnrichmentProvider,
 } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import type {
 	BenchmarkAnswerAttempt,
+	BenchmarkAnswerCallUsage,
 	BenchmarkAnswerFinishReason,
 	BenchmarkHiddenOutputTokensUnavailableReason,
 	BenchmarkProviderCallStatus,
@@ -80,6 +82,35 @@ export function hiddenOutputTokensMetadata(
 	return hidden.hiddenOutputTokens === null
 		? { hiddenOutputTokensUnavailable: hidden.reason }
 		: { hiddenOutputTokens: hidden.hiddenOutputTokens }
+}
+
+// Only this module's own error carries a status a server sent; its synthetic
+// timeout and network codes are named, not reported as statuses.
+function transportDetail(
+	error: unknown,
+): Pick<BenchmarkAnswerAttempt, "transportFailure" | "httpStatus"> {
+	if (!(error instanceof EnrichmentHttpError))
+		return { transportFailure: "other" }
+	if (error.transport) return { transportFailure: error.transport }
+	return { transportFailure: "http-status", httpStatus: error.statusCode }
+}
+
+function callUsage(
+	usage: EnrichmentChatUsage | undefined,
+): BenchmarkAnswerCallUsage | null {
+	if (!usage) return null
+	const hidden = hiddenOutputTokens(usage)
+	return {
+		inputTokens: usage.inputTokens,
+		outputTokens: usage.outputTokens,
+		reasoningTokens: usage.reasoningTokens ?? null,
+		totalTokens: usage.totalTokens ?? null,
+		hiddenOutputTokens: hidden.hiddenOutputTokens,
+		...(hidden.hiddenOutputTokens === null &&
+		hidden.reason !== "usage-not-reported"
+			? { hiddenOutputTokensUnavailable: hidden.reason }
+			: {}),
+	}
 }
 
 function callResult(
@@ -169,6 +200,7 @@ export async function generateAnswer(params: {
 
 	recordProviderCall(params.onProviderCall, "attempted")
 	let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
+	const started = performance.now()
 	try {
 		response = await params.provider.chatCompletion({
 			model: params.model,
@@ -179,16 +211,27 @@ export async function generateAnswer(params: {
 			responseFormat: { type: "json_object" },
 			maxTokens: CUSTOM_QA_ANSWER_MAX_TOKENS,
 		})
-	} catch {
+	} catch (error) {
 		recordProviderCall(params.onProviderCall, "failed", undefined, {
 			status: TRANSPORT_FAILURE_ATTEMPT.status,
 		})
-		return answerFailure(params, { ...TRANSPORT_FAILURE_ATTEMPT })
+		return answerFailure(params, {
+			...TRANSPORT_FAILURE_ATTEMPT,
+			...transportDetail(error),
+			latencyMs: Math.round(performance.now() - started),
+		})
 	}
 	// The transport succeeded: record success with any usage it reported and
 	// the fixed classification, so a malformed response neither loses billed
 	// usage nor double-counts as a transport failure.
-	const { attempt, answer } = classifyAnswerResponse(response)
+	const latencyMs = Math.round(performance.now() - started)
+	const classified = classifyAnswerResponse(response)
+	const answer = classified.answer
+	const attempt: BenchmarkAnswerAttempt = {
+		...classified.attempt,
+		latencyMs,
+		usage: callUsage(response.usage),
+	}
 	recordProviderCall(
 		params.onProviderCall,
 		"succeeded",
@@ -215,6 +258,10 @@ function answerFailure(
 		status: attempt.status,
 		...(attempt.shape ? { shape: attempt.shape } : {}),
 		...(attempt.finishReason ? { finishReason: attempt.finishReason } : {}),
+		...(attempt.transportFailure
+			? { transportFailure: attempt.transportFailure }
+			: {}),
+		...(attempt.httpStatus ? { httpStatus: attempt.httpStatus } : {}),
 	})
 	return ""
 }

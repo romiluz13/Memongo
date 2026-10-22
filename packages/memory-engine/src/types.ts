@@ -2063,7 +2063,45 @@ export type BenchmarkAnswerAttempt = {
 	responseId?: string
 	responseModel?: string
 	droppedEnvelopeFields?: Array<"id" | "model">
+	/** The finish was a token-budget stop and the message carried no content string. */
+	contentMissing?: true
+	/** Wall time of this one provider call, in whole milliseconds. */
+	latencyMs?: number
+	/**
+	 * Absent on a transport failure; null when the transport succeeded but the
+	 * provider reported no valid usage. A diagnostic copy: run token totals
+	 * come from the provider-call observer, never from this field.
+	 */
+	usage?: BenchmarkAnswerCallUsage | null
+	/** Set on a transport failure only. */
+	transportFailure?: BenchmarkAnswerTransportFailure
+	/** A status the server actually sent; present only with `http-status`. */
+	httpStatus?: number
 }
+
+/** Counts the provider reported for one answer call; a missing count is null, never 0. */
+export type BenchmarkAnswerCallUsage = {
+	inputTokens: number
+	outputTokens: number
+	reasoningTokens: number | null
+	totalTokens: number | null
+	hiddenOutputTokens: number | null
+	hiddenOutputTokensUnavailable?: Exclude<
+		BenchmarkHiddenOutputTokensUnavailableReason,
+		"usage-not-reported"
+	>
+}
+
+/**
+ * timeout: the provider aborted the call. network: the fetch rejected with a
+ * TypeError (connect, reset, TLS). http-status: the server answered non-2xx.
+ * other: DNS-guard, SSRF and redirect refusals and any other error.
+ */
+export type BenchmarkAnswerTransportFailure =
+	| "timeout"
+	| "network"
+	| "http-status"
+	| "other"
 
 /**
  * custom-v3 (D): what the reader budget admitted for one case. Token counts
