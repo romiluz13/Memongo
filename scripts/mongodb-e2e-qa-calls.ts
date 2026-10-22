@@ -84,8 +84,8 @@ export function hiddenOutputTokensMetadata(
 		: { hiddenOutputTokens: hidden.hiddenOutputTokens }
 }
 
-// Only this module's own error carries a status a server sent; its synthetic
-// timeout and network codes are named, not reported as statuses.
+// Only the enrichment provider's EnrichmentHttpError carries an HTTP status;
+// its synthetic timeout and network codes are named, not reported as statuses.
 function transportDetail(
 	error: unknown,
 ): Pick<BenchmarkAnswerAttempt, "transportFailure" | "httpStatus"> {

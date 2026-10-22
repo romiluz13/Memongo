@@ -2153,6 +2153,7 @@ describe("provider failure diagnostics never carry provider or runtime payloads"
 			expect(error).not.toBe(thrown)
 			expect(error).toBeInstanceOf(EnrichmentHttpError)
 			expect((error as EnrichmentHttpError).statusCode).toBe(503)
+			expect(Object.hasOwn(error as object, "transport")).toBe(false)
 			expect((error as Error).message).toBe(
 				"LLM enrichment request failed: HTTP 503 (transport error withheld)",
 			)

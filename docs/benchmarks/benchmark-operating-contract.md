@@ -333,7 +333,9 @@ fetch rejected with a TypeError), `http-status` (the server answered non-2xx,
 with the status in `httpStatus`) or `other` (DNS-guard, SSRF and redirect
 refusals and any other error). The provider maps a timeout to 408 and a network
 failure to 503 for its retry rules; those codes are never reported as
-`httpStatus`. A token-budget stop whose message carried no content string has
+`httpStatus`. An injected test fetch that throws an `EnrichmentHttpError` is
+recorded as `http-status` with that error's status; production fetch never
+throws one. A token-budget stop whose message carried no content string has
 `contentMissing: true`, so it is not mistaken for an empty string. Request
 settings are not repeated per call: the run configuration pins the models,
 token parameter, auth style, provider and timeout, and the answer cap,

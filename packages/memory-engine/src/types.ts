@@ -2075,7 +2075,11 @@ export type BenchmarkAnswerAttempt = {
 	usage?: BenchmarkAnswerCallUsage | null
 	/** Set on a transport failure only. */
 	transportFailure?: BenchmarkAnswerTransportFailure
-	/** A status the server actually sent; present only with `http-status`. */
+	/**
+	 * Present only with `http-status`: a non-2xx status the server sent, or the
+	 * status of an `EnrichmentHttpError` thrown by an injected fetch, which the
+	 * provider keeps without its message. Production fetch never throws one.
+	 */
 	httpStatus?: number
 }
 
