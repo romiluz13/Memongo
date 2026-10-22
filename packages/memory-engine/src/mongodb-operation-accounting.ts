@@ -255,7 +255,10 @@ export function createOperationRunContext(params: {
 			tokensMeasured = true
 		}
 		const hiddenOutputTokens = metadata?.hiddenOutputTokens
-		if (hiddenOutputTokens !== undefined && Number.isFinite(hiddenOutputTokens)) {
+		if (
+			hiddenOutputTokens !== undefined &&
+			Number.isFinite(hiddenOutputTokens)
+		) {
 			entry.hiddenOutputTokens =
 				(entry.hiddenOutputTokens ?? 0) + hiddenOutputTokens
 		}

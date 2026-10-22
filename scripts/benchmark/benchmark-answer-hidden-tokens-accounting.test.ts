@@ -22,7 +22,10 @@ describe("run cost operations hidden output tokens", () => {
 		})
 		const observe = judgedAnswerCallObserver(
 			{
-				provider: { name: "synthetic", chatCompletion: async () => ({ content: "" }) },
+				provider: {
+					name: "synthetic",
+					chatCompletion: async () => ({ content: "" }),
+				},
 				model: "answer-model",
 				judgeModel: "judge-model",
 			},

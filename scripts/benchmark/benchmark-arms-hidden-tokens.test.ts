@@ -136,8 +136,8 @@ describe("arm length-finish count", () => {
 				},
 			],
 		})
-		expect(report.arms.map((summary) => summary.lengthFinishAnswers)).toEqual(
-			[1, 2],
-		)
+		expect(report.arms.map((summary) => summary.lengthFinishAnswers)).toEqual([
+			1, 2,
+		])
 	})
 })

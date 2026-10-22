@@ -9,9 +9,7 @@ const configuration = {
 	settings: {},
 }
 
-function answerEntry(
-	context: ReturnType<typeof createOperationRunContext>,
-) {
+function answerEntry(context: ReturnType<typeof createOperationRunContext>) {
 	return context.accounting
 		.snapshot()
 		.operations.find((entry) => entry.operation === "answer-generation")
@@ -39,9 +37,9 @@ describe("operation accounting hidden output tokens", () => {
 		if (entry?.hiddenOutputTokensUnavailableCounts) {
 			entry.hiddenOutputTokensUnavailableCounts["usage-not-reported"] = 99
 		}
-		expect(
-			answerEntry(context)?.hiddenOutputTokensUnavailableCounts,
-		).toEqual({ "usage-not-reported": 1 })
+		expect(answerEntry(context)?.hiddenOutputTokensUnavailableCounts).toEqual({
+			"usage-not-reported": 1,
+		})
 
 		const resumed = createOperationRunContext({
 			runId: "run",

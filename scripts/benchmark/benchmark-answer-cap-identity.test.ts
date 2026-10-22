@@ -46,17 +46,18 @@ describe("custom QA answer cap identity", () => {
 		expect(hashOperationRunConfiguration(atCaps(8192, 512))).not.toBe(raised)
 	})
 
-	it.each(["custom-v1", "custom-v2", "custom-v3"] as const)(
-		"gives the %s arm different identities at 512 and 8192",
-		(protocol) => {
-			const arm = { name: "a", protocol, sessionTurnRecall: false }
-			expect(
-				benchmarkArmConfiguration(atCaps(512, 512), arm).configurationHash,
-			).not.toBe(
-				benchmarkArmConfiguration(atCaps(8192, 8192), arm).configurationHash,
-			)
-		},
-	)
+	it.each([
+		"custom-v1",
+		"custom-v2",
+		"custom-v3",
+	] as const)("gives the %s arm different identities at 512 and 8192", (protocol) => {
+		const arm = { name: "a", protocol, sessionTurnRecall: false }
+		expect(
+			benchmarkArmConfiguration(atCaps(512, 512), arm).configurationHash,
+		).not.toBe(
+			benchmarkArmConfiguration(atCaps(8192, 8192), arm).configurationHash,
+		)
+	})
 
 	it("moves coverage past b02-keyed-v8 so an older manifest does not resume", () => {
 		expect(BENCHMARK_CONFIGURATION_COVERAGE).toBe("b02-keyed-v9")

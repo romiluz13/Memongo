@@ -95,29 +95,29 @@ describe("runE2eQa request invariance per protocol", () => {
 			},
 		],
 	}
-	it.each(["custom-v2", "custom-v3"] as const)(
-		"sends byte-identical %s answer, judge and decoy-judge requests",
-		async (protocol) => {
-			const { provider, calls } = recordingProvider()
-			await runE2eQa({
-				provider,
-				model: "fixture-answer-model",
-				answerModel: "fixture-answer-model",
-				judgeModel: "fixture-judge-model",
-				cases: [
-					heronCase({
-						contextPassages: ["The heron nested by Quillmarsh pond"],
-						passageDates: [["2031/01/20 (Mon) 10:00"]],
-						passageRoles: ["user"],
-					}),
-					decoy,
-				],
-				protocol,
-			})
-			expect(calls).toHaveLength(6)
-			await expect(
-				`${JSON.stringify(calls, null, "\t")}\n`,
-			).toMatchFileSnapshot(PROTOCOL_SNAPSHOT(protocol))
-		},
-	)
+	it.each([
+		"custom-v2",
+		"custom-v3",
+	] as const)("sends byte-identical %s answer, judge and decoy-judge requests", async (protocol) => {
+		const { provider, calls } = recordingProvider()
+		await runE2eQa({
+			provider,
+			model: "fixture-answer-model",
+			answerModel: "fixture-answer-model",
+			judgeModel: "fixture-judge-model",
+			cases: [
+				heronCase({
+					contextPassages: ["The heron nested by Quillmarsh pond"],
+					passageDates: [["2031/01/20 (Mon) 10:00"]],
+					passageRoles: ["user"],
+				}),
+				decoy,
+			],
+			protocol,
+		})
+		expect(calls).toHaveLength(6)
+		await expect(`${JSON.stringify(calls, null, "\t")}\n`).toMatchFileSnapshot(
+			PROTOCOL_SNAPSHOT(protocol),
+		)
+	})
 })

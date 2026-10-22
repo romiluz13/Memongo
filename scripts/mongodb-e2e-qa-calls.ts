@@ -52,9 +52,7 @@ type ProviderCallObserver = (
  * (a thinking model's thoughts): total minus prompt minus completion, only
  * when all three are reported and the remainder is not negative.
  */
-export function hiddenOutputTokens(
-	usage: EnrichmentChatUsage | undefined,
-):
+export function hiddenOutputTokens(usage: EnrichmentChatUsage | undefined):
 	| { hiddenOutputTokens: number }
 	| {
 			hiddenOutputTokens: null
