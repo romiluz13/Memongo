@@ -1834,6 +1834,17 @@ export type BenchmarkOperationAccounting = {
 	 */
 	reasoningTokens?: number | null
 	/**
+	 * The provider's total_tokens summed across ended calls that reported it,
+	 * and the billed output it did not report as completion tokens (total -
+	 * input - output) summed across calls where that was derivable. Calls
+	 * without a hidden-token figure count per reason, never as zero.
+	 */
+	totalTokens?: number
+	hiddenOutputTokens?: number
+	hiddenOutputTokensUnavailableCounts?: Partial<
+		Record<BenchmarkHiddenOutputTokensUnavailableReason, number>
+	>
+	/**
 	 * Measured calls that ended (succeeded or failed) with and without both
 	 * input and output token counts. The token sums cover only reported
 	 * usage, so `usageComplete` is false whenever any ended call lacked it.

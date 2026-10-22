@@ -3,6 +3,7 @@ import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import type {
 	BenchmarkAnswerFinishReason,
 	BenchmarkCostAccounting,
+	BenchmarkHiddenOutputTokensUnavailableReason,
 	BenchmarkOperationAccounting,
 	BenchmarkOperationName,
 	BenchmarkProviderCallStatus,
@@ -46,6 +47,14 @@ export type OperationMutation = {
 	 * when the gateway does not report reasoning spend.
 	 */
 	reasoningTokens?: number
+	/** The provider's total_tokens, when reported. */
+	totalTokens?: number
+	/**
+	 * The caller's derived hidden output tokens for the ended calls, or the
+	 * fixed reason it could not derive them; the accounting never derives.
+	 */
+	hiddenOutputTokens?: number
+	hiddenOutputTokensUnavailable?: BenchmarkHiddenOutputTokensUnavailableReason
 	/** Fixed outcome of the ended calls, counted per status. */
 	status?: BenchmarkProviderCallStatus
 	/** Allowlisted finish reason of the ended calls, counted per value. */
@@ -240,6 +249,22 @@ export function createOperationRunContext(params: {
 			entry.reasoningTokens = (entry.reasoningTokens ?? 0) + reasoningTokens
 			tokensMeasured = true
 		}
+		const totalTokens = metadata?.totalTokens
+		if (totalTokens !== undefined && Number.isFinite(totalTokens)) {
+			entry.totalTokens = (entry.totalTokens ?? 0) + totalTokens
+			tokensMeasured = true
+		}
+		const hiddenOutputTokens = metadata?.hiddenOutputTokens
+		if (hiddenOutputTokens !== undefined && Number.isFinite(hiddenOutputTokens)) {
+			entry.hiddenOutputTokens =
+				(entry.hiddenOutputTokens ?? 0) + hiddenOutputTokens
+		}
+		const unavailable = metadata?.hiddenOutputTokensUnavailable
+		if (unavailable !== undefined) {
+			const counts = entry.hiddenOutputTokensUnavailableCounts ?? {}
+			counts[unavailable] = (counts[unavailable] ?? 0) + count
+			entry.hiddenOutputTokensUnavailableCounts = counts
+		}
 	}
 	return {
 		runId: params.runId,
@@ -295,6 +320,13 @@ function copyOperationEntry(
 		...(entry.statusCounts ? { statusCounts: { ...entry.statusCounts } } : {}),
 		...(entry.finishReasonCounts
 			? { finishReasonCounts: { ...entry.finishReasonCounts } }
+			: {}),
+		...(entry.hiddenOutputTokensUnavailableCounts
+			? {
+					hiddenOutputTokensUnavailableCounts: {
+						...entry.hiddenOutputTokensUnavailableCounts,
+					},
+				}
 			: {}),
 	}
 }
