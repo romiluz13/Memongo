@@ -24,8 +24,10 @@ import {
 
 const log = createSubsystemLogger("memory:mongodb:e2e-qa")
 
-const ANSWER_MAX_TOKENS = 512
-const JUDGE_MAX_TOKENS = 512
+// A thinking model's hidden thought tokens count against the output limit, so
+// a small cap truncates or empties the answer. Equal for every custom arm.
+export const CUSTOM_QA_ANSWER_MAX_TOKENS = 8192
+export const CUSTOM_QA_JUDGE_MAX_TOKENS = 8192
 export const MAX_CONTEXT_PASSAGES = 20
 
 export type E2eQaProviderOperation =
@@ -139,7 +141,7 @@ export async function generateAnswer(params: {
 				{ role: "user", content: user },
 			],
 			responseFormat: { type: "json_object" },
-			maxTokens: ANSWER_MAX_TOKENS,
+			maxTokens: CUSTOM_QA_ANSWER_MAX_TOKENS,
 		})
 	} catch {
 		recordProviderCall(params.onProviderCall, "failed", undefined, {
@@ -207,7 +209,7 @@ export async function judgeAnswer(params: {
 				{ role: "user", content: user },
 			],
 			responseFormat: { type: "json_object" },
-			maxTokens: JUDGE_MAX_TOKENS,
+			maxTokens: CUSTOM_QA_JUDGE_MAX_TOKENS,
 		})
 	} catch {
 		recordProviderCall(params.onProviderCall, "failed", undefined, {

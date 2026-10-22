@@ -46,7 +46,7 @@ describe("custom-v3 answer request", () => {
 		expect(call.messages[0]?.content).toMatch(
 			/^You answer the QUESTION using ONLY the provided context passages/,
 		)
-		expect(call.maxTokens).toBe(512)
+		expect(call.maxTokens).toBe(8192)
 		expect(call.responseFormat).toEqual({ type: "json_object" })
 		expect(envelope.judgeVersion).toBe("v3")
 		expect(envelope.caseResults[0]?.correct).toBe(true)
