@@ -9,7 +9,12 @@
  * verdict and is counted as a parse failure. A retrieval failure or a
  * transport failure records no verdict, so that pair is left out.
  */
-import type { BenchmarkE2eQaEnvelope } from "../../packages/memory-engine/src/types.js"
+import type { EnrichmentChatUsage } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
+import type {
+	BenchmarkE2eQaEnvelope,
+	BenchmarkHiddenOutputTokensUnavailableReason,
+} from "../../packages/memory-engine/src/types.js"
+import { hiddenOutputTokens } from "../mongodb-e2e-qa-calls.js"
 import type { BenchmarkArm } from "./benchmark-arms.js"
 import { exactMcNemar } from "./paired-inference.js"
 
@@ -21,6 +26,17 @@ export type TokenTotals = {
 	outputTokens: number
 	/** Ended calls whose transport reported no usage; never read as zero. */
 	callsWithoutUsage: number
+	/** Sum of the provider's reported total_tokens. */
+	totalTokens: number
+	/**
+	 * Billed but unreported output (a thinking model's thoughts), summed over
+	 * the calls where total, prompt and completion were all reported.
+	 */
+	hiddenOutputTokens: number
+	/** Ended calls with no hidden-token figure, by reason. */
+	hiddenOutputTokensUnavailable: Partial<
+		Record<BenchmarkHiddenOutputTokensUnavailableReason, number>
+	>
 }
 /** Judge totals include the decoy probe's judge calls. */
 export type ArmTokenTotals = { answer: TokenTotals; judge: TokenTotals }
@@ -37,6 +53,8 @@ export type PairedArmSummary = {
 	accuracy: number | null
 	parseFailures: number
 	missingVerdicts: number
+	/** Answers whose provider stopped at the token limit (length, max_tokens). */
+	lengthFinishAnswers: number
 	tokens: ArmTokenTotals
 }
 
@@ -61,6 +79,57 @@ export type PairedArmsReport = {
 	comparisons: PairedArmComparison[]
 	perQuestion: Array<{ caseId: string; verdicts: Record<string, ArmVerdict> }>
 }
+
+export const emptyTokenTotals = (): TokenTotals => ({
+	inputTokens: 0,
+	outputTokens: 0,
+	callsWithoutUsage: 0,
+	totalTokens: 0,
+	hiddenOutputTokens: 0,
+	hiddenOutputTokensUnavailable: {},
+})
+
+/** Add one ended call's reported usage to the totals. */
+export function addCallTokens(
+	totals: TokenTotals,
+	usage: EnrichmentChatUsage | undefined,
+): void {
+	if (usage) {
+		totals.inputTokens += usage.inputTokens
+		totals.outputTokens += usage.outputTokens
+		totals.totalTokens += usage.totalTokens ?? 0
+	} else {
+		totals.callsWithoutUsage += 1
+	}
+	const hidden = hiddenOutputTokens(usage)
+	if (hidden.hiddenOutputTokens === null) {
+		const missing = totals.hiddenOutputTokensUnavailable
+		missing[hidden.reason] = (missing[hidden.reason] ?? 0) + 1
+	} else {
+		totals.hiddenOutputTokens += hidden.hiddenOutputTokens
+	}
+}
+
+export function sumTokenTotals(values: readonly TokenTotals[]): TokenTotals {
+	return values.reduce((sum, value) => {
+		const missing = { ...sum.hiddenOutputTokensUnavailable }
+		for (const [reason, count] of Object.entries(
+			value.hiddenOutputTokensUnavailable,
+		) as Array<[BenchmarkHiddenOutputTokensUnavailableReason, number]>) {
+			missing[reason] = (missing[reason] ?? 0) + count
+		}
+		return {
+			inputTokens: sum.inputTokens + value.inputTokens,
+			outputTokens: sum.outputTokens + value.outputTokens,
+			callsWithoutUsage: sum.callsWithoutUsage + value.callsWithoutUsage,
+			totalTokens: sum.totalTokens + value.totalTokens,
+			hiddenOutputTokens: sum.hiddenOutputTokens + value.hiddenOutputTokens,
+			hiddenOutputTokensUnavailable: missing,
+		}
+	}, emptyTokenTotals())
+}
+
+const LENGTH_FINISH_REASONS = new Set(["length", "max_tokens"])
 
 const NO_VERDICT_ERRORS = new Set([
 	"answer-generation: transport-failure",
@@ -121,6 +190,9 @@ export function buildPairedArmsReport(params: {
 			accuracy: verdicts > 0 ? correct / verdicts : null,
 			parseFailures: rows.filter((row) => row.parseFailure).length,
 			missingVerdicts: params.caseIds.length - verdicts,
+			lengthFinishAnswers: entry.caseResults.filter((result) =>
+				LENGTH_FINISH_REASONS.has(result.answerAttempt?.finishReason ?? ""),
+			).length,
 			tokens: entry.tokens,
 		}
 	})

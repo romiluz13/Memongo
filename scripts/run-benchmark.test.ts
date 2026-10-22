@@ -812,8 +812,22 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 		const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {})
 		vi.spyOn(console, "error").mockImplementation(() => {})
 		const tokens = {
-			answer: { inputTokens: 200, outputTokens: 10, callsWithoutUsage: 0 },
-			judge: { inputTokens: 100, outputTokens: 6, callsWithoutUsage: 0 },
+			answer: {
+				inputTokens: 200,
+				outputTokens: 10,
+				callsWithoutUsage: 0,
+				totalTokens: 222,
+				hiddenOutputTokens: 12,
+				hiddenOutputTokensUnavailable: {},
+			},
+			judge: {
+				inputTokens: 100,
+				outputTokens: 6,
+				callsWithoutUsage: 0,
+				totalTokens: 0,
+				hiddenOutputTokens: 0,
+				hiddenOutputTokensUnavailable: { "total-tokens-not-reported": 2 },
+			},
 		}
 		const arm = (name: string, correct: number) => ({
 			name,
@@ -826,6 +840,7 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 			accuracy: correct / 8,
 			parseFailures: 0,
 			missingVerdicts: 0,
+			lengthFinishAnswers: 3,
 			tokens,
 		})
 		relevanceBenchmarkMock.mockResolvedValue({
@@ -861,7 +876,7 @@ describe("CLI control flow (parseArgs → publishable → pre-ingest gate)", () 
 			"  b vs a: pairs 8  both 0  a only 1  b only 7  neither 0  unpaired 0  McNemar p 0.0703",
 		)
 		expect(printed).toContain(
-			"  b: accuracy 0.8750 (7/8)  parse failures 0  missing 0  answer tokens 200/10  judge tokens 100/6",
+			"  b: accuracy 0.8750 (7/8)  parse failures 0  missing 0  length finishes 3  answer tokens 200/10 hidden 12  judge tokens 100/6 hidden 0 (+2 calls without hidden tokens)",
 		)
 	})
 

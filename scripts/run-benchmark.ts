@@ -236,7 +236,10 @@ export function customJudgeDifferenceDisclosure(answerQuality: {
 }
 
 function describeTokens(totals: TokenTotals): string {
-	return `${totals.inputTokens}/${totals.outputTokens}${totals.callsWithoutUsage > 0 ? ` (+${totals.callsWithoutUsage} calls without usage)` : ""}`
+	const withoutHidden = Object.values(
+		totals.hiddenOutputTokensUnavailable,
+	).reduce((sum, count) => sum + count, 0)
+	return `${totals.inputTokens}/${totals.outputTokens}${totals.callsWithoutUsage > 0 ? ` (+${totals.callsWithoutUsage} calls without usage)` : ""} hidden ${totals.hiddenOutputTokens}${withoutHidden > 0 ? ` (+${withoutHidden} calls without hidden tokens)` : ""}`
 }
 
 function printPairedArms(report: PairedArmsRunReport): void {
@@ -244,7 +247,7 @@ function printPairedArms(report: PairedArmsRunReport): void {
 	console.log(`paired arms (baseline ${report.baseline})`)
 	for (const arm of report.arms) {
 		console.log(
-			`  ${arm.name}: accuracy ${arm.accuracy?.toFixed(4) ?? "n/a"} (${arm.correct}/${arm.verdicts})  parse failures ${arm.parseFailures}  missing ${arm.missingVerdicts}  answer tokens ${describeTokens(arm.tokens.answer)}  judge tokens ${describeTokens(arm.tokens.judge)}`,
+			`  ${arm.name}: accuracy ${arm.accuracy?.toFixed(4) ?? "n/a"} (${arm.correct}/${arm.verdicts})  parse failures ${arm.parseFailures}  missing ${arm.missingVerdicts}  length finishes ${arm.lengthFinishAnswers}  answer tokens ${describeTokens(arm.tokens.answer)}  judge tokens ${describeTokens(arm.tokens.judge)}`,
 		)
 	}
 	for (const pair of report.comparisons) {

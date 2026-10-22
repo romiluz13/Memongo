@@ -6,6 +6,7 @@ import type {
 import type {
 	BenchmarkAnswerAttempt,
 	BenchmarkAnswerFinishReason,
+	BenchmarkHiddenOutputTokensUnavailableReason,
 	BenchmarkProviderCallStatus,
 } from "../packages/memory-engine/src/types.js"
 import {
@@ -45,6 +46,29 @@ type ProviderCallObserver = (
 	usage?: EnrichmentChatUsage,
 	call?: E2eQaCallResult,
 ) => void
+
+/**
+ * Output tokens the provider billed but did not report as completion tokens
+ * (a thinking model's thoughts): total minus prompt minus completion, only
+ * when all three are reported and the remainder is not negative.
+ */
+export function hiddenOutputTokens(
+	usage: EnrichmentChatUsage | undefined,
+):
+	| { hiddenOutputTokens: number }
+	| {
+			hiddenOutputTokens: null
+			reason: BenchmarkHiddenOutputTokensUnavailableReason
+	  } {
+	if (!usage) return { hiddenOutputTokens: null, reason: "usage-not-reported" }
+	if (usage.totalTokens === undefined) {
+		return { hiddenOutputTokens: null, reason: "total-tokens-not-reported" }
+	}
+	const hidden = usage.totalTokens - usage.inputTokens - usage.outputTokens
+	return hidden >= 0
+		? { hiddenOutputTokens: hidden }
+		: { hiddenOutputTokens: null, reason: "total-below-prompt-plus-completion" }
+}
 
 function callResult(
 	status: BenchmarkProviderCallStatus,

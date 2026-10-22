@@ -1850,6 +1850,15 @@ export type BenchmarkOperationAccounting = {
 	finishReasonCounts?: Partial<Record<BenchmarkAnswerFinishReason, number>>
 }
 
+/**
+ * Why a call's hidden output tokens (total_tokens minus prompt and completion
+ * tokens) were not derived: never guessed, recorded per reason.
+ */
+export type BenchmarkHiddenOutputTokensUnavailableReason =
+	| "usage-not-reported"
+	| "total-tokens-not-reported"
+	| "total-below-prompt-plus-completion"
+
 export type BenchmarkProviderCallStatus =
 	| BenchmarkAnswerAttemptStatus
 	| BenchmarkJudgeAttemptStatus

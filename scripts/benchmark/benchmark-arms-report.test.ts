@@ -4,12 +4,22 @@ import {
 	type ArmTokenTotals,
 	armCaseVerdict,
 	buildPairedArmsReport,
+	emptyTokenTotals,
 } from "./benchmark-arms-report.js"
 import type { BenchmarkArm } from "./benchmark-arms.js"
 
 const tokens = (input: number): ArmTokenTotals => ({
-	answer: { inputTokens: input, outputTokens: 10, callsWithoutUsage: 0 },
-	judge: { inputTokens: input * 2, outputTokens: 20, callsWithoutUsage: 1 },
+	answer: {
+		...emptyTokenTotals(),
+		inputTokens: input,
+		outputTokens: 10,
+	},
+	judge: {
+		...emptyTokenTotals(),
+		inputTokens: input * 2,
+		outputTokens: 20,
+		callsWithoutUsage: 1,
+	},
 })
 
 function result(
@@ -129,6 +139,7 @@ describe("buildPairedArmsReport", () => {
 				accuracy: 4 / 12,
 				parseFailures: 0,
 				missingVerdicts: 0,
+				lengthFinishAnswers: 0,
 				tokens: tokens(100),
 			},
 			{
@@ -142,6 +153,7 @@ describe("buildPairedArmsReport", () => {
 				accuracy: 8 / 11,
 				parseFailures: 1,
 				missingVerdicts: 1,
+				lengthFinishAnswers: 0,
 				tokens: tokens(300),
 			},
 		])

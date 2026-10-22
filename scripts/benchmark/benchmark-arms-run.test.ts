@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { EnrichmentProvider } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import type { BenchmarkJudgedAnswerMaterial } from "./benchmark-answer-quality.js"
+import { emptyTokenTotals } from "./benchmark-arms-report.js"
 import {
 	type BenchmarkArm,
 	benchmarkArmConfiguration,
@@ -47,8 +48,8 @@ const qa = (): BenchmarkArmScenarioQa => ({
 	attempts: { answerGeneration: 0, answerJudge: 0, decoyJudge: 0 },
 	decoyProbes: { probes: 0, passes: 0 },
 	tokens: {
-		answer: { inputTokens: 0, outputTokens: 0, callsWithoutUsage: 0 },
-		judge: { inputTokens: 0, outputTokens: 0, callsWithoutUsage: 0 },
+		answer: emptyTokenTotals(),
+		judge: emptyTokenTotals(),
 	},
 })
 

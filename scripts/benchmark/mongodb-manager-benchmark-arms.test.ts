@@ -220,9 +220,25 @@ describe("paired benchmark arms", () => {
 			{ arm: "c", pairs: 2, armOnly: 0, baselineOnly: 0, bothWrong: 2 },
 		])
 		expect(report?.comparisons[0]?.mcnemar.pTwoSided).toBe(0.5)
+		// The fixture reports no total_tokens: one answer call, and a judge and
+		// a decoy-judge call, per question, each without a hidden-token figure.
 		expect(report?.arms[0]?.tokens).toEqual({
-			answer: { inputTokens: 200, outputTokens: 10, callsWithoutUsage: 0 },
-			judge: { inputTokens: 200, outputTokens: 12, callsWithoutUsage: 0 },
+			answer: {
+				inputTokens: 200,
+				outputTokens: 10,
+				callsWithoutUsage: 0,
+				totalTokens: 0,
+				hiddenOutputTokens: 0,
+				hiddenOutputTokensUnavailable: { "total-tokens-not-reported": 2 },
+			},
+			judge: {
+				inputTokens: 200,
+				outputTokens: 12,
+				callsWithoutUsage: 0,
+				totalTokens: 0,
+				hiddenOutputTokens: 0,
+				hiddenOutputTokensUnavailable: { "total-tokens-not-reported": 4 },
+			},
 		})
 	})
 

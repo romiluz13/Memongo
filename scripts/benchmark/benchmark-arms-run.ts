@@ -28,9 +28,11 @@ import {
 	type ArmCaseResult,
 	type ArmTokenTotals,
 	type PairedArmsReport,
-	type TokenTotals,
+	addCallTokens,
 	armCaseVerdict,
 	buildPairedArmsReport,
+	emptyTokenTotals,
+	sumTokenTotals,
 } from "./benchmark-arms-report.js"
 import type { OperationRunConfiguration } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import {
@@ -182,12 +184,6 @@ export function armsDecoyPool(
 	})
 }
 
-const emptyTotals = (): TokenTotals => ({
-	inputTokens: 0,
-	outputTokens: 0,
-	callsWithoutUsage: 0,
-})
-
 export async function runArmScenarioQa(params: {
 	arm: BenchmarkArm
 	materials: readonly BenchmarkJudgedAnswerMaterial[]
@@ -198,7 +194,10 @@ export async function runArmScenarioQa(params: {
 	const { cases } = buildJudgedAnswerCases(
 		new Map(params.materials.map((material) => [material.caseId, material])),
 	)
-	const tokens: ArmTokenTotals = { answer: emptyTotals(), judge: emptyTotals() }
+	const tokens: ArmTokenTotals = {
+		answer: emptyTokenTotals(),
+		judge: emptyTokenTotals(),
+	}
 	const account = judgedAnswerCallObserver(params.setup, params.accounting)
 	const envelope = await runE2eQa({
 		provider: params.setup.provider,
@@ -210,14 +209,10 @@ export async function runArmScenarioQa(params: {
 		decoyPool: params.decoyPool,
 		onProviderCall: (operation, outcome, usage, call) => {
 			if (outcome !== "attempted") {
-				const totals =
-					operation === "answer-generation" ? tokens.answer : tokens.judge
-				if (usage) {
-					totals.inputTokens += usage.inputTokens
-					totals.outputTokens += usage.outputTokens
-				} else {
-					totals.callsWithoutUsage += 1
-				}
+				addCallTokens(
+					operation === "answer-generation" ? tokens.answer : tokens.judge,
+					usage,
+				)
 			}
 			account(operation, outcome, usage, call)
 		},
@@ -336,21 +331,10 @@ export function scenarioCheckpointArms(params: {
 	})
 }
 
-function sumTotals(values: readonly TokenTotals[]): TokenTotals {
-	return values.reduce(
-		(sum, value) => ({
-			inputTokens: sum.inputTokens + value.inputTokens,
-			outputTokens: sum.outputTokens + value.outputTokens,
-			callsWithoutUsage: sum.callsWithoutUsage + value.callsWithoutUsage,
-		}),
-		emptyTotals(),
-	)
-}
-
 function sumTokens(records: readonly BenchmarkArmScenarioQa[]): ArmTokenTotals {
 	return {
-		answer: sumTotals(records.map((record) => record.tokens.answer)),
-		judge: sumTotals(records.map((record) => record.tokens.judge)),
+		answer: sumTokenTotals(records.map((record) => record.tokens.answer)),
+		judge: sumTokenTotals(records.map((record) => record.tokens.judge)),
 	}
 }
 
