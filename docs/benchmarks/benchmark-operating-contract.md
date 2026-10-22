@@ -195,7 +195,7 @@ provider work.
 
 `custom-v2` changes one thing: the answer user content uses the official
 renderer's line format, in rank order. The system prompt, judge prompt and
-judge flow, 20-passage cap, 512-token answer budget and `answerAttempt`
+judge flow, 20-passage cap, answer and judge token caps and `answerAttempt`
 classification stay those of custom-v1. A passage keeps its own dates and role
 through filtering and the cap; one with no date or role renders without that
 prefix, and a passage that already starts with its role label is not labeled
@@ -214,7 +214,7 @@ Return only {"answer":"..."}.
 ### custom-v3: reader budget and session order
 
 `custom-v3` changes what reaches the answerer and how it is laid out; the
-system prompt, judge prompt and flow, 512-token answer budget and
+system prompt, judge prompt and flow, answer and judge token caps and
 `answerAttempt` classification stay those of custom-v1. There is no
 20-passage cap: the token budget replaces it.
 
@@ -329,6 +329,40 @@ below). No custom protocol writes a prediction sidecar, so `b2-join.ts` cannot
 compare them, and none is the official protocol: a full500 publishable run and
 the durable sidecar path refuse all three by name.
 
+### Answer and judge token caps (custom-v1, custom-v2, custom-v3)
+
+Every custom answer, judge and decoy-judge request sends `maxTokens` 8192
+(`CUSTOM_QA_ANSWER_MAX_TOKENS` and `CUSTOM_QA_JUDGE_MAX_TOKENS` in
+`scripts/mongodb-e2e-qa-calls.ts`). The caps are source constants, equal for
+every arm, not settings. The answer model thinks, and its hidden thought
+tokens count against the output limit. When a request hits the limit while the
+model is still thinking, the response is truncated or empty, and those tokens
+are still billed. A live probe with `max_tokens` 16 returned `finish_reason`
+`length` and no content, with `prompt_tokens` 6, `completion_tokens` 0 and
+`total_tokens` 18. The earlier 512 cap lost cases this way. The runs keep the
+model's default thinking, with no thinking or reasoning-effort control. The
+`official` and `custom-judge` protocols keep their own 4096 answer cap
+(`OFFICIAL_ANSWER_MAX_TOKENS`). The run configuration records both custom caps
+as `customQaAnswerMaxTokens` and `customQaJudgeMaxTokens`, so a 512-cap run or
+arm and an 8192-cap run or arm have different hashes. Raising the caps changed
+the custom request bytes only in `maxTokens`, and the per-protocol request
+snapshots pin that.
+
+The OpenAI-compatible transport keeps the provider's `total_tokens` as
+`usage.totalTokens` next to the prompt and completion tokens. For each ended
+answer, judge and decoy-judge call, `hiddenOutputTokens` is total minus
+prompt minus completion. It is recorded only when all three counts are
+reported and the result is at least 0. Otherwise the call has no figure and
+is counted under one fixed reason: `usage-not-reported`,
+`total-tokens-not-reported` (the Anthropic transport reports no total) or
+`total-below-prompt-plus-completion`. A missing figure is never guessed or
+read as zero. The run cost operations (`benchmarkReport.cost`) sum
+`totalTokens` and `hiddenOutputTokens` per operation and count missing figures
+in `hiddenOutputTokensUnavailableCounts`, next to `inputTokens` and
+`outputTokens`. Each paired arm reports the same totals, and also
+`lengthFinishAnswers`: its answers whose finish reason is `length` or
+`max_tokens`.
+
 ### Reader-cut metrics (custom-v1, custom-v2, custom-v3)
 
 A custom-protocol run adds `e2eQa.readerCut` (pooled and per question type) and
@@ -387,9 +421,11 @@ only when every arm is in its checkpoint entry, and re-ingests any other.
 
 - `arms[]`: name, protocol, `sessionTurnRecall`, `configurationHash`,
   `questions`, `verdicts`, `correct`, `accuracy`, `parseFailures`,
-  `missingVerdicts`, and `tokens.answer` and `tokens.judge` (judge includes
-  decoy calls), each `{inputTokens, outputTokens, callsWithoutUsage}` from
-  provider-reported usage.
+  `missingVerdicts`, `lengthFinishAnswers`, and `tokens.answer` and
+  `tokens.judge` (judge includes decoy calls), each `{inputTokens,
+  outputTokens, callsWithoutUsage, totalTokens, hiddenOutputTokens,
+  hiddenOutputTokensUnavailable}` from provider-reported usage (see answer and
+  judge token caps above).
 - `comparisons[]`, each arm against the baseline: `pairs`, `bothCorrect`,
   `baselineOnly`, `armOnly`, `bothWrong`, `unpaired`, both accuracies, and
   `mcnemar: {discordant, pTwoSided}`, the exact two-sided McNemar p over the
@@ -551,7 +587,7 @@ QA protocol only with a judge model, key and endpoint. A self-consistent hash
 over an incomplete or malformed manifest is refused, and schema validity says
 nothing about whether the values are authentic. `-0` counts as `0`, as it
 hashes. The marker sits inside the hash, so a manifest copied from an older
-run cannot verify. Coverage (`b02-keyed-v8`) includes the judge model, auth
+run cannot verify. Coverage (`b02-keyed-v9`) includes the judge model, auth
 style, token parameter and QA protocol, keyed fingerprints of every supported
 credential, the configured MongoDB connection inputs described below, the
 extraction-job drain stall window (`MEMONGO_BENCHMARK_JOB_DRAIN_STALL_MS`, raw
@@ -561,8 +597,9 @@ the rule, without echoing the value), and session turn recall (`MEMONGO_SESSION_
 `effectiveSessionTurnRecall`, and its frozen seed-result, seed-session and
 turns-per-session bounds), and the custom-v3 reader budget
 (`readerBudgetEstimatedTokens`, `readerBudgetTokenizer`), and paired arms
-(`MEMONGO_BENCHMARK_ARMS` raw, `benchmarkArm`, `benchmarkArmQaProtocol`), so a
-`b02-keyed-v7` manifest does not resume.
+(`MEMONGO_BENCHMARK_ARMS` raw, `benchmarkArm`, `benchmarkArmQaProtocol`), and
+the custom QA answer and judge token caps (`customQaAnswerMaxTokens`,
+`customQaJudgeMaxTokens`), so a `b02-keyed-v8` manifest does not resume.
 Checkpoints without a valid manifest, including every earlier run, every
 `b02-keyed-v1` run without connection inputs and every `b02-judge-v1` run with
 plain sha256 fingerprints, stay descriptive and are refused for resume: equal hashes alone once missed a
