@@ -51,11 +51,7 @@ export {
 	generateAnswer,
 	judgeAnswer,
 } from "./mongodb-e2e-qa-calls.js"
-export {
-	type E2eQaProtocol,
-	isCustomHarnessProtocol,
-	isReaderBudgetProtocol,
-} from "./mongodb-e2e-qa-protocol.js"
+export type { E2eQaProtocol } from "./mongodb-e2e-qa-protocol.js"
 
 /**
  * End-to-end QA: answer generation + LLM judge (issue #24 / Wave 4).

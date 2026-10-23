@@ -190,7 +190,7 @@ provider work.
 | unset or `custom-v1` | Legacy harness | `QUESTION:` line, up to 20 passages as `[n] text` in rank order | `judgeVersion: "v1"` |
 | `custom-v2` | Legacy harness | custom-v1 plus the question date and each passage's date(s) and role | `judgeVersion: "v2"` |
 | `custom-v3` | Legacy harness | Round units admitted under a 16,000 estimated-token budget, rendered as official dated sessions | `judgeVersion: "v3"`, `readerBudget` per case, `readerBudgetCalibration` |
-| `custom-v4` | Legacy harness | custom-v3's reader content under the v4 reader contract (system prompt and return line) | `judgeVersion: "v4"`, as custom-v3 |
+| `custom-v4` | Legacy harness | custom-v3's reader content under the v4 reader contract (system prompt and return line) | `judgeVersion: "v4"` (judge request identical to custom-v1 to v3), `readerBudget` per case, `readerBudgetCalibration` |
 | `official` | Durable sidecar path | Dated, chronological chain-of-note prompt; pinned judge | `official` block |
 | `custom-judge` | Durable sidecar path | As `official`, with a non-pinned judge | `customJudge` block |
 

@@ -121,7 +121,7 @@ describe("runE2eQa request invariance per protocol", () => {
 		)
 	})
 
-	// Written at 2ab6bdc4af from the same fixtures. A missing snapshot file
+	// Written at a794f2ecce from the same fixtures. A missing snapshot file
 	// writes itself, so mongodb-e2e-qa-reader-v4.test.ts pins the v4 prompt
 	// and return line directly.
 	it("sends byte-identical custom-v4 answer, judge and decoy-judge requests", async () => {

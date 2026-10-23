@@ -146,7 +146,6 @@ Return JSON only: {"answer":"<concise answer, or empty string>"}`
 /** A protocol's system prompt plus the return line that ends its user content. */
 export type ReaderContract = { systemPrompt: string; returnLine: string }
 
-/** custom-v1 to custom-v3. */
 export const ANSWER_READER_CONTRACT: ReaderContract = {
 	systemPrompt: ANSWER_SYSTEM_PROMPT,
 	returnLine: ANSWER_RETURN_LINE,
