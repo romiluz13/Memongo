@@ -1296,6 +1296,25 @@ export type MemoryBenchmarkReaderCutMetrics = {
 		falseAbstentions: number
 		falseAbstentionRate: number | null
 		failedCases: number
+		/**
+		 * `falseAbstentions` split by the case's gold turns, first match wins:
+		 * no applicable gold or no marked turn is unknown; every turn present
+		 * is all; any turn unknown is unknown; any turn present is some;
+		 * otherwise none. All present means the gold turn text was sent, not
+		 * that it sufficed. The four sum to `falseAbstentions`.
+		 */
+		falseAbstentionsByEvidence: {
+			allGoldPresent: number
+			someGoldPresent: number
+			noGoldPresent: number
+			goldUnknown: number
+		}
+		/**
+		 * Non-empty answers the abstention rule reads as abstaining (a phrase
+		 * such as "not mentioned"), over the same completed cases: at most
+		 * `correctAbstentions` and `falseAbstentions`.
+		 */
+		phraseAbstentions: { abstentionCases: number; answerableCases: number }
 	}
 }
 

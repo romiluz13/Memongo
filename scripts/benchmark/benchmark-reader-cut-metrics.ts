@@ -17,6 +17,25 @@ type CaseResult = BenchmarkE2eQaEnvelope["caseResults"][number]
 
 const rate = (part: number, whole: number) => (whole > 0 ? part / whole : null)
 
+type Evidence =
+	keyof MemoryBenchmarkReaderCutMetrics["abstention"]["falseAbstentionsByEvidence"]
+
+function goldEvidence(result: CaseResult): Evidence {
+	const turns = result.gold?.status === "applicable" ? result.gold.turns : []
+	if (turns.length === 0) return "goldUnknown"
+	if (turns.every((turn) => turn.sentStatus === "present")) {
+		return "allGoldPresent"
+	}
+	if (turns.some((turn) => turn.sentStatus === "unknown")) return "goldUnknown"
+	if (turns.some((turn) => turn.sentStatus === "present")) {
+		return "someGoldPresent"
+	}
+	return "noGoldPresent"
+}
+
+const isPhraseAbstention = (result: CaseResult) =>
+	result.candidateAnswer.trim() !== "" && isAbstaining(result.candidateAnswer)
+
 function summarize(results: CaseResult[]): MemoryBenchmarkReaderCutMetrics {
 	const turns = results.flatMap((result) =>
 		result.gold?.status === "applicable" ? [result.gold.turns] : [],
@@ -27,9 +46,10 @@ function summarize(results: CaseResult[]): MemoryBenchmarkReaderCutMetrics {
 	const abstention = completed.filter((result) => result.abstention)
 	const answerable = completed.filter((result) => !result.abstention)
 	const correctAbstentions = abstention.filter((r) => r.correct).length
-	const falseAbstentions = answerable.filter((r) =>
-		isAbstaining(r.candidateAnswer),
-	).length
+	const abstaining = answerable.filter((r) => isAbstaining(r.candidateAnswer))
+	const falseAbstentions = abstaining.length
+	const byEvidence = (evidence: Evidence) =>
+		abstaining.filter((r) => goldEvidence(r) === evidence).length
 	return {
 		goldTurns: {
 			cases: turns.length,
@@ -47,6 +67,16 @@ function summarize(results: CaseResult[]): MemoryBenchmarkReaderCutMetrics {
 			falseAbstentions,
 			falseAbstentionRate: rate(falseAbstentions, answerable.length),
 			failedCases: results.length - completed.length,
+			falseAbstentionsByEvidence: {
+				allGoldPresent: byEvidence("allGoldPresent"),
+				someGoldPresent: byEvidence("someGoldPresent"),
+				noGoldPresent: byEvidence("noGoldPresent"),
+				goldUnknown: byEvidence("goldUnknown"),
+			},
+			phraseAbstentions: {
+				abstentionCases: abstention.filter(isPhraseAbstention).length,
+				answerableCases: answerable.filter(isPhraseAbstention).length,
+			},
 		},
 	}
 }

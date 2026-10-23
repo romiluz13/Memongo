@@ -149,6 +149,13 @@ describe("reader-cut metrics", () => {
 				falseAbstentions: 1,
 				falseAbstentionRate: 0.5,
 				failedCases: 1,
+				falseAbstentionsByEvidence: {
+					allGoldPresent: 0,
+					someGoldPresent: 0,
+					noGoldPresent: 0,
+					goldUnknown: 1,
+				},
+				phraseAbstentions: { abstentionCases: 1, answerableCases: 1 },
 			},
 		})
 		expect(byType.get("single-session-user")?.readerCut).toEqual({
@@ -168,6 +175,13 @@ describe("reader-cut metrics", () => {
 				falseAbstentions: 0,
 				falseAbstentionRate: 0,
 				failedCases: 1,
+				falseAbstentionsByEvidence: {
+					allGoldPresent: 0,
+					someGoldPresent: 0,
+					noGoldPresent: 0,
+					goldUnknown: 0,
+				},
+				phraseAbstentions: { abstentionCases: 0, answerableCases: 0 },
 			},
 		})
 		expect(byType.get("knowledge-update")).toEqual(
@@ -199,6 +213,13 @@ describe("reader-cut metrics", () => {
 				falseAbstentions: 1,
 				falseAbstentionRate: 0.25,
 				failedCases: 2,
+				falseAbstentionsByEvidence: {
+					allGoldPresent: 0,
+					someGoldPresent: 0,
+					noGoldPresent: 0,
+					goldUnknown: 1,
+				},
+				phraseAbstentions: { abstentionCases: 1, answerableCases: 1 },
 			},
 		})
 		expect(
@@ -223,5 +244,83 @@ describe("reader-cut metrics", () => {
 				questionTypeByCaseId,
 			}),
 		).toEqual({ e2eQa: undefined, breakdown: rows })
+	})
+})
+
+describe("false abstentions by evidence and phrase abstentions", () => {
+	const notApplicable: Partial<CaseResult> = {
+		gold: {
+			status: "not-applicable",
+			reason: "no-has-answer-marker",
+			sessions: [],
+			turns: [],
+		},
+	}
+	const answerable = (
+		caseId: string,
+		candidateAnswer: string,
+		fields: Partial<CaseResult> = {},
+	) => result(caseId, { abstention: false, candidateAnswer, ...fields })
+	const cases: CaseResult[] = [
+		answerable("f1", ""),
+		answerable("f2", "", notApplicable),
+		answerable("f3", "", goldTurns([])),
+		answerable("f4", "", goldTurns(["present", "present"])),
+		answerable(
+			"f5",
+			"Not mentioned in the context.",
+			goldTurns(["present", "absent"]),
+		),
+		answerable("f6", "", goldTurns(["absent", "absent"])),
+		answerable("f7", "", goldTurns(["present", "unknown"])),
+		answerable("f8", "By the mill pond", goldTurns(["absent"])),
+		answerable("f9", "", {
+			error: "answer-generation: truncated",
+			...goldTurns(["present"]),
+		}),
+		result("f10", {
+			abstention: true,
+			candidateAnswer: "Unknown.",
+			correct: true,
+		}),
+		result("f11", { abstention: true, candidateAnswer: "", correct: true }),
+	]
+	const overall = () =>
+		attachReaderCutMetrics({
+			e2eQa: { caseResults: cases } as unknown as BenchmarkE2eQaEnvelope,
+			breakdown: [],
+			questionTypeByCaseId: new Map(),
+		}).e2eQa?.readerCut?.overall.abstention
+
+	it("splits false abstentions by gold evidence in precedence order", () => {
+		const abstention = overall()
+		expect(abstention?.falseAbstentions).toBe(7)
+		expect(abstention?.falseAbstentionsByEvidence).toEqual({
+			allGoldPresent: 1,
+			someGoldPresent: 1,
+			noGoldPresent: 1,
+			goldUnknown: 4,
+		})
+		const split = abstention?.falseAbstentionsByEvidence
+		expect(
+			(split?.allGoldPresent ?? 0) +
+				(split?.someGoldPresent ?? 0) +
+				(split?.noGoldPresent ?? 0) +
+				(split?.goldUnknown ?? 0),
+		).toBe(abstention?.falseAbstentions)
+	})
+
+	it("counts non-empty abstaining answers, each count at most its parent", () => {
+		const abstention = overall()
+		expect(abstention?.phraseAbstentions).toEqual({
+			abstentionCases: 1,
+			answerableCases: 1,
+		})
+		expect(abstention?.phraseAbstentions.abstentionCases).toBeLessThanOrEqual(
+			abstention?.correctAbstentions ?? -1,
+		)
+		expect(abstention?.phraseAbstentions.answerableCases).toBeLessThanOrEqual(
+			abstention?.falseAbstentions ?? -1,
+		)
 	})
 })
