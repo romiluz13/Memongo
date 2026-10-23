@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest"
 import type { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-manager.js"
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import type { MemorySearchResult } from "../../packages/memory-engine/src/types.js"
+import { V4_READER_CONTRACT } from "../mongodb-e2e-qa-calls.js"
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
 import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
@@ -1141,6 +1142,98 @@ describe("runScenarioBenchmarkDataset judged answers vs checkpoint state (F1)", 
 			})
 			expect(result.e2eQa?.readerBudgetCalibration?.answerCalls).toBe(1)
 			expect(result.e2eQa?.readerCut?.goldTurnMatchRule).toBe("containment-v2")
+		} finally {
+			chat.mockRestore()
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("custom-v4 runs alone through the custom harness with reader budget records", async () => {
+		vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "synthetic")
+		vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "synthetic-model")
+		vi.stubEnv("MEMONGO_BENCHMARK_JUDGE_MODEL", "synthetic-judge-model")
+		vi.stubEnv("MEMONGO_BENCHMARK_QA_PROTOCOL", "custom-v4")
+		enrichmentProbe.reset()
+		const chat = vi.spyOn(enrichmentProbe.provider, "chatCompletion")
+		try {
+			const search = vi.fn(
+				async () =>
+					[
+						{
+							path: "events/e-u1",
+							startLine: 1,
+							endLine: 1,
+							score: 0.9,
+							snippet: "What color is the sky?",
+							text: "What color is the sky?",
+							source: "conversation",
+							canonicalId: "event:e-u1",
+							sessionId: "session-1",
+							role: "user",
+							roundPartner: {
+								canonicalId: "event:e-a1",
+								role: "assistant",
+								text: "The sky is violet.",
+							},
+						},
+					] satisfies MemorySearchResult[],
+			)
+			const dataset = syntheticLongMemEvalDataset()
+			const evaluation = dataset.scenarios[0]?.evaluations[0]
+			if (!evaluation) throw new Error("fixture has no evaluation")
+			Object.assign(evaluation, {
+				metadata: { questionDate: "2031/02/14 (Fri) 09:30" },
+			})
+			const result = await benchmarkOps(
+				buildProbeManager(search as never),
+			).runScenarioBenchmarkDataset({
+				datasetPath: "/tmp/benchmark.json",
+				dataset: { ...dataset, scenarios: [dataset.scenarios[0]] },
+				datasetVersion: "w5-harness-v1",
+				maxResults: 10,
+				minScore: 0.1,
+				executionProfile: "shipped",
+				runContext: probeRunContext("run-custom-v4"),
+			})
+			expect(
+				(search.mock.calls[0] as unknown[] | undefined)?.[1],
+			).toMatchObject({
+				includeRoundPartner: true,
+			})
+			const answers = chat.mock.calls
+				.map(([call]) => call.messages)
+				.filter(
+					(messages) =>
+						!messages
+							.find((m) => m.role === "user")
+							?.content.includes("GOLD ANSWER:"),
+				)
+			expect(answers).toHaveLength(1)
+			expect(answers[0]?.[0]?.content).toBe(V4_READER_CONTRACT.systemPrompt)
+			expect(answers[0]?.[1]?.content).toBe(
+				[
+					"History Chats:",
+					"",
+					"### Session 1:",
+					"Session Content:",
+					"User: What color is the sky?",
+					"Assistant: The sky is violet.",
+					"",
+					"Current Date: 2031/02/14 (Fri) 09:30",
+					"Question: What color is the sky in case one?",
+					'Return only {"notes":[...],"reasoning":"...","answer":"..."}.',
+				].join("\n"),
+			)
+			expect(result.e2eQa?.judgeVersion).toBe("v4")
+			expect(result.e2eQa?.caseResults[0]?.readerBudget).toMatchObject({
+				budgetEstimatedTokens: 16_000,
+				units: { candidates: 1, admitted: 1, deduplicated: 0, skipped: 0 },
+			})
+			expect(result.e2eQa?.readerBudgetCalibration?.answerCalls).toBe(1)
+			expect(result.e2eQa?.readerCut?.goldTurnMatchRule).toBe("containment-v2")
+			expect(
+				result.e2eQa?.readerCut?.overall.abstention.falseAbstentionsByEvidence,
+			).toBeDefined()
 		} finally {
 			chat.mockRestore()
 			vi.unstubAllEnvs()
