@@ -258,7 +258,7 @@ describe("benchmarkOfficialFullRunError (pure pre-ingest gate)", () => {
 			{ checkpointDisabled: false },
 		)
 		expect(error).toContain(
-			'must be one of "custom-v1", "custom-v2", "custom-v3", "official", "custom-judge", got "turbo"',
+			'must be one of "custom-v1", "custom-v2", "custom-v3", "custom-v4", "official", "custom-judge", got "turbo"',
 		)
 	})
 
