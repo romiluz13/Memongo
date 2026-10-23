@@ -17,7 +17,7 @@ import {
 } from "./benchmark-answer-provider.js"
 import type { BenchmarkE2eQaEnvelope } from "../../packages/memory-engine/src/types.js"
 import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark-quality-contracts.js"
-import { isCustomHarnessProtocol } from "../mongodb-e2e-qa.js"
+import { isCustomHarnessProtocol } from "../mongodb-e2e-qa-protocol.js"
 import {
 	renderDatedPassageLines,
 	renderDatedQuestionLine,

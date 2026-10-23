@@ -4,7 +4,7 @@ import { hiddenOutputTokensMetadata } from "../mongodb-e2e-qa-calls.js"
 import {
 	isCustomHarnessProtocol,
 	isReaderBudgetProtocol,
-} from "../mongodb-e2e-qa.js"
+} from "../mongodb-e2e-qa-protocol.js"
 import {
 	BenchmarkInputRejectedError,
 	type BenchmarkAdmittedDataset,

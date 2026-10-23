@@ -32,6 +32,10 @@ import {
 	V4_READER_CONTRACT,
 } from "./mongodb-e2e-qa-calls.js"
 import {
+	type E2eQaProtocol,
+	isReaderBudgetProtocol,
+} from "./mongodb-e2e-qa-protocol.js"
+import {
 	type AnswerCallUsage,
 	buildReaderCaseDiagnostics,
 	type ReaderBudgetCalibration,
@@ -47,6 +51,11 @@ export {
 	generateAnswer,
 	judgeAnswer,
 } from "./mongodb-e2e-qa-calls.js"
+export {
+	type E2eQaProtocol,
+	isCustomHarnessProtocol,
+	isReaderBudgetProtocol,
+} from "./mongodb-e2e-qa-protocol.js"
 
 /**
  * End-to-end QA: answer generation + LLM judge (issue #24 / Wave 4).
@@ -82,40 +91,6 @@ const E2E_QA_READER_BUDGET_JUDGE_VERSION = "v3"
 // custom-v4 changes the answer system prompt and return line (the reader
 // contract); the judge request stays identical to custom-v1 to custom-v3.
 const E2E_QA_READER_CONTRACT_JUDGE_VERSION = "v4"
-
-/**
- * The QA protocols this harness runs. custom-v2 is custom-v1 with the
- * question date and each passage's date(s) and role in the answer request,
- * passages kept in rank order. custom-v3 admits round units under the
- * reader token budget and renders them as official dated sessions.
- * custom-v4 sends custom-v3's reader content under the v4 reader contract.
- */
-export type E2eQaProtocol =
-	| "custom-v1"
-	| "custom-v2"
-	| "custom-v3"
-	| "custom-v4"
-
-const CUSTOM_HARNESS_PROTOCOLS: ReadonlySet<string> = new Set<E2eQaProtocol>([
-	"custom-v1",
-	"custom-v2",
-	"custom-v3",
-	"custom-v4",
-])
-
-/** Protocols this harness answers and judges (not official or custom-judge). */
-export function isCustomHarnessProtocol(
-	protocol: string | undefined,
-): protocol is E2eQaProtocol {
-	return protocol !== undefined && CUSTOM_HARNESS_PROTOCOLS.has(protocol)
-}
-
-/** Protocols that admit reader units under the reader token budget. */
-export function isReaderBudgetProtocol(
-	protocol: string | undefined,
-): protocol is "custom-v3" | "custom-v4" {
-	return protocol === "custom-v3" || protocol === "custom-v4"
-}
 
 /** custom-v3 and custom-v4 add the harness-side reader budget records to the envelope. */
 export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
