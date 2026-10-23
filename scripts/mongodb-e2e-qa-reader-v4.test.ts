@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest"
+import type {
+	EnrichmentChatResponse,
+	EnrichmentProvider,
+} from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import {
 	buildReaderContext,
 	estimateTokens,
@@ -172,5 +176,66 @@ describe("custom-v4 reader budget records", () => {
 		expect(envelope.readerPositionTerciles?.positionRule).toBe(
 			"earliest-gold-turn-percentile",
 		)
+	})
+})
+
+describe("custom-v4 answer bodies", () => {
+	// Notes and reasoning quote memory text, so a canary in them must never
+	// reach the case result.
+	const CANARY = "OTTER-CANARY-72"
+	const notes = [{ date: "2031/01/20 (Mon) 10:00", fact: `nest ${CANARY}` }]
+	const answerWith = async (body: Record<string, unknown>) => {
+		const provider: EnrichmentProvider = {
+			name: "v4-bodies",
+			chatCompletion: async (call: Call): Promise<EnrichmentChatResponse> =>
+				isJudgeCall(call)
+					? {
+							content: JSON.stringify({ correct: true, rationale: "fixture" }),
+							responseMeta: { shape: "ok", finishReason: "stop" },
+						}
+					: {
+							content: JSON.stringify(body),
+							responseMeta: { shape: "ok", finishReason: "stop" },
+						},
+		}
+		const envelope = await runE2eQa({
+			provider,
+			model: "fixture-answer-model",
+			answerModel: "fixture-answer-model",
+			judgeModel: "fixture-judge-model",
+			cases: [heronCase()],
+			protocol: "custom-v4",
+		})
+		return envelope.caseResults[0]
+	}
+
+	it("classifies notes and reasoning plus an answer as answer and records only the answer", async () => {
+		const result = await answerWith({
+			notes,
+			reasoning: `the nest is by the pond ${CANARY}`,
+			answer: " Quillmarsh pond ",
+		})
+		expect(result?.answerAttempt?.status).toBe("answer")
+		expect(result?.candidateAnswer).toBe("Quillmarsh pond")
+		expect(result?.error).toBeUndefined()
+		expect(result?.answerAttempt?.contentSha256).toMatch(/^[0-9a-f]{64}$/)
+		expect(result?.answerAttempt?.contentBytes).toBeGreaterThan(0)
+		expect(JSON.stringify(result)).not.toContain(CANARY)
+	})
+
+	it("classifies an empty answer string as empty-answer", async () => {
+		const result = await answerWith({ notes, reasoning: CANARY, answer: "" })
+		expect(result?.answerAttempt?.status).toBe("empty-answer")
+		expect(result?.candidateAnswer).toBe("")
+		expect(result?.error).toBeUndefined()
+		expect(JSON.stringify(result)).not.toContain(CANARY)
+	})
+
+	it("classifies a body with no answer key as missing-answer, a case error", async () => {
+		const result = await answerWith({ notes, reasoning: CANARY })
+		expect(result?.answerAttempt?.status).toBe("missing-answer")
+		expect(result?.candidateAnswer).toBe("")
+		expect(result?.error).toBe("answer-generation: missing-answer")
+		expect(JSON.stringify(result)).not.toContain(CANARY)
 	})
 })
