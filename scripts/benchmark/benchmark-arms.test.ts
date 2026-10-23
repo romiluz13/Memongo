@@ -24,6 +24,18 @@ describe("parseBenchmarkArms", () => {
 		])
 	})
 
+	it("selects custom-v4 with and without recall", () => {
+		expect(
+			parseBenchmarkArms(
+				"v3r=custom-v3+recall,v4=custom-v4,v4r=custom-v4+recall",
+			),
+		).toEqual([
+			{ name: "v3r", protocol: "custom-v3", sessionTurnRecall: true },
+			{ name: "v4", protocol: "custom-v4", sessionTurnRecall: false },
+			{ name: "v4r", protocol: "custom-v4", sessionTurnRecall: true },
+		])
+	})
+
 	it("ignores whitespace around entries", () => {
 		expect(
 			parseBenchmarkArms(" a = custom-v1 , b = custom-v3 + recall "),

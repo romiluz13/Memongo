@@ -198,7 +198,7 @@ const RESOLVED_CONTRACTS: Record<string, Contract> = {
 	// Null on a run; an arm's identity names the arm and its QA protocol.
 	benchmarkArm: nullable(trimmedText),
 	benchmarkArmQaProtocol: nullable(
-		oneOf(["custom-v1", "custom-v2", "custom-v3"]),
+		oneOf(["custom-v1", "custom-v2", "custom-v3", "custom-v4"]),
 	),
 	answerProviderSource: oneOf(["dedicated", "enrichment-fallback"]),
 }
@@ -210,6 +210,7 @@ const ENV_CONTRACTS: Partial<Record<string, Contract>> = {
 		"custom-v1",
 		"custom-v2",
 		"custom-v3",
+		"custom-v4",
 	]),
 	MEMONGO_BENCHMARK_JUDGE_AUTH_STYLE: oneOf(JUDGE_AUTH_STYLES),
 	MEMONGO_BENCHMARK_JUDGE_TOKEN_PARAM: oneOf(JUDGE_TOKEN_PARAMS),

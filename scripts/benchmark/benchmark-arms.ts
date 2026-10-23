@@ -7,6 +7,7 @@
  * Syntax: MEMONGO_BENCHMARK_ARMS=name=protocol[+recall],... in run order;
  * the first arm is the paired report's baseline. Example:
  *   v1=custom-v1,v2=custom-v2,v3=custom-v3,v3r=custom-v3+recall
+ * or, for the reader contract, v3r=custom-v3+recall,v4r=custom-v4+recall
  */
 import {
 	type OperationRunConfiguration,
@@ -26,6 +27,7 @@ const ARM_PROTOCOLS: readonly E2eQaProtocol[] = [
 	"custom-v1",
 	"custom-v2",
 	"custom-v3",
+	"custom-v4",
 ]
 const DURABLE_PROTOCOLS = new Set(["official", "custom-judge"])
 const ARM_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/

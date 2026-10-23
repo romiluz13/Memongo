@@ -17,6 +17,7 @@ import {
 } from "./benchmark-answer-provider.js"
 import type { BenchmarkE2eQaEnvelope } from "../../packages/memory-engine/src/types.js"
 import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark-quality-contracts.js"
+import { isCustomHarnessProtocol } from "../mongodb-e2e-qa.js"
 import {
 	renderDatedPassageLines,
 	renderDatedQuestionLine,
@@ -84,6 +85,7 @@ export type BenchmarkQaProtocol =
 	| "custom-v1"
 	| "custom-v2"
 	| "custom-v3"
+	| "custom-v4"
 	| "official"
 	| "custom-judge"
 
@@ -92,8 +94,8 @@ export type BenchmarkQaProtocol =
  * "custom-judge" opt into a durable-protocol run; undefined and "custom-v1"
  * keep the legacy harness, "custom-v2" runs the legacy harness with dated,
  * role-labeled passages, "custom-v3" runs it with budgeted round units in
- * official session form, and anything else fails preflight before any paid
- * work.
+ * official session form, "custom-v4" sends custom-v3's content under the v4
+ * reader contract, and anything else fails preflight before any paid work.
  */
 export function resolveBenchmarkQaProtocol(
 	env: Record<string, string | undefined>,
@@ -105,13 +107,14 @@ export function resolveBenchmarkQaProtocol(
 	if (
 		value === "custom-v2" ||
 		value === "custom-v3" ||
+		value === "custom-v4" ||
 		value === "official" ||
 		value === "custom-judge"
 	) {
 		return value
 	}
 	throw new Error(
-		`MEMONGO_BENCHMARK_QA_PROTOCOL must be one of "custom-v1", "custom-v2", "custom-v3", "official", "custom-judge", got ${JSON.stringify(value)}`,
+		`MEMONGO_BENCHMARK_QA_PROTOCOL must be one of "custom-v1", "custom-v2", "custom-v3", "custom-v4", "official", "custom-judge", got ${JSON.stringify(value)}`,
 	)
 }
 
@@ -523,18 +526,14 @@ export async function prepareOfficialQa(params: {
 	// The manager dispatches here only after resolving "official" or
 	// "custom-judge" from this same env, so production never arrives with the
 	// env unset; direct callers that leave it unset get the historical
-	// official default. An explicit "custom-v1", "custom-v2" or "custom-v3" (or unknown)
-	// value is a misrouted call and fails before any paid work.
+	// official default. An explicit custom-harness protocol (or unknown) value
+	// is a misrouted call and fails before any paid work.
 	const protocolValue = params.env.MEMONGO_BENCHMARK_QA_PROTOCOL
 	let protocol: Extract<BenchmarkQaProtocol, "official" | "custom-judge"> =
 		"official"
 	if (protocolValue !== undefined) {
 		const resolved = resolveBenchmarkQaProtocol(params.env)
-		if (
-			resolved === "custom-v1" ||
-			resolved === "custom-v2" ||
-			resolved === "custom-v3"
-		) {
+		if (isCustomHarnessProtocol(resolved)) {
 			throw new Error(
 				`MEMONGO_BENCHMARK_QA_PROTOCOL=${resolved} does not use the durable scoring path`,
 			)
