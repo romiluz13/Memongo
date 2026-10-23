@@ -190,6 +190,7 @@ provider work.
 | unset or `custom-v1` | Legacy harness | `QUESTION:` line, up to 20 passages as `[n] text` in rank order | `judgeVersion: "v1"` |
 | `custom-v2` | Legacy harness | custom-v1 plus the question date and each passage's date(s) and role | `judgeVersion: "v2"` |
 | `custom-v3` | Legacy harness | Round units admitted under a 16,000 estimated-token budget, rendered as official dated sessions | `judgeVersion: "v3"`, `readerBudget` per case, `readerBudgetCalibration` |
+| `custom-v4` | Legacy harness | custom-v3's reader content under the v4 reader contract (system prompt and return line) | `judgeVersion: "v4"`, as custom-v3 |
 | `official` | Durable sidecar path | Dated, chronological chain-of-note prompt; pinned judge | `official` block |
 | `custom-judge` | Durable sidecar path | As `official`, with a non-pinned judge | `customJudge` block |
 
@@ -305,6 +306,50 @@ run and never feeds admission. A custom-v3 case without reader units is refused 
 any provider call. Gold is read only by these diagnostics, after the request is
 built; nothing selects by it.
 
+### custom-v4: reader contract
+
+A protocol's **reader contract** is its answer system prompt plus the return
+line that ends its user content. custom-v1 to custom-v3 share one; `custom-v4`
+keeps everything else of custom-v3 (retrieval, reader budget, admission,
+presentation, `readerBudget`, calibration and terciles) and changes only the
+contract. Its system prompt asks the reader to take dated notes on the
+passages that bear on the question, reason over them, and answer in the form
+the question asks for. Remembered statements come only from the context;
+general knowledge only works with them (counting, adding, comparing or ordering
+dates, applying what the user said to the request). The most recently dated
+statement wins, relative time resolves against the session or current date,
+and the answer is the empty string only when the context does not state a
+fact the answer depends on; a value worked out from the context is not
+missing. It asks for `{"notes":[...],"reasoning":"...","answer":"..."}` and
+the user content ends with
+`Return only {"notes":[...],"reasoning":"...","answer":"..."}.` The prompt is
+the same for every question; nothing branches on question type, id or
+wording. The exact text is `V4_SYSTEM_PROMPT` in
+`scripts/mongodb-e2e-qa-calls.ts`.
+
+- **Admission parity.** Units are admitted on custom-v3's serialization
+  (custom-v3's return line), then the admitted set is rendered with the v4
+  return line. For the same units, custom-v4 admits the same units as
+  custom-v3, and its user content differs only in the last line.
+  `estimatedContextTokens` records the content actually sent, so it can exceed
+  the 16,000 budget by the return-line difference. The calibration's request
+  estimate counts the v4 system prompt.
+- **Parsing.** A response is accepted when it is a JSON object whose `answer`
+  is a string. `notes` and `reasoning` are not required and never recorded,
+  because they quote memory text; the case result keeps `candidateAnswer`, the
+  content digest and the byte count. An empty `answer` is `empty-answer`; no
+  `answer` key is `missing-answer`. The 8192 answer cap is unchanged, so a v4
+  length stop or parse failure stays a case error (incorrect in accuracy,
+  excluded from readerCut) and is a cost of the contract.
+- **Judge.** custom-v4 reports `judgeVersion: "v4"`: the label follows the
+  answer protocol, as it does for v1 to v3. The answer-judge and decoy-judge
+  requests are identical to custom-v1 to custom-v3's for the same case and
+  candidate (pinned by test).
+
+Offline tests prove the request bytes and the parsing, not accuracy. Whether
+the v4 contract changes accuracy or false abstentions is untested until a run
+on unseen questions.
+
 In all custom protocols every answer, judge and decoy-judge call ends in one
 fixed status, decided by the first layer that fails: transport, envelope, then
 content. A token-budget stop (`length` shape, or finish reason `length` or
@@ -349,17 +394,20 @@ and the allowlisted finish reasons; judge calls and the official protocol carry
 no per-call record; and the request content has no per-call digest.
 
 The run configuration records the raw value as
-`env.MEMONGO_BENCHMARK_QA_PROTOCOL`, so custom-v1, custom-v2 and custom-v3
-runs have different configuration hashes and never resume each other's
+`env.MEMONGO_BENCHMARK_QA_PROTOCOL`, so custom-v1, custom-v2, custom-v3 and
+custom-v4 runs have different configuration hashes and never resume each other's
 checkpoints. Accepting `custom-v2` added a known value, not a covered key, so
 coverage stayed `b02-keyed-v5`; a reader built before `custom-v2` refuses such a
-manifest. custom-v3 also records `readerBudgetEstimatedTokens` and
+manifest. Accepting `custom-v4` likewise added a known value and no key, so
+coverage stays `b02-keyed-v9`, and custom-v3's manifests and hashes are
+unchanged; resume already refuses a changed `executableDigest`. custom-v3 also
+records `readerBudgetEstimatedTokens` and
 `readerBudgetTokenizer` in every run configuration (see the coverage marker
 below). No custom protocol writes a prediction sidecar, so `b2-join.ts` cannot
 compare them, and none is the official protocol: a full500 publishable run and
-the durable sidecar path refuse all three by name.
+the durable sidecar path refuse all four by name.
 
-### Answer and judge token caps (custom-v1, custom-v2, custom-v3)
+### Answer and judge token caps (custom-v1 to custom-v4)
 
 Every custom answer, judge and decoy-judge request sends `maxTokens` 8192
 (`CUSTOM_QA_ANSWER_MAX_TOKENS` and `CUSTOM_QA_JUDGE_MAX_TOKENS` in
@@ -394,7 +442,7 @@ counted the same way. Each paired arm reports the same totals, and also
 `lengthFinishAnswers`: its answers whose finish reason is `length` or
 `max_tokens`.
 
-### Reader-cut metrics (custom-v1, custom-v2, custom-v3)
+### Reader-cut metrics (custom-v1 to custom-v4)
 
 A custom-protocol run adds `e2eQa.readerCut` (pooled and per question type) and
 a `readerCut` block on each matching `questionTypeBreakdown` row. Gold-turn
@@ -405,6 +453,35 @@ failed cases: correct abstentions over abstention cases, and answers the
 harness's abstention rule classifies as abstaining over answerable cases. A
 rate without a denominator is `null`. Both are computed from the case results
 after the run and never feed retrieval or selection.
+
+Three terms keep "abstention" apart:
+
+- **Abstention question:** a case with `abstention: true` (LongMemEval `_abs`).
+- **Abstaining answer:** `isAbstaining(answer)` is true: the empty string, or
+  one of its fixed phrases ("i don't know", "not mentioned", "unknown" and the
+  like). It grades abstention questions and counts false abstentions in every
+  protocol; custom-v4 instructs the empty string but the rule is unchanged.
+- **Empty answer:** answer-attempt status `empty-answer`.
+
+`abstention.phraseAbstentions` counts non-empty abstaining answers (a phrase,
+not the empty string) over the same completed cases:
+`{ abstentionCases, answerableCases }`, each at most `correctAbstentions` and
+`falseAbstentions` respectively.
+
+`abstention.falseAbstentionsByEvidence` splits `falseAbstentions` (completed
+answerable cases with an abstaining answer) by the case's gold turns, so a
+retrieval gap can be told from a reader abstention. The first matching rule
+wins, and the four counts sum to `falseAbstentions`:
+
+1. no gold diagnostics, gold not applicable, or zero marked turns: `goldUnknown`;
+2. every marked turn `present`: `allGoldPresent`;
+3. any marked turn `unknown`: `goldUnknown`;
+4. at least one marked turn `present`: `someGoldPresent`;
+5. otherwise, every marked turn `absent`: `noGoldPresent`.
+
+`allGoldPresent` means the gold turn text was sent, not that the evidence
+sufficed: custom-v1 sends no dates, `has_answer` marks can omit context an
+answer needs, and a short turn can match by containment.
 
 ### Paired arms (`MEMONGO_BENCHMARK_ARMS`)
 
@@ -417,8 +494,9 @@ MEMONGO_BENCHMARK_ARMS=v1=custom-v1,v2=custom-v2,v3=custom-v3,v3r=custom-v3+reca
 ```
 
 Each comma-separated entry is `name=protocol[+recall]`. The name matches
-`[A-Za-z0-9][A-Za-z0-9_-]{0,31}`; the protocol is `custom-v1`, `custom-v2` or
-`custom-v3`; `+recall` turns session turn recall on for that arm's searches,
+`[A-Za-z0-9][A-Za-z0-9_-]{0,31}`; the protocol is `custom-v1`, `custom-v2`,
+`custom-v3` or `custom-v4` (for example `v3r=custom-v3+recall,v4r=custom-v4+recall`);
+`+recall` turns session turn recall on for that arm's searches,
 and its absence turns it off. The first arm is the baseline. Unset, the run
 behaves exactly as before. The CLI refuses, before it reads the dataset: an
 empty or blank value, a malformed entry, an invalid or duplicate name, an
@@ -441,7 +519,7 @@ run, as the unpaired harness does after the run.
 
 Each arm keeps its own case results, retrieval metrics (pass 0), miss ledger,
 case diagnostics, reader-cut metrics, reader-budget calibration and terciles
-(custom-v3), and configuration identity: `benchmarkArmConfiguration` sets
+(custom-v3, custom-v4), and configuration identity: `benchmarkArmConfiguration` sets
 `benchmarkArm`, `benchmarkArmQaProtocol` and `effectiveSessionTurnRecall` on
 the run settings and hashes them, so no two arms share a hash. The run's
 top-level result and `e2eQa` are the baseline arm's. A question is
@@ -561,7 +639,7 @@ configured API key; this is sensitive opt-in evidence, not anonymized output.
 Do not commit it or attach it to public issues/PRs. Disabling capture retains
 the prior prompts, prediction sidecar, call accounting and scoring behavior.
 This facility covers `official` and `custom-judge`, not `custom-v1`,
-`custom-v2` or `custom-v3`.
+`custom-v2`, `custom-v3` or `custom-v4`.
 
 Use this evidence to select an experiment before changing answer prompts or
 retrieval. The current durable answer path already passes full retrieved text

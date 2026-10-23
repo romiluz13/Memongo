@@ -117,7 +117,7 @@ export function isReaderBudgetProtocol(
 	return protocol === "custom-v3" || protocol === "custom-v4"
 }
 
-/** custom-v3 adds the harness-side reader budget records to the envelope. */
+/** custom-v3 and custom-v4 add the harness-side reader budget records to the envelope. */
 export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
 	readerBudgetCalibration?: ReaderBudgetCalibration
 	readerPositionTerciles?: ReaderPositionTerciles
@@ -125,13 +125,13 @@ export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
 	decoyProbes?: { probes: number; passes: number }
 }
 
-/** Passage dates and roles render only under custom-v2; the question date under custom-v2 and custom-v3. */
+/** Passage dates and roles render only under custom-v2; the question date under custom-v2 to custom-v4. */
 export type E2eQaCase = DatedAnswerPassages & {
 	caseId: string
 	question: string
 	goldAnswer: string
 	questionDate?: string
-	/** custom-v3 only: every candidate unit, before admission. */
+	/** custom-v3 and custom-v4 only: every candidate unit, before admission. */
 	readerUnits?: ReaderUnit[]
 	abstention?: boolean
 	upstreamFailure?: string
@@ -474,7 +474,7 @@ export async function runE2eQa(params: {
  * What an envelope reports about a set of judged case results: accuracy and
  * mean latency over every case (a failure stays attempted and deflates
  * accuracy), the decoy false-positive rate, case counts and, under
- * custom-v3, the reader budget records.
+ * custom-v3 and custom-v4, the reader budget records.
  */
 export function measureE2eQaCases(params: {
 	caseResults: BenchmarkE2eQaEnvelope["caseResults"]
