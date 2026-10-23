@@ -142,3 +142,35 @@ describe("custom-v4 admission parity", () => {
 		expect(v4.budgetEstimatedTokens).toBe(budget)
 	})
 })
+
+describe("custom-v4 reader budget records", () => {
+	it("counts the v4 system prompt in the calibration's request estimate", async () => {
+		const { provider, calls } = recordingProvider([
+			{ inputTokens: 400, outputTokens: 9 },
+		])
+		const envelope = await runE2eQa({
+			provider,
+			model: "fixture-answer-model",
+			answerModel: "fixture-answer-model",
+			judgeModel: "fixture-judge-model",
+			cases: [heronCase()],
+			protocol: "custom-v4",
+		})
+		const [answer] = calls.filter((call) => !isJudgeCall(call))
+		const user = estimateTokens(answer?.messages[1]?.content ?? "")
+		const request = estimateTokens(V4_SYSTEM_PROMPT) + user
+		expect(envelope.caseResults[0]?.readerBudget).toMatchObject({
+			estimatedContextTokens: user,
+			estimatedRequestTokens: request,
+		})
+		expect(envelope.readerBudgetCalibration).toMatchObject({
+			answerCalls: 1,
+			estimatedContextTokens: user,
+			estimatedRequestTokens: request,
+			ratio: 400 / request,
+		})
+		expect(envelope.readerPositionTerciles?.positionRule).toBe(
+			"earliest-gold-turn-percentile",
+		)
+	})
+})

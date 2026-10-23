@@ -15,7 +15,6 @@ import {
 	type ReaderUnit,
 } from "./benchmark/reader-budget.js"
 import type { RoundPartnerMissingReason } from "./benchmark/round-units.js"
-import { ANSWER_SYSTEM_PROMPT } from "./mongodb-e2e-qa-calls.js"
 
 /**
  * custom-v3 (D) recording: what the reader budget admitted for a case and
@@ -43,8 +42,6 @@ export type ReaderBudgetCaseRecord = BenchmarkReaderBudgetCaseRecord & {
 export type ReaderBudgetCalibration = BenchmarkReaderBudgetCalibration & {
 	estimatedRequestTokens: number
 }
-
-const SYSTEM_PROMPT_ESTIMATED_TOKENS = estimateTokens(ANSWER_SYSTEM_PROMPT)
 
 /**
  * Context diagnostics over the admitted units, in presentation order.
@@ -90,17 +87,19 @@ function goldTurnPositions(
 	})
 }
 
+/** `systemPrompt` is the one the answer call sent (its reader contract's). */
 export function readerBudgetCaseRecord(
 	reader: ReaderContext,
 	usage: AnswerCallUsage,
 	diagnostics: BenchmarkCaseContextDiagnostics,
+	systemPrompt: string,
 ): ReaderBudgetCaseRecord {
 	return {
 		tokenizer: READER_BUDGET_TOKENIZER,
 		budgetEstimatedTokens: reader.budgetEstimatedTokens,
 		estimatedContextTokens: reader.estimatedContextTokens,
 		estimatedRequestTokens:
-			SYSTEM_PROMPT_ESTIMATED_TOKENS + reader.estimatedContextTokens,
+			estimateTokens(systemPrompt) + reader.estimatedContextTokens,
 		budgetExceededByFirstUnit: reader.budgetExceededByFirstUnit,
 		units: reader.counts,
 		skippedRanks: reader.skippedRanks,

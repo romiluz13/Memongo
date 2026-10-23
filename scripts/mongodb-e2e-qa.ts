@@ -357,7 +357,12 @@ export async function runE2eQa(params: {
 
 		const diagnostics = caseDiagnostics(testCase, reader)
 		const readerBudget = reader
-			? readerBudgetCaseRecord(reader, answerUsage, diagnostics)
+			? readerBudgetCaseRecord(
+					reader,
+					answerUsage,
+					diagnostics,
+					contract.systemPrompt,
+				)
 			: undefined
 		const budgetRecord = readerBudget ? { readerBudget } : {}
 
