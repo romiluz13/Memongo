@@ -165,16 +165,20 @@ export function buildReaderContext(params: {
 	question: string
 	questionDate?: string
 	budget: number
-	/** The return line the user content ends with; custom-v1 to custom-v3's when absent. */
+	/**
+	 * The return line the user content ends with; custom-v1 to custom-v3's
+	 * when absent. Admission always counts custom-v3's line, so every
+	 * contract admits the same units.
+	 */
 	returnLine?: string
 }): ReaderContext {
-	const serialize = (units: readonly ReaderUnit[]) => {
+	const serialize = (units: readonly ReaderUnit[], returnLine: string) => {
 		const sessions = presentationOrder(units)
 		const { text, offsets } = render(
 			sessions,
 			params.question,
 			params.questionDate,
-			params.returnLine ?? ANSWER_RETURN_LINE,
+			returnLine,
 		)
 		return {
 			sessions,
@@ -200,10 +204,10 @@ export function buildReaderContext(params: {
 	const candidates = [...breadth, ...depth]
 	const admitted: ReaderUnit[] = []
 	const skippedRanks: number[] = []
-	let current = serialize(admitted)
+	let current = serialize(admitted, ANSWER_RETURN_LINE)
 	let budgetExceededByFirstUnit = false
 	for (const unit of candidates) {
-		const trial = serialize([...admitted, unit])
+		const trial = serialize([...admitted, unit], ANSWER_RETURN_LINE)
 		if (admitted.length === 0 && trial.tokens > params.budget) {
 			budgetExceededByFirstUnit = true
 		} else if (trial.tokens > params.budget) {
@@ -212,6 +216,12 @@ export function buildReaderContext(params: {
 		}
 		admitted.push(unit)
 		current = trial
+	}
+	if (
+		params.returnLine !== undefined &&
+		params.returnLine !== ANSWER_RETURN_LINE
+	) {
+		current = serialize(admitted, params.returnLine)
 	}
 	return {
 		userContent: current.userContent,

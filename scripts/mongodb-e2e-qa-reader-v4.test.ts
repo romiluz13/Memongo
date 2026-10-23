@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest"
+import {
+	buildReaderContext,
+	estimateTokens,
+} from "./benchmark/reader-budget.js"
 import { runE2eQa } from "./mongodb-e2e-qa.js"
+import { V4_READER_CONTRACT } from "./mongodb-e2e-qa-calls.js"
 import {
 	type Call,
 	heronCase,
 	recordingProvider,
+	unit,
 } from "./mongodb-e2e-qa-reader-budget.fixture.js"
 
 // custom-v4: custom-v3's reader content under the v4 reader contract.
@@ -54,5 +60,59 @@ describe("custom-v4 reader contract", () => {
 		})
 		const user = answers[0]?.messages[1]?.content ?? ""
 		expect(user.split("\n").at(-1)).toBe(V4_RETURN_LINE)
+	})
+})
+
+describe("custom-v4 admission parity", () => {
+	const units = [
+		unit("single:event:k1", 1, "sess-lane", 1, "User: The lantern is green.", [
+			"2031/01/05 (Sun) 08:00",
+		]),
+		unit("single:event:k2", 2, "sess-lane", 2, "User: The gate is blue.", [
+			"2031/01/05 (Sun) 08:00",
+		]),
+		unit("single:event:k3", 3, "sess-dock", 1, "User: The boat is red.", [
+			"2031/01/09 (Thu) 17:15",
+		]),
+	]
+	const build = (budget: number, returnLine?: string) =>
+		buildReaderContext({
+			units,
+			question: "Which color is the gate?",
+			questionDate: "2031/02/01 (Sat) 12:00",
+			budget,
+			...(returnLine ? { returnLine } : {}),
+		})
+	// The v3 serialization of the first two units fills the budget exactly,
+	// so the longer v4 return line would not fit if it counted.
+	const budget = buildReaderContext({
+		units: units.slice(0, 2),
+		question: "Which color is the gate?",
+		questionDate: "2031/02/01 (Sat) 12:00",
+		budget: 100_000,
+	}).estimatedContextTokens
+
+	it("admits on custom-v3's serialization and renders the v4 return line", () => {
+		const v3 = build(budget)
+		const v4 = build(budget, V4_READER_CONTRACT.returnLine)
+		expect(v3.admitted.map((u) => u.id)).toEqual([
+			"single:event:k1",
+			"single:event:k2",
+		])
+		expect(v4.admitted.map((u) => u.id)).toEqual(v3.admitted.map((u) => u.id))
+		expect(v4.counts).toEqual(v3.counts)
+		expect(v4.skippedRanks).toEqual(v3.skippedRanks)
+		expect(v4.admittedOffsets).toEqual(v3.admittedOffsets)
+		const v3Lines = v3.userContent.split("\n")
+		expect(v4.userContent).toBe(
+			[...v3Lines.slice(0, -1), V4_READER_CONTRACT.returnLine].join("\n"),
+		)
+	})
+
+	it("records the estimate of the content actually sent, over the budget by the return-line difference", () => {
+		const v4 = build(budget, V4_READER_CONTRACT.returnLine)
+		expect(v4.estimatedContextTokens).toBe(estimateTokens(v4.userContent))
+		expect(v4.estimatedContextTokens).toBeGreaterThan(budget)
+		expect(v4.budgetEstimatedTokens).toBe(budget)
 	})
 })
