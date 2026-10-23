@@ -61,6 +61,32 @@ describe("custom-v4 reader contract", () => {
 		const user = answers[0]?.messages[1]?.content ?? ""
 		expect(user.split("\n").at(-1)).toBe(V4_RETURN_LINE)
 	})
+
+	it("sends the same answer-judge and decoy-judge requests as custom-v3 and reports judgeVersion v4", async () => {
+		const decoy = heronCase({
+			caseId: "wren",
+			question: "Which reeds are tall?",
+			goldAnswer: "Brindlewick",
+		})
+		const judged = async (protocol: "custom-v3" | "custom-v4") => {
+			const { provider, calls } = recordingProvider([])
+			const envelope = await runE2eQa({
+				provider,
+				model: "fixture-answer-model",
+				answerModel: "fixture-answer-model",
+				judgeModel: "fixture-judge-model",
+				cases: [heronCase(), decoy],
+				protocol,
+			})
+			return { envelope, judges: calls.filter(isJudgeCall) }
+		}
+		const v3 = await judged("custom-v3")
+		const v4 = await judged("custom-v4")
+		expect(v4.judges).toHaveLength(4)
+		expect(v4.judges).toEqual(v3.judges)
+		expect(v3.envelope.judgeVersion).toBe("v3")
+		expect(v4.envelope.judgeVersion).toBe("v4")
+	})
 })
 
 describe("custom-v4 admission parity", () => {

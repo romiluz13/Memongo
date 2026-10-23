@@ -79,6 +79,9 @@ const E2E_QA_DATED_JUDGE_VERSION = "v2"
 // custom-v3 changes the answer user content again (budgeted round units in
 // official session form).
 const E2E_QA_READER_BUDGET_JUDGE_VERSION = "v3"
+// custom-v4 changes the answer system prompt and return line (the reader
+// contract); the judge request stays identical to custom-v1 to custom-v3.
+const E2E_QA_READER_CONTRACT_JUDGE_VERSION = "v4"
 
 /**
  * The QA protocols this harness runs. custom-v2 is custom-v1 with the
@@ -256,11 +259,13 @@ export async function runE2eQa(params: {
 			: ANSWER_READER_CONTRACT
 	const judgeVersion =
 		params.judgeVersion ??
-		(budgeted
-			? E2E_QA_READER_BUDGET_JUDGE_VERSION
-			: dated
-				? E2E_QA_DATED_JUDGE_VERSION
-				: E2E_QA_JUDGE_VERSION)
+		(params.protocol === "custom-v4"
+			? E2E_QA_READER_CONTRACT_JUDGE_VERSION
+			: budgeted
+				? E2E_QA_READER_BUDGET_JUDGE_VERSION
+				: dated
+					? E2E_QA_DATED_JUDGE_VERSION
+					: E2E_QA_JUDGE_VERSION)
 	if (budgeted) {
 		const bare = cases.find(
 			(testCase) => !testCase.upstreamFailure && !testCase.readerUnits,
