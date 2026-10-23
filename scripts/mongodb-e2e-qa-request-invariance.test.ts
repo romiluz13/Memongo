@@ -120,4 +120,30 @@ describe("runE2eQa request invariance per protocol", () => {
 			PROTOCOL_SNAPSHOT(protocol),
 		)
 	})
+
+	// Written at 2ab6bdc4af from the same fixtures. A missing snapshot file
+	// writes itself, so mongodb-e2e-qa-reader-v4.test.ts pins the v4 prompt
+	// and return line directly.
+	it("sends byte-identical custom-v4 answer, judge and decoy-judge requests", async () => {
+		const { provider, calls } = recordingProvider()
+		await runE2eQa({
+			provider,
+			model: "fixture-answer-model",
+			answerModel: "fixture-answer-model",
+			judgeModel: "fixture-judge-model",
+			cases: [
+				heronCase({
+					contextPassages: ["The heron nested by Quillmarsh pond"],
+					passageDates: [["2031/01/20 (Mon) 10:00"]],
+					passageRoles: ["user"],
+				}),
+				decoy,
+			],
+			protocol: "custom-v4",
+		})
+		expect(calls).toHaveLength(6)
+		await expect(`${JSON.stringify(calls, null, "\t")}\n`).toMatchFileSnapshot(
+			"./__snapshots__/mongodb-e2e-qa-requests.custom-v4.base-2ab6bdc4af.json",
+		)
+	})
 })

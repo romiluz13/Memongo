@@ -21,6 +21,7 @@ import {
 	type ReaderUnit,
 } from "./benchmark/reader-budget.js"
 import {
+	ANSWER_READER_CONTRACT,
 	type AnswerContent,
 	type E2eQaCallResult,
 	type E2eQaProviderOperation,
@@ -28,6 +29,7 @@ import {
 	judgeAnswer,
 	MAX_CONTEXT_PASSAGES,
 	type ProviderCallOutcome,
+	V4_READER_CONTRACT,
 } from "./mongodb-e2e-qa-calls.js"
 import {
 	type AnswerCallUsage,
@@ -83,8 +85,34 @@ const E2E_QA_READER_BUDGET_JUDGE_VERSION = "v3"
  * question date and each passage's date(s) and role in the answer request,
  * passages kept in rank order. custom-v3 admits round units under the
  * reader token budget and renders them as official dated sessions.
+ * custom-v4 sends custom-v3's reader content under the v4 reader contract.
  */
-export type E2eQaProtocol = "custom-v1" | "custom-v2" | "custom-v3"
+export type E2eQaProtocol =
+	| "custom-v1"
+	| "custom-v2"
+	| "custom-v3"
+	| "custom-v4"
+
+const CUSTOM_HARNESS_PROTOCOLS: ReadonlySet<string> = new Set<E2eQaProtocol>([
+	"custom-v1",
+	"custom-v2",
+	"custom-v3",
+	"custom-v4",
+])
+
+/** Protocols this harness answers and judges (not official or custom-judge). */
+export function isCustomHarnessProtocol(
+	protocol: string | undefined,
+): protocol is E2eQaProtocol {
+	return protocol !== undefined && CUSTOM_HARNESS_PROTOCOLS.has(protocol)
+}
+
+/** Protocols that admit reader units under the reader token budget. */
+export function isReaderBudgetProtocol(
+	protocol: string | undefined,
+): protocol is "custom-v3" | "custom-v4" {
+	return protocol === "custom-v3" || protocol === "custom-v4"
+}
 
 /** custom-v3 adds the harness-side reader budget records to the envelope. */
 export type E2eQaEnvelope = BenchmarkE2eQaEnvelope & {
@@ -221,7 +249,11 @@ export async function runE2eQa(params: {
 	const answerModel = params.answerModel ?? model
 	const judgeModel = params.judgeModel ?? model
 	const dated = params.protocol === "custom-v2"
-	const budgeted = params.protocol === "custom-v3"
+	const budgeted = isReaderBudgetProtocol(params.protocol)
+	const contract =
+		params.protocol === "custom-v4"
+			? V4_READER_CONTRACT
+			: ANSWER_READER_CONTRACT
 	const judgeVersion =
 		params.judgeVersion ??
 		(budgeted
@@ -234,7 +266,9 @@ export async function runE2eQa(params: {
 			(testCase) => !testCase.upstreamFailure && !testCase.readerUnits,
 		)
 		if (bare) {
-			throw new Error(`custom-v3 case ${bare.caseId} has no reader units`)
+			throw new Error(
+				`${params.protocol} case ${bare.caseId} has no reader units`,
+			)
 		}
 	}
 	if (cases.length === 0) {
@@ -281,6 +315,7 @@ export async function runE2eQa(params: {
 					question: testCase.question,
 					questionDate: testCase.questionDate,
 					budget: READER_BUDGET_ESTIMATED_TOKENS,
+					returnLine: contract.returnLine,
 				})
 			: undefined
 		const answerUsage: AnswerCallUsage = { inputTokens: null }
@@ -300,6 +335,7 @@ export async function runE2eQa(params: {
 			model: answerModel,
 			question: testCase.question,
 			content,
+			contract,
 			onProviderCall: (outcome, usage, call) => {
 				if (outcome !== "attempted") {
 					answerUsage.inputTokens = usage ? usage.inputTokens : null
@@ -465,19 +501,18 @@ export function measureE2eQaCases(params: {
 			completed: total - failed,
 			failed,
 		},
-		reader:
-			params.protocol === "custom-v3"
-				? {
-						readerBudgetCalibration: readerBudgetCalibration(
-							caseResults.flatMap((result) =>
-								result.readerBudget
-									? [result.readerBudget as ReaderBudgetCaseRecord]
-									: [],
-							),
-							READER_BUDGET_ESTIMATED_TOKENS,
+		reader: isReaderBudgetProtocol(params.protocol)
+			? {
+					readerBudgetCalibration: readerBudgetCalibration(
+						caseResults.flatMap((result) =>
+							result.readerBudget
+								? [result.readerBudget as ReaderBudgetCaseRecord]
+								: [],
 						),
-						readerPositionTerciles: readerPositionTerciles(caseResults),
-					}
-				: {},
+						READER_BUDGET_ESTIMATED_TOKENS,
+					),
+					readerPositionTerciles: readerPositionTerciles(caseResults),
+				}
+			: {},
 	}
 }

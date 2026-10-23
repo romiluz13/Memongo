@@ -1,0 +1,104 @@
+[
+	{
+		"model": "fixture-answer-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You answer the QUESTION from the user's memory: the dated chat sessions in the context.\nWork in two steps. First take notes: for each passage that bears on the question, record its session date and what it says. Then reason over your notes and answer.\nRules:\n- Answer what the question asks, in the form it asks for.\n- What the user or the assistant said comes only from the context. Use general knowledge only to work with it: count, add, compare or order dates, or apply what the user said to the request.\n- When sessions disagree, the most recently dated statement is current.\n- Resolve relative time (\"last week\", \"recently\") against the session date or the current date.\n- If the context does not state a fact the answer depends on, return an empty answer string. A value you can work out from the context (a count, a date difference, a suggestion built on what the user said) is not missing: give it.\nReturn JSON only: {\"notes\":[{\"date\":\"...\",\"fact\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"<concise answer, or empty string>\"}"
+			},
+			{
+				"role": "user",
+				"content": "History Chats:\n\n### Session 1:\nSession Date: 2030/11/02 (Sat) 18:45\nSession Content:\nUser: Brindlewick reeds are tall.\n\n### Session 2:\nSession Date: 2031/01/20 (Mon) 10:00\nSession Content:\nUser: Where did the heron nest?\nAssistant: By Quillmarsh pond.\n\nCurrent Date: 2031/02/14 (Fri) 09:30\nQuestion: Where did the heron nest?\nReturn only {\"notes\":[...],\"reasoning\":\"...\",\"answer\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 8192
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Where did the heron nest?\nGOLD ANSWER: Quillmarsh\nCANDIDATE ANSWER: Lisbon\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 8192
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Where did the heron nest?\nGOLD ANSWER: Quillmarsh\nCANDIDATE ANSWER: Tagus\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 8192
+	},
+	{
+		"model": "fixture-answer-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You answer the QUESTION from the user's memory: the dated chat sessions in the context.\nWork in two steps. First take notes: for each passage that bears on the question, record its session date and what it says. Then reason over your notes and answer.\nRules:\n- Answer what the question asks, in the form it asks for.\n- What the user or the assistant said comes only from the context. Use general knowledge only to work with it: count, add, compare or order dates, or apply what the user said to the request.\n- When sessions disagree, the most recently dated statement is current.\n- Resolve relative time (\"last week\", \"recently\") against the session date or the current date.\n- If the context does not state a fact the answer depends on, return an empty answer string. A value you can work out from the context (a count, a date difference, a suggestion built on what the user said) is not missing: give it.\nReturn JSON only: {\"notes\":[{\"date\":\"...\",\"fact\":\"...\"}],\"reasoning\":\"...\",\"answer\":\"<concise answer, or empty string>\"}"
+			},
+			{
+				"role": "user",
+				"content": "History Chats:\n\n### Session 1:\nSession Date: 2031/01/21 (Tue) 10:00\nSession Content:\nUser: The river is the Tagus.\n\nCurrent Date: 2031/02/15 (Sat) 09:30\nQuestion: Which river?\nReturn only {\"notes\":[...],\"reasoning\":\"...\",\"answer\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 8192
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Which river?\nGOLD ANSWER: Tagus\nCANDIDATE ANSWER: Lisbon\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 8192
+	},
+	{
+		"model": "fixture-judge-model",
+		"messages": [
+			{
+				"role": "system",
+				"content": "You are a strict grader for a memory QA benchmark.\nDecide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.\nRules:\n- Semantic equivalence counts as correct (paraphrases, extra correct detail are fine).\n- A wrong fact, a missing required fact, or an unsupported guess is incorrect.\n- Judge only against the gold answer; do not invent new criteria.\nReturn JSON only: {\"correct\":true|false,\"rationale\":\"<one sentence>\"}"
+			},
+			{
+				"role": "user",
+				"content": "QUESTION: Which river?\nGOLD ANSWER: Tagus\nCANDIDATE ANSWER: Quillmarsh\nReturn only {\"correct\":...,\"rationale\":\"...\"}."
+			}
+		],
+		"responseFormat": {
+			"type": "json_object"
+		},
+		"maxTokens": 8192
+	}
+]

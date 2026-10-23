@@ -57,7 +57,8 @@ export type ReaderContext = {
 	skippedRanks: number[]
 }
 
-const RETURN_LINE = 'Return only {"answer":"..."}.'
+/** custom-v1 to custom-v3's return line; reader admission always counts it. */
+export const ANSWER_RETURN_LINE = 'Return only {"answer":"..."}.'
 
 type SessionGroup = { sessionId: string; dates: string[]; units: ReaderUnit[] }
 
@@ -135,6 +136,7 @@ function render(
 	sessions: readonly SessionGroup[],
 	question: string,
 	questionDate: string | undefined,
+	returnLine: string,
 ): { text: string; offsets: number[] } {
 	let text = "History Chats:"
 	const offsets: number[] = []
@@ -153,7 +155,7 @@ function render(
 	const tail = [
 		...(questionDate ? [`Current Date: ${questionDate}`] : []),
 		`Question: ${question}`,
-		RETURN_LINE,
+		returnLine,
 	].join("\n")
 	return { text: `${text}\n\n${tail}`, offsets }
 }
@@ -163,6 +165,8 @@ export function buildReaderContext(params: {
 	question: string
 	questionDate?: string
 	budget: number
+	/** The return line the user content ends with; custom-v1 to custom-v3's when absent. */
+	returnLine?: string
 }): ReaderContext {
 	const serialize = (units: readonly ReaderUnit[]) => {
 		const sessions = presentationOrder(units)
@@ -170,6 +174,7 @@ export function buildReaderContext(params: {
 			sessions,
 			params.question,
 			params.questionDate,
+			params.returnLine ?? ANSWER_RETURN_LINE,
 		)
 		return {
 			sessions,

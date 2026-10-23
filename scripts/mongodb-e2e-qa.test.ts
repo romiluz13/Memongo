@@ -7,6 +7,7 @@ import {
 	runE2eQa,
 } from "./mongodb-e2e-qa.js"
 import type { EnrichmentProvider } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
+import { ANSWER_READER_CONTRACT } from "./mongodb-e2e-qa-calls.js"
 
 // A scripted provider whose response depends on the system prompt, so answer
 // generation and judging can be driven independently in one mock. Optional
@@ -35,6 +36,7 @@ describe("generateAnswer", () => {
 		const answer = await generateAnswer({
 			provider,
 			model: "m",
+			contract: ANSWER_READER_CONTRACT,
 			question: "Where does the user live?",
 			content: {
 				kind: "passages",
@@ -49,6 +51,7 @@ describe("generateAnswer", () => {
 		const answer = await generateAnswer({
 			provider,
 			model: "m",
+			contract: ANSWER_READER_CONTRACT,
 			question: "Q",
 			content: { kind: "passages", contextPassages: [] },
 		})
@@ -66,6 +69,7 @@ describe("generateAnswer", () => {
 		const answer = await generateAnswer({
 			provider,
 			model: "m",
+			contract: ANSWER_READER_CONTRACT,
 			question: "Q",
 			content: { kind: "passages", contextPassages: ["p"] },
 			onProviderCall: (outcome, reported) =>
@@ -94,6 +98,7 @@ describe("generateAnswer", () => {
 		const answer = await generateAnswer({
 			provider,
 			model: "m",
+			contract: ANSWER_READER_CONTRACT,
 			question: "Q",
 			content: { kind: "passages", contextPassages: ["p"] },
 			onProviderCall: (outcome, reported) =>
@@ -116,6 +121,7 @@ describe("generateAnswer", () => {
 		const answer = await generateAnswer({
 			provider,
 			model: "m",
+			contract: ANSWER_READER_CONTRACT,
 			question: "Where?",
 			content: { kind: "passages", contextPassages: ["Berlin"] },
 			onProviderCall: () => {

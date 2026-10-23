@@ -7,6 +7,7 @@ import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongod
 import { testOperationRunContext } from "../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
 import type { MemorySearchResult } from "../../packages/memory-engine/src/types.js"
 import { generateAnswer } from "../mongodb-e2e-qa.js"
+import { ANSWER_READER_CONTRACT } from "../mongodb-e2e-qa-calls.js"
 import {
 	type BenchmarkJudgedAnswerMaterial,
 	buildJudgedAnswerCases,
@@ -343,6 +344,7 @@ async function builtReaderPrompts(
 			model: "capture",
 			question: testCase.question,
 			content: { kind: "passages", contextPassages: testCase.contextPassages },
+			contract: ANSWER_READER_CONTRACT,
 		})
 	for (const material of materialByCaseId.values())
 		prompts.push(

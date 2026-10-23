@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { EnrichmentProvider } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
-import { type AnswerContent, generateAnswer } from "./mongodb-e2e-qa-calls.js"
+import {
+	ANSWER_READER_CONTRACT,
+	type AnswerContent,
+	generateAnswer,
+} from "./mongodb-e2e-qa-calls.js"
 
 // The answer request carries exactly one kind of content: custom-v1
 // passages, custom-v2 dated passages or custom-v3 reader content.
@@ -25,6 +29,7 @@ async function sentUser(content: AnswerContent): Promise<string | undefined> {
 		model: "fixture-answer-model",
 		question: "Where did the heron nest?",
 		content,
+		contract: ANSWER_READER_CONTRACT,
 	})
 	return calls[0]?.messages[1]?.content
 }
@@ -89,6 +94,7 @@ describe("generateAnswer content", () => {
 			model: "m",
 			question: "q",
 			content: { kind: "passages", contextPassages: [] },
+			contract: ANSWER_READER_CONTRACT,
 			// @ts-expect-error the separate readerContent parameter is gone
 			readerContent: "x",
 		}

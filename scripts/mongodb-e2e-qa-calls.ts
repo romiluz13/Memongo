@@ -16,6 +16,7 @@ import {
 	renderDatedPassageLines,
 	renderDatedQuestionLine,
 } from "./benchmark/dated-answer-context.js"
+import { ANSWER_RETURN_LINE } from "./benchmark/reader-budget.js"
 import {
 	type ClassifiedVerdict,
 	classifyAnswerResponse,
@@ -142,6 +143,30 @@ Rules:
 - Do not use outside knowledge.
 Return JSON only: {"answer":"<concise answer, or empty string>"}`
 
+/** A protocol's system prompt plus the return line that ends its user content. */
+export type ReaderContract = { systemPrompt: string; returnLine: string }
+
+/** custom-v1 to custom-v3. */
+export const ANSWER_READER_CONTRACT: ReaderContract = {
+	systemPrompt: ANSWER_SYSTEM_PROMPT,
+	returnLine: ANSWER_RETURN_LINE,
+}
+
+export const V4_SYSTEM_PROMPT = `You answer the QUESTION from the user's memory: the dated chat sessions in the context.
+Work in two steps. First take notes: for each passage that bears on the question, record its session date and what it says. Then reason over your notes and answer.
+Rules:
+- Answer what the question asks, in the form it asks for.
+- What the user or the assistant said comes only from the context. Use general knowledge only to work with it: count, add, compare or order dates, or apply what the user said to the request.
+- When sessions disagree, the most recently dated statement is current.
+- Resolve relative time ("last week", "recently") against the session date or the current date.
+- If the context does not state a fact the answer depends on, return an empty answer string. A value you can work out from the context (a count, a date difference, a suggestion built on what the user said) is not missing: give it.
+Return JSON only: {"notes":[{"date":"...","fact":"..."}],"reasoning":"...","answer":"<concise answer, or empty string>"}`
+
+export const V4_READER_CONTRACT: ReaderContract = {
+	systemPrompt: V4_SYSTEM_PROMPT,
+	returnLine: 'Return only {"notes":[...],"reasoning":"...","answer":"..."}.',
+}
+
 const JUDGE_SYSTEM_PROMPT = `You are a strict grader for a memory QA benchmark.
 Decide whether the CANDIDATE ANSWER correctly answers the QUESTION, using the GOLD ANSWER as ground truth.
 Rules:
@@ -164,6 +189,7 @@ export type AnswerContent =
 function passageUserContent(
 	question: string,
 	content: Exclude<AnswerContent, { kind: "reader" }>,
+	returnLine: string,
 ): string {
 	const passages = content.contextPassages.slice(0, MAX_CONTEXT_PASSAGES)
 	const dated = content.kind === "dated-passages"
@@ -180,7 +206,7 @@ function passageUserContent(
 		"<context>",
 		context,
 		"</context>",
-		'Return only {"answer":"..."}.',
+		returnLine,
 	].join("\n")
 }
 
@@ -189,6 +215,7 @@ export async function generateAnswer(params: {
 	model: string
 	question: string
 	content: AnswerContent
+	contract: ReaderContract
 	onFailure?: (error: Error) => void
 	onAttempt?: (attempt: BenchmarkAnswerAttempt) => void
 	onProviderCall?: ProviderCallObserver
@@ -196,7 +223,11 @@ export async function generateAnswer(params: {
 	const user =
 		params.content.kind === "reader"
 			? params.content.userContent
-			: passageUserContent(params.question, params.content)
+			: passageUserContent(
+					params.question,
+					params.content,
+					params.contract.returnLine,
+				)
 
 	recordProviderCall(params.onProviderCall, "attempted")
 	let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
@@ -205,7 +236,7 @@ export async function generateAnswer(params: {
 		response = await params.provider.chatCompletion({
 			model: params.model,
 			messages: [
-				{ role: "system", content: ANSWER_SYSTEM_PROMPT },
+				{ role: "system", content: params.contract.systemPrompt },
 				{ role: "user", content: user },
 			],
 			responseFormat: { type: "json_object" },
